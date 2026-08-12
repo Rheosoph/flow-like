@@ -10,10 +10,13 @@ pub mod evaluation;
 mod executability;
 pub mod ir;
 pub mod ir_tools;
+pub mod manifest;
 pub mod memory;
 pub mod platform;
 mod provider;
+pub mod public_web;
 mod search;
+pub mod session;
 pub mod stream;
 pub mod tool_spec;
 mod tools;
@@ -23,11 +26,13 @@ mod validation;
 
 pub use assistant::{
     AttachmentManifestEntry, GlobalDataStudioContext, GlobalOpenBoardContext, PlatformContextInput,
-    build_platform_context, data_studio_section, global_assistant_system_prompt,
-    open_board_section, run_platform_chat,
+    WebResearchCapability, build_platform_context, data_studio_section,
+    global_assistant_system_prompt, global_assistant_system_prompt_for, open_board_section,
+    run_platform_chat,
 };
 pub use context::{
-    EdgeContext, GraphContext, LayerContext, NodeContext, PinContext, prepare_context,
+    EdgeContext, GraphContext, LayerCacheContext, LayerContext, NodeContext, PinContext,
+    VariableContext, prepare_context,
 };
 pub use evaluation::{
     FLOWPILOT_GENERATION_EVALUATION_VERSION, FlowPilotDurationMetric, FlowPilotEvaluationRunStatus,
@@ -37,23 +42,32 @@ pub use evaluation::{
 pub use ir::{
     FLOW_IR_VERSION, FlowCapabilityCandidate, FlowCapabilityPlan, FlowCapabilityPlanRequest,
     FlowCapabilityRequirement, FlowCapabilityResolution, FlowIrArg, FlowIrCompileResult,
-    FlowIrContainer, FlowIrDataType, FlowIrDiagnostic, FlowIrExecutionArm, FlowIrInterface,
-    FlowIrInterfaceField, FlowIrLiteral, FlowIrModule, FlowIrObjectField, FlowIrParam,
-    FlowIrProgram, FlowIrStep, FlowIrType, FlowIrValue, FlowIrVariable, FlowModuleEstimate,
-    FlowModuleKind, FlowPinRequirement, compile_flow_ir, plan_flow_capabilities,
-    validate_flow_capability_usage,
+    FlowIrContainer, FlowIrDataType, FlowIrDiagnostic, FlowIrExecutionArm, FlowIrFunctionCache,
+    FlowIrFunctionCacheScope, FlowIrInterface, FlowIrInterfaceField, FlowIrLiteral, FlowIrModule,
+    FlowIrObjectField, FlowIrParam, FlowIrProgram, FlowIrStep, FlowIrType, FlowIrValue,
+    FlowIrVariable, FlowModuleEstimate, FlowModuleKind, FlowPinRequirement, compile_flow_ir,
+    plan_flow_capabilities, validate_flow_capability_usage,
 };
 pub use ir_tools::{
-    BeginFlowIrDraftArgs, BeginFlowIrDraftTool, BoundBeginFlowIrDraftTool, CheckFlowScriptArgs,
-    CommitFlowIrDraftArgs, CommitFlowIrDraftTool, CommitFlowScriptArgs, FlowIrAcceptanceBinding,
-    FlowIrCommitResult, FlowIrDraftMode, FlowIrDraftRecovery, FlowIrDraftRecoveryStatus,
-    FlowIrDraftRequestMismatch, FlowIrDraftResponse, FlowIrDraftStore, FlowIrEditableDraftContext,
-    FlowIrRequestIdentity, FlowIrRetainedDraftSnapshot, FlowIrToolError, FlowScriptDraftRecovery,
-    FlowScriptDraftResponse, FlowScriptEditableDraftContext, FlowScriptPendingDelivery,
-    PatchFlowScriptArgs, PlanFlowIrTool, UpdateFlowIrDraftArgs, UpdateFlowIrDraftTool,
+    BeginFlowIrDraftArgs, BeginFlowIrDraftTool, BoardScopePlan, BoundBeginFlowIrDraftTool,
+    CURRENT_BOARD_REF, CheckFlowScriptArgs, CommitFlowIrDraftArgs, CommitFlowIrDraftTool,
+    CommitFlowScriptArgs, ExtendTimeBudgetArgs, FORCED_INCREMENTAL_SEGMENT_THRESHOLD,
+    FlowIrAcceptanceBinding, FlowIrCommitResult, FlowIrDraftMode, FlowIrDraftRecovery,
+    FlowIrDraftRecoveryStatus, FlowIrDraftRequestMismatch, FlowIrDraftResponse, FlowIrDraftStore,
+    FlowIrEditableDraftContext, FlowIrRequestIdentity, FlowIrRetainedDraftSnapshot,
+    FlowIrToolError, FlowScriptDraftRecovery, FlowScriptDraftResponse,
+    FlowScriptEditableDraftContext, FlowScriptPendingDelivery, MAX_BOARD_SCOPE_SEGMENTS,
+    NEW_BOARD_REF_PREFIX, PatchFlowScriptArgs, PlanBoardScopeArgs, PlanFlowIrTool, PlannedSegment,
+    ScopePlanRejection, ScopeStrategy, UpdateFlowIrDraftArgs, UpdateFlowIrDraftTool,
     UpsertFlowIrModuleArgs, UpsertFlowIrModuleTool, ValidateFlowIrDraftArgs,
-    ValidateFlowIrDraftTool, WriteFlowScriptArgs, render_typed_ir_parse_error,
-    typed_ir_schema_hint,
+    ValidateFlowIrDraftTool, WriteFlowScriptArgs, accept_scope_plan, board_fingerprint,
+    render_typed_ir_parse_error, typed_ir_schema_hint,
+};
+pub use manifest::{
+    BOARD_CONTEXT_MANIFEST_VERSION, BoardContextManifest, FlowScriptModuleTemplate, ManifestAudit,
+    ManifestAugmentation, ManifestAugmentations, ManifestBoard, ManifestCatalog,
+    ManifestCatalogNode, ManifestCatalogPin, ManifestError, ManifestSource, ManifestSourceStatus,
+    default_flowscript_module_templates,
 };
 pub use provider::{CatalogProvider, node_to_metadata, pin_to_metadata};
 /// Re-export of the rig tool trait so non-rig adapter crates can bound on it (e.g. to derive
@@ -63,21 +77,33 @@ pub use search::{
     SearchQueryAnalysis, analyze_search_query, enrich_node_metadata, render_catalog_search_results,
     score_catalog_metadata, search_result_hint_lines,
 };
+pub use session::{
+    CircuitOpenReason, ContextReadDecision, ContextReadDomain, ContextReadKey,
+    FirstArtifactSlaStatus, PreparedWorkflowState, StrategyDecision,
+    WORKFLOW_SESSION_SNAPSHOT_VERSION, WorkflowArtifactKind, WorkflowArtifactState,
+    WorkflowCircuitState, WorkflowSession, WorkflowSessionError, WorkflowSessionPhase,
+    WorkflowSessionPolicy, WorkflowSessionSnapshot, WorkflowTelemetryEvent, WorkflowTelemetryKind,
+    WorkflowTelemetryLedger, WorkflowTelemetryMilestone, WorkflowToolLease,
+    WorkflowToolObservation, WorkflowToolPreflightDecision, WorkflowValidationState,
+    WorkflowValidationStatus, workflow_strategy_fingerprint, workflow_tool_result_succeeded,
+};
 pub use tools::{
-    CatalogTool, CheckFlowScriptTool, CommitFlowScriptTool, EditFlowScriptArgs, EmitCommandsArgs,
-    ExecuteEventArgs, ExecuteEventTool, ExecuteNodeArgs, ExecuteNodeTool, FilterCategoryArgs,
-    FilterCategoryTool, FindConnectableNodesArgs, FindConnectableNodesTool,
-    FlowScriptCandidateProfile, FlowScriptCandidateRegression, FlowScriptRepairTracker,
-    GetCurrentFlowScriptArgs, GetCurrentFlowScriptTool, GetDeclarationsArgs, GetDeclarationsTool,
-    GetNodeDetailsArgs, GetNodeDetailsTool, GetUnconfiguredNodesTool, ListBoardNodesTool,
-    ModelFacingEmitCommandsTool, PatchFlowScriptTool, QueryExecutionLogsArgs,
-    QueryExecutionLogsTool, QueryLogsArgs, QueryLogsTool, SearchArgs, SearchByPinArgs,
-    SearchByPinTool, SearchTemplatesArgs, SearchTemplatesTool, ThinkingArgs, WriteFlowScriptTool,
-    board_has_no_nodes, build_find_connectable_nodes_output, build_list_board_nodes_output,
-    build_node_details_output, build_unconfigured_nodes_output, declaration_queries,
-    detect_flowscript_candidate_regression, flowscript_has_executable_node_call,
-    flowscript_missing_function_helpers, flowscript_workspace_envelope, get_tool_description,
-    is_blocking_flowscript_diagnostic, profile_flowscript_candidate, render_edit_flowscript_result,
+    CatalogTool, CheckFlowScriptTool, CommitFlowScriptTool, DatabaseContextTool,
+    EditFlowScriptArgs, EmitCommandsArgs, ExecuteEventArgs, ExecuteEventTool, ExecuteNodeArgs,
+    ExecuteNodeTool, ExtendTimeBudgetTool, FilterCategoryArgs, FilterCategoryTool,
+    FindConnectableNodesArgs, FindConnectableNodesTool, FlowScriptCandidateProfile,
+    FlowScriptCandidateRegression, FlowScriptRepairTracker, GetCurrentFlowScriptArgs,
+    GetCurrentFlowScriptTool, GetDeclarationsArgs, GetDeclarationsTool, GetNodeDetailsArgs,
+    GetNodeDetailsTool, GetUnconfiguredNodesTool, ListBoardNodesTool, ModelFacingEmitCommandsTool,
+    PatchFlowScriptTool, PlanBoardScopeTool, QueryExecutionLogsArgs, QueryExecutionLogsTool,
+    QueryLogsArgs, QueryLogsTool, SearchArgs, SearchByPinArgs, SearchByPinTool,
+    SearchTemplatesArgs, SearchTemplatesTool, StorageContextTool, ThinkingArgs,
+    UiInspectContextTool, WriteFlowScriptTool, board_has_no_nodes,
+    build_find_connectable_nodes_output, build_list_board_nodes_output, build_node_details_output,
+    build_unconfigured_nodes_output, declaration_queries, detect_flowscript_candidate_regression,
+    flowscript_has_executable_node_call, flowscript_missing_function_helpers,
+    flowscript_workspace_envelope, get_tool_description, is_blocking_flowscript_diagnostic,
+    profile_flowscript_candidate, render_edit_flowscript_result,
     render_flowscript_candidate_regression, render_flowscript_modular_partial_result,
     run_declaration_queries, tool_definition_parts,
 };
@@ -95,7 +121,8 @@ pub use validation::{
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{Arc, Mutex as StdMutex},
+    time::Instant,
 };
 
 use flow_like_model_provider::llm::CompletionClientDyn;
@@ -119,6 +146,17 @@ use crate::flow::board::Board;
 use crate::models::llm::ModelUsageContext;
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
+
+/// Host-owned destination for the latest provider-neutral workflow lifecycle snapshot.
+///
+/// A host can retain this sink beside its run-summary emitter. Copilot replaces the value when
+/// the session is initialized, after each tool round, and when the chat future completes, errors,
+/// or is cancelled.
+pub type WorkflowSessionSnapshotSink = Arc<StdMutex<Option<WorkflowSessionSnapshot>>>;
+
+/// Host callback used to make retained FlowScript source crash-durable without coupling core to a
+/// particular filesystem or debounce strategy.
+pub type FlowIrDraftMutationHook = Arc<dyn Fn() + Send + Sync + 'static>;
 
 /// FlowPilot's verbose loop diagnostics are useful while developing the agent, but they can
 /// contain board metadata and large command payloads. Keep them out of production binaries while
@@ -161,6 +199,16 @@ pub struct Copilot {
     /// scopes retained drafts and the acceptance contract. Falls back to `raw_user_prompt` /
     /// `user_prompt` when unset so single-surface callers keep prompt-text identity.
     request_identity_prompt: Option<String>,
+    /// Frontend-owned database/UI/storage inventory. This is folded into the same immutable
+    /// authoring manifest for Bits and external adapters; it is never interpreted by a provider.
+    board_context_augmentation: Option<serde_json::Value>,
+    /// Host-authoritative explain mode. It suppresses every authoring artifact, mutation tool,
+    /// recovery instruction, and edit watchdog while preserving board/catalog inspection.
+    read_only: bool,
+    /// Optional host-owned sink for provider-neutral lifecycle observability.
+    workflow_session_snapshot_sink: Option<WorkflowSessionSnapshotSink>,
+    /// Optional host callback for scheduling retained FlowScript crash snapshots.
+    flow_ir_draft_mutation_hook: Option<FlowIrDraftMutationHook>,
 }
 
 /// A typed batch is not durable outside the model loop until its exact token is attached to the
@@ -226,6 +274,224 @@ impl Drop for PendingRequestAcceptanceBinding {
     }
 }
 
+/// Publishes the latest state on explicit checkpoints and once more on drop. The drop publication
+/// covers provider errors and cancellation, where `Copilot::chat` cannot reach a normal epilogue.
+struct WorkflowSessionSnapshotPublisher {
+    session: Arc<StdMutex<WorkflowSession>>,
+    sink: WorkflowSessionSnapshotSink,
+    started_at: Instant,
+}
+
+impl WorkflowSessionSnapshotPublisher {
+    fn new(
+        session: Arc<StdMutex<WorkflowSession>>,
+        sink: WorkflowSessionSnapshotSink,
+        started_at: Instant,
+    ) -> Self {
+        Self {
+            session,
+            sink,
+            started_at,
+        }
+    }
+
+    fn publish(&self) {
+        let snapshot = {
+            let Ok(session) = self.session.lock() else {
+                return;
+            };
+            session.snapshot(shared_session_elapsed_ms(self.started_at))
+        };
+        if let Ok(mut sink) = self.sink.lock() {
+            *sink = Some(snapshot);
+        }
+    }
+}
+
+impl Drop for WorkflowSessionSnapshotPublisher {
+    fn drop(&mut self) {
+        self.publish();
+    }
+}
+
+/// Tools intentionally withheld from every model-facing workflow authoring surface. Hosts that
+/// adapt the shared tools to MCP/SDK backends should use [`workflow_authoring_tool_allowed`]
+/// instead of maintaining a provider-specific denylist.
+pub const WORKFLOW_AUTHORING_HIDDEN_TOOLS: &[&str] = &[
+    "catalog_search",
+    "filter_category",
+    "find_connectable_nodes",
+    "get_node_details",
+    "get_unconfigured_nodes",
+    "list_board_nodes",
+    "search_by_pin",
+    "emit_commands",
+];
+
+pub fn workflow_authoring_tool_allowed(tool_name: &str) -> bool {
+    !WORKFLOW_AUTHORING_HIDDEN_TOOLS.contains(&tool_name)
+}
+
+/// Runtime checks during an authoring turn would execute the pre-edit board: compiled commands
+/// are intentionally not persisted until the user accepts the retained review. Every provider
+/// adapter uses this predicate so a later model round cannot accidentally report a false green.
+pub fn workflow_authoring_defers_runtime_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "execute_event" | "execute_node" | "query_execution_logs"
+    )
+}
+
+pub fn workflow_runtime_verification_deferred_payload() -> serde_json::Value {
+    json!({
+        "status": "error",
+        "code": "runtime_verification_deferred",
+        // Never retryable within this session: the deferral holds for every authoring turn, and
+        // external CLIs treat retryable:true as "retry this exact call".
+        "retryable": false,
+        "next_action": "finish_board_edit_then_run_in_a_later_turn",
+        "message": "Runtime verification cannot run inside this board-mutation session because compiled commands are not persisted until the user accepts the review. Complete and apply the edit, then execute the persisted node/Event and inspect its logs in a later turn."
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CopilotToolSurface {
+    read_only: bool,
+}
+
+impl CopilotToolSurface {
+    fn for_mode(read_only: bool) -> Self {
+        Self { read_only }
+    }
+
+    fn exposes(self, tool_name: &str) -> bool {
+        match tool_name {
+            "think" | "get_current_flowscript" | "get_declarations" => true,
+            "get_node_details"
+            | "list_board_nodes"
+            | "get_unconfigured_nodes"
+            | "find_connectable_nodes"
+            | "catalog_search"
+            | "search_by_pin"
+            | "filter_category" => self.read_only || workflow_authoring_tool_allowed(tool_name),
+            "write_flowscript" | "patch_flowscript" | "check_flowscript" | "commit_flowscript" => {
+                !self.read_only
+            }
+            "emit_commands" => !self.read_only && workflow_authoring_tool_allowed(tool_name),
+            _ => false,
+        }
+    }
+}
+
+fn notify_flow_ir_draft_mutation(hook: Option<&FlowIrDraftMutationHook>, tool_name: &str) {
+    if matches!(
+        tool_name,
+        "write_flowscript" | "patch_flowscript" | "check_flowscript" | "commit_flowscript"
+    ) && let Some(hook) = hook
+    {
+        hook();
+    }
+}
+
+fn shared_session_elapsed_ms(started_at: Instant) -> u64 {
+    started_at
+        .elapsed()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+/// Feed provider observations into the same pure session state machine. Adapters retain their
+/// transport mechanics, but artifact deadlines, retry fingerprints and telemetry semantics live
+/// in `session.rs` instead of drifting per backend.
+fn record_shared_workflow_session_tool_result(
+    session: &Arc<StdMutex<WorkflowSession>>,
+    started_at: Instant,
+    lease: Option<&WorkflowToolLease>,
+    tool_name: &str,
+    arguments: &serde_json::Value,
+    result_text: &str,
+) -> bool {
+    let elapsed_ms = shared_session_elapsed_ms(started_at);
+    let Ok(mut session) = session.lock() else {
+        return false;
+    };
+    match session.complete_tool_call(
+        lease,
+        tool_name,
+        arguments,
+        result_text,
+        workflow_tool_result_succeeded(result_text),
+        elapsed_ms,
+    ) {
+        Ok(observation) => observation.circuit_open(),
+        // An accounting error is a host-side bookkeeping problem, not evidence the agent is
+        // stuck. Fail open: the iteration budget still bounds the run, while coercing this to
+        // circuit-open terminated legitimate runs with no FlowScript.
+        Err(error) => {
+            flowpilot_debug_log!(
+                "[Copilot] workflow session accounting error for {tool_name}: {error}"
+            );
+            false
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct SharedWorkflowToolPreflight {
+    short_circuit: Option<String>,
+    lease: Option<WorkflowToolLease>,
+}
+
+fn preflight_shared_workflow_session_tool_call(
+    session: &Arc<StdMutex<WorkflowSession>>,
+    started_at: Instant,
+    tool_name: &str,
+    arguments: &serde_json::Value,
+) -> SharedWorkflowToolPreflight {
+    if workflow_authoring_defers_runtime_tool(tool_name) {
+        return SharedWorkflowToolPreflight {
+            short_circuit: Some(workflow_runtime_verification_deferred_payload().to_string()),
+            lease: None,
+        };
+    }
+    let elapsed_ms = shared_session_elapsed_ms(started_at);
+    let Ok(mut session) = session.lock() else {
+        return SharedWorkflowToolPreflight {
+            short_circuit: Some(json!({
+                "status": "internal_state_unavailable",
+                "code": "WORKFLOW_SESSION_UNAVAILABLE",
+                "retryable": false,
+                "next_action": "stop_and_resume_in_new_run",
+                "message": "The shared FlowPilot lifecycle state is unavailable; the tool was not dispatched."
+            })
+            .to_string()),
+            lease: None,
+        };
+    };
+    match session.preflight_tool_call(tool_name, arguments, elapsed_ms) {
+        Ok(decision) => SharedWorkflowToolPreflight {
+            short_circuit: decision
+                .short_circuit_result()
+                .map(|payload| payload.to_string()),
+            lease: decision.lease().cloned(),
+        },
+        Err(_) => SharedWorkflowToolPreflight {
+            short_circuit: Some(
+                json!({
+                    "status": "internal_state_unavailable",
+                    "code": "WORKFLOW_SESSION_PREFLIGHT_FAILED",
+                    "retryable": false,
+                    "next_action": "stop_and_resume_in_new_run",
+                    "message": "The shared FlowPilot lifecycle rejected tool preflight; the tool was not dispatched."
+                })
+                .to_string(),
+            ),
+            lease: None,
+        },
+    }
+}
+
 impl Copilot {
     /// Create a new Copilot - always loads templates from profile
     pub async fn new(
@@ -255,6 +521,10 @@ impl Copilot {
             typed_flow_ir_enabled: false,
             raw_user_prompt: None,
             request_identity_prompt: None,
+            board_context_augmentation: None,
+            read_only: false,
+            workflow_session_snapshot_sink: None,
+            flow_ir_draft_mutation_hook: None,
         })
     }
 
@@ -285,6 +555,35 @@ impl Copilot {
     /// routing and edit classification. Empty values fall back to `raw_user_prompt`/`user_prompt`.
     pub fn with_request_identity_prompt(mut self, prompt: Option<String>) -> Self {
         self.request_identity_prompt = prompt.filter(|prompt| !prompt.trim().is_empty());
+        self
+    }
+
+    pub fn with_board_context_augmentation(
+        mut self,
+        augmentation: Option<serde_json::Value>,
+    ) -> Self {
+        self.board_context_augmentation = augmentation;
+        self
+    }
+
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// Publish the current provider-neutral workflow session into a host-owned shared sink.
+    pub fn with_workflow_session_snapshot_sink(
+        mut self,
+        sink: WorkflowSessionSnapshotSink,
+    ) -> Self {
+        self.workflow_session_snapshot_sink = Some(sink);
+        self
+    }
+
+    /// Notify the host after a dispatched FlowScript source lifecycle operation, allowing it to
+    /// debounce or immediately persist [`FlowIrDraftStore::export_retained_snapshot`].
+    pub fn with_flow_ir_draft_mutation_hook(mut self, hook: FlowIrDraftMutationHook) -> Self {
+        self.flow_ir_draft_mutation_hook = Some(hook);
         self
     }
 
@@ -373,6 +672,11 @@ impl Copilot {
             "[Copilot::chat] Starting chat with run_context: {:?}",
             run_context
         );
+        if let Some(sink) = self.workflow_session_snapshot_sink.as_ref()
+            && let Ok(mut sink) = sink.lock()
+        {
+            *sink = None;
+        }
 
         let context = prepare_context(board, selected_node_ids)?;
         let context_json = flow_like_types::json::to_string_pretty(&context)?;
@@ -387,9 +691,11 @@ impl Copilot {
             },
         );
 
-        // Only include node type names (not full paths) for context efficiency
-        let available_nodes = self.catalog_provider.get_all_nodes().await;
-        let node_count = available_nodes.len();
+        // Resolve catalog metadata once. The prompt still uses the compact node count and search
+        // tools, while the immutable manifest fingerprints the same authoritative contracts for
+        // every provider path.
+        let catalog_metadata = self.catalog_provider.get_all_metadata().await;
+        let node_count = catalog_metadata.len();
         let flow_ir_drafts = self.flow_ir_drafts.clone();
         let acceptance_prompt = self
             .request_identity_prompt
@@ -409,9 +715,11 @@ impl Copilot {
         // its Apply/Dismiss token. Re-deliver the exact retained batch for the same immutable
         // request before invoking another model. The accessor is read-only, so another transport
         // interruption leaves the original nonce and commands available for the next retry.
-        if let Some(delivery) = acceptance_binding.as_ref().and_then(|binding| {
-            flow_ir_drafts.pending_flowscript_delivery_for_binding(board, binding)
-        }) {
+        if !self.read_only
+            && let Some(delivery) = acceptance_binding.as_ref().and_then(|binding| {
+                flow_ir_drafts.pending_flowscript_delivery_for_binding(board, binding)
+            })
+        {
             if let Some(callback) = on_token.as_ref() {
                 callback(stream::flowscript_workspace_frame(
                     &delivery.source,
@@ -431,15 +739,117 @@ impl Copilot {
         let typed_ir_recovery = if self.typed_flow_ir_enabled
             && flow_ir_drafts.has_editable_draft_for_board(&board.id)
         {
-            let catalog = self.catalog_provider.get_all_metadata().await;
-            Some(flow_ir_drafts.editable_draft_recovery(board, &catalog, &acceptance_prompt))
+            Some(flow_ir_drafts.editable_draft_recovery(
+                board,
+                &catalog_metadata,
+                &acceptance_prompt,
+            ))
         } else {
             None
         };
 
+        let retained_source = source_recovery
+            .exact_match
+            .as_ref()
+            .filter(|context| !context.stale_board)
+            .and_then(|context| {
+                context.source.as_ref().map(|source| {
+                    (
+                        source.clone(),
+                        context.revision,
+                        (!context.diagnostics.is_empty()).then(|| {
+                            workflow_strategy_fingerprint(&json!({
+                                "diagnostics": context.diagnostics,
+                            }))
+                        }),
+                    )
+                })
+            });
+        let manifest_source = match retained_source {
+            Some((source, revision, diagnostic_fingerprint)) => ManifestSource::new(
+                ManifestSourceStatus::Retained,
+                Some(revision),
+                Some(source),
+                diagnostic_fingerprint,
+            ),
+            None => ManifestSource::new(
+                ManifestSourceStatus::Existing,
+                None,
+                Some(flowscript.clone()),
+                None,
+            ),
+        };
+        let workflow_manifest = (!self.read_only)
+            .then(|| {
+                BoardContextManifest::from_board(
+                    board,
+                    selected_node_ids,
+                    &catalog_metadata,
+                    manifest_source,
+                    ManifestAudit {
+                        request_identity: acceptance_prompt.clone(),
+                        base_fingerprint: board_fingerprint(board),
+                        acceptance_contract_fingerprint: Some(workflow_strategy_fingerprint(
+                            &json!({
+                                "request_identity": acceptance_prompt,
+                            }),
+                        )),
+                        build_id: None,
+                        attributes: std::collections::BTreeMap::from([(
+                            "orchestrator".to_string(),
+                            "flowpilot-shared".to_string(),
+                        )]),
+                    },
+                    ManifestAugmentations::from_host_value(
+                        self.board_context_augmentation.as_ref(),
+                    ),
+                    default_flowscript_module_templates(),
+                )
+                .ok()
+            })
+            .flatten();
+        let workflow_session_started_at = Instant::now();
+        let workflow_session = workflow_manifest.clone().map(|manifest| {
+            let mut session = WorkflowSession::new(manifest, WorkflowSessionPolicy::default());
+            let _ = session.mark_manifest_ready(0);
+            let _ = session.begin_discovery(0);
+            if let (Some(revision), Some(digest)) = (
+                session.manifest().source.revision,
+                session.manifest().source.digest.clone(),
+            ) {
+                let artifact_id = source_recovery
+                    .exact_match
+                    .as_ref()
+                    .map(|context| context.draft_id.clone())
+                    .unwrap_or_else(|| format!("board:{}:source", board.id));
+                let _ = session.record_artifact(
+                    WorkflowArtifactKind::FlowScript,
+                    artifact_id,
+                    revision,
+                    digest,
+                    0,
+                );
+            }
+            Arc::new(StdMutex::new(session))
+        });
+        let workflow_session_snapshot_publisher = workflow_session
+            .as_ref()
+            .zip(self.workflow_session_snapshot_sink.as_ref())
+            .map(|(session, sink)| {
+                WorkflowSessionSnapshotPublisher::new(
+                    session.clone(),
+                    sink.clone(),
+                    workflow_session_started_at,
+                )
+            });
+        if let Some(publisher) = workflow_session_snapshot_publisher.as_ref() {
+            publisher.publish();
+        }
+
         let (model_name, completion_client) = self.get_model(model_id, token).await?;
 
         // Build a compact system prompt
+        let tool_surface = CopilotToolSurface::for_mode(self.read_only);
         let mut system_prompt = Self::build_system_prompt(
             &context_json,
             &flowscript,
@@ -447,14 +857,33 @@ impl Copilot {
             !self.templates.is_empty(),
             run_context.is_some(),
         );
-        if let Some(instruction) = typed_ir_recovery
+        if self.read_only {
+            system_prompt.push_str(
+                "\n\n## HOST MODE: READ ONLY\nExplain or inspect the current board. Do not propose, author, validate, queue, or apply workflow changes. Answer the user's question directly once the available read-only evidence is sufficient.",
+            );
+        } else {
+            system_prompt.push_str(
+                "\n\n## HOST MODE: FLOWSCRIPT AUTHORING\nUse the current FlowScript plus one focused get_declarations batch, call plan_board_scope exactly once unless the host already retained an accepted plan, then write its active segment, patch, check, and commit the retained source. Broad graph/catalog discovery and direct command emission are not available in this authoring run; do not request catalog_search, graph inspection tools, search_by_pin, filter_category, find_connectable_nodes, or emit_commands. Runtime execution and log verification are deferred until the user has accepted and persisted this review; perform them in a later turn against the applied board.",
+            );
+        }
+        if let Some(manifest_prompt) = workflow_manifest
             .as_ref()
-            .and_then(typed_ir_recovery_system_instruction)
+            .and_then(|manifest| manifest.render_authoring_prompt().ok())
+        {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&manifest_prompt);
+        }
+        if !self.read_only
+            && let Some(instruction) = typed_ir_recovery
+                .as_ref()
+                .and_then(typed_ir_recovery_system_instruction)
         {
             system_prompt.push_str("\n\n");
             system_prompt.push_str(&instruction);
         }
-        if let Some(instruction) = flowscript_recovery_system_instruction(&source_recovery) {
+        if !self.read_only
+            && let Some(instruction) = flowscript_recovery_system_instruction(&source_recovery)
+        {
             system_prompt.push_str("\n\n");
             system_prompt.push_str(&instruction);
         }
@@ -466,69 +895,83 @@ impl Copilot {
             .agent(&model_name)
             .preamble(&system_prompt)
             .tool(ThinkTool)
-            .tool(GetNodeDetailsTool {
-                graph_context: graph_context.clone(),
-            })
-            .tool(ListBoardNodesTool {
-                graph_context: graph_context.clone(),
-            })
-            .tool(GetUnconfiguredNodesTool {
-                graph_context: graph_context.clone(),
-            })
-            .tool(FindConnectableNodesTool {
-                provider: self.catalog_provider.clone(),
-                graph_context: graph_context.clone(),
-            })
-            .tool(ModelFacingEmitCommandsTool)
-            .tool(CatalogTool {
-                provider: self.catalog_provider.clone(),
-            })
             .tool(GetCurrentFlowScriptTool {
                 board: board_for_tools.clone(),
             })
             .tool(GetDeclarationsTool {
                 provider: self.catalog_provider.clone(),
-            })
-            .tool(WriteFlowScriptTool {
-                board: board_for_tools.clone(),
-                provider: self.catalog_provider.clone(),
-                store: flow_ir_drafts.clone(),
-                acceptance_binding: acceptance_binding
-                    .clone()
-                    .expect("FlowScript source tools always have a host request binding"),
-            })
-            .tool(PatchFlowScriptTool {
-                board: board_for_tools.clone(),
-                provider: self.catalog_provider.clone(),
-                store: flow_ir_drafts.clone(),
-                acceptance_binding: acceptance_binding
-                    .clone()
-                    .expect("FlowScript source tools always have a host request binding"),
-            })
-            .tool(CheckFlowScriptTool {
-                board: board_for_tools.clone(),
-                provider: self.catalog_provider.clone(),
-                store: flow_ir_drafts.clone(),
-                acceptance_binding: acceptance_binding
-                    .clone()
-                    .expect("FlowScript source tools always have a host request binding"),
-            })
-            .tool(CommitFlowScriptTool {
-                board: board_for_tools.clone(),
-                provider: self.catalog_provider.clone(),
-                store: flow_ir_drafts.clone(),
-                acceptance_binding: acceptance_binding
-                    .clone()
-                    .expect("FlowScript source tools always have a host request binding"),
-            })
-            .tool(SearchByPinTool {
-                provider: self.catalog_provider.clone(),
-            })
-            .tool(FilterCategoryTool {
-                provider: self.catalog_provider.clone(),
             });
 
-        if self.typed_flow_ir_enabled {
+        if tool_surface.exposes("catalog_search") {
+            agent_builder = agent_builder
+                .tool(GetNodeDetailsTool {
+                    graph_context: graph_context.clone(),
+                })
+                .tool(ListBoardNodesTool {
+                    graph_context: graph_context.clone(),
+                })
+                .tool(GetUnconfiguredNodesTool {
+                    graph_context: graph_context.clone(),
+                })
+                .tool(FindConnectableNodesTool {
+                    provider: self.catalog_provider.clone(),
+                    graph_context: graph_context.clone(),
+                })
+                .tool(CatalogTool {
+                    provider: self.catalog_provider.clone(),
+                })
+                .tool(SearchByPinTool {
+                    provider: self.catalog_provider.clone(),
+                })
+                .tool(FilterCategoryTool {
+                    provider: self.catalog_provider.clone(),
+                });
+        }
+
+        if tool_surface.exposes("emit_commands") {
+            agent_builder = agent_builder.tool(ModelFacingEmitCommandsTool);
+        }
+
+        if tool_surface.exposes("write_flowscript") {
+            agent_builder = agent_builder
+                // The in-process path does not have the desktop MCP preflight interceptor, so it
+                // must expose the same declaration -> plan -> source lifecycle explicitly.
+                .tool(PlanBoardScopeTool)
+                .tool(WriteFlowScriptTool {
+                    board: board_for_tools.clone(),
+                    provider: self.catalog_provider.clone(),
+                    store: flow_ir_drafts.clone(),
+                    acceptance_binding: acceptance_binding
+                        .clone()
+                        .expect("FlowScript source tools always have a host request binding"),
+                })
+                .tool(PatchFlowScriptTool {
+                    board: board_for_tools.clone(),
+                    provider: self.catalog_provider.clone(),
+                    store: flow_ir_drafts.clone(),
+                    acceptance_binding: acceptance_binding
+                        .clone()
+                        .expect("FlowScript source tools always have a host request binding"),
+                })
+                .tool(CheckFlowScriptTool {
+                    board: board_for_tools.clone(),
+                    provider: self.catalog_provider.clone(),
+                    store: flow_ir_drafts.clone(),
+                    acceptance_binding: acceptance_binding
+                        .clone()
+                        .expect("FlowScript source tools always have a host request binding"),
+                })
+                .tool(CommitFlowScriptTool {
+                    board: board_for_tools.clone(),
+                    provider: self.catalog_provider.clone(),
+                    store: flow_ir_drafts.clone(),
+                    acceptance_binding: acceptance_binding
+                        .clone()
+                        .expect("FlowScript source tools always have a host request binding"),
+                });
+        }
+
+        if self.typed_flow_ir_enabled && !self.read_only {
             agent_builder = agent_builder
                 .tool(ir_tools::PlanFlowIrTool {
                     provider: self.catalog_provider.clone(),
@@ -573,15 +1016,27 @@ impl Copilot {
 
         if let Some(bridge) = &self.runtime_bridge {
             agent_builder = agent_builder
-                .tool(ExecuteEventTool {
+                .tool(DatabaseContextTool {
                     bridge: bridge.clone(),
                 })
-                .tool(ExecuteNodeTool {
+                .tool(StorageContextTool {
                     bridge: bridge.clone(),
                 })
-                .tool(QueryExecutionLogsTool {
+                .tool(UiInspectContextTool {
                     bridge: bridge.clone(),
                 });
+            if !self.read_only {
+                agent_builder = agent_builder
+                    .tool(ExecuteEventTool {
+                        bridge: bridge.clone(),
+                    })
+                    .tool(ExecuteNodeTool {
+                        bridge: bridge.clone(),
+                    })
+                    .tool(QueryExecutionLogsTool {
+                        bridge: bridge.clone(),
+                    });
+            }
         }
 
         // Add logs query tool if run context is provided
@@ -725,10 +1180,31 @@ impl Copilot {
             typed_ir_operations.complete_recovery_lookup(Some(context));
         }
         let mut current_prompt = prompt_message.clone();
+        let mut first_artifact_sla_prompted = false;
 
         for iteration in 0..MAX_TYPED_IR_ITERATION_BUDGET {
             if iteration >= iteration_budget {
                 break;
+            }
+            if !first_artifact_sla_prompted
+                && let Some(session) = workflow_session.as_ref()
+                && let Ok(mut session) = session.lock()
+                && matches!(
+                    session.observe_first_artifact_sla(
+                        workflow_session_started_at.elapsed().as_millis() as u64,
+                    ),
+                    FirstArtifactSlaStatus::Breached { .. }
+                )
+            {
+                first_artifact_sla_prompted = true;
+                current_history.push(current_prompt.clone());
+                current_prompt = rig::message::Message::User {
+                    content: OneOrMany::one(UserContent::Text(rig::message::Text {
+                        text: "HOST ARTIFACT SLA: No retained workflow artifact exists after the shared 90-second authoring deadline. Stop broad discovery now. Use the cached manifest plus one focused declaration batch, call plan_board_scope exactly once unless the host already retained an accepted plan, then call write_flowscript for its active segment before any further inspection."
+                            .to_string(),
+                        additional_params: None,
+                    })),
+                };
             }
             // Send iteration start event
             if let Some(ref callback) = on_token {
@@ -932,16 +1408,49 @@ impl Copilot {
                     iteration_budget =
                         iteration_budget.max(typed_ir_iteration_budget(module_count));
                 }
+                // Same escalation for the FlowScript path. Without it a whole-app generation got
+                // the 12-round default, which must cover planning, get_declarations, write, every
+                // check/patch repair round and the commit — so large documents ran out of rounds
+                // and the loop terminated with an empty message.
+                if active_workflow_mutation_path
+                    .is_none_or(|path| path == WorkflowMutationPath::FlowScript)
+                    && tool_calls.iter().any(|tool_call| {
+                        workflow_mutation_path(&tool_call.function.name)
+                            == Some(WorkflowMutationPath::FlowScript)
+                    })
+                {
+                    iteration_budget = iteration_budget.max(MIN_FLOWSCRIPT_ITERATION_BUDGET);
+                }
                 let command_count_before_round = all_commands.len();
-                let round_has_pending_board_edit = tool_calls.iter().any(|tool_call| {
-                    matches!(
-                        tool_call.function.name.as_str(),
-                        "edit_flowscript"
-                            | "commit_flowscript"
-                            | "commit_flow_ir_draft"
-                            | "emit_commands"
-                    )
-                });
+                // Reserve every ancillary context read in the provider-neutral session before
+                // ordered or parallel dispatch. The aligned short-circuit vector keeps synthetic
+                // host decisions out of the completion path, so only an executed successful read
+                // commits its lease and a failed read remains exactly retryable.
+                let shared_preflight_results = tool_calls
+                    .iter()
+                    .map(|tool_call| {
+                        if workflow_authoring_defers_runtime_tool(&tool_call.function.name) {
+                            SharedWorkflowToolPreflight {
+                                short_circuit: Some(
+                                    workflow_runtime_verification_deferred_payload().to_string(),
+                                ),
+                                lease: None,
+                            }
+                        } else {
+                            workflow_session.as_ref().map_or_else(
+                                SharedWorkflowToolPreflight::default,
+                                |session| {
+                                    preflight_shared_workflow_session_tool_call(
+                                        session,
+                                        workflow_session_started_at,
+                                        &tool_call.function.name,
+                                        &tool_call.function.arguments,
+                                    )
+                                },
+                            )
+                        }
+                    })
+                    .collect::<Vec<_>>();
 
                 // Announce all tool calls starting
                 let mut frame_ids: Vec<String> = Vec::new();
@@ -977,7 +1486,7 @@ impl Copilot {
                     .iter()
                     .any(|tool_call| workflow_tool_requires_order(&tool_call.function.name))
                 {
-                    for tool_call in &tool_calls {
+                    for (tool_index, tool_call) in tool_calls.iter().enumerate() {
                         let name = tool_call.function.name.clone();
                         let arguments = tool_call.function.arguments.clone();
                         let id = tool_call.id.clone();
@@ -988,7 +1497,13 @@ impl Copilot {
                         if active_workflow_mutation_path.is_none() {
                             active_workflow_mutation_path = requested_path;
                         }
-                        let output = if path_conflict {
+                        let mut tool_dispatched = false;
+                        let output = if let Some(short_circuit) = shared_preflight_results
+                            .get(tool_index)
+                            .and_then(|result| result.short_circuit.clone())
+                        {
+                            short_circuit
+                        } else if path_conflict {
                             json!({
                                 "status": "mutation_path_conflict",
                                 "code": "WORKFLOW_MUTATION_PATH_CONFLICT",
@@ -996,17 +1511,8 @@ impl Copilot {
                                 "message": "A workflow mutation representation is already active for this run. Continue that typed IR, FlowScript, or direct-command path instead of mixing atomic mutation surfaces."
                             })
                             .to_string()
-                        } else if should_defer_runtime_verification(
-                            &name,
-                            round_has_pending_board_edit,
-                        ) {
-                            json!({
-                                "status": "error",
-                                "code": "runtime_verification_deferred",
-                                "retryable": true,
-                                "next_action": "finish_board_edit_then_run_in_a_later_turn",
-                                "error": "Runtime verification cannot run in the same model round as a queued board edit because the host has not applied that edit yet. Finish this edit turn, then execute the persisted node/Event and inspect its run logs."
-                            }).to_string()
+                        } else if workflow_authoring_defers_runtime_tool(&name) {
+                            workflow_runtime_verification_deferred_payload().to_string()
                         } else if let Some(denied) = typed_ir_request_access_preflight(
                             &flow_ir_drafts,
                             &board_for_tools.id,
@@ -1033,6 +1539,7 @@ impl Copilot {
                             }
                             typed_ir_operations.structured_stop_result(stop_reason)
                         } else {
+                            tool_dispatched = true;
                             let output = self
                                 .execute_tool(
                                     &name,
@@ -1051,6 +1558,12 @@ impl Copilot {
                             );
                             output
                         };
+                        if tool_dispatched {
+                            notify_flow_ir_draft_mutation(
+                                self.flow_ir_draft_mutation_hook.as_ref(),
+                                &name,
+                            );
+                        }
                         // Install the cancellation guard in the same poll that observes a
                         // successful commit tool result. Waiting until the whole ordered round is
                         // processed would leave a gap where a later tool await could be cancelled
@@ -1072,7 +1585,8 @@ impl Copilot {
                 } else {
                     let tool_futures: Vec<_> = tool_calls
                         .iter()
-                        .map(|tool_call| {
+                        .enumerate()
+                        .map(|(tool_index, tool_call)| {
                             let name = tool_call.function.name.clone();
                             let arguments = tool_call.function.arguments.clone();
                             let id = tool_call.id.clone();
@@ -1081,18 +1595,33 @@ impl Copilot {
                             let board_ctx = board_for_tools.clone();
                             let ir_drafts = flow_ir_drafts.clone();
                             let request_acceptance_binding = acceptance_binding.clone();
+                            let flow_ir_draft_mutation_hook =
+                                self.flow_ir_draft_mutation_hook.clone();
+                            let short_circuit = shared_preflight_results
+                                .get(tool_index)
+                                .and_then(|result| result.short_circuit.clone());
                             async move {
-                                let output = self
-                                    .execute_tool(
-                                        &name,
-                                        arguments,
-                                        ctx.as_ref(),
-                                        &graph_ctx,
-                                        &board_ctx,
-                                        &ir_drafts,
-                                        request_acceptance_binding.as_ref(),
-                                    )
-                                    .await;
+                                let output = match short_circuit {
+                                    Some(output) => output,
+                                    None => {
+                                        let output = self
+                                            .execute_tool(
+                                                &name,
+                                                arguments,
+                                                ctx.as_ref(),
+                                                &graph_ctx,
+                                                &board_ctx,
+                                                &ir_drafts,
+                                                request_acceptance_binding.as_ref(),
+                                            )
+                                            .await;
+                                        notify_flow_ir_draft_mutation(
+                                            flow_ir_draft_mutation_hook.as_ref(),
+                                            &name,
+                                        );
+                                        output
+                                    }
+                                };
                                 (id, name, output)
                             }
                         })
@@ -1145,7 +1674,27 @@ impl Copilot {
                 }
 
                 // Process results and emit completion events
+                let mut shared_circuit_open = false;
                 for (i, (id, name, tool_output)) in tool_results.iter().enumerate() {
+                    if shared_preflight_results
+                        .get(i)
+                        .is_none_or(|result| result.short_circuit.is_none())
+                        && let Some(session) = workflow_session.as_ref()
+                    {
+                        shared_circuit_open |= record_shared_workflow_session_tool_result(
+                            session,
+                            workflow_session_started_at,
+                            shared_preflight_results
+                                .get(i)
+                                .and_then(|result| result.lease.as_ref()),
+                            name,
+                            tool_calls
+                                .get(i)
+                                .map(|call| &call.function.arguments)
+                                .unwrap_or(&serde_json::Value::Null),
+                            tool_output,
+                        );
+                    }
                     flowpilot_debug_log!(
                         "[Copilot] Tool '{}' (id={}) output length: {} chars",
                         name,
@@ -1186,11 +1735,9 @@ impl Copilot {
                         if let Some(ref callback) = on_token
                             && let Some(payload) =
                                 Self::extract_tag_content(tool_output, "flowscript_workspace")
+                            && let Ok(payload) = serde_json::from_str::<serde_json::Value>(payload)
                         {
-                            callback(format!(
-                                "<flowscript_workspace>{}</flowscript_workspace>",
-                                payload
-                            ));
+                            callback(stream::stream_frame("flowscript_workspace", &payload));
                         }
                     }
 
@@ -1320,11 +1867,21 @@ impl Copilot {
                         ));
                     }
                 }
+                if let Some(publisher) = workflow_session_snapshot_publisher.as_ref() {
+                    publisher.publish();
+                }
 
                 // The host has already enforced the typed operation/stall ceiling and emitted
                 // every announced tool-end frame. Do not pay for another provider round that can
                 // only receive the same terminal envelope again.
                 if typed_ir_tool_results_are_terminal(&tool_results) {
+                    break;
+                }
+                if shared_circuit_open {
+                    terminal_typed_ir_stop = Some(
+                        "The shared FlowPilot zero-progress circuit opened after a repeated repair strategy. The retained artifact and latest compiler diagnostics remain available for a fresh, materially different continuation."
+                            .to_string(),
+                    );
                     break;
                 }
 
@@ -1365,20 +1922,31 @@ impl Copilot {
                 // the assistant's tool call message in a single message. We use that
                 // combined tool-result message as the prompt for the next turn.
                 if !tool_results.is_empty() {
+                    // `<flowscript_workspace>` is the host/UI channel, not a model affordance. It
+                    // has already been consumed above (workspace tracking, the `on_token` preview
+                    // frame, `parse_commands`, the stream frames) and the frontend reads it off the
+                    // transport stream, not off this message. This IS the next round's provider
+                    // payload (`current_prompt`, assigned below and sent at the top of the loop) —
+                    // not a history-only copy. The retained document is by construction exactly
+                    // what the model last wrote or the exact `replacen` it last requested, its own
+                    // `write_flowscript` arguments stay in history at the assistant push above, and
+                    // a run resuming a draft it has not seen gets the source from
+                    // `flowscript_recovery_system_instruction` in the system prompt. Echoing a
+                    // 72 KB document back on every round therefore bought nothing.
                     let mut tool_result_contents: Vec<UserContent> = tool_results
                         .iter()
                         .map(|(tool_id, _tool_name, tool_output)| {
+                            let mut compacted = tool_output.clone();
+                            Self::strip_tag_block(&mut compacted, "flowscript_workspace");
                             UserContent::ToolResult(RigToolResult {
                                 id: tool_id.clone(),
                                 call_id: None,
-                                content: OneOrMany::one(ToolResultContent::text(
-                                    tool_output.clone(),
-                                )),
+                                content: OneOrMany::one(ToolResultContent::text(compacted)),
                             })
                         })
                         .collect();
 
-                    if force_emit_next {
+                    if force_emit_next && !self.read_only {
                         let text = workflow_watchdog_instruction(
                             active_workflow_mutation_path,
                             typed_ir_watchdog_phase,
@@ -1430,6 +1998,7 @@ impl Copilot {
                 // Text-only round without an edit: push back up to twice — a single push is
                 // not enough for models that reply with a plan instead of calling tools.
                 if all_commands.is_empty()
+                    && !self.read_only
                     && forced_text_retries < 2
                     && iteration + 1 < iteration_budget
                 {
@@ -1500,7 +2069,22 @@ impl Copilot {
                     .as_deref()
                     .or(last_emit_validation.as_deref())
                     .map(|message| Self::clean_validation_message(&Self::clean_message(message)))
-                    .unwrap_or_default()
+                    .unwrap_or_else(|| {
+                        // Budget exhaustion mid write/patch/check repair used to fall through to
+                        // an empty string: the run "ended" with nothing visible. Report the
+                        // retained draft honestly instead so the user (and any orchestrator)
+                        // gets a stop reason.
+                        if final_flowscript_workspace.is_some() {
+                            let status = latest_flowscript_workspace_status
+                                .as_deref()
+                                .unwrap_or("validation_errors");
+                            format!(
+                                "I ran out of edit budget before the FlowScript draft passed validation (latest status: {status}). The draft is retained; ask me to continue and I will repair the remaining diagnostics, or narrow the request."
+                            )
+                        } else {
+                            "I could not produce a FlowScript draft for this request within the edit budget. Please retry with a narrower request or more specific details.".to_string()
+                        }
+                    })
             }
         } else {
             cleaned_message
@@ -1511,6 +2095,46 @@ impl Copilot {
         // any error path releases the claim through `PendingFlowIrResponseClaim::drop`.
         if let Some(claim) = pending_flow_ir_response_claim.take() {
             flow_ir_commit = Some(claim.transfer());
+        }
+
+        if let Some(session) = workflow_session.as_ref()
+            && let Ok(mut session) = session.lock()
+        {
+            let elapsed_ms = shared_session_elapsed_ms(workflow_session_started_at);
+            if let Some(token) = flow_ir_commit.as_ref() {
+                let snapshot = session.snapshot(elapsed_ms);
+                if let Some(artifact) = snapshot.artifact
+                    && session.phase() == WorkflowSessionPhase::Validated
+                {
+                    let _ = session.prepare_review(
+                        token.claim_id.clone(),
+                        artifact.revision,
+                        elapsed_ms,
+                    );
+                }
+            }
+            if let Some(callback) = on_token.as_ref()
+                && let Ok(snapshot) = serde_json::to_string(&session.snapshot(elapsed_ms))
+            {
+                callback(stream::detailed_tool_end_frame(
+                    "workflow-session",
+                    "workflow_session_summary",
+                    "done",
+                    Some(if flow_ir_commit.is_some() {
+                        "prepared"
+                    } else {
+                        "completed"
+                    }),
+                    Some("Shared FlowPilot session policy snapshot"),
+                    Some(&stream::safe_tool_result_preview(
+                        &snapshot,
+                        stream::TOOL_RESULT_PREVIEW_CHARS,
+                    )),
+                ));
+            }
+        }
+        if let Some(publisher) = workflow_session_snapshot_publisher.as_ref() {
+            publisher.publish();
         }
 
         let response = CopilotResponse {
@@ -1899,6 +2523,10 @@ impl Copilot {
                     "[]".to_string()
                 }
             }
+            "database_tool" | "storage_tool" | "ui_inspect" => {
+                execute_workflow_context_bridge_tool(self.runtime_bridge.as_ref(), name, arguments)
+                    .await
+            }
             "execute_event" | "execute_node" | "query_execution_logs" => {
                 execute_runtime_bridge_tool(self.runtime_bridge.as_ref(), name, arguments).await
             }
@@ -1984,10 +2612,10 @@ impl Copilot {
     /// Parse commands from the agent's response
     fn parse_commands(response: &str) -> Vec<BoardCommand> {
         // Look for <commands>...</commands> tags
-        if let Some(json_str) = Self::extract_tag_content(response, "commands") {
-            if let Ok(commands) = serde_json::from_str::<Vec<BoardCommand>>(json_str) {
-                return commands;
-            }
+        if let Some(json_str) = Self::extract_tag_content(response, "commands")
+            && let Ok(commands) = serde_json::from_str::<Vec<BoardCommand>>(json_str)
+        {
+            return commands;
         }
         vec![]
     }
@@ -2390,6 +3018,33 @@ async fn execute_runtime_bridge_tool(
     bridge.call(name, arguments).await
 }
 
+async fn execute_workflow_context_bridge_tool(
+    bridge: Option<&Arc<dyn platform::PlatformToolBridge>>,
+    name: &str,
+    arguments: serde_json::Value,
+) -> String {
+    let Some(spec) = tool_spec::find_workflow_context_tool_spec(name) else {
+        return json!({
+            "status": "error",
+            "code": "workflow_context_tool_unknown",
+            "error": format!("Unknown workflow context tool: {name}"),
+        })
+        .to_string();
+    };
+    if let Some(error) = tool_spec::missing_required_args(&spec, &arguments) {
+        return json!({ "status": "error", "error": error }).to_string();
+    }
+    let Some(bridge) = bridge else {
+        return json!({
+            "status": "error",
+            "code": "runtime_bridge_unavailable",
+            "error": "Board context inspection is unavailable in this host session.",
+        })
+        .to_string();
+    };
+    bridge.call(name, arguments).await
+}
+
 /// Mirror the registered `BoundBeginFlowIrDraftTool` for providers whose tool calls are executed
 /// by this module's manual streaming loop. The opaque host binding is deliberately not accepted
 /// from model JSON, and a missing binding fails closed instead of silently starting an unscoped
@@ -2426,16 +3081,14 @@ fn render_missing_direct_request_binding() -> String {
     .to_string()
 }
 
-fn should_defer_runtime_verification(tool_name: &str, round_has_pending_board_edit: bool) -> bool {
-    round_has_pending_board_edit
-        && matches!(
-            tool_name,
-            "execute_event" | "execute_node" | "query_execution_logs"
-        )
-}
-
 const DEFAULT_WORKFLOW_ITERATION_BUDGET: u64 = 12;
 const MIN_TYPED_IR_ITERATION_BUDGET: u64 = 24;
+// The FlowScript path has the same write/check/repair/commit shape as typed IR, so it gets the
+// same floor. It is deliberately NOT scaled by document size: `patch_flowscript` is in
+// `workflow_tool_requires_order`, so a single provider response can carry several sequential
+// patches, and the prompt also offers `write_flowscript { replace_existing: true }` as a
+// whole-document repair. Repair rounds therefore do not track call-site count.
+const MIN_FLOWSCRIPT_ITERATION_BUDGET: u64 = MIN_TYPED_IR_ITERATION_BUDGET;
 // One round for each maximum-sized module plus planning/header/validation/commit and repair room.
 const MAX_TYPED_IR_ITERATION_BUDGET: u64 = ir::MAX_FLOW_IR_MODULES as u64 + 16;
 // A single provider response can contain many sequential tool calls, so iteration limits alone do
@@ -2693,8 +3346,8 @@ impl TypedIrOperationLedger {
     }
 }
 
-const FLOWSCRIPT_FORCE_INSTRUCTION: &str = "You have enough context. Continue the retained FlowScript source lifecycle now. If no source draft exists, call write_flowscript with one fresh draft_id and the complete program. If diagnostics exist, patch that exact revision in place. If the retained revision has no diagnostics, call check_flowscript; after status valid, call commit_flowscript at that exact revision. Preserve all requested helpers, variables, Events, and //@n anchors across repairs. Do not submit TODOs, stubs, plan comments, a test-only Event, or hand-authored command JSON. Use emit_commands only for position-only MoveNode or canvas comments; it cannot mutate layers.";
-const FLOWSCRIPT_FORCE_ESCALATION: &str = "STOP analyzing and take the next FlowScript compiler action now: write the complete source, patch the retained diagnostic at its exact revision, check that revision, or commit it after status valid. Never restart from the live board after a failed draft, reduce the requested program to a smoke test, switch to JSON IR, or answer with only text.";
+const FLOWSCRIPT_FORCE_INSTRUCTION: &str = "You have enough context. Continue the retained FlowScript source lifecycle now. If no source draft exists, reuse or obtain one usable declaration batch, call plan_board_scope exactly once unless the host already retained an accepted plan, then call write_flowscript immediately with one fresh draft_id for its active segment; do not chase omitted or unmatched declaration queries before this recoverable checkpoint. If diagnostics exist, patch that exact revision in place and use only diagnostic-directed declaration lookups. If the retained revision has no diagnostics, call check_flowscript; after status valid, call commit_flowscript at that exact revision. Preserve all requested helpers, variables, Events, and //@n anchors across repairs. Do not submit TODOs, stubs, plan comments, a test-only Event, hand-authored command JSON, or requests for unavailable direct-command tools.";
+const FLOWSCRIPT_FORCE_ESCALATION: &str = "STOP analyzing and take the next FlowScript lifecycle action now: after usable declarations, call plan_board_scope exactly once unless an accepted plan is already retained; then write its active segment, patch the retained diagnostic at its exact revision, check that revision, or commit it after status valid. Never restart from the live board after a failed draft, reduce the requested program to a smoke test, switch to JSON IR, or answer with only text.";
 const TYPED_IR_FORCE_INSTRUCTION: &str = "Continue the active typed Flow IR path now. If plan_flow_ir returned selection_required, copy one semantically compatible candidate.node_type into exact_node_type for every required capability and resubmit the complete plan; only begin_flow_ir_draft after feasible is true. Otherwise repair the capability request from its structured feedback. After the draft exists, add or repair complete modules with update_flow_ir_draft and upsert_flow_ir_module at the exact latest revision, then validate_flow_ir_draft. Preserve every expected module and requested capability. Do not switch mutation representations or answer with only text.";
 const TYPED_IR_FORCE_ESCALATION: &str = "STOP analyzing and continue the typed Flow IR path. If the latest plan contains selection_required, resubmit the complete plan now with one compatible candidate.node_type copied into exact_node_type for every required capability. Otherwise use the exact latest revision and call the next typed draft operation now: begin the feasible planned draft, update its retained header, upsert a complete expected module, or validate it. Preserve full requested scope and do not switch mutation representations.";
 const TYPED_IR_REPAIR_INSTRUCTION: &str = "Repair the retained typed Flow IR at its exact current revision. Follow each structured diagnostic JSON-pointer path; use update_flow_ir_draft for header/expected-module repairs and upsert_flow_ir_module for the named module, then call validate_flow_ir_draft again. Keep all requested capabilities and expected modules. Do not switch mutation representations or replace the draft with a smaller smoke test.";
@@ -3178,6 +3831,159 @@ mod runtime_bridge_tests {
         execution::LogLevel,
     };
 
+    #[test]
+    fn authoring_tool_surface_is_flowscript_only() {
+        let surface = CopilotToolSurface::for_mode(false);
+        for tool_name in [
+            "think",
+            "get_current_flowscript",
+            "get_declarations",
+            "write_flowscript",
+            "patch_flowscript",
+            "check_flowscript",
+            "commit_flowscript",
+        ] {
+            assert!(
+                surface.exposes(tool_name),
+                "expected {tool_name} to be exposed"
+            );
+        }
+        for tool_name in [
+            "get_node_details",
+            "list_board_nodes",
+            "get_unconfigured_nodes",
+            "find_connectable_nodes",
+            "catalog_search",
+            "search_by_pin",
+            "filter_category",
+            "emit_commands",
+        ] {
+            assert!(
+                !surface.exposes(tool_name),
+                "authoring must hide broad/direct tool {tool_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_tool_surface_retains_board_and_catalog_inspection() {
+        let surface = CopilotToolSurface::for_mode(true);
+        for tool_name in [
+            "get_node_details",
+            "list_board_nodes",
+            "get_unconfigured_nodes",
+            "find_connectable_nodes",
+            "catalog_search",
+            "search_by_pin",
+            "filter_category",
+        ] {
+            assert!(
+                surface.exposes(tool_name),
+                "expected {tool_name} to be exposed"
+            );
+        }
+        for tool_name in [
+            "write_flowscript",
+            "patch_flowscript",
+            "check_flowscript",
+            "commit_flowscript",
+            "emit_commands",
+        ] {
+            assert!(
+                !surface.exposes(tool_name),
+                "expected {tool_name} to be hidden"
+            );
+        }
+    }
+
+    #[test]
+    fn draft_mutation_hook_is_scoped_to_source_lifecycle_tools() {
+        let calls = Arc::new(StdMutex::new(0usize));
+        let hook_calls = calls.clone();
+        let hook: FlowIrDraftMutationHook = Arc::new(move || {
+            *hook_calls.lock().unwrap() += 1;
+        });
+
+        for tool_name in [
+            "write_flowscript",
+            "patch_flowscript",
+            "check_flowscript",
+            "commit_flowscript",
+            "get_declarations",
+            "emit_commands",
+        ] {
+            notify_flow_ir_draft_mutation(Some(&hook), tool_name);
+        }
+
+        assert_eq!(*calls.lock().unwrap(), 4);
+    }
+
+    /// The `<flowscript_workspace>` tag is the host/UI channel. It used to be echoed back to the
+    /// provider inside every tool result, so a 72 KB document cost ~37k tokens per FlowScript round
+    /// on top of the copy already in the model's own `write_flowscript` arguments. The structured
+    /// envelope beside it must survive intact — that is what carries diagnostics and revision.
+    #[test]
+    fn flowscript_workspace_echo_is_stripped_from_the_provider_payload() {
+        let mut rendered = String::from(
+            "<flowscript_workspace>{\"source\":\"eventsSimple x() {}\",\"status\":\"valid\"}             </flowscript_workspace>\n<flowscript_draft_result>{\"status\":\"valid\",             \"revision\":3}</flowscript_draft_result>",
+        );
+        Copilot::strip_tag_block(&mut rendered, "flowscript_workspace");
+
+        assert!(
+            !rendered.contains("flowscript_workspace"),
+            "the workspace echo must not reach the provider: {rendered}"
+        );
+        assert!(
+            !rendered.contains("eventsSimple x() {}"),
+            "the document body must not reach the provider: {rendered}"
+        );
+        assert!(
+            rendered.contains("<flowscript_draft_result>") && rendered.contains("\"revision\":3"),
+            "the structured envelope must survive: {rendered}"
+        );
+    }
+
+    #[test]
+    fn flowscript_workspace_round_trip_survives_an_embedded_closing_sentinel() {
+        let source = "eventsSimple() { logInfo({ message: \"</flowscript_workspace>\" }) }";
+        let frame = tools::flowscript_workspace_tag(source, "queued");
+
+        assert_eq!(
+            Copilot::parse_flowscript_workspace(&frame).as_deref(),
+            Some(source)
+        );
+        let payload = Copilot::extract_tag_content(&frame, "flowscript_workspace").unwrap();
+        let payload: serde_json::Value = serde_json::from_str(payload).unwrap();
+        let reemitted = stream::stream_frame("flowscript_workspace", &payload);
+        assert_eq!(
+            Copilot::parse_flowscript_workspace(&reemitted).as_deref(),
+            Some(source)
+        );
+        assert_eq!(
+            Copilot::parse_flowscript_workspace_status(&reemitted).as_deref(),
+            Some("queued")
+        );
+    }
+
+    /// A whole-app FlowScript generation used to get the 12-round default while typed IR got 24+,
+    /// so it ran out of iterations mid-repair and the loop broke out with an empty final message.
+    #[test]
+    fn flowscript_path_leaves_the_twelve_round_default() {
+        assert!(MIN_FLOWSCRIPT_ITERATION_BUDGET > DEFAULT_WORKFLOW_ITERATION_BUDGET);
+        assert!(MIN_FLOWSCRIPT_ITERATION_BUDGET <= MAX_TYPED_IR_ITERATION_BUDGET);
+        for tool in [
+            "write_flowscript",
+            "patch_flowscript",
+            "check_flowscript",
+            "commit_flowscript",
+        ] {
+            assert_eq!(
+                workflow_mutation_path(tool),
+                Some(WorkflowMutationPath::FlowScript)
+            );
+        }
+    }
+
     #[derive(Default)]
     struct RecordingRuntimeBridge {
         calls: Mutex<Vec<(String, serde_json::Value)>>,
@@ -3208,6 +4014,7 @@ mod runtime_bridge_tests {
             log_level: LogLevel::Info,
             execution_mode: ExecutionMode::Hybrid,
             refs: HashMap::new(),
+            internal_refs: HashMap::new(),
             layers: HashMap::new(),
             page_ids: Vec::new(),
             hash: None,
@@ -3255,12 +4062,15 @@ mod runtime_bridge_tests {
     }
 
     #[test]
-    fn runtime_verification_waits_for_queued_board_edits_to_be_applied() {
+    fn runtime_verification_waits_for_the_authoring_turn_to_be_applied() {
         for tool_name in ["execute_event", "execute_node", "query_execution_logs"] {
-            assert!(should_defer_runtime_verification(tool_name, true));
-            assert!(!should_defer_runtime_verification(tool_name, false));
+            assert!(workflow_authoring_defers_runtime_tool(tool_name));
         }
-        assert!(!should_defer_runtime_verification("get_declarations", true));
+        assert!(!workflow_authoring_defers_runtime_tool("get_declarations"));
+        assert_eq!(
+            workflow_runtime_verification_deferred_payload()["code"],
+            "runtime_verification_deferred"
+        );
     }
 
     #[test]

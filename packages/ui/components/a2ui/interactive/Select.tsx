@@ -9,11 +9,14 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../../ui/select";
-import { useComponentActionTrigger, useOnAction } from "../ActionHandler";
+import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import type { BoundValue, SelectComponent } from "../types";
+
+/** Events added after select shipped never inherit `*` or `actions[0]`. */
+const EXACT_ONLY = { legacyFallback: false, wildcardFallback: false };
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	const { resolve } = useData();
@@ -42,7 +45,7 @@ export function A2UISelect({
 	surfaceId,
 }: ComponentProps<SelectComponent>) {
 	const onAction = useOnAction();
-	const triggerAction = useComponentActionTrigger(componentId);
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const value = useResolved<string>(component.value);
 	const options =
 		useResolved<Array<{ value: string; label: string }>>(component.options) ??
@@ -70,7 +73,16 @@ export function A2UISelect({
 				context: { value: newValue },
 			});
 		}
-		void triggerAction(component.actions, { value: newValue });
+		void triggerEvent("change", component, { value: newValue });
+	};
+
+	const handleOpenChange = (open: boolean) => {
+		void triggerEvent(
+			open ? "open" : "close",
+			component,
+			{ value: value ?? "" },
+			EXACT_ONLY,
+		);
 	};
 
 	return (
@@ -82,6 +94,7 @@ export function A2UISelect({
 			<Select
 				value={value ?? ""}
 				onValueChange={handleChange}
+				onOpenChange={handleOpenChange}
 				disabled={disabled}
 			>
 				<SelectTrigger>

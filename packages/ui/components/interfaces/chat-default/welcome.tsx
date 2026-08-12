@@ -2,8 +2,11 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { IEvent, IEventPayloadChat } from "../../../lib";
+import { DEFAULT_CHAT_EXAMPLE_MESSAGES } from "../../../lib/chat-appearance";
+import { createComposerActivity } from "../../../lib/composer-activity";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
+import { ChatPlaceholder } from "./chat-placeholder";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 import { isVoiceEnabled, resolveChatVoiceConfig } from "./voice-config";
 
@@ -12,36 +15,32 @@ interface ChatWelcomeProps {
 	event: IEvent;
 	config?: Partial<IEventPayloadChat>;
 	isSending?: boolean;
+	/** Needed to resolve a storage-backed placeholder image. */
+	appId?: string;
 }
 
-const defaultExamples: string[] = [
-	"Help me brainstorm ideas for a new project",
-	"Explain how machine learning works",
-	"Help me debug this code issue",
-	"What's the latest in technology?",
-	"Write a professional email",
-	"Create a workout plan",
-	"Explain quantum computing",
-	"Help with meal planning",
-];
+const defaultExamples: readonly string[] = DEFAULT_CHAT_EXAMPLE_MESSAGES;
 
 export function ChatWelcome({
 	onSendMessage,
 	event,
 	config = {},
 	isSending = false,
+	appId,
 }: Readonly<ChatWelcomeProps>) {
 	const [currentMessage, setCurrentMessage] = useState("");
 	const [voiceModeOpen, setVoiceModeOpen] = useState(false);
 	const chatBox = useRef<ChatBoxRef>(null);
+	// One channel per welcome screen — the mark must answer this composer, not another chat's.
+	const activity = useRef(createComposerActivity()).current;
 	const description = event.description?.trim();
 	const voiceConfig = useMemo(() => resolveChatVoiceConfig(config), [config]);
 	const voiceEnabled = isVoiceEnabled(voiceConfig);
 
 	const handleVoiceModeSend = useCallback(
-		(audioFile: File) => {
+		(content: string, audioFile?: File) => {
 			setVoiceModeOpen(false);
-			onSendMessage("", [audioFile]);
+			void onSendMessage(content, undefined, undefined, audioFile);
 		},
 		[onSendMessage],
 	);
@@ -255,24 +254,36 @@ export function ChatWelcome({
 				</div>
 			)}
 			{/* Welcome Content */}
-			<div className="flex min-h-0 flex-1 items-start justify-center overflow-y-auto p-3 sm:items-center sm:p-6 lg:p-8">
+			<div className="flex min-h-0 flex-1 justify-center overflow-y-auto p-3 sm:p-6 lg:p-8">
 				<div
-					className="w-full space-y-6"
+					className="my-auto w-full space-y-6"
 					data-fl-chat-welcome-panel
 					style={{
 						maxWidth: "min(var(--fl-chat-content-width, 64rem), 40rem)",
 					}}
 				>
-					{/* Header */}
-					<div className="space-y-2 text-center" data-fl-chat-welcome-header>
-						<h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-							{event.name}
-						</h1>
-						{description && (
-							<p className="line-clamp-2 text-base text-muted-foreground">
-								{description}
-							</p>
-						)}
+					{/* The mark carries the invitation; the app's own name stays as the
+					    single line of context a user needs to know where they are. */}
+					<div
+						className="flex flex-col items-center gap-3"
+						data-fl-chat-welcome-header
+					>
+						<ChatPlaceholder
+							config={config}
+							appId={appId}
+							size={168}
+							activity={activity}
+						/>
+						<div className="space-y-1 text-center">
+							<h1 className="text-base font-semibold tracking-tight">
+								{event.name}
+							</h1>
+							{description && (
+								<p className="line-clamp-2 text-sm text-muted-foreground">
+									{description}
+								</p>
+							)}
+						</div>
 					</div>
 
 					<div className="mx-auto max-w-2xl space-y-3">
@@ -283,11 +294,13 @@ export function ChatWelcome({
 							onSendMessage={onSendMessage}
 							onContentChange={(content) => {
 								setCurrentMessage(content);
+								activity.report(content);
 							}}
 							fileUpload={config?.allow_file_upload ?? false}
 							audioInput={voiceEnabled}
 							voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}
 							voiceInvoke={voiceConfig.invoke}
+							voiceMaxDuration={voiceConfig.maxDuration}
 							onVoiceModeToggle={
 								voiceEnabled && voiceConfig.invoke === "auto"
 									? () => setVoiceModeOpen(true)

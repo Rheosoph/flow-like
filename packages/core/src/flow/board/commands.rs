@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use flow_like_types::async_trait;
 use schemars::JsonSchema;
@@ -127,4 +127,72 @@ pub enum GenericCommand {
     UpsertVariable(variables::upsert_variable::UpsertVariableCommand),
     UpsertLayer(layer::upsert_layer::UpsertLayerCommand),
     RemoveLayer(layer::remove_layer::RemoveLayerCommand),
+}
+
+/// Stable digest for a typed command batch. Commands contain nested `HashMap`s, so serializing the
+/// structs directly would make retry identities depend on randomized map iteration order. Routing
+/// every backend through this helper keeps idempotency semantics provider-neutral.
+pub fn canonical_commands_digest(commands: &[GenericCommand]) -> flow_like_types::Result<String> {
+    let value = canonicalize_json(flow_like_types::json::to_value(commands)?);
+    let encoded = canonical_json::ser::to_string(&value)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"flow-like.command-batch/v1\0");
+    hasher.update(encoded.as_bytes());
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn canonicalize_json(value: flow_like_types::Value) -> flow_like_types::Value {
+    use flow_like_types::Value;
+
+    match value {
+        Value::Array(values) => Value::Array(values.into_iter().map(canonicalize_json).collect()),
+        Value::Object(values) => {
+            let sorted = values
+                .into_iter()
+                .map(|(key, value)| (key, canonicalize_json(value)))
+                .collect::<BTreeMap<_, _>>();
+            Value::Object(sorted.into_iter().collect())
+        }
+        value => value,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::flow::board::commands::nodes::copy_paste::CopyPasteCommand;
+
+    fn copy_paste_with_refs(entries: &[(&str, &str)]) -> GenericCommand {
+        let mut command =
+            CopyPasteCommand::new(Vec::new(), Vec::new(), Vec::new(), (0.0, 0.0, 0.0));
+        command.original_refs = entries
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect::<HashMap<_, _>>();
+        GenericCommand::CopyPaste(command)
+    }
+
+    #[test]
+    fn canonical_command_digest_ignores_hash_map_iteration_order() {
+        let left = vec![copy_paste_with_refs(&[("a", "1"), ("b", "2"), ("c", "3")])];
+        let right = vec![copy_paste_with_refs(&[("c", "3"), ("b", "2"), ("a", "1")])];
+
+        assert_eq!(
+            canonical_commands_digest(&left).expect("left digest"),
+            canonical_commands_digest(&right).expect("right digest")
+        );
+    }
+
+    #[test]
+    fn canonical_command_digest_changes_with_payload() {
+        let left = vec![copy_paste_with_refs(&[("a", "1")])];
+        let right = vec![copy_paste_with_refs(&[("a", "2")])];
+
+        assert_ne!(
+            canonical_commands_digest(&left).expect("left digest"),
+            canonical_commands_digest(&right).expect("right digest")
+        );
+    }
 }

@@ -61,7 +61,7 @@ pub struct SalesDashboardResponse {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/sales/dashboard", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/sales/dashboard", skip(state, user, query))]
 pub async fn dashboard(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

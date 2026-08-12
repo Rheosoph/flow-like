@@ -59,9 +59,12 @@ import {
 	SidebarRail,
 	Textarea,
 	useBackend,
+	useDeveloperMode,
 	useInvalidateInvoke,
 	useInvoke,
 	useSidebar,
+	userDisplayName,
+	userInitials,
 } from "@flow-like/flow-like-ui";
 import { createId } from "@paralleldrive/cuid2";
 import * as Sentry from "@sentry/nextjs";
@@ -88,6 +91,7 @@ import { type ComponentType, useCallback, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { fetcher } from "../lib/api";
+import { currentRelativeUrl } from "../lib/return-url";
 import { Shortcuts } from "./shortcuts";
 
 const data = {
@@ -122,6 +126,7 @@ const data = {
 			icon: AnimatedBrainIcon,
 			isActive: false,
 			permission: false,
+			devOnly: true,
 			items: [],
 		},
 		{
@@ -672,6 +677,7 @@ interface INavItem {
 	icon?: NavIcon;
 	isActive?: boolean;
 	permission?: boolean;
+	devOnly?: boolean;
 	items?: {
 		title: string;
 		url: string;
@@ -829,6 +835,7 @@ function NavMain({
 	const router = useRouter();
 	const pathname = usePathname();
 	const { open } = useSidebar();
+	const { developerMode } = useDeveloperMode();
 	const info = useInvoke(backend.userState.getInfo, backend.userState, []);
 
 	return (
@@ -838,6 +845,7 @@ function NavMain({
 				<SidebarMenu>
 					{items
 						.filter((item) => !item.permission)
+						.filter((item) => !item.devOnly || developerMode)
 						.map((item) =>
 							item.items && item.items.length > 0 ? (
 								<NavCollapsible
@@ -946,6 +954,7 @@ export function NavUser({
 	const { isMobile } = useSidebar();
 	const auth = useAuth();
 	const backend = useBackend();
+	const { developerMode } = useDeveloperMode();
 	const authQueryDeps = [auth?.user?.profile?.sub, auth?.isAuthenticated];
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -962,11 +971,15 @@ export function NavUser({
 		authQueryDeps,
 	);
 
-	const displayName: string = useMemo(() => {
-		if (!info.data) return "Offline";
+	const displayName: string = useMemo(
+		() => userDisplayName(info.data, "Offline"),
+		[info.data],
+	);
 
-		return info.data?.name ?? info.data?.preferred_username ?? "Offline";
-	}, [info.data]);
+	const initials: string = useMemo(
+		() => userInitials(displayName, "?"),
+		[displayName],
+	);
 
 	const email: string = useMemo(() => {
 		return info.data?.email ?? "Anonymous";
@@ -997,12 +1010,9 @@ export function NavUser({
 							whileHover="hover"
 						>
 							<Avatar className="h-8 w-8 rounded-lg">
-								<AvatarImage
-									src={info.data?.avatar}
-									alt={user?.name ?? "Offline"}
-								/>
+								<AvatarImage src={info.data?.avatar} alt={displayName} />
 								<AvatarFallback className="rounded-lg">
-									{displayName.slice(0, 2).toUpperCase()}
+									{initials}
 								</AvatarFallback>
 							</Avatar>
 							{notificationCount > 0 && (
@@ -1028,9 +1038,9 @@ export function NavUser({
 						<DropdownMenuLabel className="p-0 font-normal">
 							<div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
 								<Avatar className="h-8 w-8 rounded-lg">
-									<AvatarImage src={info.data?.avatar} alt={"User Avatar"} />
+									<AvatarImage src={info.data?.avatar} alt={displayName} />
 									<AvatarFallback className="rounded-lg">
-										{displayName.slice(0, 2).toUpperCase()}
+										{initials}
 									</AvatarFallback>
 								</Avatar>
 								<div className="grid flex-1 text-left text-sm leading-tight">
@@ -1099,18 +1109,22 @@ export function NavUser({
 											Notifications
 										</DropdownMenuItem>
 									</a>
-									<a href="/account/pat">
-										<DropdownMenuItem className="gap-2 p-2">
-											<KeyIcon className="size-4" />
-											Token
-										</DropdownMenuItem>
-									</a>
-									<a href="/settings/sinks">
-										<DropdownMenuItem className="gap-2 p-2">
-											<ZapIcon className="size-4" />
-											Active Sinks
-										</DropdownMenuItem>
-									</a>
+									{developerMode && (
+										<>
+											<a href="/account/pat">
+												<DropdownMenuItem className="gap-2 p-2">
+													<KeyIcon className="size-4" />
+													Token
+												</DropdownMenuItem>
+											</a>
+											<a href="/settings/sinks">
+												<DropdownMenuItem className="gap-2 p-2">
+													<ZapIcon className="size-4" />
+													Active Sinks
+												</DropdownMenuItem>
+											</a>
+										</>
+									)}
 								</DropdownMenuGroup>
 								<DropdownMenuSeparator />
 								<DropdownMenuItem
@@ -1134,7 +1148,9 @@ export function NavUser({
 									}
 									try {
 										console.log("[Login] Starting signinRedirect...");
-										await auth.signinRedirect();
+										await auth.signinRedirect({
+											url_state: currentRelativeUrl(),
+										});
 										console.log("[Login] signinRedirect completed");
 									} catch (error) {
 										console.error("[Login] signinRedirect failed:", error);

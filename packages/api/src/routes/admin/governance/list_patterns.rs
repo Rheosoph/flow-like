@@ -65,7 +65,7 @@ struct FlaggedRow {
         (status = 403, description = "Forbidden")
     )
 )]
-#[tracing::instrument(name = "GET /admin/governance/patterns", skip(state, user))]
+#[tracing::instrument(name = "GET /admin/governance/patterns", skip_all)]
 pub async fn list_patterns(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -119,13 +119,13 @@ pub async fn list_patterns(
         })
         .collect();
 
-    if let Some(search) = query.search.as_ref().map(|s| s.trim().to_lowercase()) {
-        if !search.is_empty() {
-            items.retain(|item| {
-                item.node.to_lowercase().contains(&search)
-                    || item.category.to_lowercase().contains(&search)
-            });
-        }
+    if let Some(search) = query.search.as_ref().map(|s| s.trim().to_lowercase())
+        && !search.is_empty()
+    {
+        items.retain(|item| {
+            item.node.to_lowercase().contains(&search)
+                || item.category.to_lowercase().contains(&search)
+        });
     }
 
     items.sort_by(|a, b| {

@@ -3,11 +3,11 @@
 //! Walks exec edges to build ordered statement blocks, inlines pure nodes as expressions,
 //! and binds impure-node outputs to `const` names. See `todo/ast.md` §6.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use flow_like_ast::model::*;
 
-use crate::flow::board::{Board, Layer, LayerType};
+use crate::flow::board::{Board, Layer, LayerCacheScope, LayerType};
 use crate::flow::node::Node;
 use crate::flow::pin::{Pin, PinType};
 use crate::flow::variable::{Variable, VariableType};
@@ -147,11 +147,24 @@ mod util {
 
     /// Decode a pin/variable JSON default (`Vec<u8>`) into an AST `Literal`.
     pub fn decode_default(bytes: &[u8]) -> Option<Literal> {
+        let value = decode_value(bytes)?;
+        literal_from_value(&value)
+    }
+
+    /// Decode a configured JSON default while preserving an explicit `null` value.
+    pub fn decode_default_preserving_null(bytes: &[u8]) -> Option<Literal> {
+        let value = decode_value(bytes)?;
+        match value {
+            flow_like_types::Value::Null => Some(Literal::Null),
+            other => literal_from_value(&other),
+        }
+    }
+
+    fn decode_value(bytes: &[u8]) -> Option<flow_like_types::Value> {
         if bytes.is_empty() {
             return None;
         }
-        let value: flow_like_types::Value = flow_like_types::json::from_slice(bytes).ok()?;
-        literal_from_value(&value)
+        flow_like_types::json::from_slice(bytes).ok()
     }
 
     pub fn literal_from_value(value: &flow_like_types::Value) -> Option<Literal> {
@@ -557,10 +570,10 @@ impl<'a> Lowering<'a> {
         let mut seen: HashSet<&str> = HashSet::new();
 
         for target_pin_id in &source.connected_to {
-            if seen.insert(target_pin_id.as_str()) {
-                if let Some(pin) = self.pins.get(target_pin_id.as_str()).copied() {
-                    pins.push(pin);
-                }
+            if seen.insert(target_pin_id.as_str())
+                && let Some(pin) = self.pins.get(target_pin_id.as_str()).copied()
+            {
+                pins.push(pin);
             }
         }
 
@@ -631,6 +644,21 @@ impl<'a> Lowering<'a> {
             params,
             returns,
             body,
+            cache: layer
+                .cache
+                .as_ref()
+                .filter(|cache| cache.enabled)
+                .map(|cache| FunctionCache {
+                    namespace: cache.prefix.clone(),
+                    // Persisted layer caches historically use either `None` or `0` for a
+                    // permanent entry. FlowScript omission now means five minutes, so lower both
+                    // permanent forms to an explicit zero to preserve behavior on round-trip.
+                    ttl_seconds: Some(cache.ttl_seconds.unwrap_or(0)),
+                    scope: match cache.scope {
+                        LayerCacheScope::App => FunctionCacheScope::App,
+                        LayerCacheScope::User => FunctionCacheScope::User,
+                    },
+                }),
             anchor: Some(layer.id.clone()),
         }
     }
@@ -783,15 +811,227 @@ impl<'a> Lowering<'a> {
                 .unwrap_or_default();
             let body = self.walk_entry_body(entry);
             events.push(EventBlock {
-                name: event_name(entry),
+                name: event_type_name(entry),
                 node_type: entry.name.clone(),
-                event_name: None,
+                event_name: event_alias(entry),
                 params,
                 body,
                 anchor: Some(entry.id.clone()),
             });
         }
-        events
+        self.nest_root_agent_tool_handlers(events)
+    }
+
+    /// Root-level tool entry nodes are stored beside their owning app event on the board, even
+    /// though FlowScript gives them lexical ownership by nesting them in that event's body. The
+    /// registration node plus a concrete cross-entry data edge is the authoritative relationship:
+    /// when one root event body registers a referenceable root entry and that handler consumes an
+    /// output of the event, move the entry under the event as a `Stmt::Handler`.
+    ///
+    /// Do this only for a unique capturing owner. An entry that captures outputs from multiple
+    /// registering root events (or is involved in a malformed ownership cycle) remains top-level
+    /// rather than guessing a scope and silently changing what a bare reference resolves to.
+    fn nest_root_agent_tool_handlers(&self, events: Vec<EventBlock>) -> Vec<EventBlock> {
+        if events.len() < 2 {
+            return events;
+        }
+
+        let event_index_by_anchor: HashMap<&str, usize> = events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| event.anchor.as_deref().map(|anchor| (anchor, index)))
+            .collect();
+        let mut owners_by_handler: HashMap<usize, HashSet<usize>> = HashMap::new();
+
+        for (owner_index, event) in events.iter().enumerate() {
+            let mut calls = Vec::new();
+            collect_calls_in_block(&event.body, &mut calls);
+            for call in calls {
+                let Some(register) = call
+                    .anchor
+                    .as_deref()
+                    .and_then(|anchor| self.nodes_by_id.get(anchor).copied())
+                else {
+                    continue;
+                };
+                if !AGENT_REGISTER_TOOLS.contains(&register.name.as_str()) {
+                    continue;
+                }
+                let Some(fn_refs) = register
+                    .fn_refs
+                    .as_ref()
+                    .filter(|refs| refs.can_reference_fns)
+                else {
+                    continue;
+                };
+
+                for target_id in &fn_refs.fn_refs {
+                    let Some(&handler_index) = event_index_by_anchor.get(target_id.as_str()) else {
+                        continue;
+                    };
+                    if handler_index == owner_index {
+                        continue;
+                    }
+                    let is_referenceable_entry = self
+                        .nodes_by_id
+                        .get(target_id.as_str())
+                        .and_then(|target| target.fn_refs.as_ref())
+                        .is_some_and(|refs| refs.can_be_referenced_by_fns);
+                    if !is_referenceable_entry {
+                        continue;
+                    }
+                    let Some(owner_id) = event.anchor.as_deref() else {
+                        continue;
+                    };
+                    // A nested handler parameter would shadow the owner's same-named capture.
+                    // Keep that still-ambiguous shape top-level until FlowScript can qualify
+                    // cross-handler sources explicitly.
+                    if event.params.iter().any(|owner_param| {
+                        events[handler_index]
+                            .params
+                            .iter()
+                            .any(|handler_param| handler_param.name == owner_param.name)
+                    }) {
+                        continue;
+                    }
+                    if !self.handler_captures_event_output(&events[handler_index], owner_id) {
+                        continue;
+                    }
+                    owners_by_handler
+                        .entry(handler_index)
+                        .or_default()
+                        .insert(owner_index);
+                }
+            }
+        }
+
+        let mut parent_by_child: HashMap<usize, usize> = owners_by_handler
+            .into_iter()
+            .filter_map(|(child, owners)| {
+                (owners.len() == 1).then(|| (child, *owners.iter().next().expect("one owner")))
+            })
+            .collect();
+
+        // Reject every ownership path that reaches a cycle. This also keeps descendants of a
+        // malformed cycle at the root instead of partially nesting an unsafe hierarchy.
+        let cyclic_paths: HashSet<usize> = parent_by_child
+            .keys()
+            .copied()
+            .filter(|start| {
+                let mut seen = HashSet::new();
+                let mut current = *start;
+                loop {
+                    if !seen.insert(current) {
+                        return true;
+                    }
+                    let Some(parent) = parent_by_child.get(&current).copied() else {
+                        return false;
+                    };
+                    current = parent;
+                }
+            })
+            .collect();
+        parent_by_child.retain(|child, parent| {
+            !cyclic_paths.contains(child) && !cyclic_paths.contains(parent)
+        });
+
+        let mut children_by_parent: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (&child, &parent) in &parent_by_child {
+            children_by_parent.entry(parent).or_default().push(child);
+        }
+        for children in children_by_parent.values_mut() {
+            children.sort_unstable();
+        }
+
+        fn assemble_event(
+            index: usize,
+            slots: &mut [Option<EventBlock>],
+            children_by_parent: &HashMap<usize, Vec<usize>>,
+        ) -> EventBlock {
+            let mut event = slots[index]
+                .take()
+                .expect("each lowered event is assembled exactly once");
+            if let Some(children) = children_by_parent.get(&index) {
+                for child in children {
+                    event.body.stmts.push(Stmt::Handler(assemble_event(
+                        *child,
+                        slots,
+                        children_by_parent,
+                    )));
+                }
+            }
+            event
+        }
+
+        let mut slots: Vec<Option<EventBlock>> = events.into_iter().map(Some).collect();
+        let mut nested = Vec::new();
+        for index in 0..slots.len() {
+            if !parent_by_child.contains_key(&index) {
+                nested.push(assemble_event(index, &mut slots, &children_by_parent));
+            }
+        }
+        // Defensive fallback for malformed ownership metadata not covered above: never drop an
+        // event from rendered FlowScript.
+        nested.extend(slots.into_iter().flatten());
+        nested
+    }
+
+    /// Whether an emitted handler body has a data dependency on one of `owner_id`'s outputs.
+    /// That concrete cross-entry edge is the evidence that the handler needs the registering
+    /// event's lexical parameter scope; registration alone is not enough because the same tool
+    /// entry may intentionally be shared by independent events.
+    fn handler_captures_event_output(&self, handler: &EventBlock, owner_id: &str) -> bool {
+        let mut calls = Vec::new();
+        collect_calls_in_block(&handler.body, &mut calls);
+        calls.into_iter().any(|call| {
+            let Some(node) = call
+                .anchor
+                .as_deref()
+                .and_then(|anchor| self.nodes_by_id.get(anchor).copied())
+            else {
+                return false;
+            };
+            node.pins
+                .values()
+                .filter(|pin| pin.pin_type == PinType::Input && !is_exec(pin))
+                .flat_map(|pin| &pin.depends_on)
+                .any(|source_pin_id| {
+                    self.data_source_reaches_node(source_pin_id, owner_id, &mut HashSet::new())
+                })
+        })
+    }
+
+    /// Follow upstream data plumbing from one source pin. Pure transforms and reroutes still
+    /// carry the owner event's lexical value, so recurse through every non-exec input while
+    /// guarding malformed graph cycles by pin id.
+    fn data_source_reaches_node(
+        &self,
+        source_pin_id: &str,
+        target_node_id: &str,
+        seen: &mut HashSet<String>,
+    ) -> bool {
+        if !seen.insert(source_pin_id.to_string()) {
+            return false;
+        }
+        if let Some(source_node) = self.pin_owner.get(source_pin_id).copied() {
+            if source_node.id == target_node_id {
+                return true;
+            }
+            return source_node
+                .pins
+                .values()
+                .filter(|pin| pin.pin_type == PinType::Input && !is_exec(pin))
+                .flat_map(|pin| &pin.depends_on)
+                .any(|upstream| self.data_source_reaches_node(upstream, target_node_id, seen));
+        }
+        self.boundary_pins
+            .get(source_pin_id)
+            .is_some_and(|boundary| {
+                boundary
+                    .depends_on
+                    .iter()
+                    .any(|upstream| self.data_source_reaches_node(upstream, target_node_id, seen))
+            })
     }
 
     /// Collect an event entry's non-exec data output pins as a typed parameter list, registering
@@ -879,9 +1119,9 @@ impl<'a> Lowering<'a> {
                     .unwrap_or_default();
                 let body = self.walk_entry_body(entry);
                 block.stmts.push(Stmt::Handler(EventBlock {
-                    name: event_name(entry),
+                    name: event_type_name(entry),
                     node_type: entry.name.clone(),
-                    event_name: None,
+                    event_name: event_alias(entry),
                     params,
                     body,
                     anchor: Some(entry.id.clone()),
@@ -909,17 +1149,7 @@ impl<'a> Lowering<'a> {
             }
         } else {
             let mut block = Block::default();
-            let mut arms = Vec::new();
-            for pin in exec_outs {
-                let body = match self.first_exec_target(pin) {
-                    Some(target) => self.walk_from(&target),
-                    None => Block::default(),
-                };
-                arms.push(BranchArm {
-                    label: arm_label(entry, pin),
-                    body,
-                });
-            }
+            let (arms, join) = self.lower_exec_arms(entry, &exec_outs, None);
             block.stmts.push(Stmt::Branch {
                 bind: None,
                 call: self.build_call(entry),
@@ -927,16 +1157,30 @@ impl<'a> Lowering<'a> {
                 arms,
                 anchor: Some(entry.id.clone()),
             });
+            if let Some(join) = join {
+                let mut continuation = self.walk_from(&join);
+                block.stmts.append(&mut continuation.stmts);
+            }
             block
         }
     }
 
     /// Follow the linear exec chain from `node_id`, opening nested blocks at branch nodes.
     fn walk_from(&mut self, node_id: &str) -> Block {
+        self.walk_from_until(node_id, None)
+    }
+
+    /// Follow an exec chain without consuming `stop_before`. Branch arms use this to leave a
+    /// shared post-branch continuation for the enclosing block instead of whichever arm happens
+    /// to be visited first.
+    fn walk_from_until(&mut self, node_id: &str, stop_before: Option<&str>) -> Block {
         let mut block = Block::default();
         let mut current = Some(node_id.to_string());
 
         while let Some(nid) = current.take() {
+            if stop_before == Some(nid.as_str()) {
+                break;
+            }
             if self.visited.contains(&nid) {
                 break;
             }
@@ -967,24 +1211,14 @@ impl<'a> Lowering<'a> {
             }
 
             // Conditional branch: render `if (cond) { } [else { }]`, with the connected exec
-            // outputs as the arms. Always terminal; downstream joins are handled via `visited`.
+            // outputs as the arms. A common postdominating fan-in resumes the enclosing block.
             if node.name == CONTROL_BRANCH {
                 let condition = call
                     .args
                     .iter()
                     .find(|a| a.name == CONDITION_PIN)
                     .map(|a| a.value.clone());
-                let mut arms = Vec::new();
-                for pin in exec_outs {
-                    let body = match self.first_exec_target(pin) {
-                        Some(target) => self.walk_from(&target),
-                        None => Block::default(),
-                    };
-                    arms.push(BranchArm {
-                        label: arm_label(node, pin),
-                        body,
-                    });
-                }
+                let (arms, join) = self.lower_exec_arms(node, &exec_outs, stop_before);
                 block.stmts.push(Stmt::Branch {
                     bind: None,
                     call,
@@ -992,7 +1226,7 @@ impl<'a> Lowering<'a> {
                     arms,
                     anchor: Some(node.id.clone()),
                 });
-                current = None;
+                current = join;
                 continue;
             }
 
@@ -1004,17 +1238,7 @@ impl<'a> Lowering<'a> {
                 // choosing a branch. Render the actual connected outputs as labelled arms so the
                 // reverse direction can preserve success/error/custom branches instead of
                 // flattening them into a guessed linear path.
-                let mut arms = Vec::new();
-                for pin in exec_outs {
-                    let body = match self.first_exec_target(pin) {
-                        Some(target) => self.walk_from(&target),
-                        None => Block::default(),
-                    };
-                    arms.push(BranchArm {
-                        label: arm_label(node, pin),
-                        body,
-                    });
-                }
+                let (arms, join) = self.lower_exec_arms(node, &exec_outs, stop_before);
                 block.stmts.push(Stmt::Branch {
                     bind: self.bindings.get(&node.id).cloned(),
                     call,
@@ -1022,12 +1246,183 @@ impl<'a> Lowering<'a> {
                     arms,
                     anchor: Some(node.id.clone()),
                 });
-                // Branch terminates the linear chain; joins are handled via `visited`.
-                current = None;
+                current = join;
             }
         }
 
         block
+    }
+
+    /// Lower every connected execution output as a labelled arm. When all arms must pass through
+    /// one nearest fan-in node, stop each arm immediately before that node and return it as the
+    /// enclosing continuation. Nested arms also inherit their caller's stop so they cannot consume
+    /// a join owned by an outer branch when they have no nearer structured join of their own.
+    fn lower_exec_arms(
+        &mut self,
+        node: &'a Node,
+        exec_outs: &[&'a Pin],
+        enclosing_stop: Option<&str>,
+    ) -> (Vec<BranchArm>, Option<String>) {
+        let join = self.shared_exec_join(exec_outs);
+        let arm_stop = join.as_deref().or(enclosing_stop);
+        let mut arms = Vec::with_capacity(exec_outs.len());
+        for pin in exec_outs {
+            let body = match self.first_exec_target(pin) {
+                Some(target) => self.walk_from_until(&target, arm_stop),
+                None => Block::default(),
+            };
+            arms.push(BranchArm {
+                label: arm_label(node, pin),
+                body,
+            });
+        }
+        (arms, join)
+    }
+
+    /// Find the nearest execution node that every connected output must reach. Reconcile models
+    /// statements after a branch as a legal multi-source exec input; lowering must recognize that
+    /// fan-in explicitly rather than relying on global `visited`, which nests the continuation in
+    /// whichever arm is traversed first.
+    fn shared_exec_join(&self, exec_outs: &[&Pin]) -> Option<String> {
+        if exec_outs.len() < 2 {
+            return None;
+        }
+
+        let starts: Vec<String> = exec_outs
+            .iter()
+            .map(|pin| self.first_exec_target(pin))
+            .collect::<Option<_>>()?;
+        let distances: Vec<HashMap<String, usize>> = starts
+            .iter()
+            .map(|start| self.exec_distances(start))
+            .collect();
+        let first = distances.first()?;
+
+        first
+            .keys()
+            .filter(|candidate| {
+                !self.visited.contains(candidate.as_str())
+                    && self.is_exec_fan_in(candidate)
+                    && distances
+                        .iter()
+                        .all(|reachable| reachable.contains_key(candidate.as_str()))
+                    && starts
+                        .iter()
+                        .all(|start| self.exec_postdominates(start, candidate))
+            })
+            .min_by_key(|candidate| {
+                let max_distance = distances
+                    .iter()
+                    .filter_map(|reachable| reachable.get(candidate.as_str()))
+                    .copied()
+                    .max()
+                    .unwrap_or(usize::MAX);
+                let total_distance = distances
+                    .iter()
+                    .filter_map(|reachable| reachable.get(candidate.as_str()))
+                    .copied()
+                    .sum::<usize>();
+                (max_distance, total_distance, (*candidate).clone())
+            })
+            .cloned()
+    }
+
+    /// Breadth-first execution distance from one arm target. Distances make the first common
+    /// postdominator win when several nodes in the shared continuation satisfy the predicate.
+    fn exec_distances(&self, start: &str) -> HashMap<String, usize> {
+        let mut distances = HashMap::from([(start.to_string(), 0usize)]);
+        let mut queue = VecDeque::from([start.to_string()]);
+        while let Some(current) = queue.pop_front() {
+            let next_distance = distances[&current].saturating_add(1);
+            let (successors, _) = self.exec_successors(&current);
+            for successor in successors {
+                if distances.contains_key(&successor) {
+                    continue;
+                }
+                distances.insert(successor.clone(), next_distance);
+                queue.push_back(successor);
+            }
+        }
+        distances
+    }
+
+    /// Whether every execution path from `start` reaches `candidate`. A reachable cycle or
+    /// terminal output that avoids the candidate fails closed, preventing an unsafe hoist from a
+    /// merely common-but-optional downstream node.
+    fn exec_postdominates(&self, start: &str, candidate: &str) -> bool {
+        fn all_paths_reach(
+            lowering: &Lowering<'_>,
+            current: &str,
+            candidate: &str,
+            visiting: &mut HashSet<String>,
+            memo: &mut HashMap<String, bool>,
+        ) -> bool {
+            if current == candidate {
+                return true;
+            }
+            if let Some(result) = memo.get(current) {
+                return *result;
+            }
+            if !visiting.insert(current.to_string()) {
+                return false;
+            }
+
+            let (successors, has_terminal_output) = lowering.exec_successors(current);
+            let result = !has_terminal_output
+                && !successors.is_empty()
+                && successors.iter().all(|successor| {
+                    all_paths_reach(lowering, successor, candidate, visiting, memo)
+                });
+            visiting.remove(current);
+            memo.insert(current.to_string(), result);
+            result
+        }
+
+        all_paths_reach(
+            self,
+            start,
+            candidate,
+            &mut HashSet::new(),
+            &mut HashMap::new(),
+        )
+    }
+
+    /// Downstream execution nodes plus whether this node has an output that terminates without
+    /// reaching another board node. The latter matters for postdominance: one unconnected branch
+    /// must prevent a downstream node from being hoisted as unconditional.
+    fn exec_successors(&self, node_id: &str) -> (Vec<String>, bool) {
+        let Some(node) = self.nodes_by_id.get(node_id).copied() else {
+            return (Vec::new(), true);
+        };
+        let mut outputs: Vec<&Pin> = node
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == PinType::Output && is_exec(pin))
+            .collect();
+        outputs.sort_by_key(|pin| (pin.index, pin.id.as_str()));
+        if outputs.is_empty() {
+            return (Vec::new(), true);
+        }
+
+        let mut successors = Vec::new();
+        let mut has_terminal_output = false;
+        for output in outputs {
+            match self.first_exec_target(output) {
+                Some(target) => successors.push(target),
+                None => has_terminal_output = true,
+            }
+        }
+        successors.sort();
+        successors.dedup();
+        (successors, has_terminal_output)
+    }
+
+    fn is_exec_fan_in(&self, node_id: &str) -> bool {
+        self.nodes_by_id.get(node_id).is_some_and(|node| {
+            node.pins.values().any(|pin| {
+                pin.pin_type == PinType::Input && is_exec(pin) && pin.depends_on.len() > 1
+            })
+        })
     }
 
     fn make_stmt(&mut self, node: &'a Node, call: Call) -> Stmt {
@@ -1070,17 +1465,17 @@ impl<'a> Lowering<'a> {
         }
 
         // `variable_set` sugars to a plain assignment `name = value`.
-        if node.name == VARIABLE_SET {
-            if let Some(target) = self.var_name_of(node) {
-                let value = self
-                    .input_expr(node, "value_in")
-                    .unwrap_or(Expr::Literal(Literal::Null));
-                return Stmt::Assign {
-                    target,
-                    value,
-                    anchor: Some(node.id.clone()),
-                };
-            }
+        if node.name == VARIABLE_SET
+            && let Some(target) = self.var_name_of(node)
+        {
+            let value = self
+                .input_expr(node, "value_in")
+                .unwrap_or(Expr::Literal(Literal::Null));
+            return Stmt::Assign {
+                target,
+                value,
+                anchor: Some(node.id.clone()),
+            };
         }
         // `events_generic_return_result` sugars to a `return <response>` statement. Keep the node
         // id as the anchor so reconcile matches the existing result node instead of duplicating it.
@@ -1116,28 +1511,38 @@ impl<'a> Lowering<'a> {
 
         let mut args = Vec::new();
         for pin in data_inputs {
-            if let Some(source_pin_id) = pin.depends_on.iter().next() {
-                if let Some(expr) = self.resolve_source(source_pin_id) {
-                    args.push(Arg {
-                        name: pin.name.clone(),
-                        value: expr,
-                    });
-                    continue;
-                }
+            if let Some(source_pin_id) = pin.depends_on.iter().next()
+                && let Some(expr) = self.resolve_source(source_pin_id)
+            {
+                args.push(Arg {
+                    name: pin.name.clone(),
+                    value: expr,
+                });
+                continue;
             }
             // No connection: include a configured literal default if present.
             if let Some(bytes) = &pin.default_value {
-                if let Some(lit) = util::decode_default(bytes) {
+                // Most JSON `null` defaults mean "unset" and intentionally stay absent from
+                // FlowScript. `struct_set.value` is different: an explicit null is the required,
+                // semantic value used to clear a field, so dropping it makes the rendered call
+                // invalid and prevents a lossless round-trip.
+                let lit = if node.name == STRUCT_SET && pin.name == STRUCT_SET_VALUE_PIN {
+                    util::decode_default_preserving_null(bytes)
+                } else {
+                    util::decode_default(bytes)
+                };
+                if let Some(lit) = lit {
                     // `controlCallReference.fnRef` holds an opaque target node id; resolve it to
                     // that node's binding/display name instead of leaking the CUID.
-                    if node.name == CALL_REFERENCE && pin.name == FN_REF_PIN {
-                        if let Some(name) = self.node_ref_name(&lit) {
-                            args.push(Arg {
-                                name: pin.name.clone(),
-                                value: Expr::Ref(name),
-                            });
-                            continue;
-                        }
+                    if node.name == CALL_REFERENCE
+                        && pin.name == FN_REF_PIN
+                        && let Some(name) = self.node_ref_name(&lit)
+                    {
+                        args.push(Arg {
+                            name: pin.name.clone(),
+                            value: Expr::Ref(name),
+                        });
+                        continue;
                     }
                     args.push(Arg {
                         name: pin.name.clone(),
@@ -1292,10 +1697,10 @@ impl<'a> Lowering<'a> {
     /// that should keep their literal call form. `source_pin` is the specific output being read.
     fn sugar_source(&mut self, owner: &'a Node, source_pin: &'a Pin) -> Option<Expr> {
         // Comparison/arithmetic/logic nodes -> `lhs <op> rhs` (read by pin index).
-        if let Some(op) = binary_op(owner) {
-            if let Some(expr) = self.binary_expr(owner, op) {
-                return Some(expr);
-            }
+        if let Some(op) = binary_op(owner)
+            && let Some(expr) = self.binary_expr(owner, op)
+        {
+            return Some(expr);
         }
         match owner.name.as_str() {
             // `variableGet` -> bare variable reference.
@@ -1445,10 +1850,10 @@ impl<'a> Lowering<'a> {
 
     /// Resolve the expression feeding a specific input pin (connection first, else literal).
     fn pin_expr(&mut self, pin: &'a Pin) -> Option<Expr> {
-        if let Some(source_pin_id) = pin.depends_on.iter().next() {
-            if let Some(expr) = self.resolve_source(source_pin_id) {
-                return Some(expr);
-            }
+        if let Some(source_pin_id) = pin.depends_on.iter().next()
+            && let Some(expr) = self.resolve_source(source_pin_id)
+        {
+            return Some(expr);
         }
         let bytes = pin.default_value.as_ref()?;
         util::decode_default(bytes).map(|lit| self.sugar_literal(lit))
@@ -1491,10 +1896,10 @@ impl<'a> Lowering<'a> {
     /// Replace an opaque function-layer id literal with a bare function reference; leave all
     /// other literals untouched. CUIDs are unique, so a false match is effectively impossible.
     fn sugar_literal(&self, lit: Literal) -> Expr {
-        if let Literal::String(ref s) = lit {
-            if let Some(name) = self.fn_names.get(s.as_str()) {
-                return Expr::Ref(name.clone());
-            }
+        if let Literal::String(ref s) = lit
+            && let Some(name) = self.fn_names.get(s.as_str())
+        {
+            return Expr::Ref(name.clone());
         }
         Expr::Literal(lit)
     }
@@ -1756,6 +2161,88 @@ fn ref_name_of_arg(args: &[Arg], pin: &str) -> Option<String> {
         })
 }
 
+/// Collect every node call in one lexical block, including calls nested in argument expressions.
+/// Nested handlers intentionally are not traversed: they are independent scopes and own their
+/// registrations themselves.
+fn collect_calls_in_block<'a>(block: &'a Block, calls: &mut Vec<&'a Call>) {
+    for statement in &block.stmts {
+        match statement {
+            Stmt::Let { call, .. } | Stmt::Call { call, .. } => {
+                collect_calls_in_call(call, calls);
+            }
+            Stmt::Branch {
+                call,
+                condition,
+                arms,
+                ..
+            } => {
+                collect_calls_in_call(call, calls);
+                if let Some(condition) = condition {
+                    collect_calls_in_expr(condition, calls);
+                }
+                for arm in arms {
+                    collect_calls_in_block(&arm.body, calls);
+                }
+            }
+            Stmt::Loop { call, body, .. } => {
+                collect_calls_in_call(call, calls);
+                collect_calls_in_block(body, calls);
+            }
+            Stmt::Assign { value, .. }
+            | Stmt::FieldAssign { value, .. }
+            | Stmt::LocalAlias { value, .. } => collect_calls_in_expr(value, calls),
+            Stmt::Return { values, .. } => {
+                for value in values {
+                    collect_calls_in_expr(value, calls);
+                }
+            }
+            Stmt::Handler(_) | Stmt::Local(_) | Stmt::Comment(_) => {}
+        }
+    }
+}
+
+fn collect_calls_in_call<'a>(call: &'a Call, calls: &mut Vec<&'a Call>) {
+    calls.push(call);
+    for arg in &call.args {
+        collect_calls_in_expr(&arg.value, calls);
+    }
+}
+
+fn collect_calls_in_expr<'a>(expr: &'a Expr, calls: &mut Vec<&'a Call>) {
+    match expr {
+        Expr::Call(call) => collect_calls_in_call(call, calls),
+        Expr::Field { base, .. } | Expr::Member { base, .. } => collect_calls_in_expr(base, calls),
+        Expr::Object(fields) => {
+            for field in fields {
+                collect_calls_in_expr(&field.value, calls);
+            }
+        }
+        Expr::Array(values) => {
+            for value in values {
+                collect_calls_in_expr(value, calls);
+            }
+        }
+        Expr::Index { base, index } => {
+            collect_calls_in_expr(base, calls);
+            collect_calls_in_expr(index, calls);
+        }
+        Expr::Ternary {
+            cond,
+            then,
+            otherwise,
+        } => {
+            collect_calls_in_expr(cond, calls);
+            collect_calls_in_expr(then, calls);
+            collect_calls_in_expr(otherwise, calls);
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            collect_calls_in_expr(lhs, calls);
+            collect_calls_in_expr(rhs, calls);
+        }
+        Expr::Ref(_) | Expr::Literal(_) => {}
+    }
+}
+
 fn is_impure(node: &Node) -> bool {
     node.pins.values().any(is_exec)
 }
@@ -1868,11 +2355,103 @@ fn entry_order(node: &Node) -> (i64, i64) {
         .unwrap_or((i64::MAX, i64::MAX))
 }
 
-fn event_name(node: &Node) -> String {
-    let source = if !node.friendly_name.trim().is_empty() {
-        &node.friendly_name
-    } else {
-        &node.name
-    };
-    util::to_camel_case(source)
+/// Canonical FlowScript selector for an event entry's exact catalog type. Keeping the type in the
+/// first header slot means reparsing rendered FlowScript can still recreate the same entry when
+/// its identity anchor has gone stale.
+fn event_type_name(node: &Node) -> String {
+    util::to_camel_case(&node.name)
+}
+
+/// Optional human-facing name for one event entry. The renderer places this after the catalog
+/// selector (`eventsSimple dashboardLoad()`), keeping identity and presentation independent.
+fn event_alias(node: &Node) -> Option<String> {
+    let friendly_name = node.friendly_name.trim();
+    if friendly_name.is_empty() {
+        return None;
+    }
+
+    let alias = util::to_camel_case(friendly_name);
+    (alias != event_type_name(node)).then_some(alias)
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use crate::flow::board::{LayerCache, LayerCacheScope};
+    use flow_like_storage::Path;
+
+    #[test]
+    fn enabled_function_layer_cache_lowers_to_function_metadata() {
+        let mut board = Board::new_detached(Some("board".to_string()), Path::from(""));
+        let mut layer = Layer::new(
+            "cached-layer".to_string(),
+            "Cached Lookup".to_string(),
+            LayerType::Function,
+        );
+        layer.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "pricing".to_string(),
+            ttl_seconds: Some(3600),
+            scope: LayerCacheScope::User,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+
+        let ast = lower_board(&board);
+        let cache = ast.functions[0]
+            .cache
+            .as_ref()
+            .expect("enabled layer cache should be represented in FlowScript");
+        assert_eq!(cache.namespace, "pricing");
+        assert_eq!(cache.ttl_seconds, Some(3600));
+        assert_eq!(cache.scope, FunctionCacheScope::User);
+    }
+
+    #[test]
+    fn permanent_layer_cache_lowers_with_explicit_zero_ttl() {
+        for (index, persisted_ttl) in [None, Some(0)].into_iter().enumerate() {
+            let mut board =
+                Board::new_detached(Some(format!("permanent-cache-{index}")), Path::from(""));
+            let mut layer = Layer::new(
+                format!("cached-layer-{index}"),
+                "Cached Lookup".to_string(),
+                LayerType::Function,
+            );
+            layer.cache = Some(LayerCache {
+                enabled: true,
+                prefix: "global".to_string(),
+                ttl_seconds: persisted_ttl,
+                scope: LayerCacheScope::App,
+            });
+            board.layers.insert(layer.id.clone(), layer);
+
+            let ast = lower_board(&board);
+            assert_eq!(
+                ast.functions[0].cache.as_ref().unwrap().ttl_seconds,
+                Some(0)
+            );
+            let source = flow_like_ast::render(&ast, &flow_like_ast::RenderOptions::default());
+            assert!(source.starts_with("@cache({ ttlSeconds: 0 })\n"));
+        }
+    }
+
+    #[test]
+    fn disabled_function_layer_cache_does_not_emit_a_decorator() {
+        let mut board = Board::new_detached(Some("board".to_string()), Path::from(""));
+        let mut layer = Layer::new(
+            "uncached-layer".to_string(),
+            "Uncached Lookup".to_string(),
+            LayerType::Function,
+        );
+        layer.cache = Some(LayerCache {
+            enabled: false,
+            prefix: "remembered-ui-value".to_string(),
+            ttl_seconds: Some(60),
+            scope: LayerCacheScope::User,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+
+        let ast = lower_board(&board);
+        assert_eq!(ast.functions.len(), 1);
+        assert!(ast.functions[0].cache.is_none());
+    }
 }

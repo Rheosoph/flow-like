@@ -4,12 +4,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	Activity,
 	AlertTriangle,
+	BellRing,
 	BookOpen,
 	Box,
+	Bug,
 	CheckCircle,
 	Clock,
 	Cpu,
 	Download,
+	GitBranch,
 	GraduationCap,
 	Key,
 	Lightbulb,
@@ -22,6 +25,7 @@ import {
 	Scale,
 	Shield,
 	ShieldAlert,
+	SlidersHorizontal,
 	UserCog,
 	Users,
 	Waypoints,
@@ -81,6 +85,10 @@ import {
 	UserProfileLink,
 } from "../../ui";
 import { DashboardChainWidget, DashboardErrorWidget } from "./logs";
+import { DashboardTelemetryAlertsWidget } from "./telemetry/alerts-dashboard-widget";
+import { DashboardTelemetryWidget } from "./telemetry/dashboard-telemetry-widget";
+import { DashboardTelemetryIssuesWidget } from "./telemetry/issues-dashboard-widget";
+import { DashboardTelemetryTracesWidget } from "./telemetry/traces-dashboard-widget";
 
 const PERIODS: IUsageLimitPeriod[] = ["weekly", "monthly", "yearly"];
 
@@ -163,7 +171,7 @@ function StatCard({
 	href?: string;
 }) {
 	const inner = (
-		<Card className="transition-colors hover:border-primary/40">
+		<Card className="min-w-0 transition-colors hover:border-primary/40">
 			<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
 				<CardTitle className="text-sm font-medium">{title}</CardTitle>
 				{icon}
@@ -329,6 +337,73 @@ const ADMIN_SECTIONS: AdminSection[] = [
 		links: [
 			{ label: "Errors", href: "/admin/logs" },
 			{ label: "Audit chain", href: "/admin/logs?tab=audit" },
+		],
+	},
+	{
+		title: "Telemetry",
+		description:
+			"Anonymous opt-in product metrics: events, active installs, and version adoption.",
+		icon: Activity,
+		href: "/admin/telemetry",
+		permission: GlobalPermission.Admin,
+		actionLabel: "Open Telemetry",
+		color: "text-emerald-500",
+		feature: "telemetry",
+		links: [
+			{ label: "Overview", href: "/admin/telemetry" },
+			{ label: "Issues", href: "/admin/telemetry/issues" },
+			{ label: "Traces", href: "/admin/telemetry/traces" },
+			{ label: "Alerts", href: "/admin/telemetry/alerts" },
+			{ label: "Query builder", href: "/admin/telemetry/query" },
+			{ label: "Dashboards", href: "/admin/telemetry/dashboards" },
+		],
+	},
+	{
+		title: "Issues & Crashes",
+		description:
+			"Grouped crash and error reports with release health, symbolicated stacks, and triage.",
+		icon: Bug,
+		href: "/admin/telemetry/issues",
+		permission: GlobalPermission.Admin,
+		actionLabel: "Open Issues",
+		color: "text-amber-500",
+		feature: "telemetry",
+	},
+	{
+		title: "Traces & Performance",
+		description:
+			"Sampled distributed traces, span flamegraphs, and Core Web Vitals per path.",
+		icon: GitBranch,
+		href: "/admin/telemetry/traces",
+		permission: GlobalPermission.Admin,
+		actionLabel: "Open Traces",
+		color: "text-violet-500",
+		feature: "telemetry",
+	},
+	{
+		title: "Alerts",
+		description:
+			"Threshold and anomaly rules over anonymous telemetry with an in-app alert inbox.",
+		icon: BellRing,
+		href: "/admin/telemetry/alerts",
+		permission: GlobalPermission.Admin,
+		actionLabel: "Open Alerts",
+		color: "text-rose-500",
+		feature: "telemetry",
+	},
+	{
+		title: "Query builder",
+		description:
+			"Ad-hoc breakdowns over anonymous telemetry with saved queries and pinned dashboards.",
+		icon: SlidersHorizontal,
+		href: "/admin/telemetry/query",
+		permission: GlobalPermission.Admin,
+		actionLabel: "Open Query Builder",
+		color: "text-cyan-500",
+		feature: "telemetry",
+		links: [
+			{ label: "Query builder", href: "/admin/telemetry/query" },
+			{ label: "Dashboards", href: "/admin/telemetry/dashboards" },
 		],
 	},
 ];
@@ -1981,7 +2056,7 @@ function AiActConformityPreview({
 
 	return (
 		<div className="space-y-2 rounded-lg border border-indigo-500/30 bg-indigo-500/5 p-3">
-			<div className="flex items-center justify-between gap-2">
+			<div className="flex flex-col items-start gap-2 min-[400px]:flex-row min-[400px]:items-center min-[400px]:justify-between">
 				<div className="flex items-center gap-2 text-sm font-medium">
 					<Scale className="h-4 w-4 text-indigo-500" />
 					EU AI Act Conformity
@@ -2353,11 +2428,11 @@ export function AdminDashboardPage({
 			: null;
 
 	return (
-		<main className="flex h-full min-h-0 w-full grow flex-col overflow-hidden bg-background">
-			<div className="flex-1 overflow-y-auto p-6">
-				<div className="mx-auto max-w-7xl space-y-6">
+		<main className="flex h-full min-h-0 min-w-0 w-full grow flex-col overflow-hidden bg-background">
+			<div className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-6">
+				<div className="mx-auto min-w-0 max-w-7xl space-y-4 sm:space-y-6">
 					<div>
-						<h1 className="text-3xl font-bold">Admin Dashboard</h1>
+						<h1 className="text-2xl font-bold sm:text-3xl">Admin Dashboard</h1>
 						<p className="text-muted-foreground">
 							Central hub for registry, publishing, usage, and learning content.
 						</p>
@@ -2534,6 +2609,15 @@ export function AdminDashboardPage({
 							loading={statsLoading}
 						/>
 					</div>
+
+					{hasAdminAccess && features?.telemetry === true && (
+						<div className="grid gap-4">
+							<DashboardTelemetryWidget profile={profile.data} />
+							<DashboardTelemetryIssuesWidget profile={profile.data} />
+							<DashboardTelemetryTracesWidget profile={profile.data} />
+							<DashboardTelemetryAlertsWidget profile={profile.data} />
+						</div>
+					)}
 
 					{perms.hasPermission(GlobalPermission.ReadLogs) && (
 						<div className="grid gap-4 lg:grid-cols-2">

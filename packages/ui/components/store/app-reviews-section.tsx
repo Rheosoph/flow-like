@@ -50,14 +50,14 @@ function StarRating({
 						className={
 							readonly
 								? "cursor-default"
-								: "cursor-pointer transition-transform hover:scale-110"
+								: "flex min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 cursor-pointer items-center justify-center transition-transform hover:scale-110"
 						}
 						onMouseEnter={() => !readonly && setHovered(star)}
 						onMouseLeave={() => !readonly && setHovered(0)}
 						onClick={() => onChange?.(star)}
 					>
 						<Star
-							className={`h-4 w-4 ${
+							className={`${readonly ? "h-4 w-4" : "h-6 w-6 sm:h-4 sm:w-4"} ${
 								filled
 									? "fill-yellow-500 text-yellow-500"
 									: "text-muted-foreground"

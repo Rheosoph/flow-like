@@ -5,6 +5,7 @@ import type {
 	FlowScriptApplyResultLike,
 } from "../components/flow/flow-copilot/types";
 import type { ILogMetadata } from "../lib";
+import type { BoardEditReceiptHistoryMode } from "../lib/flowpilot/board-edit-job-delivery";
 import type { FlowIrCommitToken } from "../lib/schema/copilot";
 import type { IBoard } from "../lib/schema/flow/board";
 import type { BoardCommand } from "../lib/schema/flow/copilot";
@@ -39,6 +40,8 @@ export interface AssistantBoardSurface {
 	/** Atomically applies the exact retained compiled workflow batch under a live-board CAS. */
 	applyFlowIrCommit: (
 		token: FlowIrCommitToken,
+		deliveryId?: string,
+		historyMode?: BoardEditReceiptHistoryMode,
 	) => Promise<IApplyFlowIrCommitResponse>;
 	/** Executes board copilot commands through the board's command pipeline. */
 	executeCommands: (commands: BoardCommand[]) => Promise<void>;
@@ -57,8 +60,16 @@ export interface AssistantBoardSurface {
 export interface AssistantWidgetSurface {
 	/** Builder surface id (a2ui canvas id / active page id). */
 	surfaceId: string;
+	/** Distinguishes a persisted page builder from a reusable-widget builder. */
+	kind: "page" | "widget";
 	/** App the builder is editing, when known. */
 	appId?: string;
+	/** Owning board for a page builder, when known. */
+	boardId?: string;
+	/** Persisted page being edited when kind is `page`. */
+	pageId?: string;
+	/** Persisted reusable widget being edited when kind is `widget`. */
+	widgetId?: string;
 	/** Components currently on the canvas. */
 	currentComponents: SurfaceComponent[];
 	/** Ids of the components currently selected in the builder. */

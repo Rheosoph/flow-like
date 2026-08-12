@@ -66,6 +66,7 @@ import {
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
+	useSearch,
 } from "../../..";
 import {
 	VISIBILITY_META,
@@ -603,17 +604,11 @@ function AppsTab({
 		return list;
 	}, [suggestions, appMap, memberIds]);
 
-	const filtered = useMemo(() => {
-		const query = search.trim().toLowerCase();
-		if (!query) return candidates.slice(0, 8);
-		return candidates
-			.filter(
-				(app) =>
-					app.name.toLowerCase().includes(query) ||
-					app.id.toLowerCase().includes(query),
-			)
-			.slice(0, 8);
-	}, [candidates, search]);
+	const matches = useSearch(candidates, search, {
+		fields: ["name", "id"],
+		boost: { name: 3 },
+	});
+	const filtered = useMemo(() => matches.slice(0, 8), [matches]);
 
 	const quickAdd = useMemo(
 		() => suggestions.filter((app) => !memberIds.has(app.id)).slice(0, 6),

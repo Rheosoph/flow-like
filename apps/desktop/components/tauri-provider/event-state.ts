@@ -91,6 +91,56 @@ function eventUpdatedAtMs(event?: IEvent): number {
 	);
 }
 
+function isLocalEventNewer(
+	localEvent: IEvent | undefined,
+	remoteEvent: IEvent,
+): localEvent is IEvent {
+	const localUpdated = eventUpdatedAtMs(localEvent);
+	const remoteUpdated = eventUpdatedAtMs(remoteEvent);
+	return (
+		localEvent !== undefined &&
+		!Number.isNaN(localUpdated) &&
+		!Number.isNaN(remoteUpdated) &&
+		localUpdated > remoteUpdated
+	);
+}
+
+/**
+ * Merge an online event snapshot with the events available on this device.
+ *
+ * A strictly newer local record wins when both sides contain the same event,
+ * matching getEvent's freshness policy. With equal or unavailable timestamps,
+ * the remote record remains authoritative. A Local event may legitimately be
+ * usable on this device while the server's DB mirror is incomplete, so a forced
+ * refresh must not make it disappear. Cached Remote-only events are not retained:
+ * the server remains authoritative for events that execute there.
+ */
+export function mergeLocalAndRemoteEvents(
+	localEvents: IEvent[],
+	remoteEvents: IEvent[],
+): IEvent[] {
+	const merged = new Map<string, IEvent>();
+	const localById = new Map(localEvents.map((event) => [event.id, event]));
+
+	for (const event of localEvents) {
+		if (event.execution_mode !== "Remote") {
+			merged.set(event.id, event);
+		}
+	}
+
+	for (const remoteEvent of remoteEvents) {
+		const localEvent = localById.get(remoteEvent.id);
+		merged.set(
+			remoteEvent.id,
+			isLocalEventNewer(localEvent, remoteEvent) ? localEvent : remoteEvent,
+		);
+	}
+
+	return Array.from(merged.values()).toSorted(
+		(a, b) => a.priority - b.priority,
+	);
+}
+
 export class EventState implements IEventState {
 	private readonly remoteEventSyncs = new Map<string, Promise<IEvent[]>>();
 	private readonly remoteEventFailures = new Map<
@@ -255,18 +305,38 @@ export class EventState implements IEventState {
 					},
 					this.backend.auth,
 				);
+				const localById = new Map(events.map((event) => [event.id, event]));
+				const toPersist = remoteData.filter(
+					(event) => !isLocalEventNewer(localById.get(event.id), event),
+				);
 
-				for (const event of remoteData) {
-					await invoke("upsert_event", {
-						appId: appId,
-						event: event,
-						enforceId: true,
-						offline: isOffline,
-					});
-				}
+				// The fetched snapshot is already usable for Remote execution and UI resolution,
+				// and `getEvent` reaches the server on its own when a local copy is missing. The
+				// cache writes are one IPC round trip per event, so running them ahead of the
+				// caller made every app open wait on work nothing was blocked by.
+				this.backend.backgroundTaskHandler(
+					Promise.allSettled(
+						toPersist.map((event) =>
+							invoke("upsert_event", {
+								appId: appId,
+								event: event,
+								enforceId: true,
+								offline: isOffline,
+							}).catch((error) => {
+								// A local write can fail for reasons the refresh does not share (a
+								// board that has not downloaded yet), and must not turn a successful
+								// refresh into "Event not found".
+								console.warn(
+									`[EventSync] Failed to persist remote event ${event.id} locally:`,
+									error,
+								);
+							}),
+						),
+					).then(() => undefined),
+				);
 
 				this.remoteEventFailures.delete(appId);
-				return remoteData;
+				return mergeLocalAndRemoteEvents(events, remoteData);
 			})()
 				.catch((error) => {
 					const previous = this.remoteEventFailures.get(appId)?.attempts ?? 0;

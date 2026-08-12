@@ -1,108 +1,95 @@
 ---
 title: Local-Only Execution
-description: Flows that require Studio to run locally on your device
+description: Run flows that need the browser, desktop, or other device-local capabilities
 sidebar:
   order: 45
 ---
 
-Some flows in Flow-Like **must run locally** on your device through Flow-Like Studio. These flows cannot be executed on remote servers or in the cloud—they require direct access to your machine's resources.
+Some Flow-Like nodes need capabilities that exist only on the machine running
+Flow-Like Desktop. These nodes are marked as **local-only** in the catalog and
+show a monitor badge on the Flow canvas.
 
-## Why Some Flows Require Local Execution
+Before a run, Flow-Like inspects every node in the Flow, including nodes inside
+layers. If any node is local-only, the pre-run result marks the complete Flow as
+requiring local execution. A single run is not divided between local and remote
+workers.
 
-Certain automation tasks need capabilities that only exist on your local machine:
+## Capabilities that run locally
 
-- **Direct hardware access** (cameras, microphones, USB devices)
-- **Desktop control** (mouse, keyboard, screen capture)
-- **Local file system access** (reading/writing files on your computer)
-- **Browser automation** (controlling a real browser window)
-- **Compute-intensive processing** (leveraging your local GPU or CPU)
+The current [Automation catalog](/nodes/automation/) contains the main
+local-only node families:
 
-When you add a node that requires local execution to your flow, the entire board is marked as **local-only**. This ensures your automation runs reliably with full access to the resources it needs.
+| Family | Examples | Why it needs the device |
+| --- | --- | --- |
+| **Browser** | Open a browser, navigate, fill fields, extract page data, download files, and take screenshots | Controls a browser session on the runner |
+| **Computer** | Inspect accessibility elements, focus windows, move the mouse, type, use the clipboard, and capture the display | Uses the active operating-system session |
+| **Vision** | Find or click image templates, inspect pixels, and wait for a visual state | Reads the runner's display |
+| **RPA** | Locate targets, act, assert, retry, checkpoint, and collect diagnostics | Coordinates local UI interactions and recovery |
 
-## Examples of Local-Only Nodes
+These are concrete catalog capabilities—not a general promise that every
+camera, microphone, USB device, GPU, or locally installed program is available.
+Check the documentation for the specific node you intend to use.
 
-### Robotic Process Automation (RPA)
+For a complete automation guide, see
+[Desktop & Browser Automation](/topics/desktop-automation/overview/).
 
-RPA nodes automate interactions with your desktop applications:
+## Choose a compatible execution mode
 
-- **Click** – Simulate mouse clicks at specific screen coordinates
-- **Type** – Send keystrokes to applications
-- **Screenshot** – Capture your screen or specific windows
-- **Window Control** – Focus, minimize, maximize, or close windows
-- **OCR (Optical Character Recognition)** – Read text from screen regions
+| Flow or Event setting | Compatible with local-only nodes? |
+| --- | --- |
+| **Local Flow** | Yes, from Flow-Like Desktop |
+| **Hybrid Flow** | Yes when invoked locally; no for a remote invocation |
+| **Remote Flow** | No |
+| **Local Event** | Yes, while the Desktop event runner is available |
+| **Remote Event** | No |
 
-These nodes are essential for automating legacy applications that don't have APIs.
+**Hybrid** means that the same Flow can run locally or remotely depending on
+the caller. It does not split one graph across both environments. If the graph
+contains a local-only node, invoke that Flow locally.
 
-### Browser Automation
+An online App can still run a compatible Flow locally from Desktop. Conversely,
+an offline App has no server-side invocation path. See
+[Offline vs. Online](/apps/offline-online/) for the storage and execution
+matrix.
 
-Control a real browser on your machine:
+## Run from Desktop
 
-- **Navigate** – Open URLs in a controlled browser
-- **Click Element** – Click buttons, links, or other page elements
-- **Fill Form** – Enter text into form fields
-- **Extract Data** – Scrape content from web pages
-- **Take Screenshot** – Capture page screenshots
+1. Open the App and Flow in Flow-Like Desktop.
+2. Confirm that the Flow mode permits local execution.
+3. Configure any [runtime variables](/apps/runtime-variables/) required on this
+   device.
+4. Start the Flow from its entry node, a quick action, or a local Event.
+5. Keep Desktop running for local scheduled or background Events.
 
-Browser automation requires a local browser instance (Chromium) that can only run on your device.
+Local execution identifies the host. The Flow can still call APIs, databases,
+models, and other network services when its nodes and the machine's network
+policy allow them.
 
-### Local File Operations
+## Computer-automation consent
 
-Work directly with files on your computer:
+Flows that control the computer or read the screen require explicit approval in
+Desktop. A manual run can be approved once or remembered for the Flow. A local
+Event can be approved for that Event so later API, chat, or scheduled triggers
+do not need a foreground prompt.
 
-- **Read File** – Load content from local files
-- **Write File** – Save data to your file system
-- **Watch Folder** – Monitor directories for changes
-- **Execute Program** – Run local applications or scripts
+Remembered approvals are stored on the current desktop. Operating-system
+permissions—such as accessibility, screen capture, mouse, or keyboard
+control—are separate and may also need to be granted.
 
-### Hardware Integration
-
-Access devices connected to your machine:
-
-- **Camera Capture** – Take photos or record video
-- **Microphone Input** – Record audio
-- **Speaker Output** – Play sounds
-
-### AI & Machine Learning
-
-Some AI operations run best (or only) on local hardware:
-
-- **Local LLM Inference** – Run language models on your GPU
-- **Image Processing** – GPU-accelerated image operations
-- **Speech Recognition** – On-device voice transcription
-
-## How to Identify Local-Only Flows
-
-In Flow-Like Studio, boards containing local-only nodes are visually marked. When you run a pre-flight check on your flow, you'll see:
-
-- A **local execution required** indicator
-- The specific nodes that require local execution
-
-## Running Local-Only Flows
-
-Local-only flows can be triggered in several ways:
-
-1. **Manual execution** – Click the Run button in Studio
-2. **Scheduled events** – Set up timed triggers (your computer must be on)
-3. **File watchers** – Automatically trigger when files change
-4. **Hotkeys** – Assign keyboard shortcuts to start your flow
-
-:::note
-For scheduled or automated local flows, Flow-Like Studio must be running on your machine. Consider enabling "Start on Login" in your system preferences.
+:::caution[Approve only trusted automation]
+Computer automation can view on-screen data and interact with other
+applications as the signed-in user. Review the Flow, restrict its credentials,
+and grant only the operating-system permissions it needs.
 :::
 
-## Mixing Local and Remote Nodes
+## Build reliable local automations
 
-You can combine local-only nodes with standard nodes in the same flow. The entire flow will execute locally, but you can still:
-
-- Make API calls to external services
-- Store data in cloud databases
-- Send notifications via email or messaging platforms
-
-This gives you the best of both worlds—local device control with cloud connectivity.
-
-## Best Practices
-
-1. **Test locally first** – Always verify your RPA and browser automation flows work correctly before scheduling them
-2. **Handle errors gracefully** – Desktop automation can fail if windows move or UI changes; add error handling nodes
-3. **Use delays wisely** – Some applications need time to respond; add appropriate wait nodes
-4. **Document your flows** – Use comment nodes to explain what each RPA step does for future maintenance
+- Prefer browser selectors or accessibility elements over fixed coordinates.
+- Resolve the intended browser page, window, and display before interacting.
+- Wait for an observable state instead of relying only on fixed delays.
+- Bound retries and verify the result after consequential actions.
+- Keep runtime values, paths, and credentials specific to the target machine.
+- Capture diagnostics without including passwords, tokens, or sensitive screen
+  regions.
+- Test again after application, operating-system, theme, or display-scaling
+  changes.

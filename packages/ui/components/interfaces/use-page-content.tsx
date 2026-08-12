@@ -1,5 +1,6 @@
 "use client";
 
+import { isEqual } from "lodash-es";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
 	type JSX,
@@ -12,28 +13,64 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../hooks/use-invoke";
+import { useNetworkStatus } from "../../hooks/use-network-status";
+import {
+	boardReadinessKey,
+	trackBoardReadiness,
+} from "../../lib/board-readiness";
 import { normalizeBoardVersion } from "../../lib/schema/flow/board-version";
 import type { IEvent } from "../../lib/schema/flow/event";
 import { useSetQueryParams } from "../../lib/set-query-params";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { useBackend } from "../../state/backend-state";
-import type { IPage } from "../../state/backend-state/page-state";
+import type { IBoardState } from "../../state/backend-state/board-state";
+import type {
+	IGetPageOptions,
+	IPage,
+	IPageState,
+} from "../../state/backend-state/page-state";
 import type { IRouteMapping } from "../../state/backend-state/route-state";
 import type { ISettingsProfile } from "../../types";
 import { LoadingScreen } from "../ui/loading-screen";
 import { Container } from "./container";
 import { Header } from "./header";
+import { InterfaceLoadError } from "./interface-load-error";
 import type {
-	IEventMapping,
 	ISidebarActions,
 	IToolBarActions,
+	IUseEventMapping,
 	IUseInterfaceProps,
 } from "./interfaces";
 import { NoDefaultInterface } from "./no-default";
 import { PageInterface } from "./page-interface";
 
+/**
+ * A page read can fail for reasons that resolve themselves: the payload still has to
+ * reach this device, or the session is a moment away from being able to ask the server
+ * for it. Retrying beats stranding a usable interface behind a dead end.
+ */
+const PAGE_RETRY_DELAYS_MS = [1_000, 3_000, 8_000];
+
+export function pageLoadErrorMessage(error: unknown): string {
+	if (error instanceof Error) return error.message;
+	if (typeof error === "string") return error;
+	if (
+		error &&
+		typeof error === "object" &&
+		"error" in error &&
+		typeof (error as { error?: unknown }).error === "string"
+	) {
+		return (error as { error: string }).error;
+	}
+	return "Unknown error";
+}
+
 export interface UsePageContentProps {
-	eventConfig: IEventMapping;
+	/**
+	 * Only the runtime slice is read here. Taking the narrow type means `/use` can pass a
+	 * mapping that never references a configuration panel, and so never loads one.
+	 */
+	eventConfig: IUseEventMapping;
 	notFound?: ReactNode;
 	appId?: string | null;
 	routePath?: string | null;
@@ -43,6 +80,124 @@ export interface UsePageContentProps {
 		routePath?: string | null;
 		eventId?: string | null;
 	}) => void;
+}
+
+/**
+ * Reads the page while its board refreshes alongside it.
+ *
+ * The refresh exists for the *run*, not the render: a device that has only ever synced the
+ * board manifest needs the real board before it executes anything. Rendering needs only the
+ * page payload, so waiting for a full board download before even asking for the page charged
+ * every page open for a guarantee only execution consumes. The refresh is registered with
+ * `trackBoardReadiness`, and `PageInterface` waits on it before running a workflow.
+ *
+ * Page files are still indexed through their board on native clients, so a read that fails
+ * while the board is arriving gets the ordering it used to have: wait for the refresh, then
+ * try once more. A failed refresh must not prevent page-state's own local/remote fallback from
+ * running, and web pages do not require a local board at all.
+ *
+ * An event pinned to a board version reads that version's published page: the current page
+ * file belongs to the draft board and may already have moved on.
+ */
+export async function loadPageWithBoardSync(
+	boardState: Pick<IBoardState, "getBoard">,
+	pageState: Pick<IPageState, "getPage">,
+	appId: string,
+	pageId: string,
+	boardId?: string,
+	boardVersion?: [number, number, number],
+	options?: IGetPageOptions,
+): Promise<IPage> {
+	if (!boardId) {
+		return pageState.getPage(appId, pageId, boardId, boardVersion, options);
+	}
+
+	const boardSync = trackBoardReadiness(
+		boardReadinessKey(appId, boardId, boardVersion),
+		() => boardState.getBoard(appId, boardId, boardVersion, true),
+	);
+
+	try {
+		return await pageState.getPage(
+			appId,
+			pageId,
+			boardId,
+			boardVersion,
+			options,
+		);
+	} catch (error) {
+		await boardSync;
+		try {
+			return await pageState.getPage(
+				appId,
+				pageId,
+				boardId,
+				boardVersion,
+				options,
+			);
+		} catch {
+			// The first failure is the one that describes why the page is unreadable; a retry
+			// against a board that just arrived can only restate it less precisely.
+			throw error;
+		}
+	}
+}
+
+export interface IStoreRedirectState {
+	readonly embedded: boolean;
+	readonly authLoading: boolean;
+	readonly hasAccessToken: boolean;
+	readonly appInLocalProfile: boolean;
+	readonly localProfileCheckPending: boolean;
+	readonly remoteAppCheckPending: boolean;
+	readonly remoteAppLoaded: boolean;
+	readonly remoteAppFailed: boolean;
+	readonly eventsLoaded: boolean;
+	readonly eventsFailed: boolean;
+	readonly eventsFetching: boolean;
+	readonly offline: boolean;
+}
+
+/**
+ * The store is a dead end for a running interface, so it is only reached when
+ * this device positively cannot open the app: neither the local profiles nor
+ * the hub know it, or its event catalog produced nothing to render.
+ *
+ * A refresh that failed while usable data survived must never eject a working
+ * interface — routes in particular are optional metadata whose absence simply
+ * falls back to the default event.
+ */
+export function resolveStoreRedirect(state: IStoreRedirectState): {
+	pending: boolean;
+	redirect: boolean;
+} {
+	if (state.embedded) return { pending: false, redirect: false };
+
+	if (
+		state.authLoading ||
+		state.localProfileCheckPending ||
+		state.remoteAppCheckPending
+	) {
+		return { pending: true, redirect: false };
+	}
+
+	// Without a network every access check is inconclusive and the store itself is a
+	// dead end, so ejecting there trades a possibly usable cached interface for a
+	// guaranteed empty screen.
+	if (state.offline) return { pending: false, redirect: false };
+
+	const catalogUnavailable =
+		state.eventsFailed && !state.eventsLoaded && !state.eventsFetching;
+
+	if (state.appInLocalProfile) {
+		return { pending: false, redirect: catalogUnavailable };
+	}
+
+	const hasNoAccess = state.hasAccessToken
+		? state.remoteAppFailed && !state.remoteAppLoaded
+		: true;
+
+	return { pending: false, redirect: hasNoAccess || catalogUnavailable };
 }
 
 export function UsePageContent({
@@ -58,7 +213,9 @@ export function UsePageContent({
 	const searchParams = useSearchParams();
 	const router = useRouter();
 	const auth = useAuth();
+	const isOnline = useNetworkStatus();
 	const hasAccessToken = Boolean(auth.user?.access_token);
+	const shouldWaitForPageBoardSync = backend.capabilities().canExecuteLocally;
 
 	const appId = appIdProp ?? searchParams.get("id");
 	const routePath = routePathProp ?? searchParams.get("route") ?? "/";
@@ -98,11 +255,15 @@ export function UsePageContent({
 		[],
 	);
 
+	// Signed-in users open locally installed apps too, so the local profiles
+	// stay authoritative for access even when a hub lookup is available.
+	const needsLocalProfileCheck = Boolean(appId && !embedded && !auth.isLoading);
+
 	const localProfiles = useInvoke(
 		backend.userState.getAllSettingsProfiles,
 		backend.userState,
 		[],
-		Boolean(appId && !embedded && !auth.isLoading && !hasAccessToken),
+		needsLocalProfileCheck,
 	);
 
 	const remoteApp = useInvoke(
@@ -130,19 +291,11 @@ export function UsePageContent({
 		);
 	}, [appId, localProfiles.data]);
 
-	const needsUnauthenticatedLocalCheck = Boolean(
-		appId && !embedded && !auth.isLoading && !hasAccessToken,
-	);
 	const localProfileCheckPending =
-		needsUnauthenticatedLocalCheck &&
+		needsLocalProfileCheck &&
 		localProfiles.isFetching &&
 		!localProfiles.data &&
 		!localProfiles.isError;
-	const shouldRedirectUnauthenticatedToStore = Boolean(
-		needsUnauthenticatedLocalCheck &&
-			!localProfileCheckPending &&
-			!appIsInAnyLocalProfile,
-	);
 
 	const needsAuthenticatedRemoteCheck = Boolean(
 		appId && !embedded && hasAccessToken,
@@ -152,28 +305,54 @@ export function UsePageContent({
 		remoteApp.isFetching &&
 		!remoteApp.data &&
 		!remoteApp.isError;
-	const shouldRedirectAuthenticatedToStore = Boolean(
-		needsAuthenticatedRemoteCheck &&
-			!authenticatedRemoteCheckPending &&
-			!appIsInAnyLocalProfile &&
-			!remoteApp.data &&
-			remoteApp.isError,
-	);
 
-	const shouldRedirectFetchErrorToStore = Boolean(
-		appId && !embedded && (routes.isError || events.isError),
-	);
-
-	const redirectCheckPending = Boolean(
-		authCheckPending ||
-			localProfileCheckPending ||
+	const storeRedirect = useMemo(
+		() =>
+			resolveStoreRedirect({
+				embedded: embedded || !appId,
+				authLoading: authCheckPending,
+				hasAccessToken,
+				appInLocalProfile: appIsInAnyLocalProfile,
+				localProfileCheckPending,
+				remoteAppCheckPending: authenticatedRemoteCheckPending,
+				remoteAppLoaded: Boolean(remoteApp.data),
+				remoteAppFailed: remoteApp.isError,
+				eventsLoaded: Boolean(events.data),
+				eventsFailed: events.isError,
+				eventsFetching: events.isFetching,
+				offline: !isOnline,
+			}),
+		[
+			embedded,
+			appId,
+			authCheckPending,
+			hasAccessToken,
+			appIsInAnyLocalProfile,
+			localProfileCheckPending,
 			authenticatedRemoteCheckPending,
+			remoteApp.data,
+			remoteApp.isError,
+			events.data,
+			events.isError,
+			events.isFetching,
+			isOnline,
+		],
 	);
-	const shouldRedirectToStore = Boolean(
-		shouldRedirectUnauthenticatedToStore ||
-			shouldRedirectAuthenticatedToStore ||
-			shouldRedirectFetchErrorToStore,
-	);
+	const redirectCheckPending = storeRedirect.pending;
+	const shouldRedirectToStore = storeRedirect.redirect;
+
+	// One ejection per app: a redirect that re-fires while the replace is still
+	// committing stacks navigations and flickers the interface back and forth.
+	const redirectedAppRef = useRef<string | null>(null);
+	const goToStore = useCallback(() => {
+		if (!appId || embedded) return;
+		// The store needs the network it is being used to escape to. Staying put keeps
+		// whatever this device cached on screen until the connection returns.
+		if (!isOnline) return;
+		if (redirectedAppRef.current === appId) return;
+		redirectedAppRef.current = appId;
+		router.replace(storeHref);
+	}, [appId, embedded, isOnline, router, storeHref]);
 
 	// --- Computed: usable event types ---
 
@@ -223,6 +402,11 @@ export function UsePageContent({
 	const [routeEvent, setRouteEvent] = useState<IEvent | null>(null);
 	const [directEvent, setDirectEvent] = useState<IEvent | null>(null);
 	const [pageData, setPageData] = useState<IPage | null>(null);
+	const [pageError, setPageError] = useState<string | null>(null);
+	const [pageRetry, setPageRetry] = useState<{ key: string; attempt: number }>({
+		key: "",
+		attempt: 0,
+	});
 	const [routeLoading, setRouteLoading] = useState(true);
 	const [pageLoading, setPageLoading] = useState(false);
 	const [resolvedRouteKey, setResolvedRouteKey] = useState("");
@@ -237,6 +421,7 @@ export function UsePageContent({
 			setRouteEvent(null);
 			setDirectEvent(null);
 			setPageData(null);
+			setPageError(null);
 			setRouteLoading(false);
 			setResolvedRouteKey("");
 			setResolvedDirectEventKey("");
@@ -335,19 +520,9 @@ export function UsePageContent({
 	const isRoutePending = Boolean(appId && resolvedRouteKey !== routeKey);
 
 	useEffect(() => {
-		if (!appId || embedded || redirectCheckPending || !shouldRedirectToStore) {
-			return;
-		}
-
-		router.replace(storeHref);
-	}, [
-		appId,
-		embedded,
-		redirectCheckPending,
-		shouldRedirectToStore,
-		router,
-		storeHref,
-	]);
+		if (redirectCheckPending || !shouldRedirectToStore) return;
+		goToStore();
+	}, [redirectCheckPending, shouldRedirectToStore, goToStore]);
 
 	const effectiveRouteEvent = useMemo(() => {
 		return canUseEvent(routeEvent) ? routeEvent : null;
@@ -454,6 +629,13 @@ export function UsePageContent({
 			? `${appId}:${pageEventId}:${pageId}:${pageBoardId ?? ""}:${pageBoardVersion?.join(".") ?? "latest"}`
 			: "";
 	const isPagePending = Boolean(pageKey && resolvedPageKey !== pageKey);
+	// Auth/profile initialization can refresh the same route/event objects after
+	// an early native page read failed. Use the query generation to retry even
+	// when every page key field remains unchanged.
+	const catalogDataUpdatedAt = Math.max(
+		routes.dataUpdatedAt,
+		events.dataUpdatedAt,
+	);
 
 	// --- Pre-sync board for the active event ---
 	// On fresh installs the board file may not exist locally yet.
@@ -461,22 +643,24 @@ export function UsePageContent({
 	// persisted before the user triggers their first execution.
 	useEffect(() => {
 		const target = activeEvent;
-		if (!appId || !target?.board_id) return;
-		backend.boardState
-			.getBoard(
-				appId,
-				target.board_id,
-				normalizeBoardVersion(target.board_version),
-				true,
-			)
-			.catch(() => {});
-	}, [appId, activeEvent, backend.boardState]);
+		if (
+			!appId ||
+			!target?.board_id ||
+			(target.default_page_id && shouldWaitForPageBoardSync)
+		)
+			return;
+		const version = normalizeBoardVersion(target.board_version);
+		void trackBoardReadiness(
+			boardReadinessKey(appId, target.board_id, version),
+			() => backend.boardState.getBoard(appId, target.board_id, version, true),
+		);
+	}, [appId, activeEvent, shouldWaitForPageBoardSync, backend.boardState]);
 
 	// --- Event switching ---
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: headerRef is a stable ref
 	const switchEvent = useCallback(
-		(newEventId: string) => {
+		(newEventId: string, replace = false) => {
 			if (!appId || !newEventId || eventId === newEventId) return;
 			headerRef.current?.pushToolbarElements([]);
 			headerRef.current?.pushNavElements([]);
@@ -484,7 +668,7 @@ export function UsePageContent({
 				onNavigate?.({ eventId: newEventId });
 				return;
 			}
-			setQueryParams("eventId", newEventId);
+			setQueryParams("eventId", newEventId, { replace });
 		},
 		[appId, eventId, embedded, onNavigate, setQueryParams],
 	);
@@ -503,8 +687,14 @@ export function UsePageContent({
 	// --- Page loading ---
 
 	useEffect(() => {
+		// These reads intentionally make a successful catalog refresh, or a manual
+		// or scheduled retry, re-run a page lookup whose route/event identity did
+		// not otherwise change.
+		void catalogDataUpdatedAt;
+		void pageRetry;
 		if (!appId || !pageId) {
 			setPageData(null);
+			setPageError(null);
 			setResolvedPageKey("");
 			setPageLoading(false);
 			return;
@@ -515,24 +705,57 @@ export function UsePageContent({
 
 		let cancelled = false;
 		setPageLoading(true);
+		setPageError(null);
 		setPageData((currentPage) =>
 			currentPage?.id === pageId ? currentPage : null,
 		);
 
+		// Identical content must keep its object identity: handing the interface a new object
+		// for an unchanged page rebuilds its surface and throws away whatever it had rendered.
+		const applyPage = (page: IPage) => {
+			setPageData((current) => (isEqual(current, page) ? current : page));
+			setPageError(null);
+		};
+
 		const loadPage = async () => {
 			try {
-				const page = await backend.pageState.getPage(
-					appId,
-					pageId,
-					pageBoardId,
-				);
+				// A page one revision behind renders now and corrects itself when the refresh
+				// lands, which beats holding a blank screen for a round trip. A pinned version
+				// is immutable, so there is nothing to revalidate against.
+				const readOptions: IGetPageOptions | undefined = pageBoardVersion
+					? undefined
+					: {
+							revalidate: "background",
+							onRevalidated: (fresh) => {
+								if (!cancelled) applyPage(fresh);
+							},
+						};
+
+				const page = shouldWaitForPageBoardSync
+					? await loadPageWithBoardSync(
+							backend.boardState,
+							backend.pageState,
+							appId,
+							pageId,
+							pageBoardId,
+							pageBoardVersion,
+							readOptions,
+						)
+					: await backend.pageState.getPage(
+							appId,
+							pageId,
+							pageBoardId,
+							pageBoardVersion,
+							readOptions,
+						);
 				if (!cancelled) {
-					setPageData(page);
+					applyPage(page);
 				}
 			} catch (e) {
 				console.error("Failed to load page:", e);
 				if (!cancelled) {
 					setPageData(null);
+					setPageError(pageLoadErrorMessage(e));
 				}
 			} finally {
 				if (!cancelled) {
@@ -554,8 +777,46 @@ export function UsePageContent({
 		isRoutePending,
 		routeLoading,
 		isDirectEventPending,
+		pageBoardVersion,
+		catalogDataUpdatedAt,
+		pageRetry,
+		shouldWaitForPageBoardSync,
+		backend.boardState,
 		backend.pageState,
 	]);
+
+	const pageRetryAttempt = pageRetry.key === pageKey ? pageRetry.attempt : 0;
+	// Offline there is nothing to back off from: the connection coming back is the retry.
+	const pageRetryPending =
+		Boolean(pageError) &&
+		isOnline &&
+		pageRetryAttempt < PAGE_RETRY_DELAYS_MS.length;
+
+	useEffect(() => {
+		if (!pageKey || !pageRetryPending) return;
+		const timer = setTimeout(() => {
+			setPageRetry({ key: pageKey, attempt: pageRetryAttempt + 1 });
+		}, PAGE_RETRY_DELAYS_MS[pageRetryAttempt]);
+		return () => clearTimeout(timer);
+	}, [pageKey, pageRetryPending, pageRetryAttempt]);
+
+	const retryPage = useCallback(() => {
+		setPageRetry({ key: pageKey, attempt: 0 });
+	}, [pageKey]);
+
+	const retryCatalog = useCallback(() => {
+		void routes.refetch();
+		void events.refetch();
+	}, [routes.refetch, events.refetch]);
+
+	const wasOnlineRef = useRef(isOnline);
+	useEffect(() => {
+		const reconnected = isOnline && !wasOnlineRef.current;
+		wasOnlineRef.current = isOnline;
+		if (!reconnected) return;
+		if (pageKey && pageError) setPageRetry({ key: pageKey, attempt: 0 });
+		if (!events.data) retryCatalog();
+	}, [isOnline, pageKey, pageError, events.data, retryCatalog]);
 
 	// --- Route/event sync effects ---
 
@@ -566,7 +827,7 @@ export function UsePageContent({
 				onNavigate?.({ eventId: null });
 				return;
 			}
-			setQueryParams("eventId", undefined);
+			setQueryParams("eventId", undefined, { replace: true });
 		}
 	}, [effectiveRouteMapping, eventId, embedded, onNavigate, setQueryParams]);
 
@@ -579,8 +840,7 @@ export function UsePageContent({
 
 		if (sortedEvents.length === 0) {
 			if (!events.data || queriesPending) return;
-			if (embedded) return;
-			router.replace(storeHref);
+			goToStore();
 			return;
 		}
 
@@ -588,10 +848,7 @@ export function UsePageContent({
 
 		if (!rerouteEvent) {
 			if (queriesPending) return;
-			if (events.data) {
-				if (embedded) return;
-				router.replace(storeHref);
-			}
+			if (events.data) goToStore();
 			return;
 		}
 
@@ -604,14 +861,14 @@ export function UsePageContent({
 
 		if (!resolvedCurrentEvent) {
 			if (rerouteEvent) {
-				switchEvent(rerouteEvent.id);
+				switchEvent(rerouteEvent.id, true);
 				return;
 			}
 			return;
 		}
 
 		if (eventId && !canUseEvent(resolvedCurrentEvent)) {
-			switchEvent(rerouteEvent?.id ?? "");
+			switchEvent(rerouteEvent?.id ?? "", true);
 			return;
 		}
 
@@ -630,9 +887,7 @@ export function UsePageContent({
 		isRoutePending,
 		isDirectEventPending,
 		routes.isFetching,
-		router,
-		embedded,
-		storeHref,
+		goToStore,
 	]);
 
 	// --- Route navigation ---
@@ -657,15 +912,20 @@ export function UsePageContent({
 
 	// --- Render logic ---
 
+	// A silent token renewal or a background access re-check must not tear down an
+	// interface that already resolved — it would remount the whole event tree and
+	// look like the app reloading itself.
+	const accessGateBlocking = Boolean(
+		(redirectCheckPending || shouldRedirectToStore) && !activeEvent,
+	);
+
 	const shouldRenderHeader = useMemo(() => {
-		if (redirectCheckPending) return false;
-		if (shouldRedirectToStore) return false;
+		if (accessGateBlocking) return false;
 		if (routeLoading || isRoutePending || isDirectEventPending) return false;
 		if (pageEvent?.default_page_id) return false;
 		return true;
 	}, [
-		redirectCheckPending,
-		shouldRedirectToStore,
+		accessGateBlocking,
 		routeLoading,
 		isRoutePending,
 		isDirectEventPending,
@@ -676,8 +936,7 @@ export function UsePageContent({
 	const inner = useMemo(() => {
 		if (!appId) return notFound ?? <NoDefaultInterface appId="" />;
 		if (
-			redirectCheckPending ||
-			shouldRedirectToStore ||
+			accessGateBlocking ||
 			routeLoading ||
 			isRoutePending ||
 			isDirectEventPending
@@ -702,6 +961,18 @@ export function UsePageContent({
 				);
 			}
 			if (pageLoading || isPagePending) return <LoadingScreen />;
+			// The event does declare an interface — it could not be read here. Saying
+			// "no interface" would send the user to event configuration to fix data
+			// that is already correct.
+			if (pageError)
+				return (
+					<InterfaceLoadError
+						message={pageError}
+						offline={!isOnline}
+						retrying={pageRetryPending}
+						onRetry={retryPage}
+					/>
+				);
 			return (
 				<NoDefaultInterface appId={appId} eventId={eventId ?? undefined} />
 			);
@@ -738,6 +1009,19 @@ export function UsePageContent({
 			if (events.isFetching && !events.data) return <LoadingScreen />;
 			const hasUsableEvents = sortedEvents.some((e) => canUseEvent(e));
 			if (hasUsableEvents && !eventId) return <LoadingScreen />;
+			// Nothing cached and no way to fetch it. The app is not misconfigured, this
+			// device simply has not seen its events yet.
+			if (!events.data && (events.isError || !isOnline))
+				return (
+					<InterfaceLoadError
+						message={
+							isOnline ? "This app's events could not be loaded." : undefined
+						}
+						offline={!isOnline}
+						retrying={events.isFetching}
+						onRetry={retryCatalog}
+					/>
+				);
 			return (
 				<NoDefaultInterface appId={appId} eventId={eventId ?? undefined} />
 			);
@@ -770,6 +1054,11 @@ export function UsePageContent({
 		isDirectEventPending,
 		pageData,
 		pageLoading,
+		pageError,
+		pageRetryPending,
+		retryPage,
+		retryCatalog,
+		isOnline,
 		isPagePending,
 		pageEvent,
 		effectiveRouteEvent,
@@ -782,8 +1071,7 @@ export function UsePageContent({
 		events.isFetching,
 		events.data,
 		notFound,
-		redirectCheckPending,
-		shouldRedirectToStore,
+		accessGateBlocking,
 	]);
 
 	if (!appId) {

@@ -6,6 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	applyElementUpdate,
+	applyMicroWidgetPropsPatch,
 	normalizeGeoMapViewport,
 } from "./apply-a2ui-message";
 import type { SurfaceComponent } from "./types";
@@ -70,5 +71,139 @@ describe("applyElementUpdate setGeoMapViewport", () => {
 			latitude: 48.13,
 			longitude: 11.58,
 		});
+	});
+});
+
+describe("applyElementUpdate event actions", () => {
+	const button = (): SurfaceComponent =>
+		({
+			id: "button-1",
+			component: {
+				type: "button",
+				label: { literalString: "Open" },
+				actions: [{ name: "workflow_event", context: { nodeId: "legacy" } }],
+				eventHandlers: {
+					hover: [{ name: "workflow_event", context: { nodeId: "hover" } }],
+				},
+			},
+		}) as unknown as SurfaceComponent;
+
+	test("sets one named ordered action list without touching legacy actions", () => {
+		const actions = [
+			{ name: "workflow_event", context: { nodeId: "first" } },
+			{ name: "navigate_page", context: { route: "/done" } },
+		];
+		const updated = applyElementUpdate(button(), {
+			type: "setEventActions",
+			eventName: " click ",
+			actions,
+		});
+		const data = updated.component as unknown as Record<string, unknown>;
+
+		expect(data.actions).toEqual([
+			{ name: "workflow_event", context: { nodeId: "legacy" } },
+		]);
+		expect(data.eventHandlers).toEqual({
+			hover: [{ name: "workflow_event", context: { nodeId: "hover" } }],
+			click: actions,
+		});
+	});
+
+	test("an empty list explicitly disables a named event", () => {
+		const updated = applyElementUpdate(button(), {
+			type: "setEventActions",
+			eventName: "click",
+			actions: [],
+		});
+		const data = updated.component as unknown as Record<string, unknown>;
+		expect(data.eventHandlers).toEqual({
+			hover: [{ name: "workflow_event", context: { nodeId: "hover" } }],
+			click: [],
+		});
+	});
+
+	test("ignores malformed named-event updates", () => {
+		const original = button();
+		expect(
+			applyElementUpdate(original, {
+				type: "setEventActions",
+				eventName: "",
+				actions: [],
+			}),
+		).toBe(original);
+	});
+});
+
+describe("applyElementUpdate microWidgetInstance props patches", () => {
+	const microComponent = (): SurfaceComponent =>
+		({
+			id: "inst-1",
+			component: {
+				type: "microWidgetInstance",
+				instanceId: "inst-1",
+				packageId: "com.example.sales",
+				widgetId: "sales-chart",
+				packageVersion: "1.0.0",
+				props: { title: "Sales", limit: 50 },
+			},
+		}) as unknown as SurfaceComponent;
+
+	const dataOf = (component: SurfaceComponent) =>
+		component.component as unknown as Record<string, unknown>;
+
+	test("setProps merges into component.props, never onto the component itself", () => {
+		const updated = applyElementUpdate(microComponent(), {
+			type: "setProps",
+			props: { title: "Q3 Sales", variant: "line" },
+		});
+		const data = dataOf(updated);
+		expect(data.props).toEqual({
+			title: "Q3 Sales",
+			limit: 50,
+			variant: "line",
+		});
+		expect(data.title).toBeUndefined();
+		expect(data.instanceId).toBe("inst-1");
+	});
+
+	test("a typed patch with a props object merges regardless of the type name", () => {
+		const updated = applyElementUpdate(microComponent(), {
+			type: "updateWidgetInputs",
+			props: { limit: 10 },
+		});
+		expect(dataOf(updated).props).toEqual({ title: "Sales", limit: 10 });
+	});
+
+	test("an untyped flat patch merges into props", () => {
+		const updated = applyElementUpdate(microComponent(), { title: "Renamed" });
+		expect(dataOf(updated).props).toEqual({ title: "Renamed", limit: 50 });
+	});
+
+	test("applyMicroWidgetPropsPatch ignores non-micro components", () => {
+		expect(
+			applyMicroWidgetPropsPatch({ type: "text" }, { props: { a: 1 } }),
+		).toBeNull();
+	});
+
+	test("styling updates fall through to the generic handling", () => {
+		const updated = applyElementUpdate(microComponent(), {
+			type: "setVisibility",
+			visible: false,
+		});
+		const data = dataOf(updated);
+		expect(data.hidden).toEqual({ literalBool: true });
+		expect(data.props).toEqual({ title: "Sales", limit: 50 });
+	});
+
+	test("initializes props when the component has none yet", () => {
+		const bare = {
+			id: "inst-2",
+			component: { type: "microWidgetInstance", instanceId: "inst-2" },
+		} as unknown as SurfaceComponent;
+		const updated = applyElementUpdate(bare, {
+			type: "setProps",
+			props: { title: "Hello" },
+		});
+		expect(dataOf(updated).props).toEqual({ title: "Hello" });
 	});
 });

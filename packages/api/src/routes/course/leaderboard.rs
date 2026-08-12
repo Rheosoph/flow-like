@@ -68,7 +68,7 @@ async fn verified_user_snapshot(
         (status = 200, description = "Returns the public leaderboard (opted-in users only)", body = Vec<LeaderboardEntry>)
     )
 )]
-#[tracing::instrument(name = "GET /courses/leaderboard", skip(state, _user))]
+#[tracing::instrument(name = "GET /courses/leaderboard", skip_all)]
 pub async fn get_leaderboard(
     State(state): State<AppState>,
     Extension(_user): Extension<AppUser>,

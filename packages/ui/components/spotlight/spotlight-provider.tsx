@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { useEffect, useMemo } from "react";
+import { useDeveloperMode } from "../../hooks/use-developer-mode";
 import {
 	useSpotlightKeyboard,
 	useSpotlightStaticItems,
@@ -86,6 +87,7 @@ export function SpotlightProvider({
 	className,
 }: SpotlightProviderProps) {
 	useSpotlightKeyboard();
+	const { developerMode } = useDeveloperMode();
 
 	const { registerGroup } = React.useMemo(() => {
 		return { registerGroup: useSpotlightStore.getState().registerGroup };
@@ -146,17 +148,6 @@ export function SpotlightProvider({
 				priority: 85,
 			},
 			{
-				id: "nav-explore-packages",
-				type: "navigation",
-				label: "Package Registry",
-				description: "Discover and install WASM node packages",
-				icon: Search,
-				group: "navigation",
-				keywords: ["packages", "registry", "wasm", "nodes", "install"],
-				action: () => navigate("/store/packages"),
-				priority: 84,
-			},
-			{
 				id: "nav-settings",
 				type: "navigation",
 				label: "Settings",
@@ -179,6 +170,20 @@ export function SpotlightProvider({
 				priority: 75,
 			},
 		);
+
+		if (developerMode) {
+			items.push({
+				id: "nav-explore-packages",
+				type: "navigation",
+				label: "Package Registry",
+				description: "Discover and install WASM node packages",
+				icon: Search,
+				group: "navigation",
+				keywords: ["packages", "registry", "wasm", "nodes", "install"],
+				action: () => navigate("/store/packages"),
+				priority: 84,
+			});
+		}
 
 		if (onCreateProject) {
 			items.push({
@@ -277,18 +282,19 @@ export function SpotlightProvider({
 				action: () =>
 					navigate(project.links.settings || project.links.flows || "/library"),
 				subItems: [
-					project.links.flows && {
-						id: `project-${project.id}-flows`,
-						type: "project" as const,
-						label: "Flows",
-						description: `Open flows for ${project.name}`,
-						icon: Workflow,
-						iconUrl: project.icon,
-						group: "projects",
-						priority: 149,
-						keywords: ["flows", "workflow", "board"],
-						action: () => navigate(project.links.flows!),
-					},
+					developerMode &&
+						project.links.flows && {
+							id: `project-${project.id}-flows`,
+							type: "project" as const,
+							label: "Flows",
+							description: `Open flows for ${project.name}`,
+							icon: Workflow,
+							iconUrl: project.icon,
+							group: "projects",
+							priority: 149,
+							keywords: ["flows", "workflow", "board"],
+							action: () => navigate(project.links.flows!),
+						},
 					project.links.storage && {
 						id: `project-${project.id}-storage`,
 						type: "project" as const,
@@ -301,30 +307,32 @@ export function SpotlightProvider({
 						keywords: ["storage", "files", "data"],
 						action: () => navigate(project.links.storage!),
 					},
-					project.links.events && {
-						id: `project-${project.id}-events`,
-						type: "project" as const,
-						label: "Events",
-						description: `View events for ${project.name}`,
-						icon: Cable,
-						iconUrl: project.icon,
-						group: "projects",
-						priority: 147,
-						keywords: ["events", "triggers", "webhooks"],
-						action: () => navigate(project.links.events!),
-					},
-					project.links.explore && {
-						id: `project-${project.id}-explore`,
-						type: "project" as const,
-						label: "Data Studio",
-						description: `Open Data Studio for ${project.name}`,
-						icon: Database,
-						iconUrl: project.icon,
-						group: "projects",
-						priority: 146,
-						keywords: ["data studio", "ontology", "objects", "database"],
-						action: () => navigate(project.links.explore!),
-					},
+					developerMode &&
+						project.links.events && {
+							id: `project-${project.id}-events`,
+							type: "project" as const,
+							label: "Events",
+							description: `View events for ${project.name}`,
+							icon: Cable,
+							iconUrl: project.icon,
+							group: "projects",
+							priority: 147,
+							keywords: ["events", "triggers", "webhooks"],
+							action: () => navigate(project.links.events!),
+						},
+					developerMode &&
+						project.links.explore && {
+							id: `project-${project.id}-explore`,
+							type: "project" as const,
+							label: "Data Studio",
+							description: `Open Data Studio for ${project.name}`,
+							icon: Database,
+							iconUrl: project.icon,
+							group: "projects",
+							priority: 146,
+							keywords: ["data studio", "ontology", "objects", "database"],
+							action: () => navigate(project.links.explore!),
+						},
 					project.links.settings && {
 						id: `project-${project.id}-settings`,
 						type: "project" as const,
@@ -350,6 +358,7 @@ export function SpotlightProvider({
 		onOpenDocs,
 		onReportBug,
 		additionalStaticItems,
+		developerMode,
 	]);
 
 	useSpotlightStaticItems(staticItems);

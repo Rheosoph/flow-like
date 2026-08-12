@@ -155,6 +155,7 @@ impl EventBusEvent {
             .await;
 
         internal_run.set_execution_environment(local_execution_environment());
+        internal_run.set_local_user_context().await;
 
         let run_id = internal_run.run.lock().await.id.clone();
 
@@ -168,6 +169,7 @@ impl EventBusEvent {
         let cancellation_token = CancellationToken::new();
         let board_name = internal_run.board.name.clone();
         let run_data = RunData::with_metadata(
+            Some(self.app_id.clone()),
             &board_id,
             &payload.id,
             Some(self.event_id.clone()),

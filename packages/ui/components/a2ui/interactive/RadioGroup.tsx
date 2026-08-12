@@ -3,7 +3,7 @@
 import { cn } from "../../../lib/utils";
 import { Label } from "../../ui/label";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
-import { useComponentActionTrigger, useOnAction } from "../ActionHandler";
+import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -26,7 +26,7 @@ export function A2UIRadioGroup({
 	surfaceId,
 }: ComponentProps<RadioGroupComponent>) {
 	const onAction = useOnAction();
-	const triggerAction = useComponentActionTrigger(componentId);
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const value = useResolved<string>(component.value);
 	const options =
 		useResolved<Array<{ value: string; label: string }>>(component.options) ??
@@ -49,7 +49,7 @@ export function A2UIRadioGroup({
 				context: { value: newValue },
 			});
 		}
-		void triggerAction(component.actions, { value: newValue });
+		void triggerEvent("change", component, { value: newValue });
 	};
 
 	const orientationClass =

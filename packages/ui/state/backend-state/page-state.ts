@@ -2,11 +2,11 @@ import type { SurfaceComponent } from "../../components/a2ui/types";
 import type { Version } from "./widget-state";
 
 export type PageLayoutType =
-	| "Freeform"
-	| "Stack"
-	| "Grid"
-	| "Sidebar"
-	| "HolyGrail";
+	| "freeform"
+	| "stack"
+	| "grid"
+	| "sidebar"
+	| "holyGrail";
 
 export interface Spacing {
 	value: string;
@@ -110,11 +110,41 @@ export interface PageListItem {
 	boardId?: string;
 	name: string;
 	description?: string;
+	/** Revision of the stored payload; lets a listing spot a stale cached page. */
+	updatedAt?: string;
+	/**
+	 * The board lists this page but its payload could not be read where the listing came
+	 * from. Set only when no copy is reachable — a local file that the server can still
+	 * serve is repaired in the background instead of being flagged.
+	 */
+	unavailable?: boolean;
+}
+
+export interface IGetPageOptions {
+	/**
+	 * `"await"` (the default) resolves only once the server has been consulted, so the result
+	 * is safe to read-modify-write. `"background"` resolves from the local copy as soon as it
+	 * is readable and refreshes it afterwards — for rendering, where a page that is one
+	 * revision old beats a blank screen, and where a later revision arrives as a re-render.
+	 */
+	readonly revalidate?: "await" | "background";
+	/** Invoked when background revalidation produced a newer payload than the one returned. */
+	readonly onRevalidated?: (page: IPage) => void;
 }
 
 export interface IPageState {
 	getPages(appId: string, boardId?: string): Promise<PageListItem[]>;
-	getPage(appId: string, pageId: string, boardId?: string): Promise<IPage>;
+	/**
+	 * `version` reads the page snapshot published with that board version. Without it
+	 * the current (draft) page is returned.
+	 */
+	getPage(
+		appId: string,
+		pageId: string,
+		boardId?: string,
+		version?: [number, number, number],
+		options?: IGetPageOptions,
+	): Promise<IPage>;
 	createPage(
 		appId: string,
 		pageId: string,

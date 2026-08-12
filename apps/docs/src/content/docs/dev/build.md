@@ -1,101 +1,99 @@
 ---
 title: Building from Source
-description: Building Flow-Like from Source Code
+description: Set up the repository and build the Flow-Like desktop application
 sidebar:
   order: 10
 ---
 
-## Get the Source Code
+## Clone the development branch
 
-Head to the official [GitHub Repository](https://github.com/Rheosoph/flow-like) and clone the repository to your local machine:
+The repository's default branch is `dev`. The `alpha` branch is used for
+release snapshots; do not assume a `main` branch exists.
 
 ```bash
 git clone https://github.com/Rheosoph/flow-like.git
 cd flow-like
-```
-
-Alternatively, you can fork the repository to your GitHub account and clone it from there (especially if you plan to [contribute](/dev/contribute/)).
-
-We're continuously pushing updates to Flow-Like. The latest stable versions are available on the `main` and `alpha` branches. These are the branches that contain the source code snapshot for our [latest builds available for download](https://flow-like.com/download). They should compile without issues on your machine.
-
-To get the *latest* changes, try the `dev` branch:
-```bash
 git checkout dev
 ```
 
-## Install Rust
-As [we are using Rust](/dev/rust/) for our backend, please continue by installing **Rust** on your machine as described in the [official Rust installation guide](https://www.rust-lang.org/tools/install).
+Fork the repository first if you plan to [contribute](/dev/contribute/).
 
-If you already have Rust installed, make sure you have the latest stable version:
+## Install the toolchain
+
+Flow-Like uses [mise](https://mise.jdx.dev/) to pin and run the repository
+toolchain. The root `mise.toml` currently installs Rust, Bun, Node.js 22,
+Python 3.12, and uv.
+
 ```bash
-rustup update stable
-```
-
-## Install mise
-We use [mise](https://mise.jdx.dev) as our task runner and tool version manager. It replaces the old `bun run` / `npm run` scripts and ensures everyone has the same toolchain versions.
-
-Install mise by following the [official installation guide](https://mise.jdx.dev/getting-started.html), then from the repository root:
-```bash
-mise trust && mise install
-```
-This installs all required toolchains (Rust, Bun, Node.js, Python, uv) at the versions pinned in `mise.toml`.
-
-## Install Bun
-For bundling the frontend we use [Bun](https://bun.sh/). If you ran `mise install` above, Bun is already available. Otherwise, install it manually via the [official Bun installation guide](https://bun.com/docs/installation).
-
-Alternatively, you can also install **Bun** via **npm**. To do so, first install [Node.js](https://nodejs.org/en/download/) and then run:
-```bash
-npm install -g bun
-```
-
-## Install Tauri Prerequisites
-To build the desktop application, we are using [Tauri](https://tauri.app/).
-
-Please make sure you've installed the necessary **System Dependencies** for your respective operating system as described in the [official Tauri Prerequisites guide](https://tauri.app/start/prerequisites/#system-dependencies).
-
-## Install Protocol Buffer Compiler
-Some of our Rust dependencies require **Protobuf**. Please install the Protobuf compiler (`protoc`) on your machine as described in the [official Protobuf installation guide](https://protobuf.dev/installation/).
-
-## Install Node Packages
-Now that you have all dependencies installed, fetch all required Node packages by running:
-```bash
+mise trust
+mise install
 bun install
 ```
 
-## Build and Run in Dev Mode
-To build and run the Flow-Like desktop application in development mode run:
+The desktop build also needs:
+
+- the [Tauri 2 system prerequisites](https://v2.tauri.app/start/prerequisites/)
+  for your operating system;
+- `protoc`, because Rust build scripts compile the repository's protobuf
+  definitions;
+- a working C/C++ build toolchain for native dependencies.
+
+Platform-specific native libraries and mobile toolchains have additional
+requirements. Use the task you intend to run as the final source of truth.
+
+## Run the desktop app
+
+The top-level task detects the current operating system and architecture:
+
 ```bash
-mise run dev:desktop:<os>:<arch>
+mise run dev:desktop
 ```
 
-Please replace `<os>` and `<arch>` with your respective operating system and architecture, available options are:
+Use an explicit task only when you need to override that detection:
+
 ```bash
-# Example for macOS on Apple Silicon
 mise run dev:desktop:mac:arm
-# Example for macOS on Intel/AMD (x64)
 mise run dev:desktop:mac:intel
-# Example for Windows on Intel/AMD (x64)
 mise run dev:desktop:win:x64
-# Example for Windows on ARM
 mise run dev:desktop:win:arm
-# Example for Linux on Intel/AMD (x64)
 mise run dev:desktop:linux:x64
+mise run dev:desktop:linux:arm
 ```
 
-Running in dev mode builds the backend without the Rust `cargo build` `--release` flag. Frontend assets are bundled on each change, so you can see your changes live in the app.
+To run the desktop app with the local API and runtime:
 
-## Productive Builds
-To create a productive build of the Flow-Like desktop application, run the following command (no need to specify OS and architecture here):
+```bash
+mise run dev:desktop:local
+```
+
+## Build a release bundle
+
 ```bash
 mise run build:desktop
 ```
 
-The build binary will be located at `./target/release/flow-like-desktop`. Bundled app installers can be found in `./target/release/bundle`.
+Tauri writes binaries and installers below `target/release/`; the precise
+bundle directory and extension depend on the platform.
 
-## Further Build Scripts
-You can find all available tasks in the [`mise.toml`](https://github.com/Rheosoph/flow-like/blob/main/mise.toml) file at the repository root.
-Run `mise tasks` to list them all, or `mise run <task>` to execute one.
+## Other useful tasks
 
-## Known Issues
+```bash
+mise tasks
+mise run dev:web
+mise run dev:docs
+mise run build:web
+mise run build:docs
+mise run check
+mise run fix
+```
 
-Tauri uses `WebKit` for rendering the frontend. We've noticed some [issues with certain Linux distributions and graphics drivers combinations](https://github.com/tauri-apps/tauri/issues).
+`mise.toml` is the authoritative task list. Several tasks wrap package-local
+scripts, so run them from the repository root unless a page explicitly says
+otherwise.
+
+## Linux rendering issues
+
+Tauri uses the system WebKitGTK stack on Linux. If a window fails to render,
+confirm the Tauri prerequisites for your distribution and check the
+[upstream Tauri issues](https://github.com/tauri-apps/tauri/issues) for your
+WebKitGTK or graphics-driver combination.

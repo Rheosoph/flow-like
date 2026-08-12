@@ -69,14 +69,15 @@ impl NodeLogic for SetVariable {
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        context.deactivate_exec_pin("exec_out").await?;
+        let exec_out = context.get_pin_by_name("exec_out").await?;
+        context.deactivate_exec_pin_ref(&exec_out).await?;
 
         let var_ref: String = context.evaluate_pin("var_ref").await?;
-        let value = context.evaluate_pin::<Value>("value_in").await?;
+        let value = context.evaluate_pin_to_ref("value_in").await?;
 
         context.set_variable_value(&var_ref, value.clone()).await?;
         context.set_pin_value("value_ref", value).await?;
-        context.activate_exec_pin("exec_out").await?;
+        context.activate_exec_pin_ref(&exec_out).await?;
         Ok(())
     }
 
@@ -111,7 +112,7 @@ impl NodeLogic for SetVariable {
             }
         };
 
-        let expected_name = format!("Set {}", &var_ref_variable.name);
+        let expected_name = format!("Set {}", var_ref_variable.name);
 
         // Check if value_in pin needs updating
         let value_in = read_only_node.get_pin_by_name("value_in");

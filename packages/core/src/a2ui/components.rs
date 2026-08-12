@@ -3,7 +3,10 @@
 //! This module provides strongly-typed Rust representations of all A2UI component types.
 //! These schemas enable better tooling support including autocomplete and node recommendations.
 
-use flow_like_types::json::{Deserialize, Serialize};
+use flow_like_types::{
+    Value,
+    json::{Deserialize, Serialize},
+};
 use schemars::JsonSchema;
 use std::collections::HashMap;
 
@@ -22,6 +25,10 @@ pub enum A2UIComponentType {
     AspectRatio(AspectRatioProps),
     Overlay(OverlayProps),
     Absolute(AbsoluteProps),
+    Box(BoxProps),
+    Center(CenterProps),
+    Spacer(SpacerProps),
+    WidgetInstance(WidgetInstanceProps),
 
     // Display components
     Text(TextProps),
@@ -49,6 +56,7 @@ pub enum A2UIComponentType {
     Feedback(FeedbackProps),
     AppLink(AppLinkProps),
     TextField(TextFieldProps),
+    RichText(RichTextProps),
     Select(SelectProps),
     Slider(SliderProps),
     Checkbox(CheckboxProps),
@@ -89,6 +97,8 @@ pub enum A2UIComponentType {
     Iframe(IframeProps),
     PlotlyChart(PlotlyChartProps),
     NivoChart(NivoChartProps),
+    Graph(GraphProps),
+    OntologyGraph(OntologyGraphProps),
 
     // Planning components
     Calendar(CalendarProps),
@@ -113,6 +123,9 @@ pub struct A2UIElement {
     /// Actions that can be triggered on this component
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actions: Option<Vec<Action>>,
+    /// Ordered actions bound to named component events. Legacy `actions` remains the fallback.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_handlers: Option<HashMap<String, Vec<Action>>>,
     /// Internal element ID for workflow operations (added at runtime)
     #[serde(rename = "__element_id", skip_serializing_if = "Option::is_none")]
     pub element_id: Option<String>,
@@ -157,6 +170,48 @@ pub struct ColumnProps {
 pub struct StackProps {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub align: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<BoundValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BoxProps {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r#as: Option<BoundValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CenterProps {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inline: Option<BoundValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SpacerProps {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flex: Option<BoundValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WidgetInstanceProps {
+    pub instance_id: String,
+    pub widget_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exposed_prop_values: Option<HashMap<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_bindings: Option<HashMap<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style_override: Option<Style>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -690,6 +745,39 @@ pub struct DateTimeInputProps {
     pub label: Option<BoundValue>,
 }
 
+/// Rich text authoring surface. `value` carries the editor's `plate_json::` document, which the
+/// `utils_md_plate_to_md` / `utils_md_plate_to_html` nodes convert for downstream use.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RichTextProps {
+    pub value: BoundValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub helper_text: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<BoundValue>,
+    /// Storage folder that pasted or dropped images are uploaded into.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload_prefix: Option<BoundValue>,
+    /// "app" (shared storage, default) or "user" (the viewer's private area).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload_scope: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_height: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_height: Option<BoundValue>,
+    /// Pause before the "change" event fires, in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub debounce_ms: Option<BoundValue>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FileInputProps {
@@ -782,6 +870,12 @@ pub struct VoiceInputProps {
     /// Post-input look: "player" (animated playback) | "autoplay" (player that plays the result immediately, for conversations) | "summary" (compact info + delete). Default "player".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_mode: Option<BoundValue>,
+    /// Backend-set response media URL, used by result modes such as "autoplay".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub src: Option<BoundValue>,
+    /// Alias for `src`; media-source update nodes write both fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<BoundValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -792,6 +886,8 @@ pub struct LinkProps {
     pub label: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub route: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query_params: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -872,6 +968,12 @@ pub struct TabsProps {
     pub orientation: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variant: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list_style: Option<Style>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_style: Option<Style>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_style: Option<Style>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1058,6 +1160,67 @@ pub struct Model3dProps {
     pub auto_rotate: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rotate_speed: Option<BoundValue>,
+    /// Height of the standalone model viewer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub viewer_height: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera_distance: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fov: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera_angle: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera_position: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera_target: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_controls: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_zoom: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_pan: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_rotate_camera: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera_rotate_speed: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ambient_light: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub directional_light: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill_light: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rim_light: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub light_color: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lighting_preset: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_ground: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ground_color: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_reflections: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment_source: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub use_hdr_background: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub polyhaven_hdri: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub polyhaven_resolution: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hdri_url: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ground_size: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ground_offset_y: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ground_follow_camera: Option<BoundValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1273,12 +1436,11 @@ pub struct PlotlyChartProps {
 /// Chart types: bar, line, pie, radar, heatmap, scatter, funnel, treemap, sunburst,
 /// calendar, bump, areaBump, circlePacking, network, sankey, stream, swarmplot,
 /// voronoi, waffle, marimekko, parallelCoordinates, radialBar, boxplot, bullet, chord
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NivoChartProps {
     /// The chart type (bar, line, pie, radar, etc.)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub chart_type: Option<BoundValue>,
+    pub chart_type: BoundValue,
     /// Chart title displayed above the chart
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<BoundValue>,
@@ -1357,6 +1519,87 @@ pub struct NivoChartProps {
     /// Full Nivo config override for advanced customization
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<BoundValue>,
+}
+
+// =============================================================================
+// Graphs
+// =============================================================================
+
+/// Node/edge network graph rendered with the WebGL canvas used by the ontology
+/// explorer. Nodes and edges use the subgraph wire shape, so the output of a
+/// graph or ontology query can be bound straight to this component.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphProps {
+    /// Nodes: `[{ id, label, caption?, props? }]`
+    pub nodes: BoundValue,
+    /// Edges: `[{ id, source, target, label, props? }]`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edges: Option<BoundValue>,
+    /// Per-label style overrides: `{ "<label>": { color, icon, size } }`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label_styles: Option<BoundValue>,
+    /// Toolbar with node/edge counts and the search box (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_toolbar: Option<BoundValue>,
+    /// Search box over the loaded nodes (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_search: Option<BoundValue>,
+    /// Floating label legend (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_legend: Option<BoundValue>,
+    /// Node/edge detail drawer on selection (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_inspector: Option<BoundValue>,
+    /// Component height, e.g. "480px" (default "480px")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<BoundValue>,
+}
+
+/// Embeds an existing project ontology exactly as the Data Studio shows it:
+/// live data, neighbour expansion, search, path finding and governed actions.
+/// Access is enforced by the same permissions as the Data Studio itself.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OntologyGraphProps {
+    /// Id of the ontology (graph overlay) to display
+    pub ontology_id: BoundValue,
+    /// Project the ontology belongs to (defaults to the running project)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<BoundValue>,
+    /// Node budget for the initial load (defaults to the ontology's own limit)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<BoundValue>,
+    /// Neighbour and child expansion (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_expand: Option<BoundValue>,
+    /// Search across the loaded graph and the full ontology (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_search: Option<BoundValue>,
+    /// Shortest-path finding between two nodes (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_paths: Option<BoundValue>,
+    /// Running governed ontology actions on a node (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_actions: Option<BoundValue>,
+    /// Cypher query panel (default false)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_cypher: Option<BoundValue>,
+    /// Legend style edits, persisted onto the shared ontology (default false)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_style_edit: Option<BoundValue>,
+    /// Node-limit selector in the toolbar (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_limit_change: Option<BoundValue>,
+    /// Toolbar with counts, search and limit selector (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_toolbar: Option<BoundValue>,
+    /// Floating label legend (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_legend: Option<BoundValue>,
+    /// Component height, e.g. "480px" (default "480px")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<BoundValue>,
 }
 
 // =============================================================================
@@ -1550,19 +1793,34 @@ pub struct BoundingBoxOverlayProps {
 #[serde(rename_all = "camelCase")]
 pub struct FilePreviewProps {
     /// File URL or data URI
-    pub src: BoundValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub src: Option<BoundValue>,
+    /// Alias for `src`; media-source update nodes write both fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<BoundValue>,
     /// File name (used for type detection if not specified)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filename: Option<BoundValue>,
+    /// MIME type used for preview selection when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<BoundValue>,
     /// File type override: "pdf", "image", "video", "audio", "code", "text"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_type: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_controls: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fit: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_text: Option<BoundValue>,
     /// Height of the preview area
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<BoundValue>,
     /// Show download button
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_download: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loading: Option<BoundValue>,
     /// Audio only: animated visualizer style ("conservative" | "waveform" | "orb" | "vortex" | "shader" | "aurora" | "pulse"). When set, renders an animated player instead of the default controls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variant: Option<BoundValue>,
@@ -1753,4 +2011,135 @@ pub struct GanttProps {
     /// Width in px below which the timeline collapses to the compact view.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compact_breakpoint: Option<BoundValue>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn frontend_component_variants_deserialize_on_the_rust_boundary() {
+        let components = [
+            json!({ "type": "box", "as": { "literalString": "section" } }),
+            json!({ "type": "center", "inline": { "literalBool": true } }),
+            json!({ "type": "spacer", "size": { "literalString": "1rem" } }),
+            json!({
+                "type": "widgetInstance",
+                "instanceId": "instance-1",
+                "widgetId": "widget-1"
+            }),
+        ];
+
+        for component in components {
+            serde_json::from_value::<A2UIComponentType>(component)
+                .expect("frontend component should deserialize");
+        }
+    }
+
+    #[test]
+    fn extended_frontend_props_use_the_expected_camel_case_names() {
+        let component: A2UIComponentType = serde_json::from_value(json!({
+            "type": "model3d",
+            "src": { "literalString": "/models/example.glb" },
+            "viewerHeight": { "literalString": "320px" },
+            "environmentSource": { "literalString": "polyhaven" },
+            "groundFollowCamera": { "literalBool": true }
+        }))
+        .expect("extended model3d props should deserialize");
+
+        let serialized = serde_json::to_value(component).expect("component should serialize");
+        assert!(serialized.get("viewerHeight").is_some());
+        assert!(serialized.get("environmentSource").is_some());
+        assert!(serialized.get("groundFollowCamera").is_some());
+    }
+
+    #[test]
+    fn file_preview_sources_are_optional_but_nivo_chart_type_is_required() {
+        serde_json::from_value::<A2UIComponentType>(json!({
+            "type": "filePreview",
+            "url": { "literalString": "/files/example.pdf" },
+            "mimeType": { "literalString": "application/pdf" }
+        }))
+        .expect("filePreview should accept url without src");
+
+        assert!(
+            serde_json::from_value::<A2UIComponentType>(json!({ "type": "nivoChart" })).is_err()
+        );
+        serde_json::from_value::<A2UIComponentType>(json!({
+            "type": "nivoChart",
+            "chartType": { "literalString": "bar" }
+        }))
+        .expect("nivoChart should accept a required chartType");
+    }
+
+    #[test]
+    fn graph_components_require_their_data_source() {
+        assert!(serde_json::from_value::<A2UIComponentType>(json!({ "type": "graph" })).is_err());
+        serde_json::from_value::<A2UIComponentType>(json!({
+            "type": "graph",
+            "nodes": { "path": "graph.nodes" },
+            "edges": { "path": "graph.edges" },
+            "showLegend": { "literalBool": false }
+        }))
+        .expect("graph should accept bound nodes and edges");
+
+        assert!(
+            serde_json::from_value::<A2UIComponentType>(json!({ "type": "ontologyGraph" }))
+                .is_err()
+        );
+        let component: A2UIComponentType = serde_json::from_value(json!({
+            "type": "ontologyGraph",
+            "ontologyId": { "literalString": "ontology-1" },
+            "allowCypher": { "literalBool": true },
+            "allowStyleEdit": { "literalBool": false }
+        }))
+        .expect("ontologyGraph should accept a required ontologyId");
+
+        let serialized = serde_json::to_value(component).expect("component should serialize");
+        assert_eq!(serialized["type"], "ontologyGraph");
+        assert!(serialized.get("ontologyId").is_some());
+        assert!(serialized.get("allowStyleEdit").is_some());
+    }
+
+    #[test]
+    fn generated_prop_schemas_match_the_frontend_wire_contract() {
+        let file_preview = serde_json::to_value(schemars::schema_for!(FilePreviewProps))
+            .expect("filePreview schema should serialize");
+        let file_properties = file_preview["properties"]
+            .as_object()
+            .expect("filePreview schema should expose properties");
+        for property in ["src", "url", "mimeType", "showControls", "fallbackText"] {
+            assert!(file_properties.contains_key(property));
+        }
+        assert!(
+            file_preview["required"]
+                .as_array()
+                .is_none_or(|required| required.iter().all(|field| field.as_str() != Some("src")))
+        );
+
+        let nivo = serde_json::to_value(schemars::schema_for!(NivoChartProps))
+            .expect("nivoChart schema should serialize");
+        assert!(nivo["properties"]["chartType"].is_object());
+        assert!(nivo["required"].as_array().is_some_and(|required| {
+            required
+                .iter()
+                .any(|field| field.as_str() == Some("chartType"))
+        }));
+
+        let model = serde_json::to_value(schemars::schema_for!(Model3dProps))
+            .expect("model3d schema should serialize");
+        let model_properties = model["properties"]
+            .as_object()
+            .expect("model3d schema should expose properties");
+        for property in [
+            "viewerHeight",
+            "cameraTarget",
+            "lightingPreset",
+            "environmentSource",
+            "groundFollowCamera",
+        ] {
+            assert!(model_properties.contains_key(property));
+        }
+    }
 }

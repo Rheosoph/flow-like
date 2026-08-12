@@ -162,11 +162,7 @@ export function CertificateCard({
 							size="sm"
 							className={cn("rounded-lg gap-1.5 h-7 text-xs")}
 						>
-							<a
-								href={certificate.pdf_url}
-								target="_blank"
-								rel="noreferrer"
-							>
+							<a href={certificate.pdf_url} target="_blank" rel="noreferrer">
 								<ScrollText className="size-3" />
 								PDF
 							</a>

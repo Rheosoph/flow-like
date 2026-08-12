@@ -49,16 +49,21 @@ export function parseDateValue(value: DateValue): Date | null {
 		return Number.isNaN(parsed.getTime()) ? null : parsed;
 	}
 
-	if (typeof value === "number" || typeof value === "string") {
+	if (typeof value === "string") {
+		// Backend timestamps are naive UTC (chrono NaiveDateTime, no zone suffix).
+		// new Date() parses an offset-less date-time as LOCAL time, so resolve the
+		// UTC-aware form first and only fall back for formats it doesn't recognize.
+		const chrono = parseChronoDateString(value);
+		if (chrono) {
+			return chrono;
+		}
+
 		const parsed = new Date(value);
-		if (!Number.isNaN(parsed.getTime())) {
-			return parsed;
-		}
+		return Number.isNaN(parsed.getTime()) ? null : parsed;
+	}
 
-		if (typeof value === "string") {
-			return parseChronoDateString(value);
-		}
-
+	if (typeof value === "number") {
+		const parsed = new Date(value);
 		return Number.isNaN(parsed.getTime()) ? null : parsed;
 	}
 

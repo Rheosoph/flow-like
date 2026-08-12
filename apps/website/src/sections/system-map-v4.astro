@@ -1,0 +1,592 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+
+interface Props {
+  lang?: Lang;
+}
+
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const current = translations[lang] as Record<string, string>;
+  const english = translations.en as Record<string, string>;
+  return current?.[key] ?? english[key] ?? key;
+};
+
+// The six OS layers, top of the exploded stack -> bottom (engine nearest).
+// hue ramps coral -> amber down the stack; href points at each layer's section.
+const layers = [
+  { title: t("v4.map.layer1.title"), tech: t("v4.map.layer1.tech"), desc: t("v4.map.layer1.desc"), href: "/#engine", hue: 33 },
+  { title: t("v4.map.layer2.title"), tech: t("v4.map.layer2.tech"), desc: t("v4.map.layer2.desc"), href: "/#engine", hue: 41 },
+  { title: t("v4.map.layer3.title"), tech: t("v4.map.layer3.tech"), desc: t("v4.map.layer3.desc"), href: "/#data-layer", hue: 50 },
+  { title: t("v4.map.layer4.title"), tech: t("v4.map.layer4.tech"), desc: t("v4.map.layer4.desc"), href: "/#interface", hue: 58 },
+  { title: t("v4.map.layer5.title"), tech: t("v4.map.layer5.tech"), desc: t("v4.map.layer5.desc"), href: "/#packages", hue: 52 },
+  { title: t("v4.map.layer6.title"), tech: t("v4.map.layer6.tech"), desc: t("v4.map.layer6.desc"), href: "/#rules", hue: 40 },
+] as const;
+---
+
+<section
+  id="system-map"
+  class="system-map-v4 relative isolate overflow-hidden py-24 md:py-32"
+  data-system-map
+>
+  <div class="sm-orbs pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="sm-orb sm-orb--coral"></div>
+    <div class="sm-orb sm-orb--amber"></div>
+    <div class="sm-grid"></div>
+  </div>
+
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+    <div class="sm-layout grid items-center gap-y-14 lg:grid-cols-12 lg:gap-x-6">
+      <!-- Copy column -->
+      <header class="sm-copy lg:col-span-5">
+        <span class="sm-kicker">{t("v4.map.kicker")}</span>
+        <h2 class="sm-headline">{t("v4.map.headline")}</h2>
+        <p class="sm-body">{t("v4.map.body")}</p>
+
+        <div class="sm-topline">
+          <span class="sm-status-dot" aria-hidden="true"></span>
+          <span>{t("v4.map.stackLabel")}</span>
+        </div>
+      </header>
+
+      <!-- Isometric layer stack -->
+      <div class="sm-stage lg:col-span-7">
+        <nav
+          class="sm-scene"
+          aria-label={t("v4.map.visualAria")}
+        >
+          <ol class="sm-iso">
+            <li class="sm-floor" aria-hidden="true"></li>
+            {layers.map((layer, i) => (
+              <li
+                class="sm-plate"
+                style={`--i:${i};--glow:oklch(0.72 0.185 ${layer.hue});--fade:${(1 - i * 0.08).toFixed(2)}`}
+              >
+                <a
+                  class="sm-plate__link"
+                  href={layer.href}
+                  aria-label={`${layer.title}, ${layer.tech}. ${t("v4.map.jump")}`}
+                >
+                  <span class="sm-plate__slab" aria-hidden="true">
+                    <span class="sm-plate__edge"></span>
+                  </span>
+                  <span class="sm-plate__label">
+                    <span class="sm-plate__meta">
+                      <span class="sm-plate__idx">{String(i + 1).padStart(2, "0")}</span>
+                      <span class="sm-plate__tech">{layer.tech}</span>
+                    </span>
+                    <span class="sm-plate__name">{layer.title}</span>
+                    <span class="sm-plate__detail">
+                      {layer.desc}
+                      <svg class="sm-plate__arrow" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" />
+                      </svg>
+                    </span>
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ol>
+        </nav>
+        <p class="sm-hint">{t("v4.map.indexHint")}</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  /* ── Contrast band ─────────────────────────────────────────────
+     A richer, darker band than its light neighbours in BOTH themes.
+     Light theme: deep charcoal. Dark theme: elevated warm-charcoal
+     with a framed border + inner glow so it never vanishes.        */
+  .system-map-v4 {
+    --band-bg: oklch(0.164 0.011 268);
+    --band-fg: #f5f1ec;
+    --band-muted: color-mix(in oklab, #f5f1ec 58%, transparent);
+    --band-faint: color-mix(in oklab, #f5f1ec 34%, transparent);
+    --band-line: color-mix(in oklab, #f5f1ec 12%, transparent);
+    --band-top: color-mix(in oklab, var(--primary) 32%, transparent);
+
+    color: var(--band-fg);
+    background:
+      radial-gradient(120% 90% at 82% 8%, color-mix(in oklab, var(--primary) 12%, transparent), transparent 55%),
+      linear-gradient(180deg, oklch(0.19 0.014 274), var(--band-bg) 42%);
+    border-top: 1px solid var(--band-top);
+    border-bottom: 1px solid color-mix(in oklab, #f5f1ec 8%, transparent);
+    box-shadow: inset 0 1px 0 color-mix(in oklab, #f5f1ec 6%, transparent);
+  }
+
+  :global(.dark) .system-map-v4 {
+    /* elevated surface, lifted off the near-black page */
+    background:
+      radial-gradient(120% 90% at 82% 8%, color-mix(in oklab, var(--primary) 15%, transparent), transparent 52%),
+      linear-gradient(180deg, oklch(0.223 0.016 276), oklch(0.188 0.012 270) 55%, oklch(0.204 0.02 34) 140%);
+    border-top: 1px solid color-mix(in oklab, var(--primary) 40%, transparent);
+    border-bottom: 1px solid color-mix(in oklab, var(--foreground) 12%, transparent);
+    box-shadow:
+      inset 0 1px 0 color-mix(in oklab, var(--foreground) 9%, transparent),
+      inset 0 0 120px -40px color-mix(in oklab, var(--primary) 26%, transparent);
+  }
+
+  /* ── Ambient background ── */
+  .sm-orb {
+    position: absolute;
+    border-radius: 999px;
+    filter: blur(120px);
+  }
+  .sm-orb--coral {
+    top: -6rem;
+    right: -8rem;
+    width: 34rem;
+    height: 34rem;
+    background: color-mix(in oklab, var(--primary) 40%, transparent);
+    opacity: 0.28;
+  }
+  .sm-orb--amber {
+    bottom: -10rem;
+    left: -6rem;
+    width: 30rem;
+    height: 30rem;
+    background: color-mix(in oklab, oklch(0.76 0.16 66) 42%, transparent);
+    opacity: 0.16;
+  }
+  .sm-grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(color-mix(in oklab, #f5f1ec 5%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in oklab, #f5f1ec 5%, transparent) 1px, transparent 1px);
+    background-size: 46px 46px;
+    mask-image: radial-gradient(120% 80% at 70% 30%, black, transparent 78%);
+    opacity: 0.6;
+  }
+
+  /* ── Copy column ── */
+  .sm-copy {
+    max-width: 34rem;
+  }
+  .sm-kicker {
+    display: inline-flex;
+    align-items: center;
+    margin-bottom: 1.5rem;
+    border: 1px solid color-mix(in oklab, var(--primary) 42%, transparent);
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--primary) 12%, transparent);
+    padding: 0.35rem 0.9rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: color-mix(in oklab, var(--primary) 62%, #f5f1ec);
+  }
+  .sm-headline {
+    font-size: clamp(1.85rem, 3.6vw, 3rem);
+    font-weight: 700;
+    line-height: 1.08;
+    letter-spacing: -0.03em;
+    color: var(--band-fg);
+    text-wrap: balance;
+  }
+  .sm-body {
+    margin-top: 1.25rem;
+    max-width: 32rem;
+    font-size: clamp(1rem, 1.2vw, 1.1rem);
+    line-height: 1.6;
+    color: var(--band-muted);
+  }
+  .sm-topline {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-top: 2rem;
+    border-top: 1px solid var(--band-line);
+    padding-top: 1.4rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--band-faint);
+  }
+  .sm-status-dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    flex: 0 0 auto;
+    border-radius: 999px;
+    background: var(--primary);
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--primary) 22%, transparent);
+    animation: smPulse 3.2s ease-in-out infinite;
+  }
+  @keyframes smPulse {
+    0%, 100% { box-shadow: 0 0 0 4px color-mix(in oklab, var(--primary) 22%, transparent); }
+    50% { box-shadow: 0 0 0 7px color-mix(in oklab, var(--primary) 8%, transparent); }
+  }
+
+  /* ── Isometric scene ── */
+  .sm-stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .sm-scene {
+    position: relative;
+    width: 100%;
+    min-height: 37rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    perspective: 2400px;
+    perspective-origin: 58% 42%;
+  }
+  .sm-iso {
+    position: relative;
+    width: 20rem;
+    height: 12.5rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    transform-style: preserve-3d;
+    transform: rotateX(56deg) rotateZ(-40deg);
+    opacity: 0;
+    transition: opacity 0.9s ease;
+  }
+  .system-map-v4.is-in .sm-iso {
+    opacity: 1;
+    animation: smBreathe 11s ease-in-out infinite 0.9s;
+  }
+  @keyframes smBreathe {
+    0%, 100% { transform: rotateX(56deg) rotateZ(-40deg) translateZ(0); }
+    50% { transform: rotateX(56deg) rotateZ(-40deg) translateZ(0.5rem); }
+  }
+
+  /* grounding grid plane under the stack */
+  .sm-floor {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 30rem;
+    height: 21rem;
+    transform: translate(-50%, -50%) translateZ(-1.5rem);
+    border-radius: 1.5rem;
+    background-image:
+      linear-gradient(color-mix(in oklab, var(--band-fg) 9%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in oklab, var(--band-fg) 9%, transparent) 1px, transparent 1px);
+    background-size: 2.4rem 2.4rem;
+    mask-image: radial-gradient(60% 60% at 50% 50%, black, transparent 72%);
+    opacity: 0.5;
+  }
+
+  /* ── Plates ── */
+  .sm-plate {
+    --step: 4.1rem;
+    --z: calc((5 - var(--i)) * var(--step));
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 20rem;
+    height: 12.5rem;
+    transform: translate(-50%, -50%) translateZ(var(--z));
+    transform-style: preserve-3d;
+    transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease;
+  }
+  .sm-plate__link {
+    position: absolute;
+    inset: 0;
+    display: block;
+    transform-style: preserve-3d;
+    color: inherit;
+    text-decoration: none;
+    outline: none;
+    border-radius: 1rem;
+  }
+
+  /* the flat glowing glass slab, lying in the isometric plane */
+  .sm-plate__slab {
+    position: absolute;
+    inset: 0;
+    border-radius: 1rem;
+    background:
+      linear-gradient(135deg,
+        color-mix(in oklab, var(--glow) calc(20% * var(--fade)), transparent),
+        color-mix(in oklab, var(--band-fg) 5%, transparent) 55%,
+        color-mix(in oklab, var(--glow) calc(9% * var(--fade)), transparent));
+    border: 1px solid color-mix(in oklab, var(--glow) calc(46% * var(--fade)), transparent);
+    box-shadow:
+      inset 0 1px 0 color-mix(in oklab, var(--band-fg) 26%, transparent),
+      inset 0 0 32px -12px color-mix(in oklab, var(--glow) 60%, transparent),
+      0 26px 44px -26px color-mix(in oklab, var(--glow) calc(70% * var(--fade)), transparent),
+      0 2px 0 color-mix(in oklab, #05060a 55%, transparent);
+    transition: border-color 0.35s ease, box-shadow 0.35s ease, background 0.35s ease;
+  }
+  /* bright leading edge */
+  .sm-plate__edge {
+    position: absolute;
+    inset: 0;
+    border-radius: 1rem;
+    padding: 1px;
+    background: linear-gradient(135deg,
+      color-mix(in oklab, var(--glow) 85%, transparent),
+      transparent 45%);
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: 0.9;
+  }
+
+  /* readable label, counter-rotated to stand upright toward the viewer */
+  .sm-plate__label {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 15.5rem;
+    transform-origin: left center;
+    transform:
+      translate(-2.2rem, -50%)
+      rotateZ(40deg) rotateX(-56deg)
+      translate(4.9rem, 0);
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    pointer-events: none;
+  }
+  .sm-plate__meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.62rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .sm-plate__idx {
+    color: color-mix(in oklab, var(--glow) 70%, #f5f1ec);
+  }
+  .sm-plate__tech {
+    color: var(--band-faint);
+  }
+  .sm-plate__tech::before {
+    content: "/ ";
+    opacity: 0.5;
+  }
+  .sm-plate__name {
+    font-size: clamp(1rem, 1.3vw, 1.2rem);
+    font-weight: 680;
+    line-height: 1.1;
+    letter-spacing: -0.015em;
+    color: var(--band-fg);
+    text-shadow: 0 1px 14px color-mix(in oklab, #05060a 75%, transparent);
+  }
+  .sm-plate__detail {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    max-width: 15rem;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    color: var(--band-muted);
+    opacity: 0;
+    transform: translateY(-0.25rem);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+  }
+  .sm-plate__arrow {
+    width: 0.9rem;
+    height: 0.9rem;
+    flex: 0 0 auto;
+    stroke: color-mix(in oklab, var(--glow) 78%, #f5f1ec);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* ── Interaction: lift + light + reveal ── */
+  .sm-plate:hover,
+  .sm-plate:focus-within {
+    transform: translate(-50%, -50%) translateZ(calc(var(--z) + 1.5rem));
+    z-index: 5;
+  }
+  /* focus attention on the active layer; overlaps then read as depth */
+  .sm-iso:has(.sm-plate:hover) .sm-plate:not(:hover),
+  .sm-iso:has(.sm-plate:focus-within) .sm-plate:not(:focus-within) {
+    opacity: 0.5;
+  }
+  .sm-plate:hover .sm-plate__slab,
+  .sm-plate:focus-within .sm-plate__slab {
+    border-color: color-mix(in oklab, var(--glow) 82%, transparent);
+    background:
+      linear-gradient(135deg,
+        color-mix(in oklab, var(--glow) 30%, transparent),
+        color-mix(in oklab, var(--band-fg) 7%, transparent) 55%,
+        color-mix(in oklab, var(--glow) 14%, transparent));
+    box-shadow:
+      inset 0 1px 0 color-mix(in oklab, var(--band-fg) 32%, transparent),
+      inset 0 0 46px -10px color-mix(in oklab, var(--glow) 75%, transparent),
+      0 40px 70px -30px color-mix(in oklab, var(--glow) 85%, transparent),
+      0 2px 0 color-mix(in oklab, #05060a 55%, transparent);
+  }
+  .sm-plate:hover .sm-plate__detail,
+  .sm-plate:focus-within .sm-plate__detail {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .sm-plate__link:focus-visible {
+    outline: 2px solid color-mix(in oklab, var(--glow) 80%, #f5f1ec);
+    outline-offset: 3px;
+  }
+
+  .sm-hint {
+    margin-top: 1.5rem;
+    font-size: 0.75rem;
+    letter-spacing: 0.02em;
+    color: var(--band-faint);
+    text-align: center;
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 1023px) {
+    .sm-copy {
+      max-width: 40rem;
+    }
+    .sm-scene {
+      min-height: 30rem;
+    }
+  }
+
+  /* Tablet single-column: give the isometric stage a touch more headroom */
+  @media (max-width: 1023px) and (min-width: 768px) {
+    .sm-scene {
+      min-height: 34rem;
+    }
+    .sm-iso {
+      transform: rotateX(56deg) rotateZ(-40deg) scale(0.92);
+    }
+    .system-map-v4.is-in .sm-iso {
+      animation: none;
+    }
+  }
+
+  /* Phones: the isometric side-labels have no room — flatten to a clean
+     vertical stack of layer cards, keeping the coral -> amber ramp. */
+  @media (max-width: 767px) {
+    .sm-scene {
+      min-height: 0;
+      display: block;
+      perspective: none;
+    }
+    .sm-iso {
+      position: static;
+      width: 100%;
+      height: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.7rem;
+      transform: none;
+      transform-style: flat;
+      opacity: 1;
+    }
+    .system-map-v4.is-in .sm-iso {
+      animation: none;
+    }
+    .sm-floor {
+      display: none;
+    }
+    .sm-plate {
+      position: static;
+      width: 100%;
+      height: auto;
+      transform: none !important;
+      transform-style: flat;
+      z-index: auto;
+    }
+    .sm-plate__link {
+      position: static;
+      display: grid;
+      gap: 0.35rem;
+      padding: 0.95rem 1.05rem 1rem;
+      border: 1px solid color-mix(in oklab, var(--glow) 30%, transparent);
+      border-left: 3px solid var(--glow);
+      border-radius: 0.85rem;
+      background: linear-gradient(90deg, color-mix(in oklab, var(--glow) 13%, transparent), transparent 65%);
+      transition: border-color 0.25s ease, background 0.25s ease;
+    }
+    .sm-plate__link:hover,
+    .sm-plate__link:focus-visible {
+      border-color: color-mix(in oklab, var(--glow) 60%, transparent);
+      background: linear-gradient(90deg, color-mix(in oklab, var(--glow) 20%, transparent), transparent 70%);
+    }
+    .sm-plate__slab {
+      display: none;
+    }
+    .sm-plate__label {
+      position: static;
+      width: auto;
+      transform: none;
+      transform-origin: initial;
+      gap: 0.3rem;
+      pointer-events: auto;
+    }
+    .sm-plate__name {
+      font-size: 1.1rem;
+    }
+    .sm-plate__detail {
+      max-width: none;
+      opacity: 1;
+      transform: none;
+    }
+    .sm-hint {
+      margin-top: 1.75rem;
+    }
+  }
+
+  /* ── Reduced motion: plates rest gently exploded, no float ── */
+  @media (prefers-reduced-motion: reduce) {
+    .sm-iso,
+    .system-map-v4.is-in .sm-iso {
+      opacity: 1 !important;
+      animation: none !important;
+    }
+    .sm-plate,
+    .sm-plate__slab,
+    .sm-plate__detail {
+      transition: none !important;
+    }
+    .sm-status-dot {
+      animation: none !important;
+    }
+  }
+</style>
+
+<script>
+  function initSystemMap() {
+    const section = document.getElementById("system-map");
+    if (!section) return;
+
+    const reveal = () => section.classList.add("is-in");
+
+    const reduced =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    if (reduced || !("IntersectionObserver" in window)) {
+      reveal();
+      return;
+    }
+
+    const io = new IntersectionObserver(
+      (entries, observer) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            reveal();
+            observer.disconnect();
+          }
+        }
+      },
+      { rootMargin: "0px 0px -12% 0px", threshold: 0.2 },
+    );
+    io.observe(section);
+  }
+
+  initSystemMap();
+</script>

@@ -167,7 +167,7 @@ function constructPrompt(prompt: string): (out: string) {   //@l:olhizg2b8s6seeu
     return stringFormat({ formatString: "{prompt}\n\nCurrent Time: {time}", prompt: prompt, time: utilsDatetimeFormat({ date: now2.date, format: "rfc3339" }) })
 }
 
-chatEvent(history: History, localSession: Struct, globalSession: Struct, tools: string[], actions: Struct[], attachments: Struct[], user: User) {   //@n:liqnumu9en44cq30tu9t5kez
+eventsChat chatEvent(history: History, localSession: Struct, globalSession: Struct, tools: string[], actions: Struct[], attachments: Struct[], user: User) {   //@n:liqnumu9en44cq30tu9t5kez
     const extractAttachments = aiGenLlmHistoryExtractAttachments({ history: history, attachments: attachments })   //@n:szmvl23cetvik1iwmnsslj26
     attachedFiles = {}   //@n:xal689cwuihke7lvj801euk9
     for (const forEach4 of controlForEach({ array: extractAttachments.paths })) {   //@n:yqfyly9dkiziqqa6uqmsxdzs
@@ -189,19 +189,19 @@ chatEvent(history: History, localSession: Struct, globalSession: Struct, tools: 
     }
 }
 
-addColumn(table: string, columnName: string, sqlExpression: string, payload: Struct) {   //@n:u11llqlso3ki71m6h6x1slvt
+eventsGeneric addColumn(table: string, columnName: string, sqlExpression: string, payload: Struct) {   //@n:u11llqlso3ki71m6h6x1slvt
     const openDatabase = openLocalDb({ name: table, userScoped: true, batchSize: 1000 })   //@n:dcc9b9ioxr85bjr1t6kt0cyt
     const addColumn2 = addColumnLocalDb({ database: openDatabase.database, columnName: columnName, sqlExpression: sqlExpression })   //@n:x02c1keipntdeemua38gmrsw
     return addColumn2.schema   //@n:tu04p0m2yhjlgyrdwracwafa
 }
 
-dropColumn(table: string, columnName: string, payload: Struct) {   //@n:l4jlgqw2hx5gm0373p8klkmm
+eventsGeneric dropColumn(table: string, columnName: string, payload: Struct) {   //@n:l4jlgqw2hx5gm0373p8klkmm
     const openDatabase10 = openLocalDb({ name: table, userScoped: true, batchSize: 1000 })   //@n:ig7gcpgqcdnsrbxhuxa8ay62
     const dropColumn2 = dropColumnLocalDb({ database: openDatabase10.database, columnName: columnName })   //@n:soofx7wqq0urk182m50vlgu7
     return dropColumn2.schema   //@n:wzuu665q0na68v9umz93x97q
 }
 
-indexPath(path: string, payload: Struct) {   //@n:mrnr16nfnggz0g8f7kdhsw4q
+eventsGeneric indexPath(path: string, payload: Struct) {   //@n:mrnr16nfnggz0g8f7kdhsw4q
     pathExists({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }) })   //@n:f337hswi55ynsxjl1ayejhv5
     const setExtension5 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_index" })   //@n:rregdf6lvtdsjwh7gq0gb2mf
     if (pathExists({ path: setExtension5.pathOut })) { // exec_out_exists   //@n:cqrbjotyj6ppoatuxve6ewzl
@@ -256,12 +256,12 @@ indexPath(path: string, payload: Struct) {   //@n:mrnr16nfnggz0g8f7kdhsw4q
     }
 }
 
-listTables(payload: Struct) {   //@n:zxvergp3s2e9atgyfgwq7b2i
+eventsGeneric listTables(payload: Struct) {   //@n:zxvergp3s2e9atgyfgwq7b2i
     const listTables = listTablesDb({ userScoped: true })   //@n:otarxau6e4h01u6yeunmhy66
     return listTables.tables   //@n:qy2y4dv238hw0jjzf190nv9p
 }
 
-loadVariables() {   //@n:slde8unylsfksbdl72a0bfce
+eventsSimple loadVariables() {   //@n:slde8unylsfksbdl72a0bfce
     const setPreferenceWeight2 = aiGenerativeSetPreferenceWeight({ preferencesIn: aiGenerativeMakePreferences({ multimodal: true }), preferencesKey: "Reasoning", weight: 1 })   //@n:lgo8z82ky6kdvptozoasjocf
     const findModel = aiGenerativeFindModel({ preferences: setPreferenceWeight2.preferencesOut })   //@n:bnhgx6e0icx1bg7e27ffmmsg
     mainModel = findModel.model   //@n:fpyrvp4ga6q2x8113fecveil
@@ -275,7 +275,7 @@ loadVariables() {   //@n:slde8unylsfksbdl72a0bfce
     smallModel = findModel2.model   //@n:ty18816iw02pfst7t59kw390
 }
 
-upsertDatabaseItem(table: string, idField: string, item: Struct, payload: Struct) {   //@n:n11potzkr6tc5pib0mhzc7jx
+eventsGeneric upsertDatabaseItem(table: string, idField: string, item: Struct, payload: Struct) {   //@n:n11potzkr6tc5pib0mhzc7jx
     const openDatabase14 = openLocalDb({ name: table, userScoped: true, batchSize: 1000 })   //@n:p11xzomudt9wbkxh8zds00zk
     const upsert = upsertLocalDb({ database: openDatabase14.database, idRow: idField, value: item })   //@n:urnrsfrpau9gxxsvnla6pbzg
     upsert {
@@ -288,12 +288,12 @@ upsertDatabaseItem(table: string, idField: string, item: Struct, payload: Struct
     }
 }
 
-askUser(payload: Struct, name: string, description: string, optionA: string, optionB: string, freeform: bool) {   //@n:apowdhgvaoh06hpx8a3j4qpu
+eventsGeneric askUser(payload: Struct, name: string, description: string, optionA: string, optionB: string, freeform: bool) {   //@n:apowdhgvaoh06hpx8a3j4qpu
     const singleChoice = interactionSingleChoice({ name: name, description: description, options: optionA, options: optionB, allowFreeform: freeform, ttlSeconds: 120 })   //@n:n02xez0j5efophju3ufszhc1
     return singleChoice.response   //@n:z0r9eem9ss2lr97m7us60xy9
 }
 
-fetchPage(url: string, payload: Struct) {   //@n:jifmm59liln9cnwc7ec83rf5
+eventsGeneric fetchPage(url: string, payload: Struct) {   //@n:jifmm59liln9cnwc7ec83rf5
     eventsChatPushStep({ title: "Reading Website", description: url })   //@n:oyomq4tgddsswio67wqomq25
     const aPICall = httpFetch({ request: httpMakeRequest({ method: "GET", url: url }) })   //@n:idrp1wwe0i6p1tbvia6wj7yx
     const toText = httpResponseToText({ response: aPICall.response })   //@n:sy8yfs8c7cyy5mueggnwguo2
@@ -301,19 +301,19 @@ fetchPage(url: string, payload: Struct) {   //@n:jifmm59liln9cnwc7ec83rf5
     return hTMLToMarkdown.markdown   //@n:vv2ctjbgw7txduob2we5jdij
 }
 
-makeColumnOptional(table: string, columnName: string, payload: Struct) {   //@n:lrgwibevm2khu0mk1f1md1n4
+eventsGeneric makeColumnOptional(table: string, columnName: string, payload: Struct) {   //@n:lrgwibevm2khu0mk1f1md1n4
     const openDatabase18 = openLocalDb({ name: table, userScoped: false, batchSize: 1000 })   //@n:yp2c122fa27nm767znt2ou07
     const makeColumnOptional = makeColumnOptionalLocalDb({ database: openDatabase18.database, columnName: columnName, optional: true })   //@n:hn2d0buerkwfnybvnlp8xzr0
     return makeColumnOptional.schema   //@n:bdmdj2r9mv42vx16wzx4c1vx
 }
 
-getDatabaseSchema(table: string, payload: Struct) {   //@n:g0r0v1yy9zwr3eel9geizqv3
+eventsGeneric getDatabaseSchema(table: string, payload: Struct) {   //@n:g0r0v1yy9zwr3eel9geizqv3
     const openDatabase11 = openLocalDb({ name: table, userScoped: true, batchSize: 10 })   //@n:ilp9l90rjt8j61zq19fsv4zx
     const getSchema = schemaLocalDb({ database: openDatabase11.database })   //@n:tp60n04v9nna3wgfd1a3u6sp
     return getSchema.schema   //@n:n7fidslubx64cwy1v9f98frs
 }
 
-batchUpsertDatabaseItems(table: string, idColumn: string, items: Struct[], payload: Struct) {   //@n:q13o16fksvxo1i95oqv0ymdy
+eventsGeneric batchUpsertDatabaseItems(table: string, idColumn: string, items: Struct[], payload: Struct) {   //@n:q13o16fksvxo1i95oqv0ymdy
     const openDatabase2 = openLocalDb({ name: table, userScoped: true, batchSize: 1000 })   //@n:eilcr8g97dgbxl3jt2soxp6v
     const batchUpsert = batchUpsertLocalDb({ database: openDatabase2.database, idRow: idColumn, value: items })   //@n:bugy5eaytduwrstmt0bn34yp
     batchUpsert {
@@ -326,7 +326,7 @@ batchUpsertDatabaseItems(table: string, idColumn: string, items: Struct[], paylo
     }
 }
 
-queryItems(tables: string[], query: string, payload: Struct) {   //@n:picurh0xazovwtqtoilqhmus
+eventsGeneric queryItems(tables: string[], query: string, payload: Struct) {   //@n:picurh0xazovwtqtoilqhmus
     const createDataFusionSession = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:bvnanveauu3d0ujy25s64dg1
     for (const forEach of controlForEach({ array: tables })) {   //@n:bcl92uzgcscfrnorvws50f5v
         const openDatabase12 = openLocalDb({ name: forEach.value, userScoped: true, batchSize: 1000 })   //@n:kr7jheffses6hdbkp8ywnbvd
@@ -336,7 +336,7 @@ queryItems(tables: string[], query: string, payload: Struct) {   //@n:picurh0xaz
     return sQLQuery.rows   //@n:bxd0u96i6a5421ivxz7ifqh6
 }
 
-callLibrarian(task: string, payload: Struct) {   //@n:v36kd2hgbjdmg5m9xy0b2xg6
+eventsGeneric callLibrarian(task: string, payload: Struct) {   //@n:v36kd2hgbjdmg5m9xy0b2xg6
     eventsChatPushStep({ title: "File Management", description: task })   //@n:wiqf4jne0b29zi6kv49mrf01
     const openDatabase9 = openLocalDb({ name: "files", userScoped: true, batchSize: 1000 })   //@n:ic13nkshcfmyk8a3o0wnf5wr
     files = openDatabase9.database   //@n:jy746kf8fthhfofuwarcdsl1
@@ -350,14 +350,14 @@ callLibrarian(task: string, payload: Struct) {   //@n:v36kd2hgbjdmg5m9xy0b2xg6
     return aiGenerativeLlmResponseLastContent({ response: invokeAgent.response }).content   //@n:ox8u1qsug8cmwvu4fgke4kxp
 }
 
-internetSearch(query: string, language: string, page: int, payload: Struct) {   //@n:ee1g939f5sshl86mgpju9upt
+eventsGeneric internetSearch(query: string, language: string, page: int, payload: Struct) {   //@n:ee1g939f5sshl86mgpju9upt
     eventsChatPushStep({ title: "Searching Internet", description: query })   //@n:ar4s7g8fexh0zz0poakz6hqz
     const aPICall2 = httpFetch({ request: httpMakeRequest({ method: "GET", url: stringFormat({ formatString: "https://search.flow-like.com/search?q={q}&format=json&pageno={page}&language={lang}", page: utilsTypesFallback({ value: page, default: 1 }).result, lang: utilsTypesFallback({ value: language, default: "en-US" }).result, q: a2uiUrlEncode({ input: query }) }) }) })   //@n:jzr66iw7c2h9d0bpb7atcztr
     const toStruct = httpResponseToJson({ response: aPICall2.response })   //@n:epe0y3sh3aczu7mta8f3v4gq
     return toStruct.struct   //@n:jg9pbwemxozegohcwyln8kxc
 }
 
-insertDatabaseItem(table: string, item: Struct, payload: Struct) {   //@n:apiw2bpp3zqew1j7g7nq4ba9
+eventsGeneric insertDatabaseItem(table: string, item: Struct, payload: Struct) {   //@n:apiw2bpp3zqew1j7g7nq4ba9
     const openDatabase17 = openLocalDb({ name: table, userScoped: true, batchSize: 1000 })   //@n:yfbbtef6iu62rs1t5atb3ore
     const insert = insertLocalDb({ database: openDatabase17.database, value: item })   //@n:dup5je08x8nt00tj18tb4yuh
     insert {
@@ -370,7 +370,7 @@ insertDatabaseItem(table: string, item: Struct, payload: Struct) {   //@n:apiw2b
     }
 }
 
-internetResearcher(task: string, deep: bool, payload: Struct) {   //@n:mdt4jtownods5590f5fx793t
+eventsGeneric internetResearcher(task: string, deep: bool, payload: Struct) {   //@n:mdt4jtownods5590f5fx793t
     eventsChatPushStep({ title: "Researching Internet", description: task })   //@n:g8oel8p2dou3fz0e0f3u6am8
     const callConstructPrompt3 = constructPrompt({ prompt: "You are Researcher, a web-connected research agent inside Flow-Like.\n\nYou investigate topics on the internet and return evidence-based answers. Your strength is not speed alone, but proportional depth: simple questions get direct answers; complex or high-stakes questions get deeper research, source comparison, skepticism, and a clear conclusion.\n\nWhen the user asks a complex question, do not stop at the first result. Search from multiple angles, prefer primary sources, inspect counterclaims, and explain what is known, what is claimed, and what remains uncertain.\n\nYou should be especially skeptical of marketing claims, AI demos, benchmark numbers, startup announcements, pricing pages, and viral narratives. Treat them as claims until supported by independent evidence.\n\nUse the internet search tools available to you. For complex research, run multiple searches:\n- official / primary source\n- independent analysis\n- criticism or controversy\n- competitors\n- recent updates\n- technical documentation where relevant\n\nYour answers should be structured, concise, and actionable.\n\nDefault structure for complex research:\n\n# Bottom Line\n\nGive the direct conclusion first.\n\n# Findings\n\nSummarize the main evidence.\n\n# Evidence Quality\n\nExplain which claims are well-supported, weakly supported, or disputed.\n\n# Outside Opinions\n\nInclude credible outside perspectives when available.\n\n# Implications\n\nExplain practical effects, risks, and likely consequences.\n\n# Conclusion\n\nGive a final judgment and, where appropriate, a recommendation.\n\nRules:\n- Do not invent facts.\n- Do not overstate certainty.\n- Do not rely on one source for complex claims.\n- Do not treat company marketing as objective truth.\n- Do not hide uncertainty.\n- Do not produce generic summaries when the user asked for investigation.\n- Cite or reference sources for important claims.\n- If you cannot verify something, say so clearly.\n- The more complex, current, controversial, or decision-relevant the query is, the deeper your research must be." })   //@n:vbme4b9g1vva8vj1h3j2jy3g
     const setSystemMessage = aiGenerativeSetSystemPromptMessage({ history: aiGenerativeMakeHistory({ modelName: "" }), message: callConstructPrompt3.out })   //@n:by24mxyfktn3cxch97eiyc2x
@@ -380,17 +380,17 @@ internetResearcher(task: string, deep: bool, payload: Struct) {   //@n:mdt4jtown
     return aiGenerativeLlmResponseLastContent({ response: streamInvokeAgent2.response }).content   //@n:qzl76osj1k0fqfj11e6io11h
 }
 
-buildIndex(table: string, column: string, fts: bool, payload: Struct) {   //@n:sc5s1hodo0sps7ie6q4ld9e6
+eventsGeneric buildIndex(table: string, column: string, fts: bool, payload: Struct) {   //@n:sc5s1hodo0sps7ie6q4ld9e6
     const openDatabase8 = openLocalDb({ name: table, userScoped: true, batchSize: 1000 })   //@n:i120hg20mn2g6uciwqt59iuf
     indexLocalDb({ database: openDatabase8.database, column: column, type: utilsTypesFallback({ value: fts, default: false }).result ? "FULL TEXT" : "AUTO" })   //@n:lpezrmtusregg82cxtgngv57
     return stringFormat({ formatString: "Success" })   //@n:k110lhoo4xthdph8w1wt8er9
 }
 
-dataScientist(task: string, payload: Struct) {   //@n:cx67riwzc8c16rsfsp3lg197
+eventsGeneric dataScientist(task: string, payload: Struct) {   //@n:cx67riwzc8c16rsfsp3lg197
     delay({ time: 1000.0 })   //@n:u1gqb0tcwiib6z172wswsixb
 }
 
-batchInsertDatabaseItems(table: string, items: Struct[], payload: Struct) {   //@n:m7g3tv4a3390i49i5zp38z07
+eventsGeneric batchInsertDatabaseItems(table: string, items: Struct[], payload: Struct) {   //@n:m7g3tv4a3390i49i5zp38z07
     const openDatabase16 = openLocalDb({ name: table, userScoped: true, batchSize: 1000 })   //@n:vjxc4sjrs8c157e8gxnmtbn1
     const batchInsert = batchInsertLocalDb({ database: openDatabase16.database, value: items })   //@n:scokme2u8nh6x4is1mudh586
     batchInsert {
@@ -403,7 +403,7 @@ batchInsertDatabaseItems(table: string, items: Struct[], payload: Struct) {   //
     }
 }
 
-databaseManager(task: string, payload: Struct) {   //@n:kmdd1odl4nffsegz4e7oesim
+eventsGeneric databaseManager(task: string, payload: Struct) {   //@n:kmdd1odl4nffsegz4e7oesim
     eventsChatPushStep({ title: "Database Management", description: task })   //@n:srperfqmsboyycyl1oj8u6a1
     const callConstructPrompt = constructPrompt({ prompt: "## Available Database Tools\n\nYou have access to the following database and query tools. Use them deliberately and report important operations in the final result.\n\n---\n\n# Table and Schema Discovery\n\n## List Tables\n\nUse `List Tables` when:\n- the parent asks what databases or tables exist\n- you need to discover available tables before querying\n- memory may be incomplete or stale\n- you need to validate whether a table already exists\n\nReturn table names and, when known, their purpose from memory.\n\n## Get Database Schema / Get Schema\n\nUse schema inspection when:\n- writing to an existing table\n- validating incoming data\n- deciding whether schema evolution is needed\n- preparing joins\n- preparing SQL queries\n- checking whether a full-text index target column exists\n\nNever assume an existing table schema when a schema-sensitive operation depends on it.\n\n---\n\n# Database and SQL Session Tools\n\n## Query Items\n\nUse `Query Items` for SQL/DataFusion operations over one or more tables.\n\nUse it for:\n- filtering rows\n- projecting selected columns\n- sorting\n- limiting\n- aggregation\n- grouping\n- joining multiple tables\n- deduplication\n- checking rows before deletion\n- producing analytical summaries\n\nThe `Tables` input defines which tables are made available to the query. If the query joins across tables, all required tables must be handed over.\n\nRules:\n- Use explicit table names and aliases.\n- Select only needed columns.\n- Add limits for potentially large result sets.\n- Return row count when available.\n- Avoid cartesian joins.\n- Use SQL filters for structured data.\n- Use full-text search for indexed text lookup.\n\n## Create DataFusion Session\n\nUse this when you need an explicit query session for registering and querying several LanceDB tables.\n\nImportant parameters:\n- `Session Name`\n- `Target Partitions`\n- `Batch Size`\n- repartition settings\n- parquet pruning\n- coalesce batches\n- statistics collection\n\nUse reasonable defaults unless the parent has performance requirements.\n\nUse larger batch sizes and partitioning for large analytical queries. Use conservative settings for small or interactive queries.\n\n## Open Database\n\nUse `Open Database` when:\n- accessing a LanceDB-backed table\n- creating or opening a database by table name\n- preparing to register a table in DataFusion\n- preparing insert/upsert/index/search operations\n\nWriting can implicitly create a database/table when enough schema information is available.\n\n## Register Lance Table\n\nUse this after opening a database when a table needs to be queried via DataFusion SQL.\n\nUse it when:\n- SQL query needs the table\n- joining LanceDB tables\n- filtering or aggregating through DataFusion\n- validating table contents with SQL\n\n---\n\n# Insert and Upsert Tools\n\n## Insert Database Item\n\nUse `Insert Database Item` for one append-only record.\n\nUse it when:\n- the item is an event, log, observation, snapshot, or historical record\n- duplicates are acceptable or meaningful\n- there is no stable ID\n- the parent asks to append\n\nReturn the inserted count and table name.\n\n## Batch Insert Database Items\n\nUse `Batch Insert Database Items` for multiple append-only records.\n\nUse it when:\n- writing many observations, events, documents, facts, or logs\n- records should preserve history\n- repeated records are acceptable\n- performance matters\n\nValidate schema before batch insert where possible.\n\n## Upsert Database Item\n\nUse `Upsert Database Item` for one record with a stable identity.\n\nInputs:\n- Table\n- ID Field / ID Column\n- Item / Value\n\nUse it when:\n- the parent asks to save the latest version\n- the record should replace or update an existing row with the same ID\n- the item has a stable primary key, URL, external ID, hash, email, or normalized unique name\n\nDo not upsert without a credible stable ID.\n\n## Batch Upsert Database Items\n\nUse `Batch Upsert Database Items` for many records with stable identities.\n\nUse it when:\n- importing or refreshing known entities\n- deduplicating by ID\n- updating known records in bulk\n- storing latest versions of products, companies, sources, or entities\n\nReport the ID column and affected row count.\n\n---\n\n# Indexing and Search Tools\n\n## Build Index\n\nUse `Build Index` to create an index on a table column.\n\nInputs:\n- Table\n- Column\n- FTS\n\nUse it when:\n- the parent asks for searchable content\n- repeated search over a text column is likely\n- full-text search is needed\n- a large table has a commonly filtered or searched column\n\nIf `FTS` is enabled, build a full-text search index for a text column.\n\nGood FTS columns:\n- `content`\n- `text`\n- `body`\n- `summary`\n- `title`\n- `description`\n- `notes`\n- `claim`\n- `payload_text`\n\nAfter building an index:\n- update memory\n- report the indexed table and column\n\n## Search Items / Fulltext Search\n\nUse `Search Items` when the task is keyword or text retrieval over an indexed column.\n\nInputs:\n- Table\n- Query\n- Filter\n- Search Term\n\nUse it for:\n- retrieving documents by phrase\n- searching notes, summaries, claims, descriptions, content, or titles\n- narrowing search using a structured filter\n\nRules:\n- Prefer full-text search for natural-language text lookup.\n- Prefer SQL/DataFusion for structured conditions.\n- Combine search with filters when useful.\n- Return matching IDs, key fields, and short text snippets.\n- Do not return large raw documents unless requested.\n\n---\n\n# Delete Tools\n\n## Delete Items\n\nUse `Delete Items` for deleting rows from a table using an SQL filter.\n\nInputs:\n- Table\n- SQL Filter\n\nUse it when:\n- the parent explicitly asks to delete rows\n- a precise filter is provided\n- records created in the current operation need cleanup\n- stale records are clearly identified\n\nRules:\n- Deletion is destructive.\n- Use a precise SQL filter.\n- For broad filters, query/count matching rows first.\n- Do not delete whole tables unless explicitly instructed.\n- Do not delete ID, source, provenance, or audit-critical records through vague instructions.\n\nReturn affected row count when available.\n\n---\n\n# Schema Evolution Tools\n\n## Add Column\n\nUse `Add Column` when:\n- incoming data contains a stable new field that should be queryable\n- the parent explicitly asks to add a field\n- a deterministic SQL expression can compute a useful derived column\n- storing the value in `payload` would make later queries unnecessarily difficult\n\nInputs:\n- Table\n- Column Name\n- SQL Expression\n\nRules:\n- Prefer nullable columns unless the value is guaranteed.\n- Use stable, clear names.\n- Use SQL expressions for deterministic derived values.\n- Avoid creating many columns from unstable or sparse payload keys.\n- Update memory after adding the column.\n\n## Drop Column\n\nUse `Drop Column` only when:\n- the parent explicitly requests it\n- the column was created incorrectly in the current operation\n- the column is clearly obsolete and safely recoverable elsewhere\n\nRules:\n- Dropping a column is destructive.\n- Inspect schema first.\n- Do not drop ID columns, join keys, provenance fields, timestamps, raw payloads, or source fields unless explicitly instructed.\n- Report the dropped column.\n\n## Make Column Optional\n\nUse `Make Column Optional` when:\n- valid incoming records omit the field\n- older records do not contain the field\n- partial data should be accepted\n- schema strictness would otherwise block useful writes\n\nRules:\n- Prefer optionality over rejecting useful partial records.\n- This is usually safer than forcing fake default values.\n- Update memory after changing optionality.\n\n---\n\n# Recommended Tool Flows\n\n## Store new records\n\n1. List tables if target is unknown.\n2. Get schema if table exists.\n3. Decide insert vs upsert.\n4. Evolve schema if needed.\n5. Insert or batch insert, upsert or batch upsert.\n6. Build indexes if requested or clearly useful.\n7. Update memory.\n8. Return result.\n\n## Query structured data\n\n1. Identify required tables from request or memory.\n2. Open databases.\n3. Create DataFusion session if needed.\n4. Register required Lance tables.\n5. Run SQL query through `Query Items`.\n6. Return compact rows and count.\n\n## Join across tables\n\n1. Identify all required tables.\n2. Inspect schemas for join keys.\n3. Register all tables in a DataFusion session.\n4. Use explicit SQL joins.\n5. Limit output.\n6. Return rows plus assumptions about join keys.\n\n## Search text\n\n1. Identify target table and text column.\n2. Check schema.\n3. Build FTS index if needed and appropriate.\n4. Use `Search Items`.\n5. Apply filter if provided.\n6. Return compact matches.\n\n## Delete rows\n\n1. Identify exact table.\n2. Validate SQL filter.\n3. Query/count matches if broad or risky.\n4. Delete matching rows.\n5. Return affected count.\n6. Update memory only if schema or table metadata changed.\n\n## Evolve schema\n\n1. Inspect existing schema.\n2. Compare incoming data or requested change.\n3. Add column, make optional, or return conflict.\n4. Drop only with explicit scope.\n5. Update memory.\n6. Report every schema change." })   //@n:bejjf8sfn7w936jor9d12k3c
     const setSystemMessage2 = aiGenerativeSetSystemPromptMessage({ history: aiGenerativeMakeHistory({ modelName: "" }), message: callConstructPrompt.out })   //@n:e418bnd792gtec15eyyam795
@@ -413,44 +413,44 @@ databaseManager(task: string, payload: Struct) {   //@n:kmdd1odl4nffsegz4e7oesim
     return aiGenerativeLlmResponseLastContent({ response: streamInvokeAgent3.response }).content   //@n:me917srmuw503ixkjlqt2pbd
 }
 
-deleteItems(table: string, filterQuery: string, payload: Struct) {   //@n:nejwvi3cebr8ia1l81jcd1kj
+eventsGeneric deleteItems(table: string, filterQuery: string, payload: Struct) {   //@n:nejwvi3cebr8ia1l81jcd1kj
     const openDatabase7 = openLocalDb({ name: table, userScoped: true, batchSize: 1000 })   //@n:h1384rf2bd8twzif9o1m9j2g
     const delete = filterDeleteLocalDb({ database: openDatabase7.database, filter: filterQuery })   //@n:lb1c6mrwntfnr6gxns3fmnhp
     return delete.deletedValues   //@n:yybzsh9u9ddsssb1cx694jx4
 }
 
-searchItems(table: string, query: string, filter: string, payload: Struct) {   //@n:os5g5bnq20bd038sdqhlsfay
+eventsGeneric searchItems(table: string, query: string, filter: string, payload: Struct) {   //@n:os5g5bnq20bd038sdqhlsfay
     const openDatabase3 = openLocalDb({ name: table, userScoped: true, batchSize: 1000 })   //@n:ereuvl7qy3ub4xd98azpo7wb
     const fullTextSearch = ftsSearchLocalDb({ database: openDatabase3.database, search: query, fields: [], filter: utilsTypesFallback({ value: filter, default: "" }).result, limit: 10, offset: 0 })   //@n:vnxt3cb4zshvz081sf0nxysl
     return fullTextSearch.values   //@n:r1a6ib6f9c0sakk6y1oachek
 }
 
-addInterest() {   //@n:gj21w8xym9o2w0k6rvma2hrm
+eventsSimple addInterest() {   //@n:gj21w8xym9o2w0k6rvma2hrm
     logInfo({ message: stringFormat({ formatString: "label: {label}\ngoal: {goal}\nsource: {src}\nweight: {weight}", goal: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "nkhigr7q8pwxtfzi729flmte/pa-goal" }).element }).value, src: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "nkhigr7q8pwxtfzi729flmte/pa-content" }).element }).value, weight: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "nkhigr7q8pwxtfzi729flmte/pa-weight" }).element }).value, label: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "nkhigr7q8pwxtfzi729flmte/pa-label" }).element }).value }), toast: true })   //@n:y2y24w2fuhhbdcoy7c8zws5u
 }
 
-readFile(path: string, summary: bool, payload: Struct) {   //@n:o4dbnck3e6otisqtml1l0fhw
+eventsGeneric readFile(path: string, summary: bool, payload: Struct) {   //@n:o4dbnck3e6otisqtml1l0fhw
     if (pathExists({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }) })) { // exec_out_exists   //@n:mj5m20m80usoqz2tctq8a1g9
         const setExtension4 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_index" })   //@n:pd8mngp8dg77ntdkzzu9eq63
         if (pathExists({ path: setExtension4.pathOut })) { // exec_out_exists   //@n:mtn7qgfssz2266oq3u4u8qr0
-            if (utilsTypesFallback({ value: summary, default: true }).result) {   //@n:nfc4p5mgnszvzwoyi0v63e4x
-                const setExtension2 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_summary" })   //@n:hei8qighn5h4rd1yw0yayxkv
-                const readToString = readToString({ path: setExtension2.pathOut })   //@n:d25nzcnh8lssfuo5gf8zyetl
-                return readToString.content   //@n:de09bpkohphy3tdcc62kcj8a
-            } else {
-                const setExtension6 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_md" })   //@n:sp4r8vqyry058rd5sftfsc6h
-                const readToString2 = readToString({ path: setExtension6.pathOut })   //@n:fx72h965tbhonwgyrehqctem
-                return readToString2.content   //@n:f5rma68p1tyzrewrxq6zekeu
-            }
         } else { // exec_out_missing
             indexPath({ path: path })   //@n:bhf5ysrs8kkvnihujne5oaw8
+        }
+        if (utilsTypesFallback({ value: summary, default: true }).result) {   //@n:nfc4p5mgnszvzwoyi0v63e4x
+            const setExtension2 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_summary" })   //@n:hei8qighn5h4rd1yw0yayxkv
+            const readToString = readToString({ path: setExtension2.pathOut })   //@n:d25nzcnh8lssfuo5gf8zyetl
+            return readToString.content   //@n:de09bpkohphy3tdcc62kcj8a
+        } else {
+            const setExtension6 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_md" })   //@n:sp4r8vqyry058rd5sftfsc6h
+            const readToString2 = readToString({ path: setExtension6.pathOut })   //@n:fx72h965tbhonwgyrehqctem
+            return readToString2.content   //@n:f5rma68p1tyzrewrxq6zekeu
         }
     } else { // exec_out_missing
         return stringFormat({ formatString: "Path {path} does not exist. No file found.", path: path })   //@n:a2ogmuh4frf12fkbme7f5mst
     }
 }
 
-listFilesInPath(path: string, payload: Struct) {   //@n:iuj7lsynep4xqxshgp8g3h4r
+eventsGeneric listFilesInPath(path: string, payload: Struct) {   //@n:iuj7lsynep4xqxshgp8g3h4r
     const listPaths = pathListPaths({ prefix: fromRawPath({ basePath: pathFromUserDir({ nodeScope: false }), rawPath: path }), recursive: false })   //@n:qt2j96v0nx2rb0ps9tjpuw5x
     const listFolders = pathListFolders({ prefix: fromRawPath({ basePath: pathFromUserDir({ nodeScope: false }), rawPath: path }), recursive: false })   //@n:yly5sss0lnawgzelngi29khs
     let record5 = structSet({ structIn: {}, field: "files", value: listPaths.paths }).structOut   //@n:ndc55i1zej9krr8puvhma6mn
@@ -458,7 +458,7 @@ listFilesInPath(path: string, payload: Struct) {   //@n:iuj7lsynep4xqxshgp8g3h4r
     return record5   //@n:x8yuz6uqnn48da8aeq6cetjv
 }
 
-searchInFiles(query: string, filter: string, payload: Struct) {   //@n:vxoe4h9j60ia1yande7dztwe
+eventsGeneric searchInFiles(query: string, filter: string, payload: Struct) {   //@n:vxoe4h9j60ia1yande7dztwe
     eventsChatPushStep({ title: "Querying files", description: query })   //@n:gp4jo6zd907p1g3u1ayywec3
     const embedQuery = embedQuery({ queryString: query, model: embeddingModel })   //@n:bd3soso6llln3wxyuan2rymc
     const hybridSearch2 = hybridSearchLocalDb({ database: files, search: "", vector: embedQuery.vector, fields: [], filter: utilsTypesFallback({ value: filter, default: "" }).result, rerank: true, limit: 10, offset: 0 })   //@n:gxkh5h5asw2j55blmg431shf
@@ -466,7 +466,7 @@ searchInFiles(query: string, filter: string, payload: Struct) {   //@n:vxoe4h9j6
     return filterArrayField3.arrayOut   //@n:ry108qasir5oqmruafj8offf
 }
 
-storeAttachment(attachmentPath: string, storagePath: string, payload: Struct) {   //@n:a7cmalf22cbojbumd8bmls7f
+eventsGeneric storeAttachment(attachmentPath: string, storagePath: string, payload: Struct) {   //@n:a7cmalf22cbojbumd8bmls7f
     eventsChatPushStep({ title: "Storing Artifact", description: storagePath })   //@n:y1qith6m4yjovu9a7dar7gwf
     const readToBytes = readToBytes({ path: structGet({ struct: attachedFiles, field: attachmentPath }).value })   //@n:a159c66tin5k5q03mmh127fy
     writeBytes({ path: fromRawPath({ basePath: pathFromUploadDir(), rawPath: storagePath }), content: readToBytes.content })   //@n:aco0cxuya6lux9e10wswjsx9
@@ -474,7 +474,7 @@ storeAttachment(attachmentPath: string, storagePath: string, payload: Struct) { 
     return stringFormat({ formatString: "Indexed!" })   //@n:yu9rohtu0ehrv6cknaxyqq03
 }
 
-searchInFile(query: string, filter: string, path: string, payload: Struct) {   //@n:mc53d9qa5dv2iipd68u4l2ie
+eventsGeneric searchInFile(query: string, filter: string, path: string, payload: Struct) {   //@n:mc53d9qa5dv2iipd68u4l2ie
     eventsChatPushStep({ title: "Searching Path", description: query })   //@n:maqd4j55k03g7rrqugkju1lw
     const sQLFilterDatabase = filterLocalDb({ database: files, filter: stringFormat({ formatString: "path LIKE '{path}%'", path: path }), limit: 5, offset: 0 })   //@n:esfr5nmtupbk0dgf2wo0j04d
     if (sQLFilterDatabase.values.length > 1) {   //@n:ix14u3xvffieq7tnq2f6ftyz
@@ -493,20 +493,20 @@ searchInFile(query: string, filter: string, path: string, payload: Struct) {   /
     }
 }
 
-readAttachment(attachmentPath: string, payload: Struct) {   //@n:i0qmpqpc8dpmyc5frtjy0zdi
+eventsGeneric readAttachment(attachmentPath: string, payload: Struct) {   //@n:i0qmpqpc8dpmyc5frtjy0zdi
     eventsChatPushStep({ title: "Reading Attachment", description: attachmentPath })   //@n:saimklf3m7qe4i5n4hf8xu5q
     const aIExtractDocument = aiProcessingExtractDocumentAi({ file: structGet({ struct: attachedFiles, field: attachmentPath }).value, model: smallModel, extractImages: true, imagesPerMessage: 1, pagesPerBatch: 4, temperature: 0.1, maxTokens: 0 })   //@n:dsgyqjfwbdywtcncc201xls7
     const pagesToMarkdown2 = aiProcessingPagesToMarkdown({ pages: aIExtractDocument.pages })   //@n:qp5086ebmbc92k4l1s2dimts
     return pagesToMarkdown2.markdown   //@n:e803l4ookx7jsswfa6fjwix6
 }
 
-removePath(path: string, payload: Struct) {   //@n:n6bf38mnj6fwi1pl6sqzkt1o
+eventsGeneric removePath(path: string, payload: Struct) {   //@n:n6bf38mnj6fwi1pl6sqzkt1o
     eventsChatPushStep({ title: "Deleting Artifacts", description: path })   //@n:i3h6qfsa359inh2bn3sp1r1o
     filterDeleteLocalDb({ database: files, filter: stringFormat({ formatString: "path LIKE '{path}%'", path: path }) })   //@n:tn39rpgs45x31nfe82c90uaq
     storageDelete({ path: fromRawPath({ basePath: pathFromUserDir({ nodeScope: false }), rawPath: path }), recursive: true })   //@n:cadftkshruu5fbj4bs3ijxrv
     return stringFormat({ formatString: "Deleted Files" })   //@n:p7psr8n6ewhhr6ah3h6ir3q2
 }
 
-moveFile(oldPath: string, newPath: string, payload: Struct) {   //@n:p73lfvy4jefdzh2yp1dhbbe1
+eventsGeneric moveFile(oldPath: string, newPath: string, payload: Struct) {   //@n:p73lfvy4jefdzh2yp1dhbbe1
     delay({ time: 1000.0 })   //@n:h3v6oan3tojem1amuw4v0d6w
 }

@@ -62,7 +62,7 @@ fn default_limit() -> usize {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/graph", skip(state, user, payload))]
+#[tracing::instrument(name = "POST /apps/{app_id}/graph", skip(state, user, scope, payload))]
 pub async fn create_overlay(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

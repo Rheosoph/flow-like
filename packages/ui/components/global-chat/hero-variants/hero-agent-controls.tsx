@@ -21,6 +21,9 @@ export function HeroAgentControls() {
 		setReasoningEffort,
 		connecting,
 		connected,
+		diagnostic,
+		retry,
+		statusText,
 	} = useAgentSelection();
 
 	return (
@@ -30,6 +33,7 @@ export function HeroAgentControls() {
 			models={models.map((model) => ({
 				id: model.id,
 				label: model.name,
+				isFree: model.isFree,
 				supportedReasoningEfforts: model.supportedReasoningEfforts,
 				defaultReasoningEffort: model.defaultReasoningEffort,
 			}))}
@@ -40,6 +44,9 @@ export function HeroAgentControls() {
 			onEffortChange={setReasoningEffort}
 			connecting={connecting}
 			connected={connected}
+			diagnostic={diagnostic}
+			onRetry={retry}
+			statusText={statusText}
 			emptyModelLabel="No models available"
 			triggerClassName="hero-bubble-pill hero-bubble-flowpilot h-auto max-w-full border-0 bg-transparent px-0 hover:border-transparent hover:bg-transparent"
 			contentClassName="z-200"

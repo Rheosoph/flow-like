@@ -8,6 +8,11 @@ import {
 	XCircle,
 } from "lucide-react";
 import {
+	userAvatarUrl,
+	userDisplayName,
+	userInitials,
+} from "../../../lib/user-display";
+import {
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
@@ -158,7 +163,7 @@ function statusIcon(status: string) {
 }
 
 function actorLabel(log: AppPublicationLogItem) {
-	return log.author?.name ?? log.author?.username ?? log.authorId ?? "System";
+	return userDisplayName(log.author, "System");
 }
 
 export function AppPublicationReviewCard({
@@ -225,13 +230,17 @@ export function AppPublicationReviewCard({
 									<div className="mt-4 space-y-3">
 										{request.logs.map((log) => {
 											const label = actorLabel(log);
-											const initial = label.charAt(0).toUpperCase();
 
 											return (
 												<div key={log.id} className="flex items-start gap-3">
 													<Avatar className="h-8 w-8">
-														<AvatarImage src={log.author?.avatar} alt={label} />
-														<AvatarFallback>{initial || "?"}</AvatarFallback>
+														<AvatarImage
+															src={userAvatarUrl(log.author)}
+															alt={label}
+														/>
+														<AvatarFallback>
+															{userInitials(label)}
+														</AvatarFallback>
 													</Avatar>
 													<div className="min-w-0 flex-1 space-y-1">
 														<div className="flex flex-wrap items-center gap-2 text-sm">

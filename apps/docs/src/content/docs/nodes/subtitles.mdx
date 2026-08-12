@@ -1,0 +1,30 @@
+---
+title: "Subtitles Node Catalog"
+description: "Subtitles Flow-Like node category with 6 generated node references."
+sidebar:
+  order: 0
+  label: "Subtitles"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Subtitles nodes, Subtitles, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Subtitles"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Subtitles Node Catalog\",\"description\":\"Subtitles Flow-Like node category with 6 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/subtitles/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Subtitles\",\"keywords\":\"Subtitles nodes, Subtitles, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Subtitles"}
+	label="Subtitles"
+	nodes={nodesByCategory["Subtitles"] ?? []}
+	client:load
+/>

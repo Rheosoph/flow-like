@@ -138,7 +138,7 @@ impl AwsRuntimeCredentials {
 
     #[tracing::instrument(
         name = "AwsRuntimeCredentials::scoped_credentials",
-        skip(self, state),
+        skip(self, sub, state),
         level = "debug"
     )]
     pub async fn scoped_credentials(

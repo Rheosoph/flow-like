@@ -1,0 +1,64 @@
+{
+	"schema": "flow-like.doc-screenshot-plan/v1",
+	"app": "desktop",
+	"outputDir": "apps/docs/src/assets",
+	"tauriFixture": "../fixtures/docs-roles.tauri.json",
+	"defaults": {
+		"viewport": {
+			"width": 1624,
+			"height": 1060,
+			"deviceScaleFactor": 2
+		},
+		"theme": "dark",
+		"format": "webp",
+		"timeoutMs": 120000,
+		"settleMs": 500,
+		"disableAnimations": true,
+		"hideScrollbars": true
+	},
+	"scenarios": [
+		{
+			"name": "roles",
+			"path": "/library/config/roles",
+			"query": {
+				"id": "docs-app",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "input[placeholder=\"Search roles\"]",
+					"state": "visible"
+				},
+				{
+					"type": "click",
+					"selector": "div:has(> div > input[placeholder=\"Search roles\"]) > button"
+				},
+				{
+					"type": "waitFor",
+					"selector": "#role-templates > div:last-child > button:nth-child(2)",
+					"state": "visible"
+				},
+				{
+					"type": "click",
+					"selector": "#role-templates > div:last-child > button:nth-child(2)"
+				},
+				{
+					"type": "waitFor",
+					"selector": "input[placeholder=\"Who is this for?\"]",
+					"state": "visible"
+				},
+				{
+					"type": "fill",
+					"selector": "input[placeholder=\"e.g. Reviewer\"]",
+					"value": "Support Specialist"
+				},
+				{
+					"type": "capture",
+					"name": "RightsAndRoles",
+					"mode": "viewport"
+				}
+			]
+		}
+	]
+}

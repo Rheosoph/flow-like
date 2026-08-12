@@ -1,16 +1,20 @@
 pub mod local;
+pub mod mlx;
+pub mod mlx_pack;
 
 use crate::{bit::Bit, state::FlowLikeState};
 use flow_like_model_provider::llm::{
-    ModelLogic, anthropic::AnthropicModel, cohere::CohereModel, deepseek::DeepseekModel,
-    galadriel::GaladrielModel, gemini::GeminiModel, groq::GroqModel, huggingface::HuggingfaceModel,
-    hyperbolic::HyperbolicModel, lmstudio::LMStudioModel, mira::MiraModel, mistral::MistralModel,
-    moonshot::MoonshotModel, mozilla::MozillaModel, ollama::OllamaModel, openai::OpenAIModel,
-    openrouter::OpenRouterModel, perplexity::PerplexityModel, together::TogetherModel,
-    vertex::VertexModel, voyageai::VoyageAIModel, xai::XAIModel,
+    ModelLogic, anthropic::AnthropicModel, bedrock::BedrockModel, cohere::CohereModel,
+    deepseek::DeepseekModel, galadriel::GaladrielModel, gemini::GeminiModel, groq::GroqModel,
+    huggingface::HuggingfaceModel, hyperbolic::HyperbolicModel, lmstudio::LMStudioModel,
+    mira::MiraModel, mistral::MistralModel, moonshot::MoonshotModel, mozilla::MozillaModel,
+    ollama::OllamaModel, openai::OpenAIModel, openrouter::OpenRouterModel,
+    perplexity::PerplexityModel, together::TogetherModel, vertex::VertexModel,
+    voyageai::VoyageAIModel, xai::XAIModel,
 };
 use flow_like_types::{Result, json, sync::Mutex, tokio::time::interval};
 use local::LocalModel;
+use mlx::MlxModel;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -190,6 +194,7 @@ impl ModelFactory {
 
         let model: Arc<dyn ModelLogic> = match provider {
             "custom:openai" => Arc::new(OpenAIModel::from_provider(model_provider).await?),
+            "custom:bedrock" => Arc::new(BedrockModel::from_provider(model_provider).await?),
             "custom:anthropic" => Arc::new(AnthropicModel::from_provider(model_provider).await?),
             "custom:gemini" => Arc::new(GeminiModel::from_provider(model_provider).await?),
             "custom:groq" => Arc::new(GroqModel::from_provider(model_provider).await?),
@@ -245,17 +250,31 @@ impl ModelFactory {
             provider.ok_or(flow_like_types::anyhow!("Model type not supported"))?;
         let provider = model_provider.provider_name.clone();
 
+        if bit.is_mlx_model() {
+            let cache_key = bit.mlx_runtime_model_cache_key()?;
+            if let Some(model) = self.cached_models.get(&cache_key) {
+                self.ttl_list.insert(cache_key.clone(), SystemTime::now());
+                return Ok(model.clone());
+            }
+
+            let mlx_model: Arc<MlxModel> =
+                Arc::new(MlxModel::new(bit, app_state.clone(), &settings).await?);
+            self.ttl_list.insert(cache_key.clone(), SystemTime::now());
+            self.cached_models.insert(cache_key, mlx_model.clone());
+            return Ok(mlx_model);
+        }
+
         if provider == "Local" {
-            if let Some(model) = self.cached_models.get(&bit.id) {
-                self.ttl_list.insert(bit.id.clone(), SystemTime::now());
+            let cache_key = bit.runtime_model_cache_key();
+            if let Some(model) = self.cached_models.get(&cache_key) {
+                self.ttl_list.insert(cache_key.clone(), SystemTime::now());
                 return Ok(model.clone());
             }
 
             let local_model = LocalModel::new(bit, app_state, &settings).await?;
             let local_model: Arc<LocalModel> = Arc::new(local_model);
-            self.ttl_list.insert(bit.id.clone(), SystemTime::now());
-            self.cached_models
-                .insert(bit.id.clone(), local_model.clone());
+            self.ttl_list.insert(cache_key.clone(), SystemTime::now());
+            self.cached_models.insert(cache_key, local_model.clone());
             return Ok(local_model);
         }
 

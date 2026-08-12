@@ -14,11 +14,13 @@ use crate::entity::{
     meta, user, wasm_package, wasm_package_author, wasm_package_review, wasm_package_user,
     wasm_package_version,
 };
+use flow_like::a2ui::micro_widget::{PackageWidgetRef, PackageWidgetSource};
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::PutPayload;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::create_id;
-use flow_like_wasm::manifest::{PackageManifest, PackageNodeEntry};
+use flow_like_wasm::manifest::{PackageManifest, PackageNodeEntry, PackageWidgetEntry};
+use flow_like_wasm::widget_bundle::{WidgetBundleReader, sha256_hex};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
     PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait, sea_query::Expr,
@@ -33,6 +35,176 @@ use flow_like_wasm::aot_cache::WASMTIME_MAJOR_VERSION;
 /// CDN path prefix for WASM packages
 const WASM_PACKAGES_PATH: &str = "wasm";
 pub const WASM_COMPILED_PATH: &str = "wasm-compiled";
+/// CDN path prefix for stored widget bundles (`.flwb`)
+pub const WIDGET_BUNDLES_PATH: &str = "widget-bundles";
+/// CDN path prefix for unpacked widget bundle entries
+pub const WIDGET_ASSETS_PATH: &str = "widget-assets";
+
+/// Whether a (server-built) manifest ships a WASM node artifact.
+/// Widgets-only packages declare widgets but carry no (or an empty) wasm path/hash.
+pub fn manifest_has_wasm(manifest: &PackageManifest) -> bool {
+    manifest.widgets.is_empty()
+        || manifest.wasm_hash.as_deref().is_some_and(|h| !h.is_empty())
+        || manifest.wasm_path.as_deref().is_some_and(|p| !p.is_empty())
+}
+
+/// Validate an uploaded widget bundle against the package manifest:
+/// - whole-file sha256 must equal the manifest `widget_bundle_hash`
+/// - the bundle itself must pass `WidgetBundleReader::validate`
+/// - the bundle must be built for this package id / version
+/// - the widget id sets of manifest and bundle must match exactly
+/// - every manifest `widgets[*].contract` must match the bundle's
+///   `contract.json` byte-for-byte (compared via canonical serde_json
+///   serialization of both parsed `WidgetContract`s)
+///
+/// Returns `(widget_bundle_hash, widget_bundle_size)` on success.
+pub fn validate_manifest_widget_bundle(
+    manifest: &PackageManifest,
+    bundle_bytes: &[u8],
+) -> flow_like_types::Result<(String, i64)> {
+    if manifest.widgets.is_empty() {
+        return Err(flow_like_types::anyhow!(
+            "Manifest for '{}' declares no widgets but a widget bundle was provided",
+            manifest.id
+        ));
+    }
+
+    let actual_hash = sha256_hex(bundle_bytes);
+    let declared_hash = manifest
+        .widget_bundle_hash
+        .as_deref()
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| {
+            flow_like_types::anyhow!(
+                "Manifest for '{}' declares widgets but no widget_bundle_hash",
+                manifest.id
+            )
+        })?;
+    if declared_hash != actual_hash {
+        return Err(flow_like_types::anyhow!(
+            "Widget bundle hash mismatch: manifest declares {}, uploaded bundle is {}",
+            declared_hash,
+            actual_hash
+        ));
+    }
+
+    let mut reader = WidgetBundleReader::from_bytes(bundle_bytes.to_vec())?;
+    reader.validate().map_err(|errors| {
+        flow_like_types::anyhow!("Invalid widget bundle: {}", errors.join("; "))
+    })?;
+
+    let bundle_manifest = reader.manifest().clone();
+    if bundle_manifest.package_id != manifest.id {
+        return Err(flow_like_types::anyhow!(
+            "Widget bundle was built for package '{}', expected '{}'",
+            bundle_manifest.package_id,
+            manifest.id
+        ));
+    }
+    if bundle_manifest.package_version != manifest.version {
+        return Err(flow_like_types::anyhow!(
+            "Widget bundle was built for version '{}', expected '{}'",
+            bundle_manifest.package_version,
+            manifest.version
+        ));
+    }
+
+    let manifest_ids: std::collections::BTreeSet<&str> =
+        manifest.widgets.iter().map(|w| w.id.as_str()).collect();
+    let bundle_ids: std::collections::BTreeSet<&str> = bundle_manifest
+        .widgets
+        .iter()
+        .map(|w| w.id.as_str())
+        .collect();
+    if manifest_ids != bundle_ids {
+        return Err(flow_like_types::anyhow!(
+            "Widget set mismatch between manifest [{}] and bundle [{}]",
+            manifest_ids.into_iter().collect::<Vec<_>>().join(", "),
+            bundle_ids.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+
+    for entry in &manifest.widgets {
+        let bundle_contract = reader.contract(&entry.id)?;
+        let manifest_json = serde_json::to_string(&entry.contract)?;
+        let bundle_json = serde_json::to_string(&bundle_contract)?;
+        if manifest_json != bundle_json {
+            return Err(flow_like_types::anyhow!(
+                "Contract mismatch for widget '{}': manifest and bundle contract.json differ",
+                entry.id
+            ));
+        }
+    }
+
+    Ok((actual_hash, bundle_bytes.len() as i64))
+}
+
+/// Unpack a widget bundle into the bucket under
+/// `widget-assets/{package_id}/{version}/…` (bundle-internal layout) so the
+/// web app can load widget documents straight from CDN objects.
+///
+/// Entries are verified by `WidgetBundleReader::unpack` before upload.
+/// Returns the number of uploaded objects.
+pub async fn unpack_widget_bundle_to_assets(
+    store: &FlowLikeStore,
+    package_id: &str,
+    version: &str,
+    bundle_bytes: Vec<u8>,
+) -> flow_like_types::Result<usize> {
+    fn collect_files(
+        root: &std::path::Path,
+        dir: &std::path::Path,
+        out: &mut Vec<(String, Vec<u8>)>,
+    ) -> flow_like_types::Result<()> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                collect_files(root, &path, out)?;
+            } else {
+                let rel = path
+                    .strip_prefix(root)
+                    .map_err(|e| flow_like_types::anyhow!("Path outside unpack root: {}", e))?
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                out.push((rel, std::fs::read(&path)?));
+            }
+        }
+        Ok(())
+    }
+
+    let entries = flow_like_types::tokio::task::spawn_blocking(
+        move || -> flow_like_types::Result<Vec<(String, Vec<u8>)>> {
+            let staging = tempfile::tempdir()?;
+            let dest = staging.path().join("bundle");
+            let mut reader = WidgetBundleReader::from_bytes(bundle_bytes)?;
+            reader.unpack(&dest)?;
+            let mut out = Vec::new();
+            collect_files(&dest, &dest, &mut out)?;
+            Ok(out)
+        },
+    )
+    .await??;
+
+    let base = Path::from(WIDGET_ASSETS_PATH)
+        .child(package_id)
+        .child(version);
+    let mut uploaded = 0usize;
+    for (rel, data) in entries {
+        let mut object_path = base.clone();
+        for segment in rel.split('/') {
+            object_path = object_path.child(segment);
+        }
+        store
+            .as_generic()
+            .put(&object_path, PutPayload::from(data))
+            .await?;
+        uploaded += 1;
+    }
+    Ok(uploaded)
+}
 
 pub fn with_current_wasmtime_version(existing: Option<Vec<String>>) -> Vec<String> {
     let mut versions = existing.unwrap_or_default();
@@ -222,6 +394,12 @@ pub struct PackageDetails {
     pub download_count: u64,
     pub wasm_size: u64,
     pub nodes: serde_json::Value,
+    #[serde(default)]
+    pub widgets: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget_bundle_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget_bundle_size: Option<u64>,
     pub permissions: serde_json::Value,
     pub price: i64,
     pub visibility: String,
@@ -327,6 +505,8 @@ fn package_version_from_model(v: wasm_package_version::Model) -> PackageVersion 
         min_flow_like_version: v.min_flow_like_version,
         release_notes: v.release_notes,
         yanked: v.yanked,
+        widget_bundle_hash: v.widget_bundle_hash.filter(|h| !h.is_empty()),
+        widget_bundle_size: v.widget_bundle_size.map(|s| s as u64),
     }
 }
 
@@ -384,6 +564,13 @@ impl ServerRegistry {
             .child(package_id)
             .child(version)
             .child("node.wasm")
+    }
+
+    /// Get storage path for a widget bundle version
+    fn widget_bundle_path(package_id: &str, version: &str) -> Path {
+        Path::from(WIDGET_BUNDLES_PATH)
+            .child(package_id)
+            .child(format!("{}.flwb", version))
     }
 
     async fn resolve_wasm_path(
@@ -458,7 +645,7 @@ impl ServerRegistry {
     ) -> flow_like_types::Result<serde_json::Value> {
         let config = flow_like_wasm::engine::WasmConfig::default().without_cache();
         let engine = Arc::new(flow_like_wasm::engine::WasmEngine::new(config)?);
-        let security = flow_like_wasm::limits::WasmSecurityConfig::permissive();
+        let security = flow_like_wasm::limits::WasmSecurityConfig::restrictive();
         let loaded = engine.load_auto(wasm_bytes).await?;
         let mut instance = loaded.instantiate(&engine, security).await?;
         let definitions = instance.call_get_nodes().await?;
@@ -713,6 +900,66 @@ impl ServerRegistry {
         Ok((cwasm_url.to_string(), cwasm_checksum))
     }
 
+    /// Presigned GET URL for a stored widget bundle, when the version ships one.
+    pub async fn sign_widget_bundle_url(
+        &self,
+        package_id: &str,
+        version: &str,
+    ) -> flow_like_types::Result<Option<String>> {
+        let record = wasm_package_version::Entity::find()
+            .filter(wasm_package_version::Column::PackageId.eq(package_id))
+            .filter(wasm_package_version::Column::Version.eq(version))
+            .one(&self.db)
+            .await?;
+
+        let has_bundle = record
+            .as_ref()
+            .and_then(|r| r.widget_bundle_hash.as_deref())
+            .is_some_and(|h| !h.is_empty());
+        if !has_bundle {
+            return Ok(None);
+        }
+
+        let path = Self::widget_bundle_path(package_id, version);
+        let url = self
+            .content_bucket
+            .sign("GET", &path, Duration::from_secs(3600))
+            .await?;
+        Ok(Some(url.to_string()))
+    }
+
+    /// Read the stored widget bundle (`.flwb`) for a package version.
+    pub async fn get_widget_bundle_bytes(
+        &self,
+        package_id: &str,
+        version: &str,
+    ) -> flow_like_types::Result<Vec<u8>> {
+        let path = Self::widget_bundle_path(package_id, version);
+        let data = self.content_bucket.as_generic().get(&path).await?;
+        Ok(data.bytes().await?.to_vec())
+    }
+
+    /// Read one unpacked widget asset object, if the post-publish unpack has
+    /// already produced it. Returns `Ok(None)` when the object does not exist.
+    pub async fn get_widget_asset_object(
+        &self,
+        package_id: &str,
+        version: &str,
+        entry_path: &str,
+    ) -> flow_like_types::Result<Option<Vec<u8>>> {
+        let mut path = Path::from(WIDGET_ASSETS_PATH)
+            .child(package_id)
+            .child(version);
+        for segment in entry_path.split('/').filter(|s| !s.is_empty()) {
+            path = path.child(segment);
+        }
+        match self.content_bucket.as_generic().get(&path).await {
+            Ok(data) => Ok(Some(data.bytes().await?.to_vec())),
+            Err(flow_like_storage::object_store::Error::NotFound { .. }) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Get the registry index (list of all publicly accessible packages)
     pub async fn get_index(&self) -> flow_like_types::Result<RegistryIndex> {
         use crate::entity::sea_orm_active_enums::WasmPackageStatus;
@@ -939,28 +1186,42 @@ impl ServerRegistry {
     ) -> flow_like_types::Result<PackageDetails> {
         let authors = self.get_package_authors(&pkg.id).await?;
 
-        let (version, status, wasm_size, nodes, published_at) =
-            if let Some(version) = review_version {
-                (
-                    version.version,
-                    status_to_string(&version.status),
-                    version.wasm_size as u64,
-                    version.nodes,
-                    Some(chrono::DateTime::from_naive_utc_and_offset(
-                        version.published_at,
-                        chrono::Utc,
-                    )),
-                )
-            } else {
-                (
-                    pkg.version.clone(),
-                    status_to_string(&pkg.status),
-                    pkg.wasm_size as u64,
-                    pkg.nodes.clone(),
-                    pkg.published_at
-                        .map(|dt| chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc)),
-                )
-            };
+        let (
+            version,
+            status,
+            wasm_size,
+            nodes,
+            widgets,
+            widget_bundle_hash,
+            widget_bundle_size,
+            published_at,
+        ) = if let Some(version) = review_version {
+            (
+                version.version,
+                status_to_string(&version.status),
+                version.wasm_size as u64,
+                version.nodes,
+                version.widgets,
+                version.widget_bundle_hash.filter(|h| !h.is_empty()),
+                version.widget_bundle_size.map(|s| s as u64),
+                Some(chrono::DateTime::from_naive_utc_and_offset(
+                    version.published_at,
+                    chrono::Utc,
+                )),
+            )
+        } else {
+            (
+                pkg.version.clone(),
+                status_to_string(&pkg.status),
+                pkg.wasm_size as u64,
+                pkg.nodes.clone(),
+                pkg.widgets.clone(),
+                pkg.widget_bundle_hash.clone().filter(|h| !h.is_empty()),
+                pkg.widget_bundle_size.map(|s| s as u64),
+                pkg.published_at
+                    .map(|dt| chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc)),
+            )
+        };
 
         Ok(PackageDetails {
             id: pkg.id,
@@ -977,6 +1238,9 @@ impl ServerRegistry {
             download_count: pkg.download_count as u64,
             wasm_size,
             nodes,
+            widgets,
+            widget_bundle_hash,
+            widget_bundle_size,
             permissions: pkg.permissions,
             price: pkg.price,
             visibility: visibility_to_string(&pkg.visibility),
@@ -1078,6 +1342,24 @@ impl ServerRegistry {
             })
             .collect();
 
+        // Widgets from the parent package row; fall back to the latest
+        // fetched version (mirrors the nodes fallback below) so pending
+        // widget packages surface their widgets before approval.
+        let mut widgets: Vec<PackageWidgetEntry> =
+            serde_json::from_value(pkg.widgets.clone()).unwrap_or_default();
+        let mut widget_bundle_hash = pkg.widget_bundle_hash.clone().filter(|h| !h.is_empty());
+        if let Some(latest_v) = versions.first() {
+            if widgets.is_empty() {
+                widgets = serde_json::from_value(latest_v.widgets.clone()).unwrap_or_default();
+            }
+            if widget_bundle_hash.is_none() {
+                widget_bundle_hash = latest_v
+                    .widget_bundle_hash
+                    .clone()
+                    .filter(|h| !h.is_empty());
+            }
+        }
+
         let manifest = PackageManifest {
             manifest_version: flow_like_wasm::manifest::MANIFEST_VERSION,
             id: pkg.id.clone(),
@@ -1095,6 +1377,9 @@ impl ServerRegistry {
             min_flow_like_version: None,
             wasm_path: Some(pkg.wasm_path.clone()),
             wasm_hash: Some(pkg.wasm_hash.clone()),
+            widgets,
+            widget_bundle_path: None,
+            widget_bundle_hash,
             metadata: Default::default(),
         };
 
@@ -1532,7 +1817,7 @@ impl ServerRegistry {
         package_id: &str,
         version: Option<&str>,
         viewer_sub: Option<&str>,
-    ) -> flow_like_types::Result<(String, PackageManifest, String)> {
+    ) -> flow_like_types::Result<(Option<String>, PackageManifest, String)> {
         let Some(entry) = self.get_package_as_viewer(package_id, viewer_sub).await? else {
             return Err(flow_like_types::anyhow!(
                 "Package not found: {}",
@@ -1552,7 +1837,12 @@ impl ServerRegistry {
                 .unwrap_or_else(|| entry.manifest.version.clone())
         };
 
-        let download_url = self.get_download_url(package_id, &version_str).await?;
+        // Widgets-only packages carry no WASM artifact to sign
+        let download_url = if manifest_has_wasm(&entry.manifest) {
+            Some(self.get_download_url(package_id, &version_str).await?)
+        } else {
+            None
+        };
 
         Ok((download_url, entry.manifest, version_str))
     }
@@ -1614,35 +1904,55 @@ impl ServerRegistry {
             ));
         }
 
+        // A package must ship at least one node (WASM artifact) or one widget.
+        // The WASM upload stays mandatory for packages without widgets; a
+        // missing WASM upload is only tolerated for widgets-only packages.
         let tmp_path = format!(
             "tmp/wasm/{}/{}/{}.wasm",
             submitter_id, manifest.id, manifest.version
         );
         let tmp_object_path = Path::from(tmp_path.as_str());
-        let data = self
+        let wasm_data: Option<Vec<u8>> = match self
             .content_bucket
             .as_generic()
             .get(&tmp_object_path)
             .await
-            .map_err(|_| {
-                flow_like_types::anyhow!("WASM not found at tmp path — upload may have failed")
-            })?;
+        {
+            Ok(data) => Some(data.bytes().await?.to_vec()),
+            Err(_) if !manifest.widgets.is_empty() => None,
+            Err(_) => {
+                return Err(flow_like_types::anyhow!(
+                    "WASM not found at tmp path — upload may have failed. A package must ship at least one node (WASM artifact) or one widget."
+                ));
+            }
+        };
+        let has_wasm = wasm_data.is_some();
 
-        let wasm_data = data.bytes().await?.to_vec();
-
-        if wasm_data.len() < 8 || &wasm_data[0..4] != b"\0asm" {
+        if let Some(wasm) = &wasm_data
+            && (wasm.len() < 8 || &wasm[0..4] != b"\0asm")
+        {
             return Err(flow_like_types::anyhow!("Invalid WASM binary"));
         }
 
-        let hash = blake3::hash(&wasm_data).to_hex().to_string();
-        let size = wasm_data.len() as i64;
-        let compile_wasm_data = wasm_data.clone();
+        let hash = wasm_data
+            .as_ref()
+            .map(|wasm| blake3::hash(wasm).to_hex().to_string())
+            .unwrap_or_default();
+        let size = wasm_data
+            .as_ref()
+            .map(|wasm| wasm.len() as i64)
+            .unwrap_or(0);
+        let compile_wasm_data = wasm_data.clone().unwrap_or_default();
 
         // Check for hash duplicates (non-blocking flag)
-        let duplicate_info = wasm_package_version::Entity::find()
-            .filter(wasm_package_version::Column::WasmHash.eq(&hash))
-            .one(&self.db)
-            .await?;
+        let duplicate_info = if has_wasm {
+            wasm_package_version::Entity::find()
+                .filter(wasm_package_version::Column::WasmHash.eq(&hash))
+                .one(&self.db)
+                .await?
+        } else {
+            None
+        };
 
         let (dup_pkg_id, dup_version, dup_flagged) = if let Some(dup) = &duplicate_info {
             (
@@ -1654,12 +1964,79 @@ impl ServerRegistry {
             (None, None, false)
         };
 
+        // Validate, store, and unpack the widget bundle when widgets are declared
+        let widgets_json = serde_json::to_value(&manifest.widgets)?;
+        let mut widget_bundle_hash: Option<String> = None;
+        let mut widget_bundle_size: Option<i64> = None;
+        if !manifest.widgets.is_empty() {
+            let bundle_tmp_path = format!(
+                "tmp/widget-bundles/{}/{}/{}.flwb",
+                submitter_id, manifest.id, manifest.version
+            );
+            let bundle_data = self
+                .content_bucket
+                .as_generic()
+                .get(&Path::from(bundle_tmp_path.as_str()))
+                .await
+                .map_err(|_| {
+                    flow_like_types::anyhow!(
+                        "Widget bundle not found at tmp path — upload may have failed. Packages declaring widgets must upload a widget bundle."
+                    )
+                })?;
+            let bundle_bytes = bundle_data.bytes().await?.to_vec();
+
+            let (bundle_hash, bundle_size) = {
+                let manifest_for_validation = manifest.clone();
+                let bytes = bundle_bytes.clone();
+                flow_like_types::tokio::task::spawn_blocking(move || {
+                    validate_manifest_widget_bundle(&manifest_for_validation, &bytes)
+                })
+                .await??
+            };
+
+            let final_bundle_path = Self::widget_bundle_path(&manifest.id, &manifest.version);
+            self.content_bucket
+                .as_generic()
+                .put(&final_bundle_path, PutPayload::from(bundle_bytes.clone()))
+                .await?;
+
+            // Unpack into widget-assets/ so the web app can load entries from
+            // the CDN. The widget-asset fallback route serves entries straight
+            // from the stored bundle, so a failure here degrades performance,
+            // not correctness.
+            if let Err(e) = unpack_widget_bundle_to_assets(
+                &self.content_bucket,
+                &manifest.id,
+                &manifest.version,
+                bundle_bytes,
+            )
+            .await
+            {
+                tracing::error!(
+                    pkg = %manifest.id,
+                    ver = %manifest.version,
+                    err = %e,
+                    "Failed to unpack widget bundle into widget-assets"
+                );
+            }
+
+            widget_bundle_hash = Some(bundle_hash);
+            widget_bundle_size = Some(bundle_size);
+        }
+
         // Move WASM from tmp to final path
         let final_wasm_path = Self::wasm_path(&manifest.id, &manifest.version);
-        self.content_bucket
-            .as_generic()
-            .put(&final_wasm_path, PutPayload::from(wasm_data))
-            .await?;
+        if let Some(wasm) = wasm_data {
+            self.content_bucket
+                .as_generic()
+                .put(&final_wasm_path, PutPayload::from(wasm))
+                .await?;
+        }
+        let stored_wasm_path = if has_wasm {
+            final_wasm_path.to_string()
+        } else {
+            String::new()
+        };
 
         let existing_package = wasm_package::Entity::find_by_id(&manifest.id)
             .one(&self.db)
@@ -1700,10 +2077,13 @@ impl ServerRegistry {
                 visibility: Set(WasmPackageVisibility::Private),
                 verified: Set(false),
                 download_count: Set(0),
-                wasm_path: Set(final_wasm_path.to_string()),
+                wasm_path: Set(stored_wasm_path.clone()),
                 wasm_hash: Set(hash.clone()),
                 wasm_size: Set(size),
+                widget_bundle_hash: Set(widget_bundle_hash.clone()),
+                widget_bundle_size: Set(widget_bundle_size),
                 nodes: Set(serde_json::Value::Array(vec![])),
+                widgets: Set(widgets_json.clone()),
                 permissions: Set(serde_json::to_value(&manifest.permissions)?),
                 readme: Set(None),
                 price: Set(0),
@@ -1769,15 +2149,23 @@ impl ServerRegistry {
             id: Set(version_id.clone()),
             package_id: Set(manifest.id.clone()),
             version: Set(manifest.version.clone()),
-            wasm_path: Set(final_wasm_path.to_string()),
-            wasm_hash: Set(hash),
+            wasm_path: Set(stored_wasm_path.clone()),
+            wasm_hash: Set(hash.clone()),
             wasm_size: Set(size),
+            widget_bundle_hash: Set(widget_bundle_hash.clone()),
+            widget_bundle_size: Set(widget_bundle_size),
             nodes: Set(serde_json::Value::Array(vec![])),
+            widgets: Set(widgets_json.clone()),
             release_notes: Set(None),
             min_flow_like_version: Set(None),
             yanked: Set(false),
             status: Set(WasmPackageStatus::PendingReview),
-            compilation_status: Set(WasmCompilationStatus::Pending),
+            // Widgets-only packages have nothing to compile
+            compilation_status: Set(if has_wasm {
+                WasmCompilationStatus::Pending
+            } else {
+                WasmCompilationStatus::Compiled
+            }),
             compiled_platforms: Set(Some(vec![])),
             supported_wasmtime_versions: Set(Some(vec![])),
             compilation_error: Set(None),
@@ -1807,142 +2195,181 @@ impl ServerRegistry {
         };
         submitted_review.insert(&self.db).await?;
 
-        // Dispatch compilation based on configured backend
-        let compile_db = self.db.clone();
-        let compile_content = self.content_bucket.clone();
-        let compile_meta = self.meta_bucket.clone();
-        let compile_pkg_id = manifest.id.clone();
-        let compile_version = manifest.version.clone();
-        let compile_wasm_path = final_wasm_path.to_string();
-
-        let use_external = self
-            .compilation_dispatcher
-            .as_ref()
-            .is_some_and(|d| d.backend().is_external());
-
-        tracing::info!(
-            use_external = use_external,
-            backend = ?self.compilation_dispatcher.as_ref().map(|d| format!("{:?}", d.backend())),
-            "Compilation dispatch decision"
-        );
-
-        // Dispatch compilation inline (not tokio::spawn — Lambda shuts down after response)
-        if use_external {
-            let dispatcher = self
-                .compilation_dispatcher
-                .clone()
-                .ok_or_else(|| flow_like_types::anyhow!("Compilation dispatcher not configured"))?;
-            let sub = submitter_id.to_string();
-            let params = crate::compilation::DispatchParams {
-                package_id: compile_pkg_id.clone(),
-                version: compile_version.clone(),
-                wasm_path: compile_wasm_path,
-                wasm_hash: compile_hash,
-            };
-            match dispatcher.dispatch(sub, params).await {
-                Ok(resp) => {
-                    tracing::info!(
-                        pkg = %compile_pkg_id,
-                        ver = %compile_version,
-                        job_id = %resp.job_id,
-                        backend = %resp.backend,
-                        "Compilation job dispatched"
-                    );
+        if !has_wasm {
+            // Widgets-only package: nothing to compile. Auto-approve private
+            // packages immediately (mirrors the inline compilation auto-approval).
+            if is_private_package {
+                let now_approve = chrono::Utc::now().naive_utc();
+                let _ = wasm_package_version::ActiveModel {
+                    id: Set(version_id.clone()),
+                    status: Set(WasmPackageStatus::Active),
+                    approved_at: Set(Some(now_approve)),
+                    ..Default::default()
                 }
-                Err(e) => {
-                    tracing::error!(
-                        pkg = %compile_pkg_id,
-                        ver = %compile_version,
-                        err = %e,
-                        "Failed to dispatch compilation job"
-                    );
-                    let _ = wasm_package_version::ActiveModel {
-                        id: Set(version_id.clone()),
-                        compilation_status: Set(WasmCompilationStatus::LocalOnly),
-                        compilation_error: Set(Some(format!("Dispatch failed: {e}"))),
-                        ..Default::default()
-                    }
-                    .update(&compile_db)
-                    .await;
+                .update(&self.db)
+                .await;
+
+                let _ = wasm_package::ActiveModel {
+                    id: Set(manifest.id.clone()),
+                    version: Set(manifest.version.clone()),
+                    wasm_path: Set(stored_wasm_path.clone()),
+                    wasm_hash: Set(compile_hash.clone()),
+                    wasm_size: Set(size),
+                    widgets: Set(widgets_json.clone()),
+                    widget_bundle_hash: Set(widget_bundle_hash.clone()),
+                    widget_bundle_size: Set(widget_bundle_size),
+                    updated_at: Set(now_approve),
+                    ..Default::default()
                 }
+                .update(&self.db)
+                .await;
             }
         } else {
-            // Extract node definitions from the WASM binary
-            let extracted_nodes = match Self::extract_node_entries(&compile_wasm_data).await {
-                Ok(nodes) => Some(nodes),
-                Err(e) => {
-                    tracing::warn!(
-                        pkg = %compile_pkg_id,
-                        ver = %compile_version,
-                        err = %e,
-                        "Failed to extract node definitions from WASM"
-                    );
-                    None
+            // Dispatch compilation based on configured backend
+            let compile_db = self.db.clone();
+            let compile_content = self.content_bucket.clone();
+            let compile_meta = self.meta_bucket.clone();
+            let compile_pkg_id = manifest.id.clone();
+            let compile_version = manifest.version.clone();
+            let compile_wasm_path = final_wasm_path.to_string();
+
+            let use_external = self
+                .compilation_dispatcher
+                .as_ref()
+                .is_some_and(|d| d.backend().is_external());
+
+            tracing::info!(
+                use_external = use_external,
+                backend = ?self.compilation_dispatcher.as_ref().map(|d| format!("{:?}", d.backend())),
+                "Compilation dispatch decision"
+            );
+
+            // Dispatch compilation inline (not tokio::spawn — Lambda shuts down after response)
+            if use_external {
+                let dispatcher = self.compilation_dispatcher.clone().ok_or_else(|| {
+                    flow_like_types::anyhow!("Compilation dispatcher not configured")
+                })?;
+                let sub = submitter_id.to_string();
+                let params = crate::compilation::DispatchParams {
+                    package_id: compile_pkg_id.clone(),
+                    version: compile_version.clone(),
+                    wasm_path: compile_wasm_path,
+                    wasm_hash: compile_hash,
+                };
+                match dispatcher.dispatch(sub, params).await {
+                    Ok(resp) => {
+                        tracing::info!(
+                            pkg = %compile_pkg_id,
+                            ver = %compile_version,
+                            job_id = %resp.job_id,
+                            backend = %resp.backend,
+                            "Compilation job dispatched"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            pkg = %compile_pkg_id,
+                            ver = %compile_version,
+                            err = %e,
+                            "Failed to dispatch compilation job"
+                        );
+                        let _ = wasm_package_version::ActiveModel {
+                            id: Set(version_id.clone()),
+                            compilation_status: Set(WasmCompilationStatus::LocalOnly),
+                            compilation_error: Set(Some(format!("Dispatch failed: {e}"))),
+                            ..Default::default()
+                        }
+                        .update(&compile_db)
+                        .await;
+                    }
                 }
-            };
-
-            let tmp_registry =
-                ServerRegistry::new(compile_db.clone(), compile_content, compile_meta);
-            match tmp_registry
-                .compile_and_store_artifact(&compile_pkg_id, &compile_version, &compile_wasm_data)
-                .await
-            {
-                Ok(platforms) => {
-                    let mut update = wasm_package_version::ActiveModel {
-                        id: Set(version_id.clone()),
-                        compilation_status: Set(WasmCompilationStatus::Compiled),
-                        compiled_platforms: Set(Some(platforms)),
-                        supported_wasmtime_versions: Set(Some(with_current_wasmtime_version(None))),
-                        compilation_error: Set(None),
-                        ..Default::default()
-                    };
-
-                    if let Some(ref nodes) = extracted_nodes {
-                        update.nodes = Set(nodes.clone());
+            } else {
+                // Extract node definitions from the WASM binary
+                let extracted_nodes = match Self::extract_node_entries(&compile_wasm_data).await {
+                    Ok(nodes) => Some(nodes),
+                    Err(e) => {
+                        tracing::warn!(
+                            pkg = %compile_pkg_id,
+                            ver = %compile_version,
+                            err = %e,
+                            "Failed to extract node definitions from WASM"
+                        );
+                        None
                     }
+                };
 
-                    // Auto-approve private packages on successful inline compilation
-                    if is_private_package {
-                        let now_approve = chrono::Utc::now().naive_utc();
-                        update.status = Set(WasmPackageStatus::Active);
-                        update.approved_at = Set(Some(now_approve));
+                let tmp_registry =
+                    ServerRegistry::new(compile_db.clone(), compile_content, compile_meta);
+                match tmp_registry
+                    .compile_and_store_artifact(
+                        &compile_pkg_id,
+                        &compile_version,
+                        &compile_wasm_data,
+                    )
+                    .await
+                {
+                    Ok(platforms) => {
+                        let mut update = wasm_package_version::ActiveModel {
+                            id: Set(version_id.clone()),
+                            compilation_status: Set(WasmCompilationStatus::Compiled),
+                            compiled_platforms: Set(Some(platforms)),
+                            supported_wasmtime_versions: Set(Some(with_current_wasmtime_version(
+                                None,
+                            ))),
+                            compilation_error: Set(None),
+                            ..Default::default()
+                        };
+
+                        if let Some(ref nodes) = extracted_nodes {
+                            update.nodes = Set(nodes.clone());
+                        }
+
+                        // Auto-approve private packages on successful inline compilation
+                        if is_private_package {
+                            let now_approve = chrono::Utc::now().naive_utc();
+                            update.status = Set(WasmPackageStatus::Active);
+                            update.approved_at = Set(Some(now_approve));
+                        }
+
+                        let _ = update.update(&compile_db).await;
+
+                        // Promote version data to parent package for auto-approved private packages
+                        if is_private_package {
+                            let now_promote = chrono::Utc::now().naive_utc();
+                            let mut pkg_update = wasm_package::ActiveModel {
+                                id: Set(compile_pkg_id.clone()),
+                                version: Set(compile_version.clone()),
+                                widgets: Set(widgets_json.clone()),
+                                widget_bundle_hash: Set(widget_bundle_hash.clone()),
+                                widget_bundle_size: Set(widget_bundle_size),
+                                updated_at: Set(now_promote),
+                                ..Default::default()
+                            };
+                            if let Some(ref nodes) = extracted_nodes {
+                                pkg_update.nodes = Set(nodes.clone());
+                            }
+                            let _ = pkg_update.update(&compile_db).await;
+                        }
                     }
-
-                    let _ = update.update(&compile_db).await;
-
-                    // Promote version data to parent package for auto-approved private packages
-                    if is_private_package {
-                        let now_promote = chrono::Utc::now().naive_utc();
-                        let mut pkg_update = wasm_package::ActiveModel {
-                            id: Set(compile_pkg_id.clone()),
-                            version: Set(compile_version.clone()),
-                            updated_at: Set(now_promote),
+                    Err(e) => {
+                        tracing::warn!(
+                            pkg = %compile_pkg_id,
+                            ver = %compile_version,
+                            err = %e,
+                            "AOT compilation failed"
+                        );
+                        // Still save extracted nodes even if AOT fails
+                        let mut update = wasm_package_version::ActiveModel {
+                            id: Set(version_id.clone()),
+                            compilation_status: Set(WasmCompilationStatus::LocalOnly),
+                            compilation_error: Set(Some(e.to_string())),
                             ..Default::default()
                         };
                         if let Some(ref nodes) = extracted_nodes {
-                            pkg_update.nodes = Set(nodes.clone());
+                            update.nodes = Set(nodes.clone());
                         }
-                        let _ = pkg_update.update(&compile_db).await;
+                        let _ = update.update(&compile_db).await;
                     }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        pkg = %compile_pkg_id,
-                        ver = %compile_version,
-                        err = %e,
-                        "AOT compilation failed"
-                    );
-                    // Still save extracted nodes even if AOT fails
-                    let mut update = wasm_package_version::ActiveModel {
-                        id: Set(version_id.clone()),
-                        compilation_status: Set(WasmCompilationStatus::LocalOnly),
-                        compilation_error: Set(Some(e.to_string())),
-                        ..Default::default()
-                    };
-                    if let Some(ref nodes) = extracted_nodes {
-                        update.nodes = Set(nodes.clone());
-                    }
-                    let _ = update.update(&compile_db).await;
                 }
             }
         }
@@ -2141,6 +2568,9 @@ impl ServerRegistry {
                     update_model.wasm_hash = Set(latest.wasm_hash.clone());
                     update_model.wasm_size = Set(latest.wasm_size);
                     update_model.nodes = Set(latest.nodes.clone());
+                    update_model.widgets = Set(latest.widgets.clone());
+                    update_model.widget_bundle_hash = Set(latest.widget_bundle_hash.clone());
+                    update_model.widget_bundle_size = Set(latest.widget_bundle_size);
                 }
 
                 update_model.update(&self.db).await?;
@@ -2286,6 +2716,28 @@ impl ServerRegistry {
             let wasm_path = Self::wasm_path(package_id, &version.version);
             let _ = self.content_bucket.as_generic().delete(&wasm_path).await;
 
+            if version
+                .widget_bundle_hash
+                .as_deref()
+                .is_some_and(|h| !h.is_empty())
+            {
+                let bundle_path = Self::widget_bundle_path(package_id, &version.version);
+                let _ = self.content_bucket.as_generic().delete(&bundle_path).await;
+
+                let assets_prefix = Path::from(WIDGET_ASSETS_PATH)
+                    .child(package_id)
+                    .child(version.version.as_str());
+                let store = self.content_bucket.as_generic();
+                if let Ok(objects) =
+                    futures::TryStreamExt::try_collect::<Vec<_>>(store.list(Some(&assets_prefix)))
+                        .await
+                {
+                    for object in objects {
+                        let _ = store.delete(&object.location).await;
+                    }
+                }
+            }
+
             let compiled_base = Path::from(WASM_COMPILED_PATH)
                 .child(package_id)
                 .child(version.version.as_str());
@@ -2427,5 +2879,389 @@ impl ServerRegistry {
                 }
             })
             .collect())
+    }
+}
+
+#[derive(Deserialize)]
+struct StoredPackageWidget {
+    id: String,
+    name: String,
+    #[serde(default)]
+    description: String,
+    contract: serde_json::Value,
+}
+
+fn package_widget_refs_from_version(
+    package_id: &str,
+    package_version: &str,
+    widget_bundle_hash: Option<&str>,
+    widgets: serde_json::Value,
+) -> flow_like_types::Result<Vec<PackageWidgetRef>> {
+    let entries: Vec<StoredPackageWidget> = serde_json::from_value(widgets).map_err(|error| {
+        flow_like_types::anyhow!(
+            "Invalid widget manifest for package '{}' version '{}': {}",
+            package_id,
+            package_version,
+            error
+        )
+    })?;
+    let widget_bundle_hash = widget_bundle_hash
+        .filter(|hash| !hash.is_empty())
+        .map(str::to_owned);
+    let mut widget_refs = Vec::with_capacity(entries.len());
+
+    for entry in entries {
+        widget_refs.push(PackageWidgetRef {
+            package_id: package_id.to_string(),
+            package_version: package_version.to_string(),
+            widget_id: entry.id,
+            name: entry.name,
+            description: entry.description,
+            bundle_hash: widget_bundle_hash.clone(),
+            contract: entry.contract,
+        });
+    }
+
+    Ok(widget_refs)
+}
+
+#[flow_like_types::async_trait]
+impl PackageWidgetSource for ServerRegistry {
+    async fn list_widgets(
+        &self,
+        packages: &std::collections::HashMap<String, String>,
+    ) -> flow_like_types::Result<Vec<PackageWidgetRef>> {
+        if packages.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut pinned = sea_orm::Condition::any();
+        for (package_id, version) in packages {
+            pinned = pinned.add(
+                sea_orm::Condition::all()
+                    .add(wasm_package_version::Column::PackageId.eq(package_id))
+                    .add(wasm_package_version::Column::Version.eq(version)),
+            );
+        }
+
+        let mut versions_by_pin: std::collections::HashMap<
+            (String, String),
+            wasm_package_version::Model,
+        > = wasm_package_version::Entity::find()
+            .filter(pinned)
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(|record| ((record.package_id.clone(), record.version.clone()), record))
+            .collect();
+
+        let mut widgets = Vec::new();
+        for (package_id, version) in packages {
+            let Some(record) = versions_by_pin.remove(&(package_id.clone(), version.clone()))
+            else {
+                tracing::warn!(
+                    package_id,
+                    version,
+                    "Pinned package widget version not found; skipping its widgets"
+                );
+                continue;
+            };
+
+            match package_widget_refs_from_version(
+                package_id,
+                version,
+                record.widget_bundle_hash.as_deref(),
+                record.widgets,
+            ) {
+                Ok(package_widgets) => widgets.extend(package_widgets),
+                Err(error) => tracing::warn!(
+                    package_id,
+                    version,
+                    %error,
+                    "Pinned package widget manifest is invalid; skipping its widgets"
+                ),
+            }
+        }
+
+        widgets.sort_by(|a, b| {
+            a.package_id
+                .cmp(&b.package_id)
+                .then_with(|| a.name.cmp(&b.name))
+                .then_with(|| a.widget_id.cmp(&b.widget_id))
+        });
+
+        Ok(widgets)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_wasm::widget::{ContractInput, ContractInputType, WidgetContract};
+    use flow_like_wasm::widget_bundle::{BuilderWidget, WidgetBundleBuilder};
+
+    fn contract_with_input(widget_id: &str) -> WidgetContract {
+        let mut contract = WidgetContract::new(widget_id);
+        contract.inputs.insert(
+            "title".into(),
+            ContractInput {
+                input_type: ContractInputType::String,
+                description: None,
+                default: Some(serde_json::json!("Hello")),
+                choices: None,
+                min: None,
+                max: None,
+                schema: None,
+                optional: false,
+            },
+        );
+        contract
+    }
+
+    fn build_bundle(package_id: &str, version: &str, widget_id: &str) -> (Vec<u8>, String) {
+        WidgetBundleBuilder::new(package_id, version)
+            .created_at("2026-07-31T00:00:00Z")
+            .add_widget(BuilderWidget {
+                id: widget_id.to_string(),
+                name: widget_id.to_string(),
+                description: "test widget".into(),
+                framework: Some("vanilla".into()),
+                entry_html: b"<html><body>test</body></html>".to_vec(),
+                contract: contract_with_input(widget_id),
+                assets: vec![],
+                thumbnail: None,
+            })
+            .build()
+            .unwrap()
+    }
+
+    fn manifest_with_widget(
+        package_id: &str,
+        version: &str,
+        widget_id: &str,
+        bundle_hash: &str,
+        contract: WidgetContract,
+    ) -> PackageManifest {
+        let mut manifest = PackageManifest::new(package_id, "Test", version, "test package");
+        manifest
+            .widgets
+            .push(flow_like_wasm::manifest::PackageWidgetEntry {
+                id: widget_id.to_string(),
+                name: widget_id.to_string(),
+                description: "test widget".into(),
+                icon: None,
+                thumbnail: None,
+                contract,
+                keywords: vec![],
+            });
+        manifest.widget_bundle_hash = Some(bundle_hash.to_string());
+        manifest
+    }
+
+    #[test]
+    fn package_widget_refs_preserve_pinned_version_and_contract() {
+        let contract = contract_with_input("kpi-card");
+        let mut contract_json = serde_json::to_value(contract).unwrap();
+        contract_json
+            .as_object_mut()
+            .unwrap()
+            .insert("futureContractField".into(), serde_json::json!(true));
+        let widgets = serde_json::json!([{
+            "id": "kpi-card",
+            "name": "KPI Card",
+            "description": "Shows one metric",
+            "contract": contract_json.clone(),
+            "futureManifestField": "ignored safely"
+        }]);
+
+        let refs = package_widget_refs_from_version(
+            "com.example.widgets",
+            "1.2.3",
+            Some("bundle-hash"),
+            widgets,
+        )
+        .unwrap();
+
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].package_id, "com.example.widgets");
+        assert_eq!(refs[0].package_version, "1.2.3");
+        assert_eq!(refs[0].widget_id, "kpi-card");
+        assert_eq!(refs[0].name, "KPI Card");
+        assert_eq!(refs[0].description, "Shows one metric");
+        assert_eq!(refs[0].bundle_hash.as_deref(), Some("bundle-hash"));
+        assert_eq!(refs[0].contract, contract_json);
+    }
+
+    #[test]
+    fn package_widget_refs_reject_invalid_manifest_json() {
+        let error = package_widget_refs_from_version(
+            "com.example.widgets",
+            "1.2.3",
+            Some(""),
+            serde_json::json!({ "not": "a widget list" }),
+        )
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("com.example.widgets"));
+        assert!(message.contains("1.2.3"));
+    }
+
+    #[test]
+    fn test_validate_manifest_widget_bundle_ok() {
+        let (bytes, hash) = build_bundle("com.example.w", "1.0.0", "kpi-card");
+        let manifest = manifest_with_widget(
+            "com.example.w",
+            "1.0.0",
+            "kpi-card",
+            &hash,
+            contract_with_input("kpi-card"),
+        );
+
+        let (validated_hash, size) = validate_manifest_widget_bundle(&manifest, &bytes).unwrap();
+        assert_eq!(validated_hash, hash);
+        assert_eq!(size, bytes.len() as i64);
+    }
+
+    #[test]
+    fn test_validate_manifest_widget_bundle_hash_mismatch() {
+        let (bytes, _hash) = build_bundle("com.example.w", "1.0.0", "kpi-card");
+        let manifest = manifest_with_widget(
+            "com.example.w",
+            "1.0.0",
+            "kpi-card",
+            "deadbeef",
+            contract_with_input("kpi-card"),
+        );
+
+        let err = validate_manifest_widget_bundle(&manifest, &bytes).unwrap_err();
+        assert!(err.to_string().contains("hash mismatch"));
+    }
+
+    #[test]
+    fn test_validate_manifest_widget_bundle_contract_mismatch() {
+        let (bytes, hash) = build_bundle("com.example.w", "1.0.0", "kpi-card");
+        // Manifest carries a structurally different contract (no inputs)
+        let manifest = manifest_with_widget(
+            "com.example.w",
+            "1.0.0",
+            "kpi-card",
+            &hash,
+            WidgetContract::new("kpi-card"),
+        );
+
+        let err = validate_manifest_widget_bundle(&manifest, &bytes).unwrap_err();
+        assert!(err.to_string().contains("Contract mismatch"));
+    }
+
+    #[test]
+    fn test_validate_manifest_widget_bundle_widget_set_mismatch() {
+        let (bytes, hash) = build_bundle("com.example.w", "1.0.0", "kpi-card");
+        let mut manifest = manifest_with_widget(
+            "com.example.w",
+            "1.0.0",
+            "kpi-card",
+            &hash,
+            contract_with_input("kpi-card"),
+        );
+        manifest
+            .widgets
+            .push(flow_like_wasm::manifest::PackageWidgetEntry {
+                id: "extra-widget".into(),
+                name: "Extra".into(),
+                description: "not in bundle".into(),
+                icon: None,
+                thumbnail: None,
+                contract: WidgetContract::new("extra-widget"),
+                keywords: vec![],
+            });
+
+        let err = validate_manifest_widget_bundle(&manifest, &bytes).unwrap_err();
+        assert!(err.to_string().contains("Widget set mismatch"));
+    }
+
+    #[test]
+    fn test_validate_manifest_widget_bundle_wrong_package() {
+        let (bytes, hash) = build_bundle("com.example.other", "1.0.0", "kpi-card");
+        let manifest = manifest_with_widget(
+            "com.example.w",
+            "1.0.0",
+            "kpi-card",
+            &hash,
+            contract_with_input("kpi-card"),
+        );
+
+        let err = validate_manifest_widget_bundle(&manifest, &bytes).unwrap_err();
+        assert!(err.to_string().contains("built for package"));
+    }
+
+    #[test]
+    fn test_validate_manifest_widget_bundle_tampered() {
+        let (mut bytes, _hash) = build_bundle("com.example.w", "1.0.0", "kpi-card");
+        let mid = bytes.len() / 2;
+        bytes[mid] ^= 0xff;
+        let tampered_hash = sha256_hex(&bytes);
+        let manifest = manifest_with_widget(
+            "com.example.w",
+            "1.0.0",
+            "kpi-card",
+            &tampered_hash,
+            contract_with_input("kpi-card"),
+        );
+
+        assert!(validate_manifest_widget_bundle(&manifest, &bytes).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_unpack_widget_bundle_to_assets() {
+        let (bytes, _hash) = build_bundle("com.example.w", "1.0.0", "kpi-card");
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+
+        let uploaded = unpack_widget_bundle_to_assets(&store, "com.example.w", "1.0.0", bytes)
+            .await
+            .unwrap();
+        assert!(uploaded >= 3, "expected bundle.json + entry + contract");
+
+        for entry in [
+            "bundle.json",
+            "widgets/kpi-card/index.html",
+            "widgets/kpi-card/contract.json",
+        ] {
+            let mut path = Path::from(WIDGET_ASSETS_PATH)
+                .child("com.example.w")
+                .child("1.0.0");
+            for segment in entry.split('/') {
+                path = path.child(segment);
+            }
+            let object = store.as_generic().get(&path).await;
+            assert!(object.is_ok(), "missing unpacked asset: {}", entry);
+        }
+    }
+
+    #[test]
+    fn test_manifest_has_wasm() {
+        let mut manifest = PackageManifest::new("com.example.n", "Nodes", "1.0.0", "nodes only");
+        assert!(manifest_has_wasm(&manifest));
+
+        manifest
+            .widgets
+            .push(flow_like_wasm::manifest::PackageWidgetEntry {
+                id: "w".into(),
+                name: "W".into(),
+                description: String::new(),
+                icon: None,
+                thumbnail: None,
+                contract: WidgetContract::new("w"),
+                keywords: vec![],
+            });
+        assert!(!manifest_has_wasm(&manifest));
+
+        manifest.wasm_hash = Some(String::new());
+        assert!(!manifest_has_wasm(&manifest));
+
+        manifest.wasm_hash = Some("abc".into());
+        assert!(manifest_has_wasm(&manifest));
     }
 }

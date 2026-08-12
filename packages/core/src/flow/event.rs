@@ -200,6 +200,18 @@ pub struct ChatEventParameters {
     pub custom_css: Option<String>,
     /// Background image URL or app storage path for the chat interface.
     pub background_image: Option<String>,
+    /// Mark shown on the empty chat: "none" | "planet" | "bubble" | "image".
+    /// Defaults to "planet".
+    pub placeholder_visual: Option<String>,
+    /// Which orb state the bubble placeholder rests in:
+    /// "idle" | "ready" | "thinking" | "working".
+    pub placeholder_bubble_state: Option<String>,
+    /// Image URL or app storage path for the "image" placeholder.
+    pub placeholder_image: Option<String>,
+    /// Let the placeholder mark react while the user types: it leans toward the
+    /// composer and stirs in proportion to how fast they write. Applies to the
+    /// "planet" and "bubble" marks. Defaults to disabled.
+    pub placeholder_typing_motion: Option<bool>,
     /// Preferred chat color scheme: "system" | "light" | "dark".
     pub color_scheme: Option<String>,
     /// User-facing disclosure that the conversation is with an AI.
@@ -250,6 +262,27 @@ mod tests {
         assert!(parameters.background_image.is_none());
         assert!(parameters.color_scheme.is_none());
         assert!(parameters.ai_disclosure.is_none());
+        // Motion the interface never asked for must stay off for chats saved before the field
+        // existed, so an upgrade never starts animating someone's placeholder.
+        assert!(parameters.placeholder_typing_motion.is_none());
+    }
+
+    #[test]
+    fn chat_event_payload_round_trips_placeholder_typing_motion() {
+        let payload: EventPayload = serde_json::from_value(json!({
+            "placeholder_visual": "bubble",
+            "placeholder_typing_motion": true
+        }))
+        .unwrap();
+
+        let EventPayload::ChatEvent(parameters) = &payload else {
+            panic!("placeholder fields should deserialize as chat event parameters");
+        };
+        assert_eq!(parameters.placeholder_visual.as_deref(), Some("bubble"));
+        assert_eq!(parameters.placeholder_typing_motion, Some(true));
+
+        let serialized = serde_json::to_value(payload).unwrap();
+        assert_eq!(serialized["placeholder_typing_motion"], json!(true));
     }
 
     #[test]

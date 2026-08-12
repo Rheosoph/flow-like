@@ -1,0 +1,104 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const localized = translations[lang] as Record<string, string>;
+  const english = translations.en as Record<string, string>;
+  return localized?.[key] ?? english[key] ?? key;
+};
+
+const items = [
+  "v5.control.item1",
+  "v5.control.item2",
+  "v5.control.item3",
+  "v5.control.item4",
+] as const;
+---
+
+<section class="v5-control control-section">
+  <div>
+    <span class="eyebrow">04 / {t("v5.control.eyebrow")}</span>
+    <h2>{t("v5.control.title.l1")}<br />{t("v5.control.title.l2")}</h2>
+  </div>
+  <div>
+    <p>{t("v5.control.body")}</p>
+    <ul>
+      {items.map((key, index) => (
+        <li><span>0{index + 1}</span>{t(key)}</li>
+      ))}
+    </ul>
+  </div>
+</section>
+
+<style>
+  .eyebrow {
+    font: 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: .16em;
+    color: color-mix(in oklab, var(--primary-foreground) 65%, transparent);
+  }
+
+  .control-section {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: clamp(60px, 10vw, 192px);
+    padding: 140px var(--website-content-edge);
+    background: linear-gradient(125deg, color-mix(in oklab, var(--primary) 82%, black), var(--primary) 45%, var(--accent));
+    color: var(--primary-foreground);
+  }
+  .control-section .eyebrow {
+    color: color-mix(in oklab, var(--primary-foreground) 65%, transparent);
+  }
+  .control-section h2 {
+    margin: 25px 0 0;
+    font-size: clamp(50px, 6vw, 90px);
+    line-height: .94;
+    letter-spacing: -.065em;
+    color: var(--primary-foreground);
+  }
+  .control-section > div:last-child {
+    align-self: end;
+  }
+  .control-section > div:last-child > p {
+    max-width: 550px;
+    margin: 0 0 50px;
+    font-size: 20px;
+    line-height: 1.5;
+    color: var(--primary-foreground);
+  }
+  .control-section ul {
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid color-mix(in oklab, var(--primary-foreground) 30%, transparent);
+    list-style: none;
+  }
+  .control-section li {
+    height: 50px;
+    display: grid;
+    grid-template-columns: 48px 1fr;
+    align-items: center;
+    border-bottom: 1px solid color-mix(in oklab, var(--primary-foreground) 30%, transparent);
+    font-size: 12px;
+    color: var(--primary-foreground);
+  }
+  .control-section li span {
+    color: color-mix(in oklab, var(--primary-foreground) 65%, transparent);
+    font: 8px ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  @media (max-width: 800px) {
+    .control-section {
+      grid-template-columns: 1fr;
+      gap: 60px;
+      padding: 100px 22px;
+    }
+    .control-section h2 {
+      font-size: 55px;
+    }
+    .control-section > div:last-child > p {
+      font-size: 17px;
+    }
+  }
+</style>

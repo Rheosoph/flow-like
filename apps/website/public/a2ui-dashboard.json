@@ -1,0 +1,173 @@
+{
+	"surface": {
+		"id": "demo-dashboard",
+		"rootComponentId": "root",
+		"canvasSettings": { "padding": "24px" },
+		"dataModel": [
+			{ "path": "revenue", "value": "$8,240" },
+			{ "path": "goal", "value": 45 },
+			{ "path": "tickets", "value": "12 open" },
+			{ "path": "status", "value": "Syncing…" }
+		],
+		"components": {
+			"root": {
+				"id": "root",
+				"component": {
+					"id": "root",
+					"type": "column",
+					"gap": { "literalString": "16px" },
+					"children": { "explicitList": ["title", "kpis", "bar"] }
+				}
+			},
+			"title": {
+				"id": "title",
+				"component": {
+					"id": "title",
+					"type": "text",
+					"content": { "literalString": "Sales Overview" },
+					"variant": { "literalString": "heading" },
+					"size": { "literalString": "2xl" },
+					"weight": { "literalString": "bold" }
+				}
+			},
+			"kpis": {
+				"id": "kpis",
+				"component": {
+					"id": "kpis",
+					"type": "grid",
+					"columns": { "literalNumber": 2 },
+					"gap": { "literalString": "16px" },
+					"children": { "explicitList": ["revBox", "tixBox"] }
+				}
+			},
+			"revBox": {
+				"id": "revBox",
+				"style": {
+					"padding": {
+						"top": "16px",
+						"right": "16px",
+						"bottom": "16px",
+						"left": "16px"
+					},
+					"border": { "width": "1px", "radius": "12px" }
+				},
+				"component": {
+					"id": "revBox",
+					"type": "column",
+					"gap": { "literalString": "4px" },
+					"children": { "explicitList": ["revLbl", "revVal", "revBadge"] }
+				}
+			},
+			"revLbl": {
+				"id": "revLbl",
+				"component": {
+					"id": "revLbl",
+					"type": "text",
+					"content": { "literalString": "Revenue" },
+					"variant": { "literalString": "label" },
+					"color": { "literalString": "muted" }
+				}
+			},
+			"revVal": {
+				"id": "revVal",
+				"component": {
+					"id": "revVal",
+					"type": "text",
+					"content": { "path": "revenue" },
+					"size": { "literalString": "3xl" },
+					"weight": { "literalString": "bold" }
+				}
+			},
+			"revBadge": {
+				"id": "revBadge",
+				"component": {
+					"id": "revBadge",
+					"type": "badge",
+					"content": { "path": "status" },
+					"variant": { "literalString": "secondary" }
+				}
+			},
+			"tixBox": {
+				"id": "tixBox",
+				"style": {
+					"padding": {
+						"top": "16px",
+						"right": "16px",
+						"bottom": "16px",
+						"left": "16px"
+					},
+					"border": { "width": "1px", "radius": "12px" }
+				},
+				"component": {
+					"id": "tixBox",
+					"type": "column",
+					"gap": { "literalString": "4px" },
+					"children": { "explicitList": ["tixLbl", "tixVal"] }
+				}
+			},
+			"tixLbl": {
+				"id": "tixLbl",
+				"component": {
+					"id": "tixLbl",
+					"type": "text",
+					"content": { "literalString": "Open tickets" },
+					"variant": { "literalString": "label" },
+					"color": { "literalString": "muted" }
+				}
+			},
+			"tixVal": {
+				"id": "tixVal",
+				"component": {
+					"id": "tixVal",
+					"type": "text",
+					"content": { "path": "tickets" },
+					"size": { "literalString": "3xl" },
+					"weight": { "literalString": "bold" }
+				}
+			},
+			"bar": {
+				"id": "bar",
+				"component": {
+					"id": "bar",
+					"type": "progress",
+					"value": { "path": "goal" },
+					"max": { "literalNumber": 100 },
+					"showLabel": { "literalBool": true },
+					"variant": { "literalString": "success" }
+				}
+			}
+		}
+	},
+	"timeline": [
+		{
+			"kind": "setData",
+			"data": [
+				{ "path": "revenue", "value": "$8,240" },
+				{ "path": "goal", "value": 45 },
+				{ "path": "tickets", "value": "12 open" },
+				{ "path": "status", "value": "Syncing…" }
+			]
+		},
+		{ "kind": "wait", "ms": 2200 },
+		{
+			"kind": "setData",
+			"data": [
+				{ "path": "revenue", "value": "$10,900" },
+				{ "path": "goal", "value": 63 },
+				{ "path": "tickets", "value": "9 open" },
+				{ "path": "status", "value": "On track" }
+			]
+		},
+		{ "kind": "wait", "ms": 2200 },
+		{
+			"kind": "setData",
+			"data": [
+				{ "path": "revenue", "value": "$12,480" },
+				{ "path": "goal", "value": 78 },
+				{ "path": "tickets", "value": "7 open" },
+				{ "path": "status", "value": "On track" }
+			]
+		},
+		{ "kind": "wait", "ms": 3200 }
+	]
+}

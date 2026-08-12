@@ -10,9 +10,17 @@ import {
 } from "lucide-react";
 import { type ReactNode, useMemo } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
+import {
+	userAvatarUrl,
+	userDisplayName,
+	userHandle,
+	userInitials,
+	userSecondaryLabel,
+} from "../../../lib/user-display";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import type { IUserLookup } from "../../../state/backend-state/types";
+import { resolveAccountId } from "../../../state/backend-state/user-state";
 import { Avatar, AvatarFallback, AvatarImage } from "../../ui/avatar";
 import {
 	HoverCard,
@@ -104,39 +112,17 @@ function normalizeVariant(value: string | undefined): UserProfileVariant {
 	return "row";
 }
 
-function deriveInitials(label?: string | null) {
-	if (!label) return "??";
-	const parts = label.trim().split(/\s+/).filter(Boolean);
-	if (parts.length === 0) return "??";
-	if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-	return `${parts[0][0] ?? ""}${
-		parts[parts.length - 1][0] ?? ""
-	}`.toUpperCase();
-}
-
-function preferredLabel(
-	lookup: IUserLookup | null | undefined,
-	userId: string | undefined,
-	fallbackLabel: string,
-) {
-	return (
-		lookup?.name ??
-		lookup?.preferred_username ??
-		lookup?.username ??
-		lookup?.email ??
-		userId ??
-		fallbackLabel
-	);
-}
-
 function secondaryLabel(
 	lookup: IUserLookup | null | undefined,
 	userId: string | undefined,
 	showEmail: boolean,
 ) {
-	const handle = lookup?.preferred_username ?? lookup?.username;
+	const handle = userHandle(lookup);
 	if (handle) return `@${handle}`;
-	if (showEmail && lookup?.email) return lookup.email;
+	if (showEmail) {
+		const secondary = userSecondaryLabel(lookup);
+		if (secondary) return secondary;
+	}
 	return userId ?? null;
 }
 
@@ -210,7 +196,7 @@ function ProfileHoverContent({
 	showProfileLink,
 	isLoading,
 }: Readonly<{
-	userId: string;
+	userId?: string;
 	label: string;
 	subtitle: string | null;
 	avatarUrl?: string | null;
@@ -245,7 +231,7 @@ function ProfileHoverContent({
 								{subtitle}
 							</div>
 						)}
-						{showProfileLink && (
+						{showProfileLink && userId && (
 							<a
 								href={`/profile?sub=${encodeURIComponent(userId)}`}
 								className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
@@ -281,7 +267,7 @@ function ProfileHoverContent({
 								<RelativeTime value={createdAt} />
 							</DetailRow>
 						) : null}
-						{showUserId ? (
+						{showUserId && userId ? (
 							<DetailRow
 								icon={<IdCard className="h-3.5 w-3.5" />}
 								label="User ID"
@@ -350,13 +336,17 @@ export function A2UIUserProfile({
 		Boolean(userId),
 	);
 
-	const label = preferredLabel(lookup.data, userId, fallbackLabel);
-	const subtitle = secondaryLabel(lookup.data, userId, showEmail);
-	const avatarUrl = lookup.data?.avatar_url ?? "";
+	// A "local" sub means the executing user was not authenticated: the lookup
+	// resolves it to the current user, so use the account id it returns.
+	const resolvedUserId = resolveAccountId(lookup.data?.id, userId);
+
+	const label = userDisplayName(lookup.data, resolvedUserId ?? fallbackLabel);
+	const subtitle = secondaryLabel(lookup.data, resolvedUserId, showEmail);
+	const avatarUrl = userAvatarUrl(lookup.data) ?? "";
 	const description = showDescription ? lookup.data?.description : undefined;
 	const createdAt = lookup.data?.created_at;
 	const email = lookup.data?.email;
-	const initials = useMemo(() => deriveInitials(label), [label]);
+	const initials = useMemo(() => userInitials(label, "??"), [label]);
 	const rootStyle = resolveInlineStyle(style);
 	const rootClassName = resolveStyle(style);
 
@@ -469,17 +459,20 @@ export function A2UIUserProfile({
 								</span>
 							</div>
 						) : null}
-						{showUserId ? (
+						{showUserId && resolvedUserId ? (
 							<div className="flex min-w-0 items-center gap-2 text-muted-foreground">
 								<IdCard className="h-3.5 w-3.5 shrink-0" />
-								<code className="min-w-0 truncate font-mono" title={userId}>
-									{userId}
+								<code
+									className="min-w-0 truncate font-mono"
+									title={resolvedUserId}
+								>
+									{resolvedUserId}
 								</code>
 							</div>
 						) : null}
-						{showProfileLink ? (
+						{showProfileLink && resolvedUserId ? (
 							<a
-								href={`/profile?sub=${encodeURIComponent(userId)}`}
+								href={`/profile?sub=${encodeURIComponent(resolvedUserId)}`}
 								className="inline-flex min-w-0 items-center gap-1 font-medium text-primary hover:underline"
 							>
 								<span className="truncate">View profile</span>
@@ -562,7 +555,7 @@ export function A2UIUserProfile({
 				className="w-80 max-w-[calc(100vw-2rem)] p-0"
 			>
 				<ProfileHoverContent
-					userId={userId}
+					userId={resolvedUserId}
 					label={label}
 					subtitle={subtitle}
 					avatarUrl={avatarUrl}

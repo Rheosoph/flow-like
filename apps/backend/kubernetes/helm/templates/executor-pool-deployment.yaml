@@ -48,12 +48,12 @@ spec:
             - name: BACKEND_PUB
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "flow-like.fullname" . }}-api-keys
+                  name: {{ include "flow-like.jwtSecretName" . }}
                   key: BACKEND_PUB
             - name: BACKEND_KID
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "flow-like.fullname" . }}-api-keys
+                  name: {{ include "flow-like.jwtSecretName" . }}
                   key: BACKEND_KID
             # LLM Provider Configuration
             {{- if .Values.llm.openrouter.enabled }}

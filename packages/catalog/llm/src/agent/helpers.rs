@@ -52,6 +52,25 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 const DEFAULT_MAX_CONTEXT_TOKENS: u32 = 32000;
 const CHARS_PER_TOKEN_ESTIMATE: usize = 4;
 
+/// Bound network waits on remote MCP servers so a hung peer can never stall the
+/// whole agent run. Values are per awaited call, not per whole registration.
+#[cfg(feature = "execute")]
+const MCP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+#[cfg(feature = "execute")]
+const MCP_LIST_TOOLS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Tool bodies can be legitimately long-running, so this is generous while still
+/// guaranteeing eventual progress.
+#[cfg(feature = "execute")]
+const MCP_CALL_TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+/// Cap the serialized tool result fed back to the LLM to keep a single tool from
+/// blowing up the context window (and the model provider's request size).
+#[cfg(feature = "execute")]
+const MCP_MAX_RESULT_BYTES: usize = 256 * 1024;
+/// Cap tools registered per MCP server so a misbehaving or hostile server cannot
+/// flood the tool list via unbounded pagination.
+#[cfg(feature = "execute")]
+const MCP_MAX_TOOLS_PER_SERVER: usize = 256;
+
 #[cfg(feature = "execute")]
 fn flatten_reasoning(reasoning: &rig::message::Reasoning) -> String {
     reasoning
@@ -762,7 +781,7 @@ pub async fn generate_tool_from_function(
     let mut has_data_pins = false;
     let mut payload_pin: Option<&Pin> = None;
 
-    for (_pin_id, pin) in node.pins.iter() {
+    for pin in node.pins.values() {
         // Skip execution pins and input pins
         if pin.data_type == VariableType::Execution || pin.pin_type != PinType::Output {
             continue;
@@ -893,7 +912,7 @@ pub async fn execute_tool_call(
     // Also set values on the referenced function's OUTPUT pins (shared storage
     // + override map) so that both override-aware and non-override code paths
     // resolve correctly regardless of old/new layer format.
-    for (_id, pin) in referenced_node.pins.iter() {
+    for pin in referenced_node.pins.values() {
         if pin.pin_type == PinType::Input || pin.data_type == VariableType::Execution {
             continue;
         }
@@ -1125,14 +1144,17 @@ pub async fn execute_agent_streaming(
         .await?
         .preamble(&system_prompt);
     let mut tool_servers: Vec<(Vec<rmcp::model::Tool>, rmcp::service::ServerSink)> = Vec::new();
-    let mut mcp_tool_clients: HashMap<String, rmcp::service::ServerSink> = HashMap::new();
+    // Maps the tool name the LLM sees to (peer, actual server-side tool name).
+    // The two names diverge when a colliding tool is namespaced so routing keeps
+    // pointing at the correct app.
+    let mut mcp_tool_clients: HashMap<String, (rmcp::service::ServerSink, String)> = HashMap::new();
     let mut _mcp_clients = Vec::new();
 
     let mut implementation = Implementation::new("Flow-Like", "alpha");
     implementation.website_url = Some("https://flow-like.com".to_string());
     let client_info = ClientInfo::new(ClientCapabilities::default(), implementation);
 
-    for mcp_config in &agent.mcp_servers {
+    for (server_index, mcp_config) in agent.mcp_servers.iter().enumerate() {
         let transport_config =
             match crate::agent::mcp_transport_config_for_execution(mcp_config, context).await {
                 Ok(config) => config,
@@ -1149,21 +1171,48 @@ pub async fn execute_agent_streaming(
             };
         let transport =
             rmcp::transport::StreamableHttpClientTransport::from_config(transport_config);
-        let client = match client_info.clone().serve(transport).await {
-            Ok(c) => c,
-            Err(e) => {
-                let error = format!("Failed to connect to MCP server {}: {}", mcp_config.uri, e);
-                context.log_message(&error, LogLevel::Error);
-                continue;
-            }
-        };
+        let client =
+            match tokio::time::timeout(MCP_CONNECT_TIMEOUT, client_info.clone().serve(transport))
+                .await
+            {
+                Ok(Ok(c)) => c,
+                Ok(Err(e)) => {
+                    let error =
+                        format!("Failed to connect to MCP server {}: {}", mcp_config.uri, e);
+                    context.log_message(&error, LogLevel::Error);
+                    continue;
+                }
+                Err(_) => {
+                    let error = format!(
+                        "Timed out connecting to MCP server {} after {:?}",
+                        mcp_config.uri, MCP_CONNECT_TIMEOUT
+                    );
+                    context.log_message(&error, LogLevel::Error);
+                    continue;
+                }
+            };
 
         // Fetch all tools with pagination support
         let mut all_tools = Vec::new();
         let mut cursor: Option<PaginatedRequestParams> = None;
 
         loop {
-            let list_result = client.list_tools(cursor.clone()).await;
+            let list_result = match tokio::time::timeout(
+                MCP_LIST_TOOLS_TIMEOUT,
+                client.list_tools(cursor.clone()),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => {
+                    let error = format!(
+                        "Timed out fetching tools from MCP server {} after {:?}",
+                        mcp_config.uri, MCP_LIST_TOOLS_TIMEOUT
+                    );
+                    context.log_message(&error, LogLevel::Error);
+                    break;
+                }
+            };
 
             let response = match list_result {
                 Ok(r) => r,
@@ -1178,6 +1227,18 @@ pub async fn execute_agent_streaming(
             };
 
             all_tools.extend(response.tools);
+
+            if all_tools.len() >= MCP_MAX_TOOLS_PER_SERVER {
+                all_tools.truncate(MCP_MAX_TOOLS_PER_SERVER);
+                context.log_message(
+                    &format!(
+                        "MCP server {} exposed more than {} tools; truncating the tool list",
+                        mcp_config.uri, MCP_MAX_TOOLS_PER_SERVER
+                    ),
+                    LogLevel::Warn,
+                );
+                break;
+            }
 
             // Check if there are more pages
             if let Some(next_cursor) = response.next_cursor {
@@ -1195,7 +1256,7 @@ pub async fn execute_agent_streaming(
             continue;
         }
 
-        let filtered_tools = if let Some(filter) = &mcp_config.tool_filter {
+        let mut filtered_tools = if let Some(filter) = &mcp_config.tool_filter {
             all_tools
                 .into_iter()
                 .filter(|t| filter.contains(&*t.name))
@@ -1217,20 +1278,43 @@ pub async fn execute_agent_streaming(
 
         let peer = client.peer().to_owned();
 
-        for tool in &filtered_tools {
-            let tool_name = tool.name.to_string();
-            if mcp_tool_clients
-                .insert(tool_name.clone(), peer.clone())
-                .is_some()
-            {
+        // Register each tool under a name unique across all servers. On a
+        // collision we namespace the LLM-facing name so it stays in sync with
+        // the peer it routes to; the original server-side name is preserved for
+        // the actual call. Tools that still collide after namespacing are
+        // dropped so the LLM never sees a tool that would route to the wrong app
+        // (or hit the "not found" abort path).
+        filtered_tools.retain_mut(|tool| {
+            let server_tool_name = tool.name.to_string();
+            let mut registered_name = server_tool_name.clone();
+            if mcp_tool_clients.contains_key(&registered_name) {
+                let namespaced = format!("srv{server_index}_{server_tool_name}");
+                if mcp_tool_clients.contains_key(&namespaced) {
+                    context.log_message(
+                        &format!(
+                            "Skipping MCP tool '{}' from server {}: name collides even after namespacing",
+                            server_tool_name, mcp_config.uri
+                        ),
+                        LogLevel::Warn,
+                    );
+                    return false;
+                }
                 context.log_message(
                     &format!(
-                        "Duplicate MCP tool name '{}' detected; using the latest registration",
-                        tool_name
+                        "Namespacing colliding MCP tool '{}' from server {} as '{}'",
+                        server_tool_name, mcp_config.uri, namespaced
                     ),
                     LogLevel::Warn,
                 );
+                tool.name = namespaced.clone().into();
+                registered_name = namespaced;
             }
+            mcp_tool_clients.insert(registered_name, (peer.clone(), server_tool_name));
+            true
+        });
+
+        if filtered_tools.is_empty() {
+            continue;
         }
 
         tool_servers.push((filtered_tools, peer));
@@ -1583,7 +1667,7 @@ pub async fn execute_agent_streaming(
                         "Failed to store evicted messages to memory (non-fatal): {}",
                         e
                     ),
-                    LogLevel::Warn,
+                    LogLevel::Error,
                 );
             }
         }
@@ -1831,17 +1915,21 @@ pub async fn execute_agent_streaming(
                         Ok(value) => value,
                         Err(error) => json::json!(format!("Error: {:?}", error)),
                     }
-                } else if let Some(mcp_peer) = mcp_tool_clients.get(name) {
+                } else if let Some((mcp_peer, server_tool_name)) = mcp_tool_clients.get(name) {
                     context.log_message(
                         &format!("Calling MCP tool '{}' with arguments {}", name, arguments),
                         LogLevel::Debug,
                     );
 
+                    let mcp_peer = mcp_peer.clone();
+                    let server_tool_name = server_tool_name.clone();
                     let args_map = arguments.as_object().cloned();
-                    let mut params = CallToolRequestParams::new(name.clone());
+                    let mut params = CallToolRequestParams::new(server_tool_name);
                     params.arguments = args_map;
-                    match mcp_peer.call_tool(params).await {
-                        Ok(result) => {
+                    match tokio::time::timeout(MCP_CALL_TOOL_TIMEOUT, mcp_peer.call_tool(params))
+                        .await
+                    {
+                        Ok(Ok(result)) => {
                             context.log_message(
                                 &format!(
                                     "MCP tool '{}' returned successfully with result {:?}",
@@ -1849,15 +1937,48 @@ pub async fn execute_agent_streaming(
                                 ),
                                 LogLevel::Debug,
                             );
-                            json::to_value(result)
-                                .unwrap_or_else(|_| json::json!({"message": "Tool executed"}))
+                            let value = json::to_value(result)
+                                .unwrap_or_else(|_| json::json!({"message": "Tool executed"}));
+                            let byte_len = json::to_string(&value).map(|s| s.len()).unwrap_or(0);
+                            if byte_len > MCP_MAX_RESULT_BYTES {
+                                context.log_message(
+                                    &format!(
+                                        "MCP tool '{}' result of {} bytes exceeds cap {}; returning an error instead of overflowing context",
+                                        name, byte_len, MCP_MAX_RESULT_BYTES
+                                    ),
+                                    LogLevel::Warn,
+                                );
+                                json::json!({
+                                    "error": format!(
+                                        "Tool result too large ({} bytes, limit {}). Ask the tool to return less data or paginate.",
+                                        byte_len, MCP_MAX_RESULT_BYTES
+                                    )
+                                })
+                            } else {
+                                value
+                            }
                         }
-                        Err(error) => {
+                        Ok(Err(error)) => {
                             context.log_message(
                                 &format!("MCP tool '{}' call failed: {}", name, error),
                                 LogLevel::Error,
                             );
                             json::json!({"error": format!("{}", error)})
+                        }
+                        Err(_) => {
+                            context.log_message(
+                                &format!(
+                                    "MCP tool '{}' timed out after {:?}",
+                                    name, MCP_CALL_TOOL_TIMEOUT
+                                ),
+                                LogLevel::Error,
+                            );
+                            json::json!({
+                                "error": format!(
+                                    "Tool '{}' timed out after {:?}",
+                                    name, MCP_CALL_TOOL_TIMEOUT
+                                )
+                            })
                         }
                     }
                 } else if name == "think" && agent.thinking_enabled {
@@ -2051,7 +2172,7 @@ pub async fn execute_agent_streaming(
                             "Failed to store evicted messages to memory (non-fatal): {}",
                             e
                         ),
-                        LogLevel::Warn,
+                        LogLevel::Error,
                     );
                 }
             }
@@ -2265,7 +2386,7 @@ async fn handle_memory_tool_call(
         VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
+    use tokio::sync::RwLockReadGuard;
 
     type MemoryDB = BufferedVectorStore<LanceDBVectorStore>;
 
@@ -2412,10 +2533,7 @@ async fn handle_memory_tool_call(
                 "timestamp": now,
             });
 
-            {
-                let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
-                db.insert(vec![record]).await?;
-            }
+            cached_db.insert_from(context, vec![record]).await?;
 
             cached_db.ensure_flushed().await?;
 
@@ -2456,7 +2574,7 @@ async fn handle_memory_tool_call(
                     Err(e) => {
                         context.log_message(
                             &format!("Auto-compress failed (non-fatal): {}", e),
-                            LogLevel::Warn,
+                            LogLevel::Error,
                         );
                     }
                 }
@@ -2480,13 +2598,7 @@ async fn store_evicted_to_memory(
     agent: &Agent,
     evicted: &[rig::message::Message],
 ) -> flow_like_types::Result<()> {
-    use flow_like_storage::databases::vector::{
-        VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
-    };
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tokio::sync::RwLockWriteGuard;
-
-    type MemoryDB = BufferedVectorStore<LanceDBVectorStore>;
 
     let memory = agent
         .memory
@@ -2559,9 +2671,7 @@ async fn store_evicted_to_memory(
 
     let cached_db = memory.database.load(context).await?;
 
-    let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
-    db.insert(vec![record]).await?;
-    drop(db);
+    cached_db.insert_from(context, vec![record]).await?;
     cached_db.ensure_flushed().await?;
 
     context.log_message(
@@ -2587,7 +2697,7 @@ async fn run_memory_compress(
         VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
+    use tokio::sync::RwLockReadGuard;
 
     type MemoryDB = BufferedVectorStore<LanceDBVectorStore>;
 
@@ -2704,9 +2814,7 @@ async fn run_memory_compress(
     });
 
     // Insert summary first, then delete old observations (safer ordering)
-    let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
-    db.insert(vec![summary_record]).await?;
-    drop(db);
+    cached_db.insert_from(context, vec![summary_record]).await?;
 
     cached_db.ensure_flushed().await?;
 

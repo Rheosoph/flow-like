@@ -1,3 +1,4 @@
+use flow_like::flow::execution::LOCAL_USER_SUB;
 use flow_like::flow::execution::context::ExecutionContext;
 use flow_like_types::reqwest;
 use serde::Serialize;
@@ -166,7 +167,7 @@ pub async fn persist_notification(
         .filter(|id| !id.is_empty());
 
     let run_id = Some(context.run_id().to_string());
-    let node_id = Some(context.id.clone());
+    let node_id = Some(context.id.to_string());
     let client = reqwest::Client::new();
 
     // Try app-scoped endpoint first (online projects with board context)
@@ -227,10 +228,14 @@ pub async fn persist_notification(
         }
     }
 
-    // For other-user targeting without a valid app, skip (can't verify membership)
+    // For other-user targeting without a valid app, skip (can't verify membership).
+    // Targeting the executing user stays allowed — the user-scoped endpoint is
+    // bound to their own token, and authenticated local runs report a real sub.
+    let executing_sub = context.user_context().map(|user| user.sub.as_str());
     if let Some(ref target) = params.target_user_sub
-        && target != "local"
+        && target != LOCAL_USER_SUB
         && !target.is_empty()
+        && Some(target.as_str()) != executing_sub
     {
         return Ok(false);
     }

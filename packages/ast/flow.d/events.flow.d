@@ -242,13 +242,63 @@ declare function eventsGenericReturnResult({ response: any }): void;
 // === Events/Remote ===
 
 /**
+ * Call an internal REST API exposed by a connected project and return its status, headers and response body.
+ * @param flowRemoteAppId (optional) — Connected project to invoke the event in
+ * @param flowRemoteEvent (optional) — REST API event of the selected project
+ * @param flowRemoteEventMeta (optional) — Auto-filled by the editor when an event is selected. Drives the typed pins.
+ * @param route — Route of the remote API to call
+ * @param query (optional) — Query parameters as an object
+ * @param body (optional) — Request body (JSON)
+ * @param headers (optional) — Additional request headers as an object
+ * @param timeoutSeconds (optional) — Maximum time to wait for the remote request to finish
+ * @returns status — HTTP status code of the response
+ * @returns responseHeaders — Response headers as an object
+ * @returns response — Response body (JSON when parseable, else text)
+ * @returns file — Response body as a downloaded file when it is binary
+ * @impure has side effects / drives control flow
+ */
+declare function callRemoteApi({ flowRemoteAppId?: string, flowRemoteEvent?: string, flowRemoteEventMeta?: string, route: string, query?: any, body?: any, headers?: any, timeoutSeconds?: int }): { status: int, responseHeaders: any, response: any, file: Struct };
+
+/**
+ * Call a chat event in a connected project. Chunks, complete responses, widgets, attachments and session state are exposed while the remote chat streams.
+ * @param flowRemoteAppId (optional) — Connected project to invoke the event in
+ * @param flowRemoteEvent (optional) — Chat event of the selected project
+ * @param flowRemoteEventMeta (optional) — Auto-filled by the editor when an event is selected. Drives the typed pins.
+ * @param history (optional) — Conversation to send, including the new user message
+ * @param localSession (optional) — State local to this chat session
+ * @param globalSession (optional) — State shared for the remote chat user
+ * @param tools (optional) — Tool ids the remote assistant may use
+ * @param actions (optional) — User actions included with the chat request
+ * @param attachments (optional) — Attachments included with the chat request
+ * @param user (optional) — User information forwarded to the remote chat
+ * @param timeoutSeconds (optional) — Maximum time to wait for the remote request to finish
+ * @returns chunk — Latest streamed response chunk
+ * @returns response — Complete model response
+ * @returns responseText — Text of the complete response
+ * @returns widgets — Widgets emitted by the remote chat
+ * @returns attachmentsOut — Attachments emitted by the remote chat
+ * @returns actionsOut — Actions emitted by the remote chat
+ * @returns localSessionOut — Latest remote local session state
+ * @returns globalSessionOut — Latest remote global session state
+ * @returns modelId — Model reported by the remote chat
+ * @returns runId — Remote run id
+ * @returns status — Final run status
+ * @returns plan — Latest streamed reasoning plan
+ * @returns usageStat — Latest model usage update
+ * @returns eventType — Type of the latest streamed remote event
+ * @returns eventPayload — Raw payload of the latest streamed remote event
+ * @impure has side effects / drives control flow
+ */
+declare function callRemoteChat({ flowRemoteAppId?: string, flowRemoteEvent?: string, flowRemoteEventMeta?: string, history?: Struct, localSession?: Struct, globalSession?: Struct, tools?: string[], actions?: Struct[], attachments?: Struct[], user?: Struct, timeoutSeconds?: int }): { chunk: Struct, response: Struct, responseText: string, widgets: Struct[], attachmentsOut: Struct[], actionsOut: Struct[], localSessionOut: Struct, globalSessionOut: Struct, modelId: string, runId: string, status: string, plan: Struct, usageStat: Struct, eventType: string, eventPayload: any };
+
+/**
  * Invoke a chat, API or MCP event of a connected project. Pins adapt to the selected event. The project must have granted this app a role that allows executing events.
  * @param flowRemoteAppId (optional) — Connected project to invoke the event in
  * @param flowRemoteEvent (optional) — Event of the selected project to invoke
- * @param flowRemoteEventMeta (optional) — Auto-filled by the editor when an event is selected. Drives the input and output pins.
+ * @param flowRemoteEventMeta (optional) — Auto-filled by the editor when an event is selected. Drives the typed pins.
  * @param payload — Input payload passed to the remote event
  * @param waitForResult (optional) — Wait for the remote run to finish and return its result
- * @param timeoutSeconds (optional) — Maximum time to wait for the remote run to finish
+ * @param timeoutSeconds (optional) — Maximum time to wait for the remote request to finish
  * @returns runId — Remote run id
  * @returns status — Final run status
  * @returns result — Result payload of the remote run

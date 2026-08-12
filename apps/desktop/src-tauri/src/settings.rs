@@ -22,6 +22,28 @@ impl Default for LogRetentionSettings {
     }
 }
 
+/// `enabled` (usage telemetry) is `None` while the user has not answered the
+/// consent prompt, `Some(false)` when declined and `Some(true)` when opted in.
+/// `crash_reports` is a separate consent that defaults to on: only an explicit
+/// `Some(false)` turns crash reporting off.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TelemetrySettings {
+    pub enabled: Option<bool>,
+    pub crash_reports: Option<bool>,
+    pub anon_id: Option<String>,
+}
+
+impl TelemetrySettings {
+    pub fn crash_reports_enabled(&self) -> bool {
+        self.crash_reports != Some(false)
+    }
+
+    pub fn usage_enabled(&self) -> bool {
+        self.enabled == Some(true)
+    }
+}
+
 // Mobile-only centralized, sandbox-safe roots (iOS + Android).
 #[cfg(target_os = "ios")]
 fn app_data_root() -> PathBuf {
@@ -195,7 +217,14 @@ pub struct Settings {
     pub user_dir: PathBuf,
     #[serde(default)]
     pub log_retention: LogRetentionSettings,
+    #[serde(default)]
+    pub telemetry: TelemetrySettings,
     pub profiles: HashMap<String, UserProfile>,
+    /// User-wide library of custom model bits. Definitions (and their
+    /// credentials) are configured once here; each profile activates the ones
+    /// it wants through its own `bits` list, exactly like public bits.
+    #[serde(default)]
+    pub custom_bits: Vec<flow_like::bit::Bit>,
     pub updated: SystemTime,
     pub created: SystemTime,
 
@@ -207,7 +236,7 @@ impl Settings {
     pub fn new() -> Self {
         // Prefer new stable settings path; fallback to legacy cache path for one-time backward compatibility.
         let new_settings_path = settings_store_path();
-        let legacy_settings_path = get_cache_dir().join("global-settings.json");
+        let legacy_settings_path = legacy_settings_store_path();
 
         if new_settings_path.exists() || legacy_settings_path.exists() {
             let path = if new_settings_path.exists() {
@@ -259,7 +288,9 @@ impl Settings {
             temporary_dir: default_temporary_dir(),
             user_dir,
             log_retention: LogRetentionSettings::default(),
+            telemetry: TelemetrySettings::default(),
             profiles: HashMap::new(),
+            custom_bits: Vec::new(),
             created: SystemTime::now(),
             updated: SystemTime::now(),
             config: None,
@@ -271,12 +302,16 @@ impl Settings {
     }
 
     pub fn get_current_profile(&self) -> anyhow::Result<UserProfile> {
-        let profile = self
+        let mut profile = self
             .profiles
             .get(&self.current_profile)
             .or_else(|| self.profiles.values().next())
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("No profiles found"))?;
+
+        // Resolve the custom bits this profile activated out of the user-wide
+        // library, so model lookups see exactly the profile's line-up.
+        profile.hub_profile.custom_bits = self.profile_custom_bits(&profile);
 
         // Proxied model calls resolve their endpoint from a process-wide base
         // URL. The desktop only learns it from the active profile, and the
@@ -286,6 +321,37 @@ impl Settings {
         );
 
         Ok(profile)
+    }
+
+    /// The subset of the custom-bit library a profile has activated, matched
+    /// against its `bits` references (`hub:id` or bare id).
+    pub fn profile_custom_bits(
+        &self,
+        profile: &UserProfile,
+    ) -> Vec<flow_like::profile::ProfileCustomBit> {
+        let wanted: std::collections::HashSet<&str> = profile
+            .hub_profile
+            .bits
+            .iter()
+            .map(|reference| {
+                reference
+                    .rsplit_once(':')
+                    .map_or(reference.as_str(), |(_, id)| id)
+            })
+            .collect();
+
+        self.custom_bits
+            .iter()
+            .filter(|bit| wanted.contains(bit.id.as_str()))
+            .cloned()
+            .map(|mut bit| {
+                // Legacy offline custom bits used their stable logical id as
+                // every cache key. Normalize clones before model resolution so
+                // old settings files get the source-aware behavior immediately.
+                bit.normalize_user_local_artifact_identity();
+                flow_like::profile::ProfileCustomBit(bit)
+            })
+            .collect()
     }
 
     pub async fn set_current_profile(
@@ -344,7 +410,7 @@ impl Settings {
 }
 
 // Compute the path to persist global settings. On mobile, prefer data_dir for durability.
-fn settings_store_path() -> std::path::PathBuf {
+pub(crate) fn settings_store_path() -> PathBuf {
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
         return mobile_storage_root().join("global-settings.json");
@@ -352,5 +418,26 @@ fn settings_store_path() -> std::path::PathBuf {
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
     {
         get_cache_dir().join("global-settings.json")
+    }
+}
+
+/// Pre-`settings_store_path` location, still read once for backward compatibility.
+pub(crate) fn legacy_settings_store_path() -> PathBuf {
+    get_cache_dir().join("global-settings.json")
+}
+
+/// The project dir `Settings::new()` would end up with, without loading the
+/// full settings graph. Mirrors `normalize_platform_paths`: on mobile the
+/// current container root always wins over the persisted value, so early
+/// startup paths derive the same directory the loaded settings will use.
+pub(crate) fn resolve_project_dir(persisted: Option<PathBuf>) -> Option<PathBuf> {
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        let _ = persisted;
+        return Some(mobile_storage_root().join("projects"));
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        persisted
     }
 }

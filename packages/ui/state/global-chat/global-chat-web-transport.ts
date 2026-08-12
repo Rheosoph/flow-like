@@ -16,6 +16,10 @@ import type {
 	FrontendToolResponse,
 } from "../../components/global-chat/global-tool-bridge";
 import type { IAgentDebugEvent } from "./agent-debug-report";
+import {
+	registerGlobalChatRunControl,
+	unregisterGlobalChatRunControl,
+} from "./global-chat-run-control";
 
 // The desktop and browser tool contracts are identical; reuse the canonical bridge types so a single
 // executor (see `global-chat-tool-registry`) satisfies both transports.
@@ -33,6 +37,13 @@ export interface WebGlobalChatOptions {
 	token?: string;
 	/** POST body for `/ai/global-chat` (userPrompt, history, modelId, embeddingModelId, …). */
 	body: Record<string, unknown>;
+	/**
+	 * The run id the FRONTEND minted (the assistant message id). The server mints its own and hands
+	 * it back in the `run` frame; only this transport sees both. It uses the client id to register
+	 * the run's cancel/steer control and to tag outgoing tool requests, so the tool bridge can route
+	 * a tool's output back to the right reply when several turns stream at once.
+	 */
+	clientRunId?: string;
 	/**
 	 * Execute one browser tool and resolve with its result. Wire this to the same handlers the
 	 * desktop tool bridge uses (navigate, open_app_chat, flowpilot_board, ask_user, …). When omitted
@@ -79,14 +90,22 @@ function executionTimeout(
 	request: WebToolRequest,
 ) {
 	const configured = options.toolExecutionTimeoutMs;
-	const configuredTimeout =
+	const explicitCap =
 		typeof configured === "number" && Number.isFinite(configured)
 			? Math.max(1, configured)
-			: DEFAULT_TOOL_EXECUTION_TIMEOUT_MS;
+			: undefined;
 	const requestDeadline = request.deadlineAtMs ?? request.deadline_at_ms;
-	return typeof requestDeadline === "number" && Number.isFinite(requestDeadline)
-		? Math.max(1, Math.min(configuredTimeout, requestDeadline - Date.now()))
-		: configuredTimeout;
+	// The backend deadline is authoritative. A delegated board run earns wall clock by proving
+	// progress and can legitimately last hours, so a generic client-side default must not cut it
+	// short — that default only covers requests arriving without a deadline. An explicitly
+	// configured cap still applies, mirroring how the desktop bridge derives its deadline.
+	if (typeof requestDeadline === "number" && Number.isFinite(requestDeadline)) {
+		const remaining = Math.max(1, requestDeadline - Date.now());
+		return explicitCap === undefined
+			? remaining
+			: Math.min(explicitCap, remaining);
+	}
+	return explicitCap ?? DEFAULT_TOOL_EXECUTION_TIMEOUT_MS;
 }
 
 function emitLifecycle(options: WebGlobalChatOptions, event: IAgentDebugEvent) {
@@ -259,6 +278,44 @@ async function executeBrowserTool(
 	return result;
 }
 
+/**
+ * POST a control action (`cancel` / `steer`) for a live run. Kept separate from tool-result
+ * delivery because it must fail loudly: the composer restores a steering message the run refused,
+ * and the stop button reports a cancel that did not land.
+ */
+async function postRunControl(
+	options: WebGlobalChatOptions,
+	authHeaders: Record<string, string>,
+	runId: string,
+	action: "cancel" | "steer",
+	payload: Record<string, unknown>,
+) {
+	const controller = new AbortController();
+	const timeoutId = setTimeout(
+		() => controller.abort(),
+		deliveryTimeout(options),
+	);
+	try {
+		const response = await fetch(
+			`${options.baseUrl}/api/v1/ai/global-chat/${encodeURIComponent(runId)}/${action}`,
+			{
+				method: "POST",
+				headers: { "content-type": "application/json", ...authHeaders },
+				body: JSON.stringify(payload),
+				signal: controller.signal,
+			},
+		);
+		if (!response.ok) {
+			const text = await response.text().catch(() => "");
+			throw new Error(
+				`FlowPilot ${action} failed (${response.status}): ${text.slice(0, MAX_ERROR_BODY_CHARS)}`,
+			);
+		}
+	} finally {
+		clearTimeout(timeoutId);
+	}
+}
+
 async function deliverToolResult(
 	options: WebGlobalChatOptions,
 	authHeaders: Record<string, string>,
@@ -382,6 +439,31 @@ export function webGlobalChatStart(options: WebGlobalChatOptions) {
 			}),
 		);
 
+		// Stopping a browser run has two halves: abort the SSE request so the UI stops immediately,
+		// and tell the server to cancel the generation so it does not keep burning tokens.
+		//
+		// The control is registered BEFORE the request goes out, closing over a run id that is only
+		// filled in when the server's `run` frame lands. Stopping in that window still aborts the
+		// stream locally; steering in it is refused rather than silently dropped.
+		const streamAbort = new AbortController();
+		let serverRunId: string | undefined;
+		if (options.clientRunId) {
+			registerGlobalChatRunControl(options.clientRunId, {
+				cancel: async () => {
+					streamAbort.abort();
+					if (!serverRunId) return;
+					await postRunControl(options, authHeaders, serverRunId, "cancel", {});
+				},
+				steer: async (content) => {
+					if (!serverRunId) {
+						throw new Error("The run has not started yet.");
+					}
+					await postRunControl(options, authHeaders, serverRunId, "steer", {
+						message: content,
+					});
+				},
+			});
+		}
 		try {
 			const response = await fetch(`${baseUrl}/api/v1/ai/global-chat`, {
 				method: "POST",
@@ -391,6 +473,7 @@ export function webGlobalChatStart(options: WebGlobalChatOptions) {
 					...authHeaders,
 				},
 				body: JSON.stringify(body),
+				signal: streamAbort.signal,
 			});
 
 			if (!response.ok || !response.body) {
@@ -465,6 +548,9 @@ export function webGlobalChatStart(options: WebGlobalChatOptions) {
 							return;
 						}
 						runId = nextRunId;
+						// The run is addressable from here on — the control registered above starts
+						// reaching the server instead of only aborting locally.
+						serverRunId = nextRunId;
 						emitLifecycle(
 							options,
 							bridgeEvent("web:protocol:run", "run_frame_received", "done"),
@@ -514,6 +600,17 @@ export function webGlobalChatStart(options: WebGlobalChatOptions) {
 							return;
 						}
 						seenToolRequestIds.add(request.requestId);
+						// The server knows only its own run id, so stamp ours on the way through:
+						// the bridge routes every store write this tool performs by it.
+						if (options.clientRunId) {
+							request = {
+								...request,
+								context: {
+									...request.context,
+									runId: options.clientRunId,
+								},
+							};
+						}
 						emitLifecycle(
 							options,
 							bridgeEvent(
@@ -668,6 +765,10 @@ export function webGlobalChatStart(options: WebGlobalChatOptions) {
 				}),
 			);
 			throw failure;
+		} finally {
+			if (options.clientRunId) {
+				unregisterGlobalChatRunControl(options.clientRunId);
+			}
 		}
 	};
 }

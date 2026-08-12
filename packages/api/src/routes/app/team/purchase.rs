@@ -58,7 +58,7 @@ pub struct PurchaseResponse {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/team/purchase", skip(state, user))]
+#[tracing::instrument(name = "POST /apps/{app_id}/team/purchase", skip(state, user, params))]
 pub async fn purchase(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

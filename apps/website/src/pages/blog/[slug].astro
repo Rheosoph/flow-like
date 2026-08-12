@@ -4,6 +4,7 @@ import "@flow-like/flow-like-ui/global.css";
 import "../../styles/blog.css";
 import BlogLayout from "../../layouts/Blog-Layout.astro";
 import BlogNewsletter from "../../components/blog-newsletter.astro";
+import { BlogCodeEnhancer } from "../../components/blog/BlogCodeEnhancer";
 import { LuCopy, LuShare } from "react-icons/lu";
 
 export async function getStaticPaths() {
@@ -20,6 +21,7 @@ const { entry } = Astro.props;
 const { Content, headings } = await render(entry);
 const { title, description, date, tags = [], cover } = entry.data;
 const postCover = cover;
+const hasFencedCode = /^ {0,3}(?:`{3,}|~{3,})/m.test(entry.body ?? "");
 
 const site = Astro.site ?? import.meta.env.SITE;
 const canonical = site ? new URL(Astro.url.pathname, site).toString() : "";
@@ -91,7 +93,7 @@ const canonical = site ? new URL(Astro.url.pathname, site).toString() : "";
     <div class="grid gap-10 lg:grid-cols-[minmax(0,1fr)_260px] xl:gap-12 xl:grid-cols-[minmax(0,1fr)_280px]">
       <article
         id="post-content"
-        class="post-prose prose prose-zinc dark:prose-invert max-w-none prose-headings:scroll-mt-20 first-h1-hidden"
+        class="post-prose prose prose-zinc dark:prose-invert min-w-0 w-full max-w-none prose-headings:scroll-mt-20 first-h1-hidden"
       >
         <Content />
 
@@ -166,6 +168,8 @@ const canonical = site ? new URL(Astro.url.pathname, site).toString() : "";
     >
     </div>
   </div>
+
+  {hasFencedCode && <BlogCodeEnhancer client:only="react" />}
 
   <script type="module" define:vars={{ title, description, canonical }}>
     const $ = (s, r = document) => r.querySelector(s);

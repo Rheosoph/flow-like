@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { userDisplayName } from "../lib/user-display";
 import type { IUserLookup } from "../state/backend-state/types";
 
 /** A curated palette of visually distinct colors for peer identification */
@@ -78,14 +79,12 @@ export function usePeerUsers({
 			// Check cache first
 			const cached = cache.current.get(sub);
 			if (cached) {
+				const cachedName = userDisplayName(cached, "User");
 				return {
 					sub,
 					color: colorFromSub(sub),
-					name: cached.name ?? cached.username ?? "User",
-					truncatedName: truncateName(
-						cached.name ?? cached.username,
-						maxNameLength,
-					),
+					name: cachedName,
+					truncatedName: truncateName(cachedName, maxNameLength),
 					avatarUrl: cached.avatar_url,
 					loading: false,
 				};
@@ -111,14 +110,12 @@ export function usePeerUsers({
 			try {
 				const user = await lookupUser(sub);
 				cache.current.set(sub, user);
+				const name = userDisplayName(user, "User");
 				const info: PeerUserInfo = {
 					sub,
 					color: colorFromSub(sub),
-					name: user.name ?? user.username ?? "User",
-					truncatedName: truncateName(
-						user.name ?? user.username,
-						maxNameLength,
-					),
+					name,
+					truncatedName: truncateName(name, maxNameLength),
 					avatarUrl: user.avatar_url,
 					loading: false,
 				};

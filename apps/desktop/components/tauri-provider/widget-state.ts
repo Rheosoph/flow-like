@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import {
 	IAppVisibility,
 	type IMetadata,
@@ -6,9 +5,12 @@ import {
 	type IWidgetState,
 	type Version,
 	type VersionType,
+	normalizeWidgetForPersistence,
 } from "@flow-like/flow-like-ui";
-import { appsDB } from "../../lib/apps-db";
+import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
+import { appsDB } from "../../lib/apps-db";
+import { withWidgetName } from "../../lib/widget-metadata";
 import type { TauriBackend } from "../tauri-provider";
 
 export class WidgetState implements IWidgetState {
@@ -48,12 +50,13 @@ export class WidgetState implements IWidgetState {
 		widget: IWidget,
 	): Promise<void> {
 		if (!this.backend.profile) return;
+		const normalizedWidget = normalizeWidgetForPersistence(widget);
 		await fetcher(
 			this.backend.profile,
 			`apps/${appId}/widgets/${widget.id}`,
 			{
 				method: "PUT",
-				body: JSON.stringify({ widget }),
+				body: JSON.stringify({ widget: normalizedWidget }),
 			},
 			this.getRemoteAuth(),
 		);
@@ -93,7 +96,7 @@ export class WidgetState implements IWidgetState {
 			} catch {
 				metadata = undefined;
 			}
-			result.push([appId, widget.id, metadata]);
+			result.push([appId, widget.id, withWidgetName(metadata, widget)]);
 		}
 		return result;
 	}
@@ -138,12 +141,22 @@ export class WidgetState implements IWidgetState {
 				}),
 			);
 
+			const localById = new Map(localWidgets.map((w) => [w.id, w]));
+
 			const result: [string, string, IMetadata | undefined][] = [];
 			for (const [, widgetId, metadata] of remoteList) {
-				result.push([appId, widgetId, metadata]);
+				result.push([
+					appId,
+					widgetId,
+					withWidgetName(metadata, localById.get(widgetId)),
+				]);
 			}
 			for (let i = 0; i < localOnly.length; i++) {
-				result.push([appId, localOnly[i].id, localOnlyMeta[i]]);
+				result.push([
+					appId,
+					localOnly[i].id,
+					withWidgetName(localOnlyMeta[i], localOnly[i]),
+				]);
 			}
 
 			const syncTask = (async () => {
@@ -226,11 +239,38 @@ export class WidgetState implements IWidgetState {
 
 		try {
 			const remote = await this.fetchRemoteWidget(appId, widgetId, version);
+			if (local && !version) {
+				const localUpdatedAt = Date.parse(local.updatedAt);
+				const remoteUpdatedAt = Date.parse(remote.updatedAt);
+				const localIsNewer =
+					(Number.isFinite(localUpdatedAt) &&
+						(!Number.isFinite(remoteUpdatedAt) ||
+							localUpdatedAt > remoteUpdatedAt)) ||
+					(localUpdatedAt === remoteUpdatedAt &&
+						local.components.length > remote.components.length);
+				if (localIsNewer) {
+					// Never replace a newer populated local definition with an older/empty
+					// remote copy left by an interrupted two-phase create.
+					try {
+						await this.pushWidgetRemote(appId, local);
+					} catch (pushError) {
+						console.warn(
+							"[WidgetState] Failed to repair stale remote widget:",
+							widgetId,
+							pushError,
+						);
+					}
+					return local;
+				}
+			}
 			if (!version) {
 				try {
 					await invoke("update_widget", { appId, widget: remote });
 				} catch (e) {
-					console.warn("[WidgetState] Failed to cache remote widget locally:", e);
+					console.warn(
+						"[WidgetState] Failed to cache remote widget locally:",
+						e,
+					);
 				}
 			}
 			return remote;
@@ -266,23 +306,26 @@ export class WidgetState implements IWidgetState {
 				await this.pushWidgetRemote(appId, widget);
 			} catch (e) {
 				console.warn("[WidgetState] Failed to push new widget to remote:", e);
+				throw e;
 			}
 		}
 		return widget;
 	}
 
 	async updateWidget(appId: string, widget: IWidget): Promise<void> {
-		await invoke("update_widget", { appId, widget });
+		const normalizedWidget = normalizeWidgetForPersistence(widget);
+		await invoke("update_widget", { appId, widget: normalizedWidget });
 
 		const isOffline = await this.backend.isOffline(appId);
 		if (!isOffline && this.hasRemote()) {
 			try {
-				await this.pushWidgetRemote(appId, widget);
+				await this.pushWidgetRemote(appId, normalizedWidget);
 			} catch (e) {
 				console.warn(
 					"[WidgetState] Failed to push widget update to remote:",
 					e,
 				);
+				throw e;
 			}
 		}
 	}

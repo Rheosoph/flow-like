@@ -9,4 +9,7 @@ permissions = [
     "allow-blob-configure",
     "allow-blob-inc-refs",
     "allow-blob-dec-refs",
+    "allow-sql-open",
+    "allow-sql-exec",
+    "allow-sql-close",
 ]

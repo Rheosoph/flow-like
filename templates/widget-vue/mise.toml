@@ -1,0 +1,19 @@
+[tools]
+bun = "latest"
+
+[tasks.setup]
+description = "Install dependencies"
+run = "bun install"
+
+[tasks.build]
+description = "Build the widget group into dist/"
+depends = ["setup"]
+run = "bun run build"
+
+[tasks.dev]
+description = "Vite dev server (SDK standalone mode without a host)"
+run = "bun run dev"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "rm -rf dist node_modules"

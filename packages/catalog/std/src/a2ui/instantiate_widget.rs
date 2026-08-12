@@ -1,9 +1,16 @@
+use super::micro_widget_utils::{
+    DYN_INPUT_PREFIX, add_contract_input_pins, clear_widget_ref_metadata,
+    expected_contract_input_pin_names, set_widget_ref_metadata,
+};
+use flow_like::a2ui::micro_widget::{
+    self, MICRO_WIDGET_COMPONENT_TYPE, ResolvedWidget, WidgetProvider,
+};
 use flow_like::a2ui::widget::{CustomizationType, ExposedPropType, Widget};
 use flow_like::app::App;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
-    node::{Node, NodeLogic, remove_pin},
+    node::{Node, NodeLogic, NodeScores, remove_pin},
     pin::PinOptions,
     variable::VariableType,
 };
@@ -58,22 +65,6 @@ fn infer_variable_type(value: &Value) -> VariableType {
         Value::Bool(_) => VariableType::Boolean,
         _ => VariableType::Generic,
     }
-}
-
-async fn load_app_widgets(board: &Board) -> Vec<Widget> {
-    let app_state = match &board.app_state {
-        Some(s) => s.clone(),
-        None => return Vec::new(),
-    };
-    let app_id = match board.board_dir.filename() {
-        Some(id) if !id.is_empty() => id.to_string(),
-        _ => return Vec::new(),
-    };
-    let app = match App::load(app_id, app_state).await {
-        Ok(a) => a,
-        Err(_) => return Vec::new(),
-    };
-    app.get_widgets().await.unwrap_or_default()
 }
 
 fn find_widget_by_selector<'a>(widgets: &'a [Widget], selector: &str) -> Option<&'a Widget> {
@@ -266,23 +257,160 @@ fn set_nested_property(value: &mut Value, path: &str, new_val: Value) {
     }
 }
 
+/// Build the frozen `microWidgetInstance` component for a package widget
+/// instance. The contract JSON is embedded verbatim from the manifest.
+fn build_micro_widget_component(
+    entry: &micro_widget::PackageWidgetRef,
+    instance_id: &str,
+    props: flow_like_types::json::Map<String, Value>,
+    action_bindings: flow_like_types::json::Map<String, Value>,
+) -> Value {
+    json!({
+        "type": MICRO_WIDGET_COMPONENT_TYPE,
+        "instanceId": instance_id,
+        "packageId": entry.package_id,
+        "widgetId": entry.widget_id,
+        "packageVersion": entry.package_version,
+        "bundleHash": entry.bundle_hash,
+        "contract": entry.contract,
+        "props": props,
+        "actionBindings": action_bindings,
+        "preview": false,
+    })
+}
+
+async fn instantiate_package_widget(
+    context: &mut ExecutionContext,
+    widget_selector: &str,
+    instance_id: &str,
+    app_id: &str,
+) -> flow_like_types::Result<()> {
+    let (package_id, widget_id) = micro_widget::decode_package_widget_ref(widget_selector)
+        .ok_or_else(|| {
+            flow_like_types::anyhow!("Invalid package widget reference '{}'", widget_selector)
+        })?;
+
+    let provider = WidgetProvider::load(app_id, context.app_state.clone()).await?;
+    let entry = provider
+        .resolve_package(package_id, widget_id)
+        .ok_or_else(|| {
+            flow_like_types::anyhow!(
+                "Package widget '{}' not found — is package '{}' added to the app?",
+                widget_selector,
+                package_id
+            )
+        })?;
+    let contract = entry.parsed_contract()?;
+
+    // One props entry per contract input from the dyn_in_* pins; unset
+    // optional inputs are omitted.
+    let mut props = flow_like_types::json::Map::new();
+    for key in contract.inputs.keys() {
+        let pin_name = format!("{DYN_INPUT_PREFIX}{key}");
+        if let Ok(val) = context.evaluate_pin::<Value>(&pin_name).await
+            && !val.is_null()
+        {
+            props.insert(key.clone(), val);
+        }
+    }
+
+    // Preserve the existing Instantiate Widget fn-ref contract for package
+    // widgets too. Each referenced Widget Action Event binds its action_id to
+    // the workflow node; an empty action_id remains a catch-all for currently
+    // unbound events declared by the package contract.
+    let mut action_bindings = flow_like_types::json::Map::new();
+    if let Ok(referenced_fns) = context.get_referenced_functions().await {
+        let mut catch_all_nodes = Vec::new();
+        for referenced_node in &referenced_fns {
+            let node_guard = referenced_node.node.lock().await;
+            let node_id = node_guard.id.clone();
+            let action_id = node_guard
+                .get_pin_by_name("action_id")
+                .and_then(|p| p.default_value.as_ref())
+                .and_then(|v| flow_like_types::json::from_slice::<String>(v).ok())
+                .unwrap_or_default();
+            drop(node_guard);
+
+            if action_id.is_empty() {
+                catch_all_nodes.push(node_id);
+            } else {
+                action_bindings.insert(
+                    action_id,
+                    json!({ "workflow": { "flowId": node_id, "inputMappings": {} } }),
+                );
+            }
+        }
+
+        for node_id in catch_all_nodes {
+            for event_id in contract.events.keys() {
+                if !action_bindings.contains_key(event_id) {
+                    action_bindings.insert(
+                        event_id.clone(),
+                        json!({ "workflow": { "flowId": &node_id, "inputMappings": {} } }),
+                    );
+                }
+            }
+        }
+    }
+
+    let component = build_micro_widget_component(entry, instance_id, props, action_bindings);
+
+    context
+        .upsert_element(
+            instance_id,
+            json!({
+                "type": "createComponent",
+                "component": component.clone()
+            }),
+        )
+        .await?;
+
+    let element_ref = json!({
+        "id": instance_id,
+        "instanceId": instance_id,
+        "widgetId": entry.widget_id,
+        "surfaceId": instance_id,
+        "component": component,
+    });
+
+    context
+        .get_pin_by_name("element_ref")
+        .await?
+        .set_value(element_ref)
+        .await;
+
+    context.activate_exec_pin("exec_out").await?;
+
+    Ok(())
+}
+
 #[async_trait]
 impl NodeLogic for InstantiateWidget {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "a2ui_instantiate_widget",
             "Instantiate Widget",
-            "Creates a new widget instance for dynamic insertion into containers. Select a widget from the dropdown to auto-generate input pins for its exposed props and customizations.",
+            "Creates a new widget instance for dynamic insertion into containers. The dropdown lists project widgets and widgets from packages added to the project; selecting one auto-generates typed input pins (exposed props and customizations for project widgets, contract inputs for package widgets).",
             "UI/Container",
         );
         node.add_icon("/flow/icons/a2ui.svg");
+        node.set_scores(
+            NodeScores::new()
+                .set_privacy(8)
+                .set_security(8)
+                .set_performance(8)
+                .set_governance(7)
+                .set_reliability(8)
+                .set_cost(9)
+                .build(),
+        );
 
         node.add_input_pin("exec_in", "▶", "Execution input", VariableType::Execution);
 
         node.add_input_pin(
             "widget_selector",
             "Widget",
-            "Select a widget from the project",
+            "Select a widget from the project or from packages added to the project",
             VariableType::String,
         );
 
@@ -304,19 +432,21 @@ impl NodeLogic for InstantiateWidget {
 
         node.set_can_reference_fns(true);
         node.set_long_running(true);
-        node.set_version(4);
+        node.set_version(5);
 
         node
     }
 
     async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
-        let widgets = load_app_widgets(board).await;
-
-        let widget_names: Vec<String> = widgets.iter().map(|w| w.name.clone()).collect();
+        let provider = WidgetProvider::from_board(board).await;
 
         if let Some(selector_pin) = node.get_pin_mut_by_name("widget_selector") {
-            selector_pin.set_options(PinOptions::new().set_valid_values(widget_names).build());
+            selector_pin.set_options(
+                PinOptions::new()
+                    .set_valid_values(provider.selector_values())
+                    .build(),
+            );
         }
 
         let selected = node
@@ -324,26 +454,73 @@ impl NodeLogic for InstantiateWidget {
             .and_then(|pin| pin.default_value.clone())
             .and_then(|bytes| flow_like_types::json::from_slice::<String>(&bytes).ok());
 
-        if let Some(ref selector) = selected {
-            if let Some(widget) = find_widget_by_selector(&widgets, selector) {
+        match selected.as_ref().and_then(|s| provider.resolve(s)) {
+            Some(ResolvedWidget::Declarative(widget)) => {
                 let expected = expected_dynamic_pin_names(widget);
                 remove_stale_dynamic_pins(node, &expected);
                 node.friendly_name = format!("Instantiate {}", widget.name);
                 add_dynamic_pins_for_widget(node, widget);
-            } else {
-                remove_stale_dynamic_pins(node, &BTreeSet::new());
+                if let Some(element_ref) = node.get_pin_mut_by_name("element_ref") {
+                    clear_widget_ref_metadata(element_ref);
+                }
             }
-        } else {
-            remove_stale_dynamic_pins(node, &BTreeSet::new());
+            Some(ResolvedWidget::Package(entry)) => match entry.parsed_contract() {
+                Ok(contract) => {
+                    let expected = expected_contract_input_pin_names(&contract);
+                    remove_stale_dynamic_pins(node, &expected);
+                    node.friendly_name = format!("Instantiate {}", entry.name);
+                    add_contract_input_pins(node, &contract, true);
+                    if let Some(element_ref) = node.get_pin_mut_by_name("element_ref") {
+                        set_widget_ref_metadata(
+                            element_ref,
+                            &entry.selector(),
+                            &entry.name,
+                            &entry.contract,
+                        );
+                    }
+                }
+                Err(e) => {
+                    remove_stale_dynamic_pins(node, &BTreeSet::new());
+                    if let Some(element_ref) = node.get_pin_mut_by_name("element_ref") {
+                        clear_widget_ref_metadata(element_ref);
+                    }
+                    node.error = Some(e.to_string());
+                }
+            },
+            None => {
+                if selected.is_none() {
+                    remove_stale_dynamic_pins(node, &BTreeSet::new());
+                    if let Some(element_ref) = node.get_pin_mut_by_name("element_ref") {
+                        clear_widget_ref_metadata(element_ref);
+                    }
+                } else {
+                    // A registry source can be briefly unavailable while a host
+                    // starts. Preserve the last good contract-shaped pins and
+                    // metadata instead of destructively collapsing the node.
+                    node.error = Some(
+                        "The selected widget contract is temporarily unavailable; refresh after the package registry is ready."
+                            .to_string(),
+                    );
+                }
+            }
         }
 
-        // Validate fn_ref connections (action event bindings)
+        // Validate fn_ref connections (action / contract-event bindings)
         if let Some(fn_refs) = &node.fn_refs {
-            // Collect valid action IDs from the selected widget
+            // Collect valid action IDs from the selected widget: declarative
+            // widget actions or package widget contract event names.
             let valid_actions: BTreeSet<String> = selected
                 .as_ref()
-                .and_then(|selector| find_widget_by_selector(&widgets, selector))
-                .map(|w| w.actions.iter().map(|a| a.id.clone()).collect())
+                .and_then(|selector| provider.resolve(selector))
+                .map(|resolved| match resolved {
+                    ResolvedWidget::Declarative(w) => {
+                        w.actions.iter().map(|a| a.id.clone()).collect()
+                    }
+                    ResolvedWidget::Package(entry) => entry
+                        .parsed_contract()
+                        .map(|c| c.events.keys().cloned().collect())
+                        .unwrap_or_default(),
+                })
                 .unwrap_or_default();
 
             let mut seen_actions = BTreeSet::new();
@@ -408,6 +585,11 @@ impl NodeLogic for InstantiateWidget {
             .as_ref()
             .map(|c| c.app_id.clone())
             .ok_or_else(|| flow_like_types::anyhow!("Execution cache not available"))?;
+
+        if micro_widget::decode_package_widget_ref(&widget_selector).is_some() {
+            return instantiate_package_widget(context, &widget_selector, &instance_id, &app_id)
+                .await;
+        }
 
         let app = App::load(app_id.clone(), context.app_state.clone()).await?;
         let widgets = app.get_widgets().await.unwrap_or_default();
@@ -596,5 +778,132 @@ impl NodeLogic for InstantiateWidget {
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like::a2ui::micro_widget::PackageWidgetRef;
+
+    #[test]
+    fn test_build_micro_widget_component_frozen_shape() {
+        let contract = json!({
+            "contractVersion": 1,
+            "id": "sales-chart",
+            "inputs": {
+                "title": { "type": "string", "default": "Sales" }
+            }
+        });
+        let entry = PackageWidgetRef {
+            package_id: "com.example.sales".to_string(),
+            package_version: "1.2.0".to_string(),
+            widget_id: "sales-chart".to_string(),
+            name: "Sales Chart".to_string(),
+            description: String::new(),
+            bundle_hash: Some("deadbeef".to_string()),
+            contract: contract.clone(),
+        };
+
+        let mut props = flow_like_types::json::Map::new();
+        props.insert("title".to_string(), json!("Q3 Sales"));
+
+        let component = build_micro_widget_component(
+            &entry,
+            "instance-1",
+            props,
+            flow_like_types::json::Map::new(),
+        );
+
+        assert_eq!(
+            component,
+            json!({
+                "type": "microWidgetInstance",
+                "instanceId": "instance-1",
+                "packageId": "com.example.sales",
+                "widgetId": "sales-chart",
+                "packageVersion": "1.2.0",
+                "bundleHash": "deadbeef",
+                "contract": contract,
+                "props": { "title": "Q3 Sales" },
+                "actionBindings": {},
+                "preview": false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_build_micro_widget_component_null_bundle_hash() {
+        let entry = PackageWidgetRef {
+            package_id: "com.example.sales".to_string(),
+            package_version: "1.0.0".to_string(),
+            widget_id: "kpi-card".to_string(),
+            name: "KPI Card".to_string(),
+            description: String::new(),
+            bundle_hash: None,
+            contract: json!({ "contractVersion": 1, "id": "kpi-card" }),
+        };
+
+        let component = build_micro_widget_component(
+            &entry,
+            "i-2",
+            flow_like_types::json::Map::new(),
+            flow_like_types::json::Map::new(),
+        );
+        assert_eq!(component.get("bundleHash"), Some(&Value::Null));
+        assert_eq!(component.get("props"), Some(&json!({})));
+        assert_eq!(component.get("actionBindings"), Some(&json!({})));
+        assert_eq!(component.get("preview"), Some(&json!(false)));
+    }
+
+    #[test]
+    fn test_build_micro_widget_component_preserves_action_bindings() {
+        let entry = PackageWidgetRef {
+            package_id: "com.example.sales".to_string(),
+            package_version: "1.0.0".to_string(),
+            widget_id: "sales-chart".to_string(),
+            name: "Sales Chart".to_string(),
+            description: String::new(),
+            bundle_hash: Some("deadbeef".to_string()),
+            contract: json!({
+                "contractVersion": 1,
+                "id": "sales-chart",
+                "events": {
+                    "pointSelected": { "description": "A point was selected" },
+                    "refreshRequested": { "description": "Refresh was requested" }
+                }
+            }),
+        };
+        let mut action_bindings = flow_like_types::json::Map::new();
+        action_bindings.insert(
+            "pointSelected".to_string(),
+            json!({
+                "workflow": {
+                    "flowId": "handle-point-selected",
+                    "inputMappings": {}
+                }
+            }),
+        );
+        action_bindings.insert(
+            "refreshRequested".to_string(),
+            json!({
+                "workflow": {
+                    "flowId": "handle-refresh",
+                    "inputMappings": {}
+                }
+            }),
+        );
+
+        let component = build_micro_widget_component(
+            &entry,
+            "instance-with-bindings",
+            flow_like_types::json::Map::new(),
+            action_bindings.clone(),
+        );
+
+        assert_eq!(
+            component.get("actionBindings"),
+            Some(&Value::Object(action_bindings))
+        );
     }
 }

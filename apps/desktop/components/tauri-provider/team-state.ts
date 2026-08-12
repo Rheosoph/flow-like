@@ -34,6 +34,7 @@ export class TeamState implements ITeamState {
 		appId: string,
 		name: string,
 		maxUses: number,
+		expiresInHours?: number,
 	): Promise<void> {
 		if (!this.backend.profile || !this.backend.auth) {
 			throw new Error("Profile or auth context not available");
@@ -47,6 +48,7 @@ export class TeamState implements ITeamState {
 				body: JSON.stringify({
 					name: name,
 					max_uses: maxUses,
+					expires_in_hours: expiresInHours ?? null,
 				}),
 			},
 			this.backend.auth,
@@ -207,6 +209,45 @@ export class TeamState implements ITeamState {
 			url,
 			{
 				method: "GET",
+			},
+			this.backend.auth,
+		);
+	}
+	async getAppInvites(
+		appId: string,
+		offset?: number,
+		limit?: number,
+	): Promise<IInvite[]> {
+		if (!this.backend.profile || !this.backend.auth) {
+			return [];
+		}
+
+		let url = `apps/${appId}/team/invites`;
+		const effectiveOffset = offset ?? 0;
+		const effectiveLimit = limit ?? 20;
+		if (effectiveLimit) {
+			url += `?offset=${effectiveOffset}&limit=${effectiveLimit}`;
+		}
+
+		return await fetcher(
+			this.backend.profile,
+			url,
+			{
+				method: "GET",
+			},
+			this.backend.auth,
+		);
+	}
+	async revokeAppInvite(appId: string, inviteId: string): Promise<void> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+
+		await fetcher(
+			this.backend.profile,
+			`apps/${appId}/team/invites/${inviteId}`,
+			{
+				method: "DELETE",
 			},
 			this.backend.auth,
 		);

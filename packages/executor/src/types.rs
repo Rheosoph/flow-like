@@ -1,5 +1,5 @@
 use flow_like::credentials::SharedCredentials;
-use flow_like::flow::execution::{ExecutionMode, UserExecutionContext};
+use flow_like::flow::execution::{ExecutionMode, RunStatus, UserExecutionContext};
 use flow_like::flow::variable::Variable;
 use flow_like_types::OAuthTokenInput;
 use serde::{Deserialize, Serialize};
@@ -86,6 +86,19 @@ pub enum ExecutionStatus {
     Cancelled,
 }
 
+impl ExecutionStatus {
+    /// Converts the core run status after `InternalRun::execute` has finished.
+    /// A still-running status at that boundary is invalid and must fail closed.
+    pub fn from_final_run_status(status: &RunStatus) -> Self {
+        match status {
+            RunStatus::Success => Self::Completed,
+            RunStatus::Failed => Self::Failed,
+            RunStatus::Stopped => Self::Cancelled,
+            RunStatus::Running => Self::Failed,
+        }
+    }
+}
+
 /// Event emitted during execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionEvent {
@@ -154,5 +167,30 @@ impl TryFrom<DispatchPayload> for ExecutionRequest {
             profile: p.profile,
             wasm_packages: p.wasm_packages,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn final_core_run_status_is_not_masked_as_completed() {
+        assert_eq!(
+            ExecutionStatus::from_final_run_status(&RunStatus::Success),
+            ExecutionStatus::Completed
+        );
+        assert_eq!(
+            ExecutionStatus::from_final_run_status(&RunStatus::Failed),
+            ExecutionStatus::Failed
+        );
+        assert_eq!(
+            ExecutionStatus::from_final_run_status(&RunStatus::Stopped),
+            ExecutionStatus::Cancelled
+        );
+        assert_eq!(
+            ExecutionStatus::from_final_run_status(&RunStatus::Running),
+            ExecutionStatus::Failed
+        );
     }
 }

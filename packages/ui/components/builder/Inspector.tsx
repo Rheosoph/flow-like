@@ -1,33 +1,67 @@
 "use client";
 
-import { ChevronDown, Plus, Trash2 } from "lucide-react";
+import {
+	type ContractInput,
+	type WidgetContract,
+	validateInputValue,
+} from "@flow-like/widget-sdk";
+import {
+	ChevronDown,
+	ChevronUp,
+	Package,
+	Plus,
+	Trash2,
+	Zap,
+} from "lucide-react";
 import {
 	type CSSProperties,
 	type ReactNode,
 	useCallback,
+	useEffect,
+	useId,
 	useMemo,
 	useState,
 } from "react";
+import { useInvoke } from "../../hooks";
 import { cn } from "../../lib";
+import {
+	createContractInputValue,
+	updateWidgetContractProps,
+} from "../../lib/widget-contract-form";
+import { homogeneousArrayItemSchema } from "../../lib/widget-schema-form";
+import { useBackend } from "../../state/backend-state";
+import {
+	type ComponentEventDefinition,
+	getComponentEventDefinitions,
+} from "../a2ui/component-event-manifest";
 import {
 	NIVO_CHART_DEFAULTS,
 	NIVO_SAMPLE_DATA,
 } from "../a2ui/display/nivo-data";
+import { WILDCARD_EVENT } from "../a2ui/event-handlers";
 import { getModel3DView } from "../a2ui/game/model3d-view-registry";
 import {
 	inferFileName,
 	inferFileType,
 	inferMimeTypeFromSource,
 } from "../a2ui/media-source";
+import { normalizeStyleUpdate } from "../a2ui/style-updates";
 import type {
+	A2UIComponent,
 	BoundValue,
+	BreakpointStyle,
 	ChartAxis,
 	ChartSeries,
 	ChartType,
+	MicroWidgetInstanceComponent,
 	Overflow,
 	Position,
+	ResponsiveOverrides,
 	SelectOption,
+	Shadow,
+	Spacing,
 	Style,
+	StyleValue,
 	SurfaceComponent,
 	TableColumn,
 } from "../a2ui/types";
@@ -52,6 +86,7 @@ import { Slider } from "../ui/slider";
 import { Switch } from "../ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Textarea } from "../ui/textarea";
+import { WidgetSchemaListEditor } from "../widget-contract/WidgetSchemaListEditor";
 import { AssetPicker, type AssetPickerProps } from "./AssetPicker";
 import { useBuilder } from "./BuilderContext";
 import { getDefaultProps } from "./componentDefaults";
@@ -101,6 +136,74 @@ function getLiteralAssetPath(value: unknown): string | undefined {
 		return String(value.literalString);
 	}
 	return undefined;
+}
+
+function getStyleValue(value: StyleValue | undefined): string {
+	if (!value) return "";
+	return typeof value === "string" ? value : value.value;
+}
+
+function getSpacingValue(spacing: Spacing | undefined): string {
+	if (!spacing) return "";
+	if ("value" in spacing) return spacing.value ?? "";
+	if (!spacing.top && !spacing.right && !spacing.bottom && !spacing.left) {
+		return "";
+	}
+	return [spacing.top, spacing.right, spacing.bottom, spacing.left]
+		.map((value) => value || "0")
+		.join(" ");
+}
+
+function getSpacingEdges(spacing: Spacing | undefined): {
+	top?: string;
+	right?: string;
+	bottom?: string;
+	left?: string;
+} {
+	if (!spacing) return {};
+	if (!("value" in spacing)) return spacing;
+	const parts = (spacing.value ?? "").trim().split(/\s+/).filter(Boolean);
+	if (parts.length === 0) return {};
+	const [top, right = top, bottom = top, left = right] = parts;
+	return { top, right, bottom, left };
+}
+
+function withSpacingSide(
+	spacing: Spacing | undefined,
+	side: "top" | "right" | "bottom" | "left",
+	value: string,
+): Spacing {
+	return { ...getSpacingEdges(spacing), [side]: value || undefined };
+}
+
+function spacingFromShorthand(value: string): Spacing | undefined {
+	if (!value.trim()) return undefined;
+	return getSpacingEdges({ value });
+}
+
+function getPositionType(
+	position: Position | undefined,
+): NonNullable<Position["type"]> {
+	return position?.type ?? position?.positionType ?? "relative";
+}
+
+function withPositionType(
+	position: Position | undefined,
+	positionType: NonNullable<Position["type"]>,
+): Position {
+	return {
+		top: position?.top,
+		right: position?.right,
+		bottom: position?.bottom,
+		left: position?.left,
+		type: positionType,
+	};
+}
+
+function withoutLegacyBoxShadow(shadow: Shadow | undefined): Shadow {
+	if (!shadow) return {};
+	const { boxShadows: _boxShadows, ...canonicalShadow } = shadow;
+	return canonicalShadow;
 }
 
 export interface InspectorProps {
@@ -370,6 +473,12 @@ function PropertyEditor({ component, onUpdate }: PropertyEditorProps) {
 		);
 	}
 
+	// Package micro widgets: code widgets are not editable as a component tree.
+	// Contract events are configured in the Actions tab.
+	if (componentType === "microWidgetInstance") {
+		return <MicroWidgetEditor component={component} onUpdate={onUpdate} />;
+	}
+
 	// Render different editors based on component type
 	return (
 		<div className="min-w-0 max-w-full space-y-4">
@@ -407,6 +516,439 @@ function PropertyEditor({ component, onUpdate }: PropertyEditorProps) {
 					/>
 				);
 			})}
+		</div>
+	);
+}
+
+interface JsonContractFieldProps {
+	id: string;
+	input: ContractInput;
+	value: unknown;
+	disabled: boolean;
+	labelledBy: string;
+	describedBy?: string;
+	onCommit: (value: unknown) => void;
+}
+
+// Commit-on-blur JSON editor so re-serialization never fights the caret.
+function JsonContractField({
+	id,
+	input,
+	value,
+	disabled,
+	labelledBy,
+	describedBy,
+	onCommit,
+}: JsonContractFieldProps) {
+	const serialized = useMemo(
+		() => JSON.stringify(value ?? null, null, 2),
+		[value],
+	);
+	const [text, setText] = useState(serialized);
+	const [errors, setErrors] = useState<string[]>([]);
+	const errorId = `${id}-draft-error`;
+
+	useEffect(() => {
+		setText(serialized);
+		setErrors([]);
+	}, [serialized]);
+
+	const commit = useCallback(() => {
+		try {
+			const parsed = JSON.parse(text);
+			const validation = validateInputValue(input, parsed);
+			if (!validation.valid) {
+				setErrors(validation.errors);
+				return;
+			}
+			setErrors([]);
+			if (JSON.stringify(parsed) !== JSON.stringify(value ?? null)) {
+				onCommit(parsed);
+			}
+		} catch (error) {
+			setErrors([
+				`Invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+			]);
+		}
+	}, [input, text, value, onCommit]);
+
+	return (
+		<div className="space-y-1">
+			<Textarea
+				id={id}
+				value={text}
+				onChange={(e) => setText(e.target.value)}
+				onBlur={commit}
+				disabled={disabled}
+				rows={4}
+				spellCheck={false}
+				aria-labelledby={labelledBy}
+				aria-invalid={errors.length > 0}
+				aria-describedby={
+					[describedBy, errors.length > 0 ? errorId : undefined]
+						.filter(Boolean)
+						.join(" ") || undefined
+				}
+				className={cn(
+					"font-mono text-xs",
+					errors.length > 0 &&
+						"border-destructive focus-visible:ring-destructive",
+				)}
+				style={FIXED_FIELD_SIZING_STYLE}
+			/>
+			{errors.length > 0 && (
+				<div id={errorId} className="space-y-0.5" role="alert">
+					{[...new Set(errors)].map((error) => (
+						<p key={error} className="text-[10px] text-destructive">
+							{error.replace(/^\$(?:\.|:\s*)?/, "")}
+						</p>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
+interface ContractInputFieldProps {
+	name: string;
+	input: ContractInput;
+	value: unknown;
+	present: boolean;
+	onChange: (value: unknown) => void;
+}
+
+function enumOptionValue(choice: string): string {
+	return JSON.stringify(choice);
+}
+
+function ContractInputField({
+	name,
+	input,
+	value,
+	present,
+	onChange,
+}: ContractInputFieldProps) {
+	const id = useId();
+	const labelId = `${id}-label`;
+	const descriptionId = input.description ? `${id}-description` : undefined;
+	const validation = validateInputValue(input, present ? value : undefined);
+	const [draftErrors, setDraftErrors] = useState<string[]>([]);
+	const controlValue = present ? value : createContractInputValue(input);
+	const listItemSchema =
+		input.type === "json" ? homogeneousArrayItemSchema(input.schema) : null;
+	const isList = listItemSchema !== null && Array.isArray(controlValue);
+	const disabled = input.optional === true && !present;
+	const errorId = `${id}-error`;
+	const errors = [...new Set([...validation.errors, ...draftErrors])];
+	const describedBy = [descriptionId, errors.length > 0 ? errorId : undefined]
+		.filter(Boolean)
+		.join(" ");
+
+	const renderControl = () => {
+		switch (input.type) {
+			case "boolean":
+				return (
+					<Switch
+						id={id}
+						checked={controlValue === true}
+						onCheckedChange={(checked) => onChange(checked)}
+						disabled={disabled}
+						aria-invalid={errors.length > 0}
+						aria-describedby={describedBy || undefined}
+					/>
+				);
+			case "number":
+			case "integer":
+				return (
+					<Input
+						id={id}
+						type="number"
+						className="h-8 text-sm"
+						value={typeof controlValue === "number" ? controlValue : ""}
+						min={
+							input.min === undefined
+								? undefined
+								: input.type === "integer"
+									? Math.ceil(input.min)
+									: input.min
+						}
+						max={
+							input.max === undefined
+								? undefined
+								: input.type === "integer"
+									? Math.floor(input.max)
+									: input.max
+						}
+						step={input.type === "integer" ? 1 : "any"}
+						disabled={disabled}
+						aria-invalid={errors.length > 0}
+						aria-describedby={describedBy || undefined}
+						onChange={(e) => {
+							if (e.target.value === "") {
+								setDraftErrors(["$: value is required"]);
+								return;
+							}
+							const parsed = Number(e.target.value);
+							const nextValidation = validateInputValue(input, parsed);
+							setDraftErrors(nextValidation.errors);
+							if (nextValidation.valid) onChange(parsed);
+						}}
+					/>
+				);
+			case "enum":
+				return (
+					<Select
+						value={
+							typeof controlValue === "string"
+								? enumOptionValue(controlValue)
+								: undefined
+						}
+						onValueChange={(encoded) => onChange(JSON.parse(encoded))}
+						disabled={disabled}
+					>
+						<SelectTrigger
+							id={id}
+							className="h-8 text-sm"
+							aria-invalid={errors.length > 0}
+							aria-describedby={describedBy || undefined}
+						>
+							<SelectValue placeholder="Select…" />
+						</SelectTrigger>
+						<SelectContent>
+							{[...new Set(input.choices ?? [])].map((choice) => (
+								<SelectItem
+									key={enumOptionValue(choice)}
+									value={enumOptionValue(choice)}
+								>
+									{choice || "Empty string"}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+				);
+			case "json": {
+				if (input.schema && isList) {
+					return (
+						<WidgetSchemaListEditor
+							fieldName={name}
+							id={id}
+							labelledBy={labelId}
+							schema={input.schema}
+							value={controlValue}
+							disabled={disabled}
+							describedBy={describedBy || undefined}
+							onChange={(nextValue) => {
+								const nextValidation = validateInputValue(input, nextValue);
+								setDraftErrors(nextValidation.errors);
+								const onlyNeedsMoreItems =
+									!nextValidation.valid &&
+									nextValidation.errors.length > 0 &&
+									nextValidation.errors.every((error) =>
+										error.includes("array has fewer than minItems"),
+									);
+								if (nextValidation.valid || onlyNeedsMoreItems)
+									onChange(nextValue);
+							}}
+						/>
+					);
+				}
+				return (
+					<JsonContractField
+						id={id}
+						input={input}
+						value={controlValue}
+						disabled={disabled}
+						labelledBy={labelId}
+						describedBy={describedBy || undefined}
+						onCommit={onChange}
+					/>
+				);
+			}
+			default:
+				return (
+					<Input
+						id={id}
+						className="h-8 text-sm"
+						value={typeof controlValue === "string" ? controlValue : ""}
+						disabled={disabled}
+						aria-invalid={errors.length > 0}
+						aria-describedby={describedBy || undefined}
+						onChange={(e) => onChange(e.target.value)}
+					/>
+				);
+		}
+	};
+
+	return (
+		<div className={INSPECTOR_FIELD_CLASS}>
+			<div className="flex items-center justify-between gap-2">
+				{isList ? (
+					<span id={labelId} className="text-xs font-medium">
+						{name}
+					</span>
+				) : (
+					<Label id={labelId} htmlFor={id} className="text-xs font-medium">
+						{name}
+					</Label>
+				)}
+				{input.optional && (
+					<span className="text-[10px] text-muted-foreground">optional</span>
+				)}
+			</div>
+			{input.description && (
+				<p
+					id={descriptionId}
+					className="text-[10px] leading-4 text-muted-foreground"
+				>
+					{input.description}
+				</p>
+			)}
+			{input.optional && (
+				<div className="flex items-center gap-2">
+					<Switch
+						id={`${id}-included`}
+						checked={present}
+						onCheckedChange={(included) =>
+							onChange(included ? createContractInputValue(input) : undefined)
+						}
+					/>
+					<Label
+						htmlFor={`${id}-included`}
+						className="text-[10px] font-normal text-muted-foreground"
+					>
+						Include value
+					</Label>
+				</div>
+			)}
+			{!input.optional && !present && !isList ? (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					onClick={() => onChange(controlValue)}
+				>
+					Set value
+				</Button>
+			) : (
+				renderControl()
+			)}
+			{errors.length > 0 && (
+				<div id={errorId} className="space-y-0.5" role="alert">
+					{errors.map((error) => (
+						<p key={error} className="text-[10px] text-destructive">
+							{error.replace(/^\$(?:\.|:\s*)?/, "")}
+						</p>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
+interface MicroWidgetEditorProps {
+	component: SurfaceComponent;
+	onUpdate: (updates: Partial<SurfaceComponent>) => void;
+}
+
+/**
+ * Inspector for package micro widgets: provenance header, contract-typed
+ * input controls writing static values into `component.props`, plus the
+ * contract's read-only queries. Contract events live in the Actions tab.
+ */
+function MicroWidgetEditor({ component, onUpdate }: MicroWidgetEditorProps) {
+	const micro = component.component as unknown as MicroWidgetInstanceComponent;
+	const contract = (micro.contract ?? null) as WidgetContract | null;
+	const props = micro.props ?? {};
+	const inputs = useMemo(
+		() => Object.entries(contract?.inputs ?? {}),
+		[contract],
+	);
+	const queries = useMemo(
+		() => Object.entries(contract?.queries ?? {}),
+		[contract],
+	);
+
+	const setProp = useCallback(
+		(key: string, value: unknown) => {
+			const current =
+				(component.component as unknown as MicroWidgetInstanceComponent)
+					.props ?? {};
+			onUpdate({
+				component: {
+					...component.component,
+					props: updateWidgetContractProps(current, key, value),
+				} as SurfaceComponent["component"],
+			});
+		},
+		[component.component, onUpdate],
+	);
+
+	return (
+		<div className="min-w-0 max-w-full space-y-4">
+			<div className="space-y-1 rounded-md border bg-muted/40 p-3 dark:border-white/15">
+				<div className="flex items-center gap-1.5 text-xs font-medium">
+					<Package className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+					<span className="truncate" title={micro.packageId}>
+						{micro.packageId}
+						{micro.packageVersion ? `@${micro.packageVersion}` : ""}
+					</span>
+				</div>
+				<p className="text-[10px] text-muted-foreground">
+					Widget “{micro.widgetId}” — rendered in a sandbox; its internals are
+					not editable in the builder.
+				</p>
+			</div>
+
+			<div className={INSPECTOR_FIELD_CLASS}>
+				<Label className="text-xs">Component ID</Label>
+				<Input
+					value={component.id}
+					onChange={(e) => onUpdate({ id: e.target.value })}
+					className="h-8 text-sm"
+				/>
+			</div>
+
+			<div className="space-y-3">
+				<Label className="text-xs font-semibold">Inputs</Label>
+				{inputs.length === 0 ? (
+					<p className="text-xs text-muted-foreground">
+						This widget declares no inputs.
+					</p>
+				) : (
+					inputs.map(([name, input]) => (
+						<ContractInputField
+							key={`${contract?.id ?? "widget"}-${name}`}
+							name={name}
+							input={input}
+							value={props[name]}
+							present={Object.hasOwn(props, name)}
+							onChange={(value) => setProp(name, value)}
+						/>
+					))
+				)}
+			</div>
+
+			{queries.length > 0 && (
+				<div className="space-y-2">
+					<Label className="text-xs font-semibold">Queries</Label>
+					<p className="text-[10px] text-muted-foreground">
+						Callable from flows by connecting Get Element to Query Widget.
+					</p>
+					{queries.map(([name, spec]) => (
+						<div
+							key={name}
+							className="rounded-md border px-2.5 py-1.5 dark:border-white/10"
+						>
+							<span className="text-xs font-medium">{name}</span>
+							{spec.description && (
+								<p className="mt-0.5 text-[10px] text-muted-foreground">
+									{spec.description}
+								</p>
+							)}
+						</div>
+					))}
+				</div>
+			)}
 		</div>
 	);
 }
@@ -2850,6 +3392,51 @@ interface PropertyFieldProps {
 	enumOptions?: string[];
 }
 
+/** Picks one of the project's ontologies by name instead of pasting its id. */
+function OntologyIdField({
+	appId,
+	value,
+	onChange,
+}: {
+	appId: string;
+	value: string;
+	onChange: (value: unknown) => void;
+}) {
+	const backend = useBackend();
+	const ontologies = useInvoke(
+		backend.graphState.listOverlays,
+		backend.graphState,
+		[appId],
+		Boolean(appId),
+	);
+
+	return (
+		<div className={INSPECTOR_FIELD_CLASS}>
+			<Label className="text-xs">Ontology</Label>
+			<Select
+				value={value || undefined}
+				onValueChange={(next) => onChange({ literalString: next })}
+			>
+				<SelectTrigger className="h-8 text-sm">
+					<SelectValue placeholder="Select an ontology..." />
+				</SelectTrigger>
+				<SelectContent>
+					{(ontologies.data ?? []).map((ontology) => (
+						<SelectItem key={ontology.id} value={ontology.id}>
+							{ontology.name}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
+			{ontologies.data?.length === 0 && (
+				<p className="text-[11px] text-muted-foreground">
+					This project has no ontologies yet — create one in Data Studio.
+				</p>
+			)}
+		</div>
+	);
+}
+
 function PropertyField({
 	name,
 	value,
@@ -2861,6 +3448,34 @@ function PropertyField({
 }: PropertyFieldProps) {
 	const { actionContext } = useBuilder();
 	const appId = actionContext?.appId;
+
+	// The ontology element is a link to existing project data — pick it by name.
+	// A path-bound id keeps the generic editor so bindings stay editable.
+	const literalOntologyId =
+		value === undefined
+			? ""
+			: typeof value === "object" &&
+					value !== null &&
+					"literalString" in value &&
+					typeof (value as { literalString: unknown }).literalString ===
+						"string"
+				? (value as { literalString: string }).literalString
+				: null;
+
+	if (
+		componentType === "ontologyGraph" &&
+		name === "ontologyId" &&
+		appId &&
+		literalOntologyId !== null
+	) {
+		return (
+			<OntologyIdField
+				appId={appId}
+				value={literalOntologyId}
+				onChange={onChange}
+			/>
+		);
+	}
 
 	// Skip rendering complex objects for now
 	if (typeof value === "object" && value !== null) {
@@ -3417,18 +4032,76 @@ interface StyleEditorProps {
 
 function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 	const style = component.style || {};
+	const [responsiveBreakpoint, setResponsiveBreakpoint] =
+		useState<keyof ResponsiveOverrides>("md");
 
 	const updateStyle = useCallback(
 		<K extends keyof Style>(key: K, value: Style[K]) => {
 			onUpdate({
-				style: {
+				style: normalizeStyleUpdate({
 					...style,
 					[key]: value,
-				},
+				}),
 			});
 		},
 		[style, onUpdate],
 	);
+
+	const updateBreakpointStyle = useCallback(
+		<K extends keyof BreakpointStyle>(key: K, value: BreakpointStyle[K]) => {
+			const responsive = style.responsiveOverrides ?? style.responsive ?? {};
+			updateStyle("responsiveOverrides", {
+				...responsive,
+				[responsiveBreakpoint]: {
+					...responsive[responsiveBreakpoint],
+					[key]: value,
+				},
+			});
+		},
+		[
+			responsiveBreakpoint,
+			style.responsive,
+			style.responsiveOverrides,
+			updateStyle,
+		],
+	);
+
+	const breakpointStyle =
+		(style.responsiveOverrides ?? style.responsive)?.[responsiveBreakpoint] ??
+		{};
+	const backgroundMode = !style.background
+		? "none"
+		: "color" in style.background
+			? "color"
+			: "gradient" in style.background
+				? "gradient"
+				: "image" in style.background
+					? "image"
+					: "blur";
+	const gradient =
+		style.background && "gradient" in style.background
+			? style.background.gradient
+			: undefined;
+	const gradientType = gradient?.type ?? gradient?.gradientType ?? "linear";
+	const gradientStops = gradient?.stops
+		? gradient.stops.map((stop) => ({
+				...stop,
+				position:
+					gradient.type === undefined &&
+					stop.position !== undefined &&
+					stop.position >= 0 &&
+					stop.position <= 1
+						? stop.position * 100
+						: stop.position,
+			}))
+		: [
+				{ color: "#000000", position: 0 },
+				{ color: "#ffffff", position: 100 },
+			];
+	const backgroundImage =
+		style.background && "image" in style.background
+			? style.background.image
+			: undefined;
 
 	return (
 		<div className="space-y-4">
@@ -3439,110 +4112,37 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="pt-2 space-y-3">
-					<div className="space-y-1">
-						<Label className="text-xs">Margin</Label>
-						<div className="grid grid-cols-4 gap-1">
-							<Input
-								value={style.margin?.top || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("margin", {
-										...style.margin,
-										top: e.target.value,
-									})
-								}
-								placeholder="T"
-								className="h-7 text-xs text-center"
-							/>
-							<Input
-								value={style.margin?.right || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("margin", {
-										...style.margin,
-										right: e.target.value,
-									})
-								}
-								placeholder="R"
-								className="h-7 text-xs text-center"
-							/>
-							<Input
-								value={style.margin?.bottom || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("margin", {
-										...style.margin,
-										bottom: e.target.value,
-									})
-								}
-								placeholder="B"
-								className="h-7 text-xs text-center"
-							/>
-							<Input
-								value={style.margin?.left || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("margin", {
-										...style.margin,
-										left: e.target.value,
-									})
-								}
-								placeholder="L"
-								className="h-7 text-xs text-center"
-							/>
-						</div>
-						<p className="text-[10px] text-muted-foreground">
-							Top, Right, Bottom, Left (e.g., 8px, 1rem, auto)
-						</p>
-					</div>
-					<div className="space-y-1">
-						<Label className="text-xs">Padding</Label>
-						<div className="grid grid-cols-4 gap-1">
-							<Input
-								value={style.padding?.top || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("padding", {
-										...style.padding,
-										top: e.target.value,
-									})
-								}
-								placeholder="T"
-								className="h-7 text-xs text-center"
-							/>
-							<Input
-								value={style.padding?.right || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("padding", {
-										...style.padding,
-										right: e.target.value,
-									})
-								}
-								placeholder="R"
-								className="h-7 text-xs text-center"
-							/>
-							<Input
-								value={style.padding?.bottom || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("padding", {
-										...style.padding,
-										bottom: e.target.value,
-									})
-								}
-								placeholder="B"
-								className="h-7 text-xs text-center"
-							/>
-							<Input
-								value={style.padding?.left || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("padding", {
-										...style.padding,
-										left: e.target.value,
-									})
-								}
-								placeholder="L"
-								className="h-7 text-xs text-center"
-							/>
-						</div>
-						<p className="text-[10px] text-muted-foreground">
-							Top, Right, Bottom, Left (e.g., 8px, 1rem)
-						</p>
-					</div>
+					{(["margin", "padding"] as const).map((property) => {
+						const edges = getSpacingEdges(style[property]);
+						return (
+							<div className="space-y-1" key={property}>
+								<Label className="text-xs capitalize">{property}</Label>
+								<div className="grid grid-cols-4 gap-1">
+									{(["top", "right", "bottom", "left"] as const).map((side) => (
+										<Input
+											key={side}
+											value={edges[side] ?? ""}
+											onChange={(e) =>
+												updateStyle(
+													property,
+													withSpacingSide(
+														style[property],
+														side,
+														e.target.value,
+													),
+												)
+											}
+											placeholder={side[0]?.toUpperCase()}
+											className="h-7 text-xs text-center"
+										/>
+									))}
+								</div>
+								<p className="text-[10px] text-muted-foreground">
+									Top, Right, Bottom, Left
+								</p>
+							</div>
+						);
+					})}
 				</CollapsibleContent>
 			</Collapsible>
 
@@ -3557,7 +4157,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						<div className="space-y-1">
 							<Label className="text-xs">Width</Label>
 							<Input
-								value={style.width || ""}
+								value={getStyleValue(style.width)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 									updateStyle("width", e.target.value || undefined)
 								}
@@ -3568,7 +4168,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						<div className="space-y-1">
 							<Label className="text-xs">Height</Label>
 							<Input
-								value={style.height || ""}
+								value={getStyleValue(style.height)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 									updateStyle("height", e.target.value || undefined)
 								}
@@ -3579,7 +4179,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						<div className="space-y-1">
 							<Label className="text-xs">Min Width</Label>
 							<Input
-								value={style.minWidth || ""}
+								value={getStyleValue(style.minWidth)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 									updateStyle("minWidth", e.target.value || undefined)
 								}
@@ -3590,7 +4190,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						<div className="space-y-1">
 							<Label className="text-xs">Min Height</Label>
 							<Input
-								value={style.minHeight || ""}
+								value={getStyleValue(style.minHeight)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 									updateStyle("minHeight", e.target.value || undefined)
 								}
@@ -3601,7 +4201,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						<div className="space-y-1">
 							<Label className="text-xs">Max Width</Label>
 							<Input
-								value={style.maxWidth || ""}
+								value={getStyleValue(style.maxWidth)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 									updateStyle("maxWidth", e.target.value || undefined)
 								}
@@ -3612,7 +4212,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						<div className="space-y-1">
 							<Label className="text-xs">Max Height</Label>
 							<Input
-								value={style.maxHeight || ""}
+								value={getStyleValue(style.maxHeight)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 									updateStyle("maxHeight", e.target.value || undefined)
 								}
@@ -3653,12 +4253,15 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 					<div className="space-y-1">
 						<Label className="text-xs">Type</Label>
 						<Select
-							value={style.position?.type || "relative"}
+							value={getPositionType(style.position)}
 							onValueChange={(v) =>
-								updateStyle("position", {
-									...style.position,
-									type: v as Position["type"],
-								})
+								updateStyle(
+									"position",
+									withPositionType(
+										style.position,
+										v as NonNullable<Position["type"]>,
+									),
+								)
 							}
 						>
 							<SelectTrigger className="h-8 text-sm">
@@ -3672,7 +4275,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							</SelectContent>
 						</Select>
 					</div>
-					{style.position?.type && style.position.type !== "relative" && (
+					{style.position && getPositionType(style.position) !== "relative" && (
 						<div className="grid grid-cols-2 gap-2">
 							<div className="space-y-1">
 								<Label className="text-xs">Top</Label>
@@ -3680,7 +4283,8 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 									value={style.position?.top || ""}
 									onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 										updateStyle("position", {
-											...style.position!,
+											...(style.position ?? {}),
+											type: getPositionType(style.position),
 											top: e.target.value,
 										})
 									}
@@ -3694,7 +4298,8 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 									value={style.position?.right || ""}
 									onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 										updateStyle("position", {
-											...style.position!,
+											...(style.position ?? {}),
+											type: getPositionType(style.position),
 											right: e.target.value,
 										})
 									}
@@ -3708,7 +4313,8 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 									value={style.position?.bottom || ""}
 									onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 										updateStyle("position", {
-											...style.position!,
+											...(style.position ?? {}),
+											type: getPositionType(style.position),
 											bottom: e.target.value,
 										})
 									}
@@ -3722,7 +4328,8 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 									value={style.position?.left || ""}
 									onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 										updateStyle("position", {
-											...style.position!,
+											...(style.position ?? {}),
+											type: getPositionType(style.position),
 											left: e.target.value,
 										})
 									}
@@ -3743,75 +4350,338 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 				</CollapsibleTrigger>
 				<CollapsibleContent className="pt-2 space-y-3">
 					<div className="space-y-1">
-						<Label className="text-xs">Color</Label>
-						<div className="flex gap-2">
-							<Input
-								type="color"
-								value={
-									style.background && "color" in style.background
-										? style.background.color
-										: "#ffffff"
+						<Label className="text-xs">Type</Label>
+						<Select
+							value={backgroundMode}
+							onValueChange={(value) => {
+								switch (value) {
+									case "color":
+										updateStyle("background", { color: "#ffffff" });
+										break;
+									case "gradient":
+										updateStyle("background", {
+											gradient: {
+												type: "linear",
+												angle: 180,
+												stops: gradientStops,
+											},
+										});
+										break;
+									case "image":
+										updateStyle("background", {
+											image: {
+												url: { literalString: "" },
+												size: "cover",
+												position: "center",
+												repeat: "no-repeat",
+											},
+										});
+										break;
+									case "blur":
+										updateStyle("background", { blur: "4px" });
+										break;
+									default:
+										updateStyle("background", undefined);
 								}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("background", { color: e.target.value })
-								}
-								className="h-8 w-12 p-1"
-							/>
+							}}
+						>
+							<SelectTrigger className="h-8 text-sm">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="none">None</SelectItem>
+								<SelectItem value="color">Color</SelectItem>
+								<SelectItem value="gradient">Gradient</SelectItem>
+								<SelectItem value="image">Image</SelectItem>
+								<SelectItem value="blur">Backdrop blur</SelectItem>
+							</SelectContent>
+						</Select>
+					</div>
+
+					{backgroundMode === "color" && (
+						<div className="space-y-1">
+							<Label className="text-xs">Color</Label>
 							<Input
 								value={
 									style.background && "color" in style.background
 										? style.background.color
 										: ""
 								}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+								onChange={(e) =>
 									updateStyle("background", { color: e.target.value })
 								}
 								placeholder="#ffffff or transparent"
-								className="h-8 text-sm flex-1"
+								className="h-8 text-sm"
 							/>
 						</div>
-					</div>
-					<div className="space-y-1">
-						<Label className="text-xs">Image URL</Label>
-						<Input
-							value={
-								style.background &&
-								"image" in style.background &&
-								style.background.image?.url
-									? "literalString" in style.background.image.url
-										? style.background.image.url.literalString
+					)}
+
+					{backgroundMode === "gradient" && (
+						<div className="space-y-3">
+							<div className="grid grid-cols-2 gap-2">
+								<div className="space-y-1">
+									<Label className="text-xs">Gradient type</Label>
+									<Select
+										value={gradientType}
+										onValueChange={(value) =>
+											updateStyle("background", {
+												gradient: {
+													type: value as "linear" | "radial" | "conic",
+													angle: gradient?.angle,
+													direction: gradient?.direction,
+													stops: gradientStops,
+												},
+											})
+										}
+									>
+										<SelectTrigger className="h-8 text-sm">
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value="linear">Linear</SelectItem>
+											<SelectItem value="radial">Radial</SelectItem>
+											<SelectItem value="conic">Conic</SelectItem>
+										</SelectContent>
+									</Select>
+								</div>
+								<div className="space-y-1">
+									<Label className="text-xs">Direction</Label>
+									<Input
+										value={
+											gradient?.direction ??
+											(gradient?.angle === undefined
+												? ""
+												: `${gradient.angle}deg`)
+										}
+										onChange={(e) =>
+											updateStyle("background", {
+												gradient: {
+													type: gradientType,
+													angle: undefined,
+													direction: e.target.value || undefined,
+													stops: gradientStops,
+												},
+											})
+										}
+										placeholder="to right or 45deg"
+										className="h-8 text-sm"
+									/>
+								</div>
+							</div>
+							{gradientStops.map((stop, index) => (
+								<div key={`${index}-${stop.position}`} className="flex gap-2">
+									<Input
+										value={stop.color}
+										onChange={(e) => {
+											const stops = gradientStops.map((item, itemIndex) =>
+												itemIndex === index
+													? { ...item, color: e.target.value }
+													: item,
+											);
+											updateStyle("background", {
+												gradient: {
+													type: gradientType,
+													angle: gradient?.angle,
+													direction: gradient?.direction,
+													stops,
+												},
+											});
+										}}
+										placeholder="#000000"
+										className="h-8 text-sm flex-1"
+									/>
+									<Input
+										type="number"
+										min="0"
+										max="100"
+										step="1"
+										value={stop.position}
+										onChange={(e) => {
+											const stops = gradientStops.map((item, itemIndex) =>
+												itemIndex === index
+													? { ...item, position: Number(e.target.value) }
+													: item,
+											);
+											updateStyle("background", {
+												gradient: {
+													type: gradientType,
+													angle: gradient?.angle,
+													direction: gradient?.direction,
+													stops,
+												},
+											});
+										}}
+										className="h-8 text-sm w-20"
+									/>
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon"
+										className="h-8 w-8"
+										disabled={gradientStops.length <= 2}
+										onClick={() =>
+											updateStyle("background", {
+												gradient: {
+													type: gradientType,
+													angle: gradient?.angle,
+													direction: gradient?.direction,
+													stops: gradientStops.filter(
+														(_, itemIndex) => itemIndex !== index,
+													),
+												},
+											})
+										}
+									>
+										<Trash2 className="h-3.5 w-3.5" />
+									</Button>
+								</div>
+							))}
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								className="h-7 text-xs"
+								onClick={() =>
+									updateStyle("background", {
+										gradient: {
+											type: gradientType,
+											angle: gradient?.angle,
+											direction: gradient?.direction,
+											stops: [
+												...gradientStops,
+												{ color: "#ffffff", position: 100 },
+											],
+										},
+									})
+								}
+							>
+								<Plus className="mr-1 h-3.5 w-3.5" />
+								Add stop
+							</Button>
+						</div>
+					)}
+
+					{backgroundMode === "image" && backgroundImage && (
+						<div className="space-y-3">
+							<div className="space-y-1">
+								<Label className="text-xs">URL source</Label>
+								<Select
+									value={"path" in backgroundImage.url ? "path" : "literal"}
+									onValueChange={(value) =>
+										updateStyle("background", {
+											image: {
+												...backgroundImage,
+												url:
+													value === "path"
+														? { path: "", defaultValue: "" }
+														: { literalString: "" },
+											},
+										})
+									}
+								>
+									<SelectTrigger className="h-8 text-sm">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="literal">Literal URL</SelectItem>
+										<SelectItem value="path">Data path</SelectItem>
+									</SelectContent>
+								</Select>
+							</div>
+							<div className="space-y-1">
+								<Label className="text-xs">
+									{"path" in backgroundImage.url ? "Data path" : "Image URL"}
+								</Label>
+								<Input
+									value={
+										"path" in backgroundImage.url
+											? backgroundImage.url.path
+											: "literalString" in backgroundImage.url
+												? backgroundImage.url.literalString
+												: ""
+									}
+									onChange={(e) =>
+										updateStyle("background", {
+											image: {
+												...backgroundImage,
+												url:
+													"path" in backgroundImage.url
+														? { ...backgroundImage.url, path: e.target.value }
+														: { literalString: e.target.value },
+											},
+										})
+									}
+									placeholder={
+										"path" in backgroundImage.url
+											? "/theme/heroImage"
+											: "/path/to/image.jpg"
+									}
+									className="h-8 text-sm"
+								/>
+							</div>
+							{"path" in backgroundImage.url && (
+								<div className="space-y-1">
+									<Label className="text-xs">Fallback URL</Label>
+									<Input
+										value={
+											typeof backgroundImage.url.defaultValue === "string"
+												? backgroundImage.url.defaultValue
+												: ""
+										}
+										onChange={(e) =>
+											updateStyle("background", {
+												image: {
+													...backgroundImage,
+													url: {
+														...backgroundImage.url,
+														defaultValue: e.target.value,
+													},
+												},
+											})
+										}
+										className="h-8 text-sm"
+									/>
+								</div>
+							)}
+							<div className="grid grid-cols-3 gap-2">
+								{(["size", "position", "repeat"] as const).map((field) => (
+									<div className="space-y-1" key={field}>
+										<Label className="text-xs capitalize">{field}</Label>
+										<Input
+											value={backgroundImage[field] ?? ""}
+											onChange={(e) =>
+												updateStyle("background", {
+													image: {
+														...backgroundImage,
+														[field]: e.target.value || undefined,
+													},
+												})
+											}
+											className="h-8 text-xs"
+										/>
+									</div>
+								))}
+							</div>
+						</div>
+					)}
+
+					{backgroundMode === "blur" && (
+						<div className="space-y-1">
+							<Label className="text-xs">Backdrop Blur</Label>
+							<Input
+								value={
+									style.background && "blur" in style.background
+										? style.background.blur
 										: ""
-									: ""
-							}
-							onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-								updateStyle("background", {
-									image: {
-										url: { literalString: e.target.value },
-										size: "cover",
-										position: "center",
-										repeat: "no-repeat",
-									},
-								})
-							}
-							placeholder="/path/to/image.jpg"
-							className="h-8 text-sm"
-						/>
-					</div>
-					<div className="space-y-1">
-						<Label className="text-xs">Backdrop Blur</Label>
-						<Input
-							value={
-								style.background && "blur" in style.background
-									? style.background.blur
-									: ""
-							}
-							onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-								updateStyle("background", { blur: e.target.value })
-							}
-							placeholder="4px"
-							className="h-8 text-sm"
-						/>
-					</div>
+								}
+								onChange={(e) =>
+									updateStyle("background", { blur: e.target.value })
+								}
+								placeholder="4px"
+								className="h-8 text-sm"
+							/>
+						</div>
+					)}
 					<div className="space-y-1">
 						<Label className="text-xs">Opacity</Label>
 						<Input
@@ -3910,56 +4780,56 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 				</CollapsibleTrigger>
 				<CollapsibleContent className="pt-2 space-y-3">
 					<div className="grid grid-cols-2 gap-2">
-						<div className="space-y-1">
-							<Label className="text-xs">X Offset</Label>
-							<Input
-								value={style.shadow?.x || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("shadow", { ...style.shadow, x: e.target.value })
-								}
-								placeholder="0"
-								className="h-8 text-sm"
-							/>
-						</div>
-						<div className="space-y-1">
-							<Label className="text-xs">Y Offset</Label>
-							<Input
-								value={style.shadow?.y || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("shadow", { ...style.shadow, y: e.target.value })
-								}
-								placeholder="2px"
-								className="h-8 text-sm"
-							/>
-						</div>
-						<div className="space-y-1">
-							<Label className="text-xs">Blur</Label>
-							<Input
-								value={style.shadow?.blur || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("shadow", {
-										...style.shadow,
-										blur: e.target.value,
-									})
-								}
-								placeholder="4px"
-								className="h-8 text-sm"
-							/>
-						</div>
-						<div className="space-y-1">
-							<Label className="text-xs">Color</Label>
-							<Input
-								value={style.shadow?.color || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("shadow", {
-										...style.shadow,
-										color: e.target.value,
-									})
-								}
-								placeholder="rgba(0,0,0,0.1)"
-								className="h-8 text-sm"
-							/>
-						</div>
+						{(
+							[
+								["x", "X offset", "0"],
+								["y", "Y offset", "2px"],
+								["blur", "Blur", "4px"],
+								["spread", "Spread", "0"],
+								["color", "Color", "rgba(0,0,0,0.1)"],
+							] as const
+						).map(([field, label, placeholder]) => (
+							<div className="space-y-1" key={field}>
+								<Label className="text-xs">{label}</Label>
+								<Input
+									value={style.shadow?.[field] ?? ""}
+									onChange={(e) =>
+										updateStyle("shadow", {
+											...withoutLegacyBoxShadow(style.shadow),
+											[field]: e.target.value || undefined,
+										})
+									}
+									placeholder={placeholder}
+									className="h-8 text-sm"
+								/>
+							</div>
+						))}
+					</div>
+					<div className="flex items-center justify-between">
+						<Label className="text-xs">Inset</Label>
+						<Switch
+							checked={style.shadow?.inset ?? false}
+							onCheckedChange={(checked) =>
+								updateStyle("shadow", {
+									...withoutLegacyBoxShadow(style.shadow),
+									inset: checked || undefined,
+								})
+							}
+						/>
+					</div>
+					<div className="space-y-1">
+						<Label className="text-xs">Text Shadow</Label>
+						<Input
+							value={style.shadow?.textShadow || ""}
+							onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+								updateStyle("shadow", {
+									...withoutLegacyBoxShadow(style.shadow),
+									textShadow: e.target.value || undefined,
+								})
+							}
+							placeholder="0 1px 2px rgba(0,0,0,0.2)"
+							className="h-8 text-sm"
+						/>
 					</div>
 				</CollapsibleContent>
 			</Collapsible>
@@ -4015,6 +4885,176 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 								className="h-8 text-sm"
 							/>
 						</div>
+						<div className="space-y-1">
+							<Label className="text-xs">Skew</Label>
+							<Input
+								value={style.transform?.skew || ""}
+								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+									updateStyle("transform", {
+										...style.transform,
+										skew: e.target.value,
+									})
+								}
+								placeholder="10deg, 5deg"
+								className="h-8 text-sm"
+							/>
+						</div>
+						<div className="space-y-1">
+							<Label className="text-xs">Origin</Label>
+							<Input
+								value={style.transform?.transformOrigin || ""}
+								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+									updateStyle("transform", {
+										...style.transform,
+										transformOrigin: e.target.value,
+									})
+								}
+								placeholder="center"
+								className="h-8 text-sm"
+							/>
+						</div>
+					</div>
+				</CollapsibleContent>
+			</Collapsible>
+
+			{/* Responsive overrides */}
+			<Collapsible>
+				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
+					<span>Responsive</span>
+					<ChevronDown className="h-4 w-4" />
+				</CollapsibleTrigger>
+				<CollapsibleContent className="pt-2 space-y-3">
+					<div className="space-y-1">
+						<Label className="text-xs">Breakpoint</Label>
+						<Select
+							value={responsiveBreakpoint}
+							onValueChange={(value) =>
+								setResponsiveBreakpoint(value as keyof ResponsiveOverrides)
+							}
+						>
+							<SelectTrigger className="h-8 text-sm">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="sm">sm · 640px</SelectItem>
+								<SelectItem value="md">md · 768px</SelectItem>
+								<SelectItem value="lg">lg · 1024px</SelectItem>
+								<SelectItem value="xl">xl · 1280px</SelectItem>
+								<SelectItem value="xxl">2xl · 1536px</SelectItem>
+							</SelectContent>
+						</Select>
+					</div>
+					<div className="space-y-1">
+						<Label className="text-xs">Tailwind classes</Label>
+						<Input
+							value={breakpointStyle.className ?? ""}
+							onChange={(e) =>
+								updateBreakpointStyle("className", e.target.value || undefined)
+							}
+							className="h-8 text-sm"
+						/>
+					</div>
+					<div className="grid grid-cols-2 gap-2">
+						{(
+							[
+								["display", "Display", "flex"],
+								["flexDirection", "Flex direction", "row"],
+								["justifyContent", "Justify", "center"],
+								["alignItems", "Align", "center"],
+								["gap", "Gap", "16px"],
+								["fontSize", "Font size", "1rem"],
+								["textAlign", "Text align", "center"],
+							] as const
+						).map(([field, label, placeholder]) => (
+							<div className="space-y-1" key={field}>
+								<Label className="text-xs">{label}</Label>
+								<Input
+									value={String(breakpointStyle[field] ?? "")}
+									onChange={(e) =>
+										updateBreakpointStyle(field, e.target.value || undefined)
+									}
+									placeholder={placeholder}
+									className="h-8 text-xs"
+								/>
+							</div>
+						))}
+						{(
+							[
+								["width", "Width", "100%"],
+								["height", "Height", "auto"],
+							] as const
+						).map(([field, label, placeholder]) => (
+							<div className="space-y-1" key={field}>
+								<Label className="text-xs">{label}</Label>
+								<Input
+									value={getStyleValue(breakpointStyle[field])}
+									onChange={(e) =>
+										updateBreakpointStyle(field, e.target.value || undefined)
+									}
+									placeholder={placeholder}
+									className="h-8 text-xs"
+								/>
+							</div>
+						))}
+						{(
+							[
+								["padding", "Padding"],
+								["margin", "Margin"],
+							] as const
+						).map(([field, label]) => (
+							<div className="space-y-1" key={field}>
+								<Label className="text-xs">{label}</Label>
+								<Input
+									value={getSpacingValue(breakpointStyle[field])}
+									onChange={(e) =>
+										updateBreakpointStyle(
+											field,
+											spacingFromShorthand(e.target.value),
+										)
+									}
+									placeholder="8px 16px"
+									className="h-8 text-xs"
+								/>
+							</div>
+						))}
+						<div className="space-y-1">
+							<Label className="text-xs">Grid columns</Label>
+							<Input
+								type="number"
+								min="1"
+								value={breakpointStyle.gridCols ?? ""}
+								onChange={(e) =>
+									updateBreakpointStyle(
+										"gridCols",
+										e.target.value ? Number(e.target.value) : undefined,
+									)
+								}
+								className="h-8 text-xs"
+							/>
+						</div>
+						<div className="space-y-1">
+							<Label className="text-xs">Order</Label>
+							<Input
+								type="number"
+								value={breakpointStyle.order ?? ""}
+								onChange={(e) =>
+									updateBreakpointStyle(
+										"order",
+										e.target.value ? Number(e.target.value) : undefined,
+									)
+								}
+								className="h-8 text-xs"
+							/>
+						</div>
+					</div>
+					<div className="flex items-center justify-between">
+						<Label className="text-xs">Hidden at this breakpoint</Label>
+						<Switch
+							checked={breakpointStyle.hidden ?? false}
+							onCheckedChange={(checked) =>
+								updateBreakpointStyle("hidden", checked || undefined)
+							}
+						/>
 					</div>
 				</CollapsibleContent>
 			</Collapsible>
@@ -4145,28 +5185,196 @@ interface ActionValue {
 	context?: Record<string, unknown>;
 }
 
-function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
-	const { actionContext } = useBuilder();
-	const componentData = component.component as { actions?: ActionValue[] };
-	const actions = componentData.actions ?? [];
-	const action = actions[0] ?? null;
+type ComponentActionData = {
+	actions?: ActionValue[];
+	actionBindings?: Record<string, unknown>;
+	eventHandlers?: Record<string, ActionValue[]>;
+};
 
-	const setAction = (newAction: ActionValue | null) => {
-		onUpdate({
-			component: {
-				...component.component,
-				actions: newAction ? [newAction] : undefined,
-			} as SurfaceComponent["component"],
-		});
-	};
+function ownsHandler(
+	handlers: Record<string, unknown>,
+	eventName: string,
+): boolean {
+	return Object.prototype.hasOwnProperty.call(handlers, eventName);
+}
 
-	const currentType = action?.name as ActionType | undefined;
-	const context = action?.context ?? {};
-	const widgetActions = actionContext?.widgetActions;
-	const isWidgetMode = widgetActions !== undefined;
+function cloneActions(actions: ActionValue[]): ActionValue[] {
+	return actions.map((action) => ({
+		...action,
+		context: action.context ? { ...action.context } : {},
+	}));
+}
+
+function createInitialAction(
+	widgetActions: readonly { id: string }[] | undefined,
+): ActionValue {
+	return widgetActions !== undefined
+		? {
+				name: "widget_event",
+				context: widgetActions[0] ? { actionId: widgetActions[0].id } : {},
+			}
+		: { name: "workflow_event", context: {} };
+}
+
+function actionTypeLabel(name: string): string {
+	return (
+		{
+			widget_event: "Widget event",
+			navigate_page: "Navigate to page",
+			external_link: "External link",
+			workflow_event: "Trigger workflow",
+		}[name] ?? name
+	);
+}
+
+function HandlerStatus({
+	exact,
+	actions,
+	fallbackLabel,
+}: {
+	exact: boolean;
+	actions: ActionValue[];
+	fallbackLabel?: string;
+}) {
+	const label = exact
+		? actions.length === 0
+			? "Disabled"
+			: `${actions.length} action${actions.length === 1 ? "" : "s"}`
+		: (fallbackLabel ?? "Uses default");
 
 	return (
-		<div className="space-y-4">
+		<span className="shrink-0 rounded border bg-muted/40 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+			{label}
+		</span>
+	);
+}
+
+interface OrderedActionsEditorProps {
+	actions: ActionValue[];
+	onChange: (actions: ActionValue[]) => void;
+}
+
+function OrderedActionsEditor({
+	actions,
+	onChange,
+}: OrderedActionsEditorProps) {
+	const { actionContext } = useBuilder();
+	const widgetActions = actionContext?.widgetActions;
+
+	const addAction = () => {
+		const nextAction = createInitialAction(widgetActions);
+		onChange([...actions, nextAction]);
+	};
+
+	const updateAction = (index: number, action: ActionValue | null) => {
+		if (action === null) {
+			onChange(actions.filter((_, actionIndex) => actionIndex !== index));
+			return;
+		}
+		onChange(
+			actions.map((current, actionIndex) =>
+				actionIndex === index ? action : current,
+			),
+		);
+	};
+
+	const moveAction = (index: number, direction: -1 | 1) => {
+		const target = index + direction;
+		if (target < 0 || target >= actions.length) return;
+		const next = [...actions];
+		[next[index], next[target]] = [next[target], next[index]];
+		onChange(next);
+	};
+
+	return (
+		<div className="space-y-3">
+			{actions.length === 0 && (
+				<div className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+					This event is explicitly disabled. Add an action to enable it.
+				</div>
+			)}
+			{actions.map((action, index) => (
+				<div
+					key={`${index}-${action.name}`}
+					className="space-y-3 rounded-md border p-2.5 dark:border-white/10"
+				>
+					<div className="flex items-center gap-1">
+						<span className="min-w-0 flex-1 truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+							{index + 1}. {actionTypeLabel(action.name)}
+						</span>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className="h-6 w-6"
+							disabled={index === 0}
+							onClick={() => moveAction(index, -1)}
+							aria-label={`Move action ${index + 1} up`}
+						>
+							<ChevronUp className="h-3.5 w-3.5" />
+						</Button>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className="h-6 w-6"
+							disabled={index === actions.length - 1}
+							onClick={() => moveAction(index, 1)}
+							aria-label={`Move action ${index + 1} down`}
+						>
+							<ChevronDown className="h-3.5 w-3.5" />
+						</Button>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className="h-6 w-6 text-destructive hover:text-destructive"
+							onClick={() => updateAction(index, null)}
+							aria-label={`Remove action ${index + 1}`}
+						>
+							<Trash2 className="h-3.5 w-3.5" />
+						</Button>
+					</div>
+					<ActionValueEditor
+						action={action}
+						onChange={(nextAction) => updateAction(index, nextAction)}
+					/>
+				</div>
+			))}
+			<Button
+				type="button"
+				variant="outline"
+				size="sm"
+				className="h-7 w-full text-xs"
+				onClick={addAction}
+			>
+				<Plus className="mr-1 h-3.5 w-3.5" />
+				Add action
+			</Button>
+		</div>
+	);
+}
+
+function ActionValueEditor({
+	action,
+	onChange,
+}: {
+	action: ActionValue;
+	onChange: (action: ActionValue | null) => void;
+}) {
+	const { actionContext } = useBuilder();
+	const currentType = action.name as ActionType;
+	const context = action.context ?? {};
+	const widgetActions = actionContext?.widgetActions;
+	const isWidgetMode = widgetActions !== undefined;
+	const knownActionTypes: string[] = [
+		"navigate_page",
+		"external_link",
+		"workflow_event",
+	];
+
+	return (
+		<div className="space-y-3">
 			<div className="space-y-2">
 				<Label className="text-xs font-medium">
 					{isWidgetMode ? "Widget Event" : "Action Type"}
@@ -4180,14 +5388,17 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 						<Select
 							value={
 								currentType === "widget_event"
-									? ((context.actionId as string) ?? "")
+									? (context.actionId as string) || "none"
 									: "none"
 							}
-							onValueChange={(v) => {
-								if (v === "none") {
-									setAction(null);
+							onValueChange={(value) => {
+								if (value === "none") {
+									onChange(null);
 								} else {
-									setAction({ name: "widget_event", context: { actionId: v } });
+									onChange({
+										name: "widget_event",
+										context: { actionId: value },
+									});
 								}
 							}}
 						>
@@ -4196,9 +5407,9 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 							</SelectTrigger>
 							<SelectContent>
 								<SelectItem value="none">No event</SelectItem>
-								{widgetActions.map((wa) => (
-									<SelectItem key={wa.id} value={wa.id}>
-										{wa.label}
+								{widgetActions.map((widgetAction) => (
+									<SelectItem key={widgetAction.id} value={widgetAction.id}>
+										{widgetAction.label}
 									</SelectItem>
 								))}
 							</SelectContent>
@@ -4206,12 +5417,12 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 					)
 				) : (
 					<Select
-						value={currentType ?? "none"}
-						onValueChange={(v) => {
-							if (v === "none") {
-								setAction(null);
+						value={currentType || "none"}
+						onValueChange={(value) => {
+							if (value === "none") {
+								onChange(null);
 							} else {
-								setAction({ name: v, context: {} });
+								onChange({ name: value, context: {} });
 							}
 						}}
 					>
@@ -4220,6 +5431,11 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 						</SelectTrigger>
 						<SelectContent>
 							<SelectItem value="none">No action</SelectItem>
+							{currentType && !knownActionTypes.includes(currentType) && (
+								<SelectItem value={currentType}>
+									Custom: {currentType}
+								</SelectItem>
+							)}
 							<SelectItem value="navigate_page">Navigate to Page</SelectItem>
 							<SelectItem value="external_link">External Link</SelectItem>
 							<SelectItem value="workflow_event">Trigger Workflow</SelectItem>
@@ -4229,13 +5445,15 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 			</div>
 
 			{currentType === "widget_event" && (
-				<div className="space-y-1 pl-2 border-l-2 border-muted">
-					{widgetActions?.find((wa) => wa.id === (context.actionId as string))
-						?.description && (
+				<div className="space-y-1 border-l-2 border-muted pl-2">
+					{widgetActions?.find(
+						(widgetAction) => widgetAction.id === (context.actionId as string),
+					)?.description && (
 						<p className="text-xs text-muted-foreground">
 							{
 								widgetActions.find(
-									(wa) => wa.id === (context.actionId as string),
+									(widgetAction) =>
+										widgetAction.id === (context.actionId as string),
 								)?.description
 							}
 						</p>
@@ -4248,33 +5466,33 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 			)}
 
 			{currentType === "navigate_page" && (
-				<div className="space-y-2 pl-2 border-l-2 border-muted">
+				<div className="space-y-2 border-l-2 border-muted pl-2">
 					<Label className="text-xs text-muted-foreground">Route</Label>
 					<Input
 						className="h-8 text-sm"
 						placeholder="/about"
 						value={(context.route as string) ?? ""}
-						onChange={(e) =>
-							setAction({
+						onChange={(event) =>
+							onChange({
 								name: currentType,
-								context: { ...context, route: e.target.value },
+								context: { ...context, route: event.target.value },
 							})
 						}
 					/>
 					<p className="text-xs text-muted-foreground">
 						Relative path to navigate to (e.g., /contact, /products/123)
 					</p>
-					<Label className="text-xs text-muted-foreground mt-2">
+					<Label className="mt-2 text-xs text-muted-foreground">
 						Query Params (JSON)
 					</Label>
 					<Input
 						className="h-8 text-sm font-mono"
 						placeholder='{"id": "123"}'
 						value={(context.queryParams as string) ?? ""}
-						onChange={(e) =>
-							setAction({
+						onChange={(event) =>
+							onChange({
 								name: currentType,
-								context: { ...context, queryParams: e.target.value },
+								context: { ...context, queryParams: event.target.value },
 							})
 						}
 					/>
@@ -4285,16 +5503,16 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 			)}
 
 			{currentType === "external_link" && (
-				<div className="space-y-2 pl-2 border-l-2 border-muted">
+				<div className="space-y-2 border-l-2 border-muted pl-2">
 					<Label className="text-xs text-muted-foreground">URL</Label>
 					<Input
 						className="h-8 text-sm"
 						placeholder="https://example.com"
 						value={(context.url as string) ?? ""}
-						onChange={(e) =>
-							setAction({
+						onChange={(event) =>
+							onChange({
 								name: currentType,
-								context: { url: e.target.value },
+								context: { ...context, url: event.target.value },
 							})
 						}
 					/>
@@ -4303,16 +5521,17 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 			)}
 
 			{currentType === "workflow_event" && (
-				<div className="space-y-2 pl-2 border-l-2 border-muted">
+				<div className="space-y-2 border-l-2 border-muted pl-2">
 					<Label className="text-xs text-muted-foreground">
 						Workflow Event
 					</Label>
 					<Select
 						value={(context.nodeId as string) ?? ""}
 						onValueChange={(nodeId) =>
-							setAction({
+							onChange({
 								name: currentType,
 								context: {
+									...context,
 									nodeId,
 									appId: actionContext?.appId,
 									boardId: actionContext?.boardId,
@@ -4325,13 +5544,16 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 						</SelectTrigger>
 						<SelectContent>
 							{actionContext?.workflowEvents?.length ? (
-								actionContext.workflowEvents.map((event) => (
-									<SelectItem key={event.nodeId} value={event.nodeId}>
-										{event.name}
+								actionContext.workflowEvents.map((workflowEvent) => (
+									<SelectItem
+										key={workflowEvent.nodeId}
+										value={workflowEvent.nodeId}
+									>
+										{workflowEvent.name}
 									</SelectItem>
 								))
 							) : (
-								<div className="p-2 text-sm text-muted-foreground text-center">
+								<div className="p-2 text-center text-sm text-muted-foreground">
 									No workflow events available
 								</div>
 							)}
@@ -4339,6 +5561,331 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 					</Select>
 				</div>
 			)}
+		</div>
+	);
+}
+
+function NamedEventHandlerEditor({
+	definition,
+	exact,
+	actions,
+	fallbackActions,
+	fallbackLabel,
+	hasExistingWorkflowBinding,
+	onSet,
+	onDelete,
+}: {
+	definition: ComponentEventDefinition;
+	exact: boolean;
+	actions: ActionValue[];
+	fallbackActions: ActionValue[];
+	fallbackLabel: string;
+	hasExistingWorkflowBinding: boolean;
+	onSet: (actions: ActionValue[]) => void;
+	onDelete: () => void;
+}) {
+	const { actionContext } = useBuilder();
+	const customizeActions = () =>
+		onSet(
+			fallbackActions.length > 0
+				? cloneActions(fallbackActions)
+				: [createInitialAction(actionContext?.widgetActions)],
+		);
+
+	return (
+		<Collapsible defaultOpen={exact} className="group rounded-md border">
+			<CollapsibleTrigger className="flex w-full items-start gap-2 px-2.5 py-2 text-left hover:bg-muted/40">
+				<ChevronDown className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+				<Zap className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+				<div className="min-w-0 flex-1">
+					<div className="truncate text-xs font-medium">{definition.label}</div>
+					<div className="truncate font-mono text-[10px] text-muted-foreground">
+						{definition.id}
+					</div>
+					{hasExistingWorkflowBinding && (
+						<div className="mt-0.5 text-[10px] text-amber-600 dark:text-amber-400">
+							Existing workflow binding
+						</div>
+					)}
+				</div>
+				<HandlerStatus
+					exact={exact}
+					actions={actions}
+					fallbackLabel={fallbackLabel}
+				/>
+			</CollapsibleTrigger>
+			<CollapsibleContent className="space-y-3 border-t px-2.5 py-3">
+				<p className="text-xs text-muted-foreground">
+					{definition.description}
+				</p>
+				{hasExistingWorkflowBinding && (
+					<div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[10px] text-muted-foreground">
+						This legacy widget workflow binding is preserved. Adding an exact
+						handler may override it at runtime.
+					</div>
+				)}
+				{exact ? (
+					<>
+						<OrderedActionsEditor actions={actions} onChange={onSet} />
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							className="h-7 w-full text-xs"
+							onClick={onDelete}
+						>
+							Use default
+						</Button>
+					</>
+				) : (
+					<div className="space-y-2">
+						<p className="text-[10px] text-muted-foreground">
+							No exact handler is stored. This event currently{" "}
+							{fallbackLabel.toLowerCase()}.
+						</p>
+						<div className="grid grid-cols-2 gap-2">
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								className="h-7 text-xs"
+								onClick={customizeActions}
+							>
+								Customize
+							</Button>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								className="h-7 text-xs"
+								onClick={() => onSet([])}
+							>
+								Disable
+							</Button>
+						</div>
+					</div>
+				)}
+			</CollapsibleContent>
+		</Collapsible>
+	);
+}
+
+function LegacyDefaultEditor({
+	actions,
+	onChange,
+}: {
+	actions: ActionValue[];
+	onChange: (action: ActionValue | null) => void;
+}) {
+	const { actionContext } = useBuilder();
+	const legacyAction = actions[0];
+	const dormantCount = Math.max(0, actions.length - 1);
+	const widgetActions = actionContext?.widgetActions;
+
+	return (
+		<Collapsible
+			defaultOpen={Boolean(legacyAction)}
+			className="group rounded-md border"
+		>
+			<CollapsibleTrigger className="flex w-full items-start gap-2 px-2.5 py-2 text-left hover:bg-muted/40">
+				<ChevronDown className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+				<div className="min-w-0 flex-1">
+					<div className="text-xs font-medium">Default / legacy fallback</div>
+					<div className="font-mono text-[10px] text-muted-foreground">
+						actions[0] · only the first legacy action runs
+					</div>
+				</div>
+				<span className="shrink-0 rounded border bg-muted/40 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+					{legacyAction ? actionTypeLabel(legacyAction.name) : "Unconfigured"}
+				</span>
+			</CollapsibleTrigger>
+			<CollapsibleContent className="space-y-3 border-t px-2.5 py-3">
+				<p className="text-xs text-muted-foreground">
+					This preserves the original single-action behavior. Exact named and
+					wildcard handlers take precedence.
+				</p>
+				{dormantCount > 0 && (
+					<p className="rounded-md bg-muted/40 px-2.5 py-2 text-[10px] text-muted-foreground">
+						{dormantCount} inactive legacy{" "}
+						{dormantCount === 1 ? "entry" : "entries"}
+						preserved while this action is edited. Removing the default clears
+						them too.
+					</p>
+				)}
+				{legacyAction ? (
+					<>
+						<ActionValueEditor action={legacyAction} onChange={onChange} />
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							className="h-7 w-full text-xs text-destructive hover:text-destructive"
+							onClick={() => onChange(null)}
+						>
+							Remove legacy default
+						</Button>
+					</>
+				) : (
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						className="h-7 w-full text-xs"
+						onClick={() => onChange(createInitialAction(widgetActions))}
+					>
+						Configure legacy default
+					</Button>
+				)}
+			</CollapsibleContent>
+		</Collapsible>
+	);
+}
+
+function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
+	const componentData = component.component as ComponentActionData;
+	const legacyActions = componentData.actions ?? [];
+	const actionBindings = componentData.actionBindings ?? {};
+	const handlers = componentData.eventHandlers ?? {};
+	const wildcardExact = ownsHandler(handlers, WILDCARD_EVENT);
+	const wildcardActions = wildcardExact ? (handlers[WILDCARD_EVENT] ?? []) : [];
+	const legacyAction = legacyActions[0];
+
+	const definitions = useMemo(() => {
+		const declared = getComponentEventDefinitions(
+			component.component as A2UIComponent,
+		);
+		const declaredIds = new Set(declared.map((definition) => definition.id));
+		const savedEventIds = new Set([
+			...Object.keys(handlers),
+			...Object.keys(actionBindings),
+		]);
+		const configuredOnly = [...savedEventIds]
+			.filter(
+				(eventName) =>
+					eventName !== WILDCARD_EVENT && !declaredIds.has(eventName),
+			)
+			.map(
+				(eventName): ComponentEventDefinition => ({
+					id: eventName,
+					label: eventName,
+					description:
+						"This handler is configured but is not declared by the current component contract.",
+					legacyFallback: true,
+					wildcardFallback: true,
+				}),
+			);
+		const definitions = [...declared, ...configuredOnly];
+		if (definitions.length > 0 || savedEventIds.has(WILDCARD_EVENT)) {
+			definitions.push({
+				id: WILDCARD_EVENT,
+				label: "Wildcard default",
+				description:
+					"Runs for named events that do not have an exact handler, except events added after the component shipped — those need their own handler. Supports an ordered action list.",
+				legacyFallback: true,
+				wildcardFallback: true,
+			});
+		}
+		return definitions;
+	}, [actionBindings, component.component, handlers]);
+
+	const updateHandler = (eventName: string, actions: ActionValue[] | null) => {
+		const next = { ...handlers };
+		if (actions === null) {
+			delete next[eventName];
+		} else {
+			next[eventName] = actions;
+		}
+
+		onUpdate({
+			component: {
+				...component.component,
+				eventHandlers: Object.keys(next).length > 0 ? next : undefined,
+			} as SurfaceComponent["component"],
+		});
+	};
+
+	const updateLegacyAction = (action: ActionValue | null) => {
+		onUpdate({
+			component: {
+				...component.component,
+				actions: action ? [action, ...legacyActions.slice(1)] : undefined,
+			} as SurfaceComponent["component"],
+		});
+	};
+
+	const hasAnyConfiguration =
+		legacyActions.length > 0 ||
+		Object.keys(handlers).length > 0 ||
+		Object.keys(actionBindings).length > 0;
+
+	if (definitions.length === 0 && !hasAnyConfiguration) {
+		return (
+			<div className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
+				This component does not expose configurable events.
+			</div>
+		);
+	}
+
+	return (
+		<div className="space-y-4">
+			{definitions.length > 0 && (
+				<div className="space-y-2">
+					<div>
+						<Label className="text-xs font-semibold">Events</Label>
+						<p className="mt-1 text-[10px] text-muted-foreground">
+							Each event can run an ordered list of actions. An exact empty list
+							disables only that event.
+						</p>
+					</div>
+					{definitions.map((definition) => {
+						const exact = ownsHandler(handlers, definition.id);
+						const actions = exact ? (handlers[definition.id] ?? []) : [];
+						const hasExistingWorkflowBinding = ownsHandler(
+							actionBindings,
+							definition.id,
+						);
+						const fallbackActions = wildcardExact
+							? wildcardActions
+							: hasExistingWorkflowBinding
+								? []
+								: definition.legacyFallback && legacyAction
+									? [legacyAction]
+									: [];
+						const fallbackLabel = wildcardExact
+							? wildcardActions.length === 0
+								? "Disabled by default"
+								: "Uses default"
+							: hasExistingWorkflowBinding
+								? "Uses existing workflow binding"
+								: definition.legacyFallback && legacyAction
+									? "Uses legacy fallback"
+									: "Unconfigured";
+
+						return (
+							<NamedEventHandlerEditor
+								key={definition.id}
+								definition={definition}
+								exact={exact}
+								actions={actions}
+								fallbackActions={fallbackActions}
+								fallbackLabel={fallbackLabel}
+								hasExistingWorkflowBinding={hasExistingWorkflowBinding}
+								onSet={(nextActions) =>
+									updateHandler(definition.id, nextActions)
+								}
+								onDelete={() => updateHandler(definition.id, null)}
+							/>
+						);
+					})}
+				</div>
+			)}
+
+			<div className="space-y-2 border-t pt-4">
+				<LegacyDefaultEditor
+					actions={legacyActions}
+					onChange={updateLegacyAction}
+				/>
+			</div>
 		</div>
 	);
 }

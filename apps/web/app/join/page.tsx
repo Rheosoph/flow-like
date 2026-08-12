@@ -1,17 +1,18 @@
 "use client";
 
 import {
-	addAppToProfile,
 	LoadingScreen,
+	addAppToProfile,
 	useBackend,
 } from "@flow-like/flow-like-ui";
+import {
+	attemptJoinWithRetry,
+	joinFailureMessage,
+} from "@flow-like/flow-like-ui/lib/join-invite";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
-
-const MAX_RETRIES = 6;
-const BASE_DELAY = 800;
 
 export default function JoinPage() {
 	const backend = useBackend();
@@ -30,27 +31,23 @@ export default function JoinPage() {
 			return;
 		}
 
-		for (let i = 0; i <= MAX_RETRIES; i++) {
-			setAttempt(i);
-			try {
-				await backend.teamState.joinInviteLink(appId, token);
-				await addAppToProfile(backend, appId);
-				toast.success("Successfully joined the app!");
-				router.push(`/use?id=${appId}`);
-				return;
-			} catch (error) {
-				if (i === MAX_RETRIES) {
-					console.error("Failed to join after retries:", error);
-					toast.error(
-						"Failed to join. The invite link may be expired or invalid.",
-					);
-					router.push("/");
-					return;
-				}
-				const delay = BASE_DELAY * 2 ** i;
-				await new Promise((r) => setTimeout(r, delay));
-			}
+		const result = await attemptJoinWithRetry(async () => {
+			await backend.teamState.joinInviteLink(appId, token);
+			await addAppToProfile(backend, appId);
+		}, setAttempt);
+
+		// Scrub the token from the address bar and history before leaving.
+		window.history.replaceState(null, "", "/");
+
+		if (result.ok) {
+			toast.success("Successfully joined the app!");
+			router.push(`/use?id=${appId}`);
+			return;
 		}
+
+		console.error("Failed to join:", result.error);
+		toast.error(joinFailureMessage(result.kind ?? "retry-exhausted"));
+		router.push("/");
 	}, [backend, appId, token, router]);
 
 	useEffect(() => {

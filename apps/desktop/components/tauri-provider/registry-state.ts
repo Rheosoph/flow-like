@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import type {
 	AccessRequest,
 	CachedPackage,
@@ -15,6 +14,7 @@ import type {
 	WasmPurchaseResponse,
 } from "@flow-like/flow-like-ui/lib/schema/wasm";
 import type { IRegistryState } from "@flow-like/flow-like-ui/state/backend-state/registry-state";
+import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 

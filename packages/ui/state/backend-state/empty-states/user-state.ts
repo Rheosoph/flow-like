@@ -12,8 +12,8 @@ import type {
 } from "@flow-like/flow-like-ui/state/backend-state/types";
 import type {
 	IBillingSession,
-	IPushTargetStatus,
 	IPricingResponse,
+	IPushTargetStatus,
 	IRegisterPushTargetRequest,
 	IRegisterPushTargetResponse,
 	ISubscribeRequest,

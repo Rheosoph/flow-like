@@ -1,5 +1,9 @@
 {
     "identifier": "com.flow-like.app",
+    "build": {
+        "beforeDevCommand": "bun ./scripts/prepare-mlx.ts --configuration Debug && bun run dev",
+        "beforeBuildCommand": "bun ./scripts/prepare-mlx.ts --configuration Release && bun run build"
+    },
     "bundle": {
         "externalBin": [
             "binaries/mac/arm/libggml-base.dylib",
@@ -10,11 +14,13 @@
             "binaries/mac/arm/libggml.dylib",
             "binaries/mac/arm/libllama.dylib",
             "binaries/mac/arm/libmtmd.dylib",
-            "binaries/mac/arm/llama-server"
+            "binaries/mac/arm/llama-server",
+            "binaries/mac/arm/flow-like-mlx-service"
         ],
         "resources": {
             "icons/Assets.car": "Assets.car",
-            "assets/THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt"
+            "assets/THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt",
+            "binaries/mac/arm/mlx-resources/": ""
         }
     }
 }

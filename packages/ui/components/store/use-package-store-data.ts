@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
+import { openExternalUrl } from "../../lib/open-external";
 import type { RegistryEntry } from "../../lib/schema/wasm";
 import type {
 	RequestAccessResponse,
@@ -10,17 +11,6 @@ import type {
 } from "../../lib/schema/wasm";
 import { useBackend } from "../../state/backend-state";
 import type { GenericFetcher } from "../pages/store/store-package-detail";
-
-async function openCheckoutUrl(url: string) {
-	if (typeof window !== "undefined" && "__TAURI__" in window) {
-		const { openUrl } = await import("@tauri-apps/plugin-opener");
-		await openUrl(url);
-		toast.info("Opening checkout in your browser...");
-	} else {
-		window.open(url, "_blank");
-		toast.info("Opening checkout in a new tab...");
-	}
-}
 
 export function usePackageStoreData(
 	packageId: string | undefined,
@@ -67,7 +57,7 @@ export function usePackageStoreData(
 			}
 
 			if (result.checkoutUrl) {
-				await openCheckoutUrl(result.checkoutUrl);
+				await openExternalUrl(result.checkoutUrl, "checkout");
 			} else {
 				toast.error("Unable to start purchase. Please try again.");
 			}

@@ -1,84 +1,100 @@
 ---
 title: Offline vs. Online
-description: Offline and Online Apps Explained
+description: Choose where an app is stored, shared, and executed
 sidebar:
   order: 10
 ---
 
-When creating apps in Flow-Like, you can choose to make them either **offline** or **online**.
+Flow-Like Desktop can create **offline** and **online** apps. This choice
+primarily controls persistence and collaboration; each Flow and Event also has
+execution settings that control where a run happens.
 
-Unlike offline apps, **online apps** can be shared with other users, published in the **Flow-Like App Store**, and accessed from multiple devices. Regardless of the mode, you can always export any app and re-import it later if you prefer not to go online.
+## Storage and collaboration
 
-### Why Choose Offline or Online at App Creation?
-Currently, it is not yet possible to convert an offline app into an online app after creation. However, this feature is planned. You can track our progress in [this issue](https://github.com/Rheosoph/flow-like/issues/280).
+| Capability | Offline app | Online app |
+| --- | --- | --- |
+| Primary app data | Local device | Configured Flow-Like backend |
+| Works without signing in | Yes | No |
+| Available in the web app | No | Yes |
+| Multi-device access | Through explicit export/import | Through the online account |
+| Team roles and invitations | No | Yes |
+| Publication workflow | No | Yes |
 
-### Where Does My Flow Actually Run?
+Offline is a good default for personal experiments, local automation, and
+work that must stay on one machine. Online apps are the right choice when the
+app needs web access, collaboration, server-side events, or publication.
 
-It depends on how you're accessing your app and how the flow is configured:
+## Create an online copy later
 
-| Access Method | Execution Location |
-|---------------|-------------------|
-| **Web App** | Always runs on the server (cloud or self-hosted) |
-| **Desktop App (offline app)** | Always runs locally on your machine |
-| **Desktop App (online app, default)** | Runs locally on your machine |
-| **Desktop App (online-only board/event)** | Runs on the server |
-| **Self-hosted deployment** | Runs in a dedicated execution container on your server |
+An offline app is not mutated in place. From its configuration, select
+**Create an online copy** to upload a new, secret-stripped copy to your
+account. The local source app remains unchanged.
 
-#### Hybrid Execution
+The copy process removes secret variable defaults and known token fields
+before upload. Runtime values stored on the device are separate from the app
+bundle and are not used to configure the online copy. Review the new app's
+Flows, storage, credentials, roles, and event settings before relying on it.
 
-Online apps support **hybrid execution**—the same flow can run in different locations depending on how it's accessed:
+Online apps can likewise be forked to a local or another online destination
+when the source app and your permissions allow it.
 
-- **From Flow-Like Desktop** → Executes locally on your machine (unless marked as online-only)
-- **From the Web App** → Executes on the server
+## Where a Flow runs
 
-This means you can test and develop flows locally, then access them from anywhere via the web.
+The client and the Flow's execution mode work together:
 
-#### Online-Only Boards & Events
+| Flow mode | Flow-Like Desktop | Web app or server-only caller |
+| --- | --- | --- |
+| **Hybrid** | Normally local | Remote |
+| **Local** | Local | Not remotely executable |
+| **Remote** | Remote | Remote |
 
-You can mark specific boards or events as **online-only**, which forces them to always execute on the server—even when accessed from the Desktop app. This is useful for:
+An offline app runs on Desktop and cannot be invoked by the web backend. An
+online app can still run locally from Desktop when the Flow and required nodes
+allow it.
 
-- Flows that need to run 24/7 without your computer being on
-- Scheduled automations and webhooks
-- Flows that should run in a consistent server environment
+**Hybrid** means the same Flow may run locally in Desktop or remotely through
+the web/API path. It does not divide a single graph into local and remote
+sections.
 
-#### Self-Hosting
+## Event execution
 
-When [self-hosting Flow-Like](/self-hosting/overview/), all server-side execution happens in a dedicated container on your infrastructure. You maintain full control over where your data and flows run.
+Events have their own **Local** or **Remote** execution setting and reference
+either the latest Flow draft or a pinned Flow version. A remote event is useful
+for webhooks, schedules, and other triggers that must work while a user's
+Desktop app is not running.
 
-:::note
-Please make sure you are using the same version of Flow-Like on all devices from which you want to access your online apps.
-:::
+The selected Flow must be compatible with that location. Pre-run analysis can
+require local execution when a node needs capabilities unavailable on the
+server.
 
-### Board Execution Mode
+## Permissions and local execution
 
-Each board has an **execution mode** setting that controls where it runs:
+Local execution requires enough read access to obtain the Flow definition.
+A role that can invoke an app but cannot read its Flows uses server-side
+execution instead. Configure exact capabilities on the app's
+[Roles](/apps/share/#rights-and-roles) page.
 
-| Execution Mode | Desktop App | Web App |
-|---------------|-------------|---------|
-| **Hybrid** (default) | Runs locally | Runs on server |
-| **Local** | Runs locally | Cannot execute |
-| **Remote** | Runs on server | Runs on server |
+## Local-only capabilities
 
-You can set the execution mode in the board settings. Use **Remote** when you want the flow to always run on the server (e.g., for scheduled tasks), and **Local** for flows that must never leave your machine.
+Some nodes depend on the current device—for example desktop input, a local
+path, locally installed software, or attached hardware. When a Flow requires
+those capabilities, run it from Desktop and keep the app available on that
+machine.
 
-### Permission-Based Execution
+A local run can still call remote APIs and cloud services. “Local” identifies
+the execution host, not a network-disconnected sandbox.
 
-When sharing apps with other users, you can grant different permission levels:
+See [Local-only execution](/studio/local-execution/) and
+[Runtime Variables](/apps/runtime-variables/) for device-specific
+configuration.
 
-| Permission | Can Execute Locally | Can Execute on Server |
-|------------|---------------------|----------------------|
-| **Execute + Read Boards** | ✅ Yes | ✅ Yes |
-| **Execute Only** | ❌ No | ✅ Yes |
+## Self-hosted online execution
 
-Users with only **Execute** permission (without **Read Boards**) can only run flows on the server. This is useful when you want to share an app's functionality without giving access to the underlying flow logic.
+With a [self-hosted backend](/self-hosting/overview/), remote runs stay on the
+infrastructure and execution backend you configure. They may use a shared
+runtime pool, a per-run Kubernetes Job, Lambda, or another supported
+[execution backend](/self-hosting/execution-backends/); self-hosting does not
+imply one dedicated container per run.
 
-### Local-Only Execution
-
-Some flows **must always run locally** on your device, regardless of whether your app is offline or online. This includes:
-
-- **RPA (Robotic Process Automation)** – Controlling your desktop, mouse, and keyboard
-- **Browser automation** – Interacting with a real browser window
-- **Local file access** – Reading and writing files on your computer
-- **Hardware integration** – Accessing cameras, microphones, or other devices
-
-Learn more about which nodes require local execution in our [Local-Only Execution guide](/studio/local-execution/).
+Keep Desktop, web, API, and executor versions compatible when the same online
+app is used across them.

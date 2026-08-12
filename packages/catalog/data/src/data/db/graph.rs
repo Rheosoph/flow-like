@@ -1,5 +1,5 @@
 use flow_like::flow::{
-    execution::context::ExecutionContext,
+    execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
@@ -511,8 +511,13 @@ impl NodeLogic for CreateGraphOverlayNode {
                     issues.push(format!("{} '{}': {}", mapping.kind, mapping.label, issue));
                 }
             }
+            let message = issues.join("; ");
+            context.log_message(
+                &format!("Database graph-overlay validation failed: {message}"),
+                LogLevel::Error,
+            );
             context
-                .set_pin_value("error_message", json!(issues.join("; ")))
+                .set_pin_value("error_message", json!(message))
                 .await?;
             context.activate_exec_pin("error").await?;
             return Ok(());
@@ -526,6 +531,10 @@ impl NodeLogic for CreateGraphOverlayNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Err(e) => {
+                context.log_message(
+                    &format!("Database graph-overlay save failed: {e:#}"),
+                    LogLevel::Error,
+                );
                 context
                     .set_pin_value("error_message", json!(e.to_string()))
                     .await?;

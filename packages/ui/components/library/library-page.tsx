@@ -15,10 +15,10 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useMiniSearch } from "react-minisearch";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useIsMobile } from "../../hooks/use-mobile";
+import { useSearch } from "../../hooks/use-search-index";
 import { formatAppCategory } from "../../lib/app-category";
 import { IBitTypes } from "../../lib/schema/hub/bit-search-query";
 import type { IProfileApp } from "../../lib/schema/profile/profile";
@@ -41,7 +41,12 @@ import {
 } from "./library-sub-components";
 import { SuiteShelf } from "./library-suite-shelf";
 import type { LibraryItem, SortMode } from "./library-types";
-import { CATEGORY_COLORS, sortItems } from "./library-types";
+import {
+	CATEGORY_COLORS,
+	sortItems,
+	sortItemsByRank,
+	toLibraryItem,
+} from "./library-types";
 
 export interface LibraryPageProps {
 	onAppClick?: (appId: string) => void;
@@ -93,23 +98,22 @@ export function LibraryPage({
 	}, [sortMode]);
 	const isMobile = useIsMobile();
 
+	// Navigating away used to invalidate the entire query cache. The library is
+	// still mounted while the router transitions, so it immediately refetched
+	// its own app list and reshuffled the grid under the pointer. The target
+	// route refetches what it needs on mount anyway.
 	const handleAppClick = useCallback(
 		(appId: string) => {
 			if (onAppClickProp) {
 				onAppClickProp(appId);
-			} else {
-				queryClient.invalidateQueries();
-				router.push(`/use?id=${appId}`);
+				return;
 			}
+			router.push(`/use?id=${appId}`);
 		},
-		[onAppClickProp, queryClient, router],
+		[onAppClickProp, router],
 	);
 
 	const appHref = useCallback((appId: string) => `/use?id=${appId}`, []);
-
-	const handleSettingsClick = useCallback(() => {
-		queryClient.invalidateQueries();
-	}, [queryClient]);
 
 	const appSettingsHref = useCallback(
 		(appId: string) => `/library/config?id=${appId}`,
@@ -148,7 +152,7 @@ export function LibraryPage({
 	const allAvailableItems = useMemo(() => {
 		const map = new Map<string, LibraryItem>();
 		for (const [app, meta] of apps.data ?? []) {
-			if (meta) map.set(app.id, { ...meta, id: app.id, app });
+			if (meta) map.set(app.id, toLibraryItem(app, meta));
 		}
 		return Array.from(map.values());
 	}, [apps.data]);
@@ -203,29 +207,25 @@ export function LibraryPage({
 		[currentProfile, profileAppMap, backend.userState],
 	);
 
-	const pinnedItems = useMemo(() => {
-		const sorted = sortItems(
-			allItems.filter((item) => profileAppMap.get(item.id)?.pinned),
-			sortMode,
-		);
-		return [...sorted].sort((a, b) => {
-			const orderA = profileAppMap.get(a.id)?.pinned_order ?? 999;
-			const orderB = profileAppMap.get(b.id)?.pinned_order ?? 999;
-			return orderA - orderB;
-		});
-	}, [allItems, profileAppMap, sortMode]);
+	const pinnedItems = useMemo(
+		() =>
+			sortItemsByRank(
+				allItems.filter((item) => profileAppMap.get(item.id)?.pinned),
+				(id) => profileAppMap.get(id)?.pinned_order,
+				sortMode,
+			),
+		[allItems, profileAppMap, sortMode],
+	);
 
-	const favoriteItems = useMemo(() => {
-		const favs = allItems.filter(
-			(item) => profileAppMap.get(item.id)?.favorite,
-		);
-		return [...favs].sort((a, b) => {
-			const orderA = profileAppMap.get(a.id)?.favorite_order ?? 999;
-			const orderB = profileAppMap.get(b.id)?.favorite_order ?? 999;
-			if (orderA !== orderB) return orderA - orderB;
-			return (a.name ?? "").localeCompare(b.name ?? "");
-		});
-	}, [allItems, profileAppMap]);
+	const favoriteItems = useMemo(
+		() =>
+			sortItemsByRank(
+				allItems.filter((item) => profileAppMap.get(item.id)?.favorite),
+				(id) => profileAppMap.get(id)?.favorite_order,
+				sortMode,
+			),
+		[allItems, profileAppMap, sortMode],
+	);
 
 	const recentItems = useMemo(
 		() => sortItems(itemsForDisplay, "recent").slice(0, 10),
@@ -283,28 +283,18 @@ export function LibraryPage({
 			.sort((a, b) => a.label.localeCompare(b.label));
 	}, [ungroupedItems, sortMode]);
 
-	const { addAll, removeAll, clearSearch, search, searchResults } =
-		useMiniSearch(itemsForDisplay, {
-			fields: [
-				"name",
-				"description",
-				"long_description",
-				"tags",
-				"category",
-				"id",
-			],
-		});
-
-	useEffect(() => {
-		if (itemsForDisplay.length > 0) {
-			removeAll();
-			addAll(itemsForDisplay);
-		}
-		return () => {
-			removeAll();
-			clearSearch();
-		};
-	}, [itemsForDisplay, removeAll, addAll, clearSearch]);
+	const searchResults = useSearch(itemsForDisplay, searchQuery, {
+		fields: [
+			"name",
+			"description",
+			"long_description",
+			"tags",
+			"use_case",
+			"app.primary_category",
+			"id",
+		],
+		boost: { name: 4, tags: 2, use_case: 1.5, description: 1 },
+	});
 
 	const menuActions = useMemo(
 		() => [...(extraMobileActions ?? []), <JoinInline key="join-inline" />],
@@ -466,25 +456,19 @@ export function LibraryPage({
 			<div
 				className={`pt-5 pb-3 space-y-3 ${isMobile ? "px-4" : "px-4 sm:px-8 pb-4"}`}
 			>
-				<div className="flex items-center gap-2">
-					<div className="relative flex-1 max-w-lg">
+				<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+					<div className="relative w-full sm:flex-1 sm:max-w-lg">
 						<Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40 pointer-events-none" />
 						<Input
 							placeholder="Search…"
 							value={searchQuery}
-							onChange={(e) => {
-								search(e.target.value);
-								setSearchQuery(e.target.value);
-							}}
-							className="pl-11 h-10 rounded-full bg-muted/30 border-transparent focus:border-border/40 focus:bg-muted/50 transition-all text-sm"
+							onChange={(e) => setSearchQuery(e.target.value)}
+							className="pl-11 h-11 sm:h-10 rounded-full bg-muted/30 border-transparent focus:border-border/40 focus:bg-muted/50 transition-all text-sm"
 						/>
 						{searchQuery && (
 							<button
 								type="button"
-								onClick={() => {
-									setSearchQuery("");
-									clearSearch();
-								}}
+								onClick={() => setSearchQuery("")}
 								className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground/40 hover:text-foreground transition-colors"
 							>
 								<X className="h-4 w-4" />
@@ -498,7 +482,7 @@ export function LibraryPage({
 								<Button
 									variant="ghost"
 									size="icon"
-									className={`h-8 w-8 rounded-full ${
+									className={`h-11 w-11 sm:h-8 sm:w-8 rounded-full ${
 										sortMode === "alpha"
 											? "text-foreground/80 bg-muted/40"
 											: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
@@ -519,16 +503,19 @@ export function LibraryPage({
 							</TooltipContent>
 						</Tooltip>
 
-						<JoinInline />
-
-						{extraToolbarActions}
+						{!isMobile && (
+							<>
+								<JoinInline />
+								{extraToolbarActions}
+							</>
+						)}
 
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button
 									variant="ghost"
 									size="icon"
-									className="h-8 w-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
+									className="h-11 w-11 sm:h-8 sm:w-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
 									onClick={handleOpenCreateFlow}
 								>
 									<Plus className="h-4 w-4" />
@@ -542,7 +529,7 @@ export function LibraryPage({
 								<Button
 									variant={visibilityMode ? "secondary" : "ghost"}
 									size="icon"
-									className={`h-8 w-8 rounded-full ${
+									className={`h-11 w-11 sm:h-8 sm:w-8 rounded-full ${
 										visibilityMode
 											? "text-primary bg-primary/10"
 											: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
@@ -577,10 +564,9 @@ export function LibraryPage({
 			>
 				{isSearching ? (
 					<SearchResults
-						items={(searchResults as LibraryItem[]) ?? []}
+						items={searchResults}
 						query={searchQuery}
 						onAppClick={handleAppClick}
-						onSettingsClick={handleSettingsClick}
 						settingsHref={appSettingsHref}
 						visibilityMode={visibilityMode}
 						activeAppIds={activeAppIds}
@@ -594,7 +580,6 @@ export function LibraryPage({
 							<PinnedHero
 								items={pinnedItems}
 								onAppClick={handleAppClick}
-								onSettingsClick={handleSettingsClick}
 								settingsHref={appSettingsHref}
 								appHref={appHref}
 								isMobile={isMobile}
@@ -605,7 +590,6 @@ export function LibraryPage({
 							<FavoritesSection
 								items={favoriteItems}
 								onAppClick={handleAppClick}
-								onSettingsClick={handleSettingsClick}
 								settingsHref={appSettingsHref}
 								onReorder={handleFavoriteReorder}
 								appHref={appHref}
@@ -626,7 +610,6 @@ export function LibraryPage({
 								}
 								items={recentItems}
 								onAppClick={handleAppClick}
-								onSettingsClick={handleSettingsClick}
 								settingsHref={appSettingsHref}
 								visibilityMode={visibilityMode}
 								activeAppIds={activeAppIds}
@@ -641,7 +624,6 @@ export function LibraryPage({
 							<SuiteShelf
 								suites={suiteGroups}
 								onAppClick={handleAppClick}
-								onSettingsClick={handleSettingsClick}
 								settingsHref={appSettingsHref}
 								appHref={appHref}
 								visibilityMode={visibilityMode}
@@ -661,7 +643,6 @@ export function LibraryPage({
 								title={label}
 								items={items}
 								onAppClick={handleAppClick}
-								onSettingsClick={handleSettingsClick}
 								settingsHref={appSettingsHref}
 								visibilityMode={visibilityMode}
 								activeAppIds={activeAppIds}

@@ -4,6 +4,7 @@ import {
 	type ProjectQuickLink,
 	type SpotlightItem,
 	SpotlightProvider,
+	handleUpgradeRequiredError,
 	nowSystemTime,
 	useBackend,
 	useInvalidateInvoke,
@@ -23,6 +24,7 @@ import { useCallback, useMemo } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { type IShortcut, appsDB } from "../lib/apps-db";
+import { currentRelativeUrl } from "../lib/return-url";
 
 interface SpotlightWrapperProps {
 	children: React.ReactNode;
@@ -345,7 +347,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 				group: "account",
 				keywords: ["login", "sign in", "account", "authenticate"],
 				priority: 40,
-				action: () => auth.signinRedirect(),
+				action: () => auth.signinRedirect({ url_state: currentRelativeUrl() }),
 			});
 		}
 
@@ -466,7 +468,13 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 				return { appId: app.id, boardId };
 			} catch (error) {
 				console.error("Failed to create project:", error);
-				toast.error("Failed to create project");
+				if (handleUpgradeRequiredError(error, "project-limit")) {
+					useSpotlightStore.getState().close();
+				} else {
+					toast.error(
+						error instanceof Error ? error.message : "Failed to create project",
+					);
+				}
 				return null;
 			}
 		},

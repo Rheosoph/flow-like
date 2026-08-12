@@ -42,14 +42,16 @@ impl NodeLogic for NavigateTo {
             "Query Params",
             "Optional query parameters as key-value pairs (e.g., {\"tab\": \"settings\", \"id\": \"123\"})",
             VariableType::Struct,
-        );
+        )
+        .set_default_value(Some(flow_like_types::json::json!({})));
 
         node.add_input_pin(
             "replace",
             "Replace",
             "If true, replaces the current history entry instead of adding a new one",
             VariableType::Boolean,
-        );
+        )
+        .set_default_value(Some(flow_like_types::json::json!(false)));
 
         node.add_output_pin("exec_out", "▶", "Execution output", VariableType::Execution);
 
@@ -91,5 +93,35 @@ impl NodeLogic for NavigateTo {
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_types::{
+        Value,
+        json::{from_slice, json},
+    };
+
+    fn pin_default(node: &Node, name: &str) -> Option<Value> {
+        node.get_pin_by_name(name)
+            .and_then(|pin| pin.default_value.as_deref())
+            .map(|bytes| from_slice(bytes).expect("pin default must be valid JSON"))
+    }
+
+    #[test]
+    fn navigation_metadata_requires_only_route_payload() {
+        let node = NavigateTo::new().get_node();
+
+        assert!(
+            node.get_pin_by_name("route")
+                .expect("route input")
+                .default_value
+                .is_none(),
+            "route must remain required at runtime"
+        );
+        assert_eq!(pin_default(&node, "query_params"), Some(json!({})));
+        assert_eq!(pin_default(&node, "replace"), Some(json!(false)));
     }
 }

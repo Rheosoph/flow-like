@@ -380,6 +380,10 @@ function redactValue(
 	stringLimit = MAX_PREVIEW_CHARS,
 	allowWorkspaceEnvelopes = true,
 ): unknown {
+	if (key === "_flowpilot_image_urls") {
+		const count = Array.isArray(value) ? value.length : 0;
+		return `[OMITTED ${count} IMAGE ATTACHMENT${count === 1 ? "" : "S"}]`;
+	}
 	if (SENSITIVE_KEY.test(key)) return "[REDACTED]";
 	// MCP content -> text -> JSON adds two legitimate wrapper levels before the diagnostic list.
 	// Keep enough depth for stable diagnostic codes while arrays/objects remain independently
@@ -1794,22 +1798,47 @@ export function summarizeAgentDebugRootOutcomes(events: IAgentDebugEvent[]) {
 			!successfulRootRequests.has(event.parent_request_id),
 	);
 	const relevant = [...relevantRootEvents, ...relevantNestedTerminals];
+	// A failed delegation that a LATER root request completed successfully is a recovered
+	// attempt, not a failed turn: every delegation carries its own request_id, so the retry can
+	// never supersede the failed request's authoritative event by id. Without this, one recovered
+	// mid-turn failure marks a fully successful turn as outcome=error forever. Terminal lifecycle
+	// failures (stream_error/resume_gap) keep counting — nothing recovers those.
+	const lastSuccessfulCompletionMs = Math.max(
+		0,
+		...[...latestRootRequest.values()]
+			.filter(
+				(event) =>
+					event.stage === "request_completed" &&
+					["done", "ok", "completed"].includes(
+						String(event.status ?? "").toLowerCase(),
+					),
+			)
+			.map((event) => event.timestamp_ms),
+	);
+	const recoveredBySuccess = (event: IAgentDebugEvent) =>
+		event.kind !== "lifecycle" &&
+		lastSuccessfulCompletionMs > 0 &&
+		event.timestamp_ms < lastSuccessfulCompletionMs;
 	return {
 		recordedTimeout: relevant.some(
-			(event) => event.status === "timeout" || event.stage.includes("timeout"),
+			(event) =>
+				(event.status === "timeout" || event.stage.includes("timeout")) &&
+				!recoveredBySuccess(event),
 		),
 		recordedPartial: relevant.some(
 			(event) =>
-				event.status === "partial" ||
-				event.status === "denied" ||
-				event.status === "cancelled" ||
-				event.stage.includes("partial"),
+				(event.status === "partial" ||
+					event.status === "denied" ||
+					event.status === "cancelled" ||
+					event.stage.includes("partial")) &&
+				!recoveredBySuccess(event),
 		),
 		recordedError: relevant.some(
 			(event) =>
-				event.status === "error" ||
-				event.status === "failed" ||
-				Boolean(event.error),
+				(event.status === "error" ||
+					event.status === "failed" ||
+					Boolean(event.error)) &&
+				!recoveredBySuccess(event),
 		),
 	};
 }

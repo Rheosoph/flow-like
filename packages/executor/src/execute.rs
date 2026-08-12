@@ -559,14 +559,28 @@ pub async fn execute(
                 );
             }
 
+            let status = ExecutionStatus::from_final_run_status(&run.get_status().await);
+            let (event_type, message, error) = match &status {
+                ExecutionStatus::Completed => (EventType::Log, "Execution completed", None),
+                ExecutionStatus::Cancelled => (
+                    EventType::Error,
+                    "Execution cancelled",
+                    Some("Execution cancelled".to_string()),
+                ),
+                ExecutionStatus::Failed | ExecutionStatus::Running => (
+                    EventType::Error,
+                    "Execution failed",
+                    Some("Execution failed".to_string()),
+                ),
+            };
             send_event(
                 &event_tx,
                 &sequence,
                 &claims.run_id,
-                EventType::Log,
-                serde_json::json!({ "message": "Execution completed" }),
+                event_type,
+                serde_json::json!({ "message": message }),
             );
-            (ExecutionStatus::Completed, None, None)
+            (status, None, error)
         }
         Err(_) => {
             send_event(

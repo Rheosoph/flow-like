@@ -1,6 +1,6 @@
 "use client";
-import { createId } from "@paralleldrive/cuid2";
 import { SidebarTrigger } from "@flow-like/flow-like-ui";
+import { createId } from "@paralleldrive/cuid2";
 import React, {
 	createContext,
 	useCallback,
@@ -136,12 +136,30 @@ export function useMobileHeader(
 	return { set, update, clear } as const;
 }
 
-export const MobileHeader: React.FC = () => {
+export const MobileHeader: React.FC<{
+	showSidebarTrigger?: boolean;
+}> = ({ showSidebarTrigger = true }) => {
 	const ctx = useContext(MobileHeaderContext);
 	const active = ctx?.active ?? null;
 	const ref = React.useRef<HTMLDivElement | null>(null);
+	const hasAdditionalContent = useMemo(
+		() =>
+			[active?.title, active?.left, active?.right].some(
+				(content) => React.Children.toArray(content).length > 0,
+			),
+		[active?.title, active?.left, active?.right],
+	);
+	const shouldHide = !showSidebarTrigger && !hasAdditionalContent;
 
 	useEffect(() => {
+		if (shouldHide) {
+			document.documentElement.style.setProperty(
+				"--mobile-header-height",
+				"0px",
+			);
+			return;
+		}
+
 		const el = ref.current;
 		if (!el) return;
 		const setVar = () => {
@@ -155,7 +173,7 @@ export const MobileHeader: React.FC = () => {
 		const ro = new ResizeObserver(setVar);
 		ro.observe(el);
 		return () => ro.disconnect();
-	}, []);
+	}, [shouldHide]);
 
 	const left = useMemo(() => {
 		if (!active?.left) return null;
@@ -175,14 +193,18 @@ export const MobileHeader: React.FC = () => {
 		<React.Fragment key={i}>{node}</React.Fragment>
 	));
 
+	if (shouldHide) return null;
+
 	return (
 		<div ref={ref} className="md:hidden sticky top-0 z-40 px-2 pt-2 pb-1">
 			<div className="rounded-xl bg-card/80 shadow-2xl flex items-center justify-between gap-2 p-2">
 				<div className="flex items-center gap-2 min-w-0">
-					<SidebarTrigger
-						className="size-9 rounded-lg border"
-						aria-label="Open Menu"
-					/>
+					{showSidebarTrigger && (
+						<SidebarTrigger
+							className="size-10 rounded-lg border extend-touch-target"
+							aria-label="Open Menu"
+						/>
+					)}
 					{leftNodes}
 				</div>
 				<div className="flex-1 min-w-0 text-center font-medium truncate">

@@ -9,15 +9,18 @@ import {
 	MessageSquareIcon,
 	ThumbsDownIcon,
 	ThumbsUpIcon,
+	XIcon,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { IRole, cn } from "../../../lib";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../../lib/flowpilot-debug";
+import { observeResize } from "../../../lib/observe-resize";
 import {
 	Badge,
 	Button,
 	Dialog,
+	DialogClose,
 	DialogContent,
 	DialogDescription,
 	DialogFooter,
@@ -31,18 +34,36 @@ import {
 import { StreamingTextEditor } from "../../ui/streaming-text-editor";
 import { AgentDebugReport } from "./agent-debug-report";
 import { AppReferences } from "./app-references";
-import { FilePreview, type ProcessedAttachment } from "./attachment";
+import { type ProcessedAttachment, getDisplayFileName } from "./attachment";
 import {
 	FileDialog,
 	FileDialogPreview,
 	canPreviewFile,
 	downloadFile,
 } from "./attachment-dialog";
+import { AttachmentStrip } from "./attachment-strip";
 import type { IAttachment, IMessage } from "./chat-db";
 import { useProcessedAttachments } from "./hooks/use-processed-attachments";
+import { buildInlineSegments } from "./inline-segments";
 import { MessageWidgets } from "./message-widgets";
-import { PlanSteps } from "./plan-steps";
+import { InlineStepGroup, PlanSteps } from "./plan-steps";
 import { UsageStats } from "./usage-stats";
+
+/** Lines of a sent message shown before it collapses behind "Show more". */
+const COLLAPSED_ASK_LINES = 6;
+
+function ThinkingIndicator() {
+	return (
+		<div className="flex items-center gap-1.5 py-1">
+			<div className="flex gap-1">
+				<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:0ms]" />
+				<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:150ms]" />
+				<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:300ms]" />
+			</div>
+			<span className="text-xs text-muted-foreground ml-1">Thinking...</span>
+		</div>
+	);
+}
 
 interface MessageProps {
 	message: IMessage;
@@ -307,9 +328,6 @@ const MessageActions = ({
 	onFeedbackClick,
 	onEdit,
 	onCopy,
-	allFiles,
-	hiddenFilesCount,
-	onFileClick,
 }: {
 	isUser: boolean;
 	hasFooterContent: boolean;
@@ -321,9 +339,6 @@ const MessageActions = ({
 	onFeedbackClick: () => void;
 	onEdit: () => void;
 	onCopy: () => void;
-	allFiles: ProcessedAttachment[];
-	hiddenFilesCount: number;
-	onFileClick: (file: ProcessedAttachment) => void;
 }) => (
 	<div
 		className={cn(
@@ -374,9 +389,6 @@ const MessageActions = ({
 				</Badge>
 			</button>
 		)}
-		{hiddenFilesCount > 0 && (
-			<FileDialog files={allFiles} handleFileClick={onFileClick} />
-		)}
 		{!isUser && (
 			<MessageActionButton onClick={onEdit} title="Edit message">
 				<EditIcon className="w-4 h-4" />
@@ -387,110 +399,6 @@ const MessageActions = ({
 		</MessageActionButton>
 	</div>
 );
-
-const AttachmentSection = ({
-	files,
-	onFileClick,
-	onFullscreen,
-}: {
-	files: ProcessedAttachment[];
-	onFileClick: (file: ProcessedAttachment) => void;
-	onFullscreen?: (file: ProcessedAttachment) => void;
-}) => {
-	const { visibleAudio, visibleImages, visibleVideo, visibleDocuments } =
-		useMemo(() => {
-			const audioFiles = files.filter((file) => file.type === "audio");
-			const imageFiles = files.filter((file) => file.type === "image");
-			const videoFiles = files.filter((file) => file.type === "video");
-			const documentFiles = files.filter(
-				(file) => !["audio", "image", "video"].includes(file.type),
-			);
-
-			return {
-				visibleAudio: audioFiles.slice(0, 1),
-				visibleImages: imageFiles.slice(0, 4),
-				visibleVideo: videoFiles.slice(0, 1),
-				visibleDocuments: documentFiles.slice(0, 3),
-			};
-		}, [files]);
-
-	const getImageGridClassName = useCallback((count: number) => {
-		if (count === 1) return "grid-cols-1";
-		if (count === 2) return "grid-cols-2";
-		if (count >= 3) return "grid-cols-2";
-		return "grid-cols-1";
-	}, []);
-
-	return (
-		<>
-			{visibleAudio.length > 0 && (
-				<div className="mt-2 max-w-md">
-					{visibleAudio.map((file) => (
-						<FilePreview key={file.url} file={file} onClick={onFileClick} />
-					))}
-				</div>
-			)}
-
-			{visibleImages.length > 0 && (
-				<div
-					className={cn(
-						"mt-2 grid gap-1.5 max-w-md",
-						getImageGridClassName(visibleImages.length),
-					)}
-				>
-					{visibleImages.map((file) => (
-						<FilePreview
-							key={file.url}
-							file={file}
-							showFullscreenButton={true}
-							onFullscreen={onFullscreen}
-							inGrid={visibleImages.length > 1}
-						/>
-					))}
-				</div>
-			)}
-
-			{visibleVideo.length > 0 && (
-				<div className="mt-2 max-w-md">
-					{visibleVideo.map((file) => (
-						<FilePreview key={file.url} file={file} onClick={onFileClick} />
-					))}
-				</div>
-			)}
-
-			{visibleDocuments.length > 0 && (
-				<div className="mt-2 flex flex-col gap-2 max-w-md">
-					{visibleDocuments.map((file) => (
-						<button
-							key={file.url}
-							onClick={() => onFileClick(file)}
-							className="flex flex-col gap-1 p-3 rounded-lg border bg-muted/30 hover:bg-muted/50 transition-colors text-left"
-						>
-							<div className="flex items-center gap-2">
-								<Badge variant="outline" className="text-xs capitalize">
-									{file.type}
-								</Badge>
-								<span className="text-sm font-medium truncate flex-1">
-									{file.name}
-								</span>
-								{file.pageNumber !== undefined && (
-									<Badge variant="secondary" className="text-xs">
-										Page {file.pageNumber}
-									</Badge>
-								)}
-							</div>
-							{file.previewText && (
-								<p className="text-xs text-muted-foreground line-clamp-2">
-									{file.previewText}
-								</p>
-							)}
-						</button>
-					))}
-				</div>
-			)}
-		</>
-	);
-};
 
 export const MessageComponent = memo(
 	function MessageComponent({
@@ -512,18 +420,9 @@ export const MessageComponent = memo(
 		const [dialogSelectedFile, setDialogSelectedFile] =
 			useState<ProcessedAttachment | null>(null);
 		const contentRef = useRef<HTMLDivElement>(null);
-
-		const maxCollapsedHeight = "4rem";
-
-		const getDisplayFileName = useCallback((name: string) => {
-			try {
-				const decoded = decodeURIComponent(name);
-				const parts = decoded.split(/[/\\]/);
-				return parts[parts.length - 1];
-			} catch {
-				return name;
-			}
-		}, []);
+		const [collapsedMaxHeight, setCollapsedMaxHeight] = useState(
+			COLLAPSED_ASK_LINES * 22,
+		);
 
 		const messageContent = useMemo(() => {
 			if (typeof message.inner.content === "string") {
@@ -580,57 +479,35 @@ export const MessageComponent = memo(
 			messageContent.attachments,
 		);
 
-		const hiddenFilesCount = useMemo(() => {
-			const audioFiles = processedAttachments.filter(
-				(file) => file.type === "audio",
-			);
-			const imageFiles = processedAttachments.filter(
-				(file) => file.type === "image",
-			);
-			const videoFiles = processedAttachments.filter(
-				(file) => file.type === "video",
-			);
-			const documentFiles = processedAttachments.filter(
-				(file) => !["audio", "image", "video"].includes(file.type),
-			);
-
-			const hiddenAudio = audioFiles.slice(1);
-			const hiddenImages = imageFiles.slice(4);
-			const hiddenVideo = videoFiles.slice(1);
-			const hiddenDocuments = documentFiles.slice(3);
-
-			return (
-				hiddenAudio.length +
-				hiddenImages.length +
-				hiddenVideo.length +
-				hiddenDocuments.length
-			);
-		}, [processedAttachments]);
-
+		// A long paste should not push the answer off screen. The cap is measured
+		// from the rendered line height rather than assumed, and the observer stays
+		// attached so the toggle disappears again if the content shrinks.
 		useEffect(() => {
-			if (!isUser || !contentRef.current) return;
-
+			if (!isUser) return;
 			const el = contentRef.current;
-			const maxHeight = Number.parseFloat(maxCollapsedHeight) * 16;
+			if (!el) return;
 
-			if (el.scrollHeight > maxHeight) {
-				setShowToggle(true);
-				return;
-			}
+			const evaluate = () => {
+				const lineHeight =
+					Number.parseFloat(window.getComputedStyle(el).lineHeight) || 22;
+				const cap = Math.round(lineHeight * COLLAPSED_ASK_LINES);
+				setCollapsedMaxHeight(cap);
+				setShowToggle(el.scrollHeight > cap + 4);
+			};
 
-			const observer = new ResizeObserver(() => {
-				if (el.scrollHeight > maxHeight) {
-					setShowToggle(true);
-					observer.disconnect();
-				}
-			});
-			observer.observe(el);
-
-			return () => observer.disconnect();
+			evaluate();
+			// Collapsing caps the height of the observed element itself, so the
+			// re-measure has to happen a frame after the notification rather than
+			// inside it.
+			return observeResize([el], evaluate);
 		}, [message.inner, isUser]);
 
 		const handleFileClick = useCallback((file: ProcessedAttachment) => {
-			if (canPreviewFile(file)) {
+			// A cited page is a destination, not a file — downloading its markup is
+			// never what the external-link affordance promised.
+			if (file.type === "website") {
+				window.open(file.url, "_blank", "noopener,noreferrer");
+			} else if (canPreviewFile(file)) {
 				// Open file dialog with this file selected
 				setDialogSelectedFile(file);
 				setShowFileDialog(true);
@@ -638,6 +515,11 @@ export const MessageComponent = memo(
 				// Download non-previewable files
 				downloadFile(file);
 			}
+		}, []);
+
+		const showAllAttachments = useCallback(() => {
+			setDialogSelectedFile(null);
+			setShowFileDialog(true);
 		}, []);
 
 		const copyToClipboard = useCallback(() => {
@@ -750,6 +632,42 @@ export const MessageComponent = memo(
 				? message.current_step_id
 				: undefined;
 
+		// Anchors index into the RAW content string — only trust them when content is that string
+		// (array-form content is re-joined for display, which shifts offsets).
+		const inlineSegments = useMemo(
+			() =>
+				isUser || typeof message.inner.content !== "string"
+					? null
+					: buildInlineSegments(messageContent.text, planSteps),
+			[isUser, message.inner.content, messageContent.text, planSteps],
+		);
+
+		// Which segments are still moving while the turn streams: the growing text tail (not
+		// necessarily the last segment — an action anchored at the end sorts after it) and the one
+		// action group that can still gain steps.
+		const { lastTextSegmentIndex, liveSegmentIndex } = useMemo(() => {
+			let lastText = -1;
+			let lastSteps = -1;
+			let withCurrent = -1;
+			inlineSegments?.forEach((segment, index) => {
+				if (segment.steps) {
+					lastSteps = index;
+					if (
+						currentPlanStepId &&
+						segment.steps.some((step) => step.id === currentPlanStepId)
+					) {
+						withCurrent = index;
+					}
+					return;
+				}
+				lastText = index;
+			});
+			return {
+				lastTextSegmentIndex: lastText,
+				liveSegmentIndex: withCurrent === -1 ? lastSteps : withCurrent,
+			};
+		}, [inlineSegments, currentPlanStepId]);
+
 		const usageStats = !isUser ? (message.usage_stats ?? []) : [];
 		const hasUsageStats = usageStats.length > 0;
 		const hasFooterContent =
@@ -761,30 +679,43 @@ export const MessageComponent = memo(
 		return (
 			<>
 				<div
-					className={cn(
-						"flex w-full flex-col gap-1 transition-all duration-300 ease-in-out",
-						isUser ? "items-end" : "items-start",
-					)}
-					style={{ maxWidth: "var(--fl-chat-content-width, 64rem)" }}
+					className="flex w-full flex-col items-start gap-1 transition-all duration-300 ease-in-out"
+					style={{
+						maxWidth:
+							"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+					}}
 				>
 					<div
 						className={cn(
-							"p-4 pt-2 whitespace-break-spaces transition-all duration-300 ease-in-out",
+							"whitespace-break-spaces transition-all duration-300 ease-in-out",
 							compactUserActions && "relative",
-							isUser ? "max-w-3xl" : "w-full max-w-full pb-0",
+							isUser
+								? "w-full border-l-2 py-2 pr-4 pl-3.5"
+								: "w-full max-w-full p-4 pt-2 pb-0",
 						)}
 						data-fl-chat-message={isUser ? "user" : "assistant"}
 						style={{
 							backgroundColor: isUser
-								? "var(--fl-chat-user-message-background, var(--muted))"
+								? "var(--fl-chat-ask-background, transparent)"
 								: "var(--fl-chat-ai-message-background, var(--background))",
-							borderRadius: "var(--fl-chat-message-radius, 0.75rem)",
+							borderLeftColor: isUser
+								? "var(--fl-chat-ask-rule, var(--primary))"
+								: undefined,
+							borderRadius: isUser
+								? "0 var(--fl-chat-message-radius, 0.75rem) var(--fl-chat-message-radius, 0.75rem) 0"
+								: "var(--fl-chat-message-radius, 0.75rem)",
 							color: isUser
 								? "var(--fl-chat-user-message-foreground, var(--foreground))"
 								: "var(--fl-chat-ai-message-foreground, var(--foreground))",
+							maxWidth: isUser ? "var(--fl-chat-measure, 38rem)" : undefined,
 						}}
 					>
-						{!isUser && planSteps.length > 0 && (
+						{isUser && (
+							<span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+								Asked
+							</span>
+						)}
+						{!isUser && !inlineSegments && planSteps.length > 0 && (
 							<PlanSteps
 								steps={planSteps}
 								currentStepId={currentPlanStepId}
@@ -794,61 +725,114 @@ export const MessageComponent = memo(
 						<div
 							ref={contentRef}
 							className={cn(
-								"text-sm leading-relaxed whitespace-break-spaces text-wrap max-w-full w-full",
+								"w-full max-w-full whitespace-break-spaces text-wrap text-sm leading-relaxed",
 								compactUserActions && "pr-10",
-								isUser && !isExpanded && "overflow-hidden",
+								isUser && showToggle && !isExpanded && "overflow-hidden",
 							)}
 							style={
-								isUser && !isExpanded
-									? { maxHeight: maxCollapsedHeight }
+								// Only clamp + fade a message that genuinely overflows. Applying
+								// the mask unconditionally faded every short question.
+								isUser && showToggle && !isExpanded
+									? {
+											maxHeight: collapsedMaxHeight,
+											WebkitMaskImage:
+												"linear-gradient(to bottom, #000 calc(100% - 2rem), transparent)",
+											maskImage:
+												"linear-gradient(to bottom, #000 calc(100% - 2rem), transparent)",
+										}
 									: undefined
 							}
 						>
-							{loading && !isUser && messageContent.text === "" ? (
-								<div className="flex items-center gap-1.5 py-1">
-									<div className="flex gap-1">
-										<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:0ms]" />
-										<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:150ms]" />
-										<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:300ms]" />
-									</div>
-									<span className="text-xs text-muted-foreground ml-1">
-										Thinking...
-									</span>
-								</div>
+							{inlineSegments ? (
+								<>
+									{inlineSegments.map((segment, index) =>
+										segment.steps ? (
+											<InlineStepGroup
+												key={segment.key}
+												steps={segment.steps}
+												// Only the group owning the active step gets the live
+												// flags. Earlier groups are frozen (anchors never move
+												// backwards), so handing them the bubble's `loading`
+												// would spin them at "Working…" for the whole turn.
+												currentStepId={
+													segment.steps.some(
+														(step) => step.id === currentPlanStepId,
+													)
+														? currentPlanStepId
+														: undefined
+												}
+												loading={loading && index === liveSegmentIndex}
+												// …but every group stays expanded until the whole
+												// turn settles, or finished groups fold away one by
+												// one mid-stream and the run looks frozen.
+												turnActive={loading}
+											/>
+										) : loading && index === lastTextSegmentIndex ? (
+											<div key={segment.key} data-fl-chat-prose>
+												<StreamingTextEditor content={segment.text ?? ""} />
+											</div>
+										) : (
+											<div key={segment.key} data-fl-chat-prose>
+												<TextEditor
+													initialContent={segment.text ?? ""}
+													isMarkdown={true}
+													editable={false}
+												/>
+											</div>
+										),
+									)}
+									{loading &&
+										Boolean(
+											inlineSegments[inlineSegments.length - 1]?.steps,
+										) && <ThinkingIndicator />}
+								</>
+							) : loading && !isUser && messageContent.text === "" ? (
+								<ThinkingIndicator />
 							) : loading && !isUser && messageContent.text !== "" ? (
-								<StreamingTextEditor content={messageContent.text} />
-							) : (
+								<div data-fl-chat-prose>
+									<StreamingTextEditor content={messageContent.text} />
+								</div>
+							) : isUser ? (
 								<TextEditor
 									initialContent={messageContent.text}
 									isMarkdown={true}
 									editable={false}
 								/>
+							) : (
+								<div data-fl-chat-prose>
+									<TextEditor
+										initialContent={messageContent.text}
+										isMarkdown={true}
+										editable={false}
+									/>
+								</div>
 							)}
-						</div>{" "}
+						</div>
 						{isUser && showToggle && (
 							<Button
 								variant="ghost"
 								size="sm"
 								onClick={() => setIsExpanded(!isExpanded)}
-								className="h-auto p-0 text-xs text-foreground hover:text-foreground/80 mt-1"
+								className="-ml-1 mt-1 h-auto gap-1 p-1 text-xs text-muted-foreground hover:text-foreground"
 							>
 								{isExpanded ? (
 									<>
-										<ChevronUp className="w-3 h-3 mr-1" />
+										<ChevronUp className="w-3 h-3" />
 										Show less
 									</>
 								) : (
 									<>
-										<ChevronDown className="w-3 h-3 mr-1" />
+										<ChevronDown className="w-3 h-3" />
 										Show more
 									</>
 								)}
 							</Button>
 						)}
-						<AttachmentSection
+						<AttachmentStrip
 							files={processedAttachments}
 							onFileClick={handleFileClick}
 							onFullscreen={setFullscreenFile}
+							onShowAll={showAllAttachments}
 						/>
 						{(message.widgets?.length ?? 0) > 0 && (
 							<MessageWidgets
@@ -862,7 +846,7 @@ export const MessageComponent = memo(
 							<AppReferences appIds={message.app_refs ?? []} />
 						)}
 						{hasUsageStats && (
-							<UsageStats stats={usageStats} className="mt-1" />
+							<UsageStats stats={usageStats} className="mt-2" />
 						)}
 						{FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report && (
 							<AgentDebugReport report={message.debug_report} />
@@ -879,26 +863,48 @@ export const MessageComponent = memo(
 								onFeedbackClick={() => setShowFeedbackDialog(true)}
 								onEdit={() => setShowEditDialog(true)}
 								onCopy={copyToClipboard}
-								allFiles={processedAttachments}
-								hiddenFilesCount={hiddenFilesCount}
-								onFileClick={handleFileClick}
 							/>
 						)}
 					</div>
-				</div>{" "}
+				</div>
 				{fullscreenFile && (
 					<Dialog
 						open={!!fullscreenFile}
 						onOpenChange={() => setFullscreenFile(null)}
 					>
-						<DialogContent className="w-screen h-screen max-w-none! max-h-none! p-0 bg-black border-0 rounded-none top-[50%]! left-[50%]! translate-x-[-50%]! translate-y-[-50%]!">
+						<DialogContent
+							showCloseButton={false}
+							className="w-dvw h-dvh max-w-none! max-h-none! p-0 gap-0 overflow-hidden bg-black text-white border-0 rounded-none top-[50%]! left-[50%]! translate-x-[-50%]! translate-y-[-50%]!"
+						>
 							<div className="relative w-full h-full flex flex-col">
-								<div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-start p-4 bg-linear-to-b from-black/80 to-transparent pointer-events-none">
-									<p className="text-white text-sm font-medium truncate">
+								<div
+									className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between gap-2 px-3 pb-6 bg-linear-to-b from-black/80 to-transparent pointer-events-none"
+									style={{
+										paddingTop:
+											"calc(var(--fl-safe-top, env(safe-area-inset-top, 0px)) + 0.75rem)",
+									}}
+								>
+									<p className="min-w-0 flex-1 text-white text-sm font-medium truncate">
 										{getDisplayFileName(fullscreenFile.name)}
 									</p>
+									<DialogClose asChild>
+										<Button
+											variant="ghost"
+											size="icon"
+											className="pointer-events-auto size-10 shrink-0 rounded-full bg-black/40 text-white hover:bg-black/60 hover:text-white"
+										>
+											<XIcon className="size-5" />
+											<span className="sr-only">Close</span>
+										</Button>
+									</DialogClose>
 								</div>
-								<div className="flex-1 flex items-center justify-center w-full h-full">
+								<div
+									className="flex-1 min-h-0 flex items-center justify-center w-full"
+									style={{
+										paddingBottom:
+											"var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px))",
+									}}
+								>
 									<FileDialogPreview file={fullscreenFile} />
 								</div>
 							</div>

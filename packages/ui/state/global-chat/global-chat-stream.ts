@@ -1,8 +1,18 @@
 import { createId } from "@paralleldrive/cuid2";
 import {
+	isAgentBackendProvider,
+	normalizeAIProvider,
+} from "../../components/flowpilot/types";
+import { copilotBackendConnectionCoordinator } from "../../hooks/copilot-backend-coordinator";
+import {
 	FLOWPILOT_DEBUG_ENABLED,
 	stripFlowPilotDebugReport,
 } from "../../lib/flowpilot-debug";
+import {
+	classifyAgentBackendError,
+	formatAgentBackendFailure,
+	shouldPersistAgentBackendDiagnostic,
+} from "../../lib/flowpilot/agent-backend-diagnostics";
 import { isTauri } from "../../lib/platform";
 import { IRole } from "../../lib/schema/llm/history";
 import {
@@ -12,7 +22,6 @@ import {
 import {
 	applyStreamEvent,
 	createStreamAccumulator,
-	mergeUsageStats,
 	orderedSteps,
 } from "./copilot-stream-steps";
 import {
@@ -20,59 +29,158 @@ import {
 	type IMessage,
 	globalChatDb,
 } from "./global-chat-db";
-import { useGlobalChatStore } from "./global-chat-store";
+import {
+	getGlobalChatRunControl,
+	registerGlobalChatRunControl,
+	takeUnconsumedSteering,
+	tauriGlobalChatRunControl,
+	unregisterGlobalChatRunControl,
+} from "./global-chat-run-control";
+import {
+	type GlobalChatAgentSelection,
+	LAST_CONVERSATION_KEY,
+	beginGlobalChatTurnSelection,
+	useGlobalChatStore,
+} from "./global-chat-store";
 
 // The global-chat streaming engine lives here — OUTSIDE any React component — so a turn keeps
 // streaming, checkpointing, and finalizing even as the conversation morphs between the /chat page
 // and the docked overlay (each unmounts the other) or the webview hard-reloads. All state is read
-// from / written to the zustand singleton, never component-local refs. The Rust side mirrors every
-// run into a resumable buffer keyed by `runId`; `resumeGlobalChatStream` re-attaches after a reload.
+// from / written to the zustand store, never component-local refs, and every write is addressed by
+// run id so N turns can stream at once. The Rust side mirrors every run into a resumable buffer
+// keyed by `runId`; `resumeGlobalChatStream` re-attaches to all of them after a reload.
 
-/** Session-scoped pointer to the active conversation, so reloads/navigation restore the transcript. */
-export const LAST_CONVERSATION_KEY = "flow-like:global-chat:last-conversation";
-/** Session-scoped pointer to an in-flight run so a reload can re-attach to the live Rust stream. */
+/** Session-scoped pointers to in-flight runs so a reload can re-attach to the live Rust streams. */
 const ACTIVE_RUN_KEY = "flow-like:global-chat:active-run";
 
 interface ActiveRun {
 	conversationId: string;
 	runId: string;
+	agentSelection?: GlobalChatAgentSelection;
 }
 
-/** Remember the run currently streaming, so a reload mid-response can re-attach to it. */
-export function setActiveRun(conversationId: string, runId: string) {
+function writeActiveRuns(runs: ActiveRun[]) {
 	try {
-		sessionStorage.setItem(
-			ACTIVE_RUN_KEY,
-			JSON.stringify({ conversationId, runId }),
-		);
+		if (runs.length === 0) sessionStorage.removeItem(ACTIVE_RUN_KEY);
+		else sessionStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(runs));
 	} catch {
 		// resumability is best-effort
 	}
 }
 
-export function readActiveRun(): ActiveRun | null {
-	try {
-		const raw = sessionStorage.getItem(ACTIVE_RUN_KEY);
-		if (!raw) return null;
-		const parsed = JSON.parse(raw);
-		if (
-			typeof parsed?.conversationId === "string" &&
-			typeof parsed?.runId === "string"
-		) {
-			return parsed as ActiveRun;
-		}
-	} catch {
-		// ignore malformed pointer
-	}
-	return null;
+/** Remember a run that is streaming, so a reload mid-response can re-attach to it. */
+export function setActiveRun(
+	conversationId: string,
+	runId: string,
+	agentSelection?: GlobalChatAgentSelection,
+) {
+	const entry: ActiveRun = {
+		conversationId,
+		runId,
+		...(agentSelection
+			? {
+					agentSelection: {
+						provider: agentSelection.provider,
+						selectedModelId: agentSelection.selectedModelId,
+						reasoningEffort: agentSelection.reasoningEffort,
+					},
+				}
+			: {}),
+	};
+	writeActiveRuns([
+		...readActiveRuns().filter((run) => run.runId !== runId),
+		entry,
+	]);
 }
 
-export function clearActiveRun() {
-	try {
-		sessionStorage.removeItem(ACTIVE_RUN_KEY);
-	} catch {
-		// best-effort
+function readAgentSelection(
+	value: unknown,
+): GlobalChatAgentSelection | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const candidate = value as Record<string, unknown>;
+	if (
+		candidate.provider !== "bits" &&
+		candidate.provider !== "github-copilot" &&
+		candidate.provider !== "codex" &&
+		candidate.provider !== "claude-code" &&
+		candidate.provider !== "copilot"
+	) {
+		return undefined;
 	}
+	if (
+		typeof candidate.selectedModelId !== "string" ||
+		typeof candidate.reasoningEffort !== "string"
+	) {
+		return undefined;
+	}
+	return Object.freeze({
+		provider: candidate.provider,
+		selectedModelId: candidate.selectedModelId,
+		reasoningEffort: candidate.reasoningEffort,
+	});
+}
+
+function parseActiveRun(value: unknown): ActiveRun | null {
+	if (!value || typeof value !== "object") return null;
+	const parsed = value as Record<string, unknown>;
+	if (
+		typeof parsed.conversationId !== "string" ||
+		typeof parsed.runId !== "string"
+	) {
+		return null;
+	}
+	return {
+		conversationId: parsed.conversationId,
+		runId: parsed.runId,
+		agentSelection: readAgentSelection(parsed.agentSelection),
+	};
+}
+
+/** Every run that was in flight when the pointer was last written. */
+export function readActiveRuns(): ActiveRun[] {
+	try {
+		const raw = sessionStorage.getItem(ACTIVE_RUN_KEY);
+		if (!raw) return [];
+		const parsed = JSON.parse(raw);
+		// Tolerate the pre-concurrency single-object shape so an in-progress reload still resumes.
+		const entries = Array.isArray(parsed) ? parsed : [parsed];
+		return entries
+			.map(parseActiveRun)
+			.filter((run): run is ActiveRun => run !== null);
+	} catch {
+		return [];
+	}
+}
+
+/** The most recently started in-flight run, or null. */
+export function readActiveRun(): ActiveRun | null {
+	const runs = readActiveRuns();
+	return runs.length > 0 ? runs[runs.length - 1] : null;
+}
+
+export function clearActiveRun(runId?: string) {
+	if (!runId) {
+		writeActiveRuns([]);
+		return;
+	}
+	const remaining = readActiveRuns().filter((run) => run.runId !== runId);
+	writeActiveRuns(remaining);
+}
+
+/**
+ * Last timestamp handed out, so consecutive messages never collide.
+ *
+ * A turn creates the question and its reply back-to-back, which lands both in the
+ * same millisecond on any quick machine. The transcript sorts on `timestamp`, and
+ * Dexie breaks ties by primary key — a random cuid — so after a reload the reply
+ * could sort ahead of the question it answers. Strictly increasing stamps make the
+ * order deterministic without touching any call site.
+ */
+let lastIssuedTimestamp = 0;
+
+export function nextGlobalChatTimestamp(): number {
+	lastIssuedTimestamp = Math.max(Date.now(), lastIssuedTimestamp + 1);
+	return lastIssuedTimestamp;
 }
 
 export function makeGlobalChatMessage(
@@ -88,11 +196,22 @@ export function makeGlobalChatMessage(
 		files: [],
 		tools: [],
 		actions: [],
-		timestamp: Date.now(),
+		timestamp: nextGlobalChatTimestamp(),
 	};
 }
 
+/**
+ * Conversations deleted in this session.
+ *
+ * Cancelling a run only *requests* teardown — the backend call returns on delivery, and the run's
+ * own `finally` still commits its partial reply afterwards. Without this guard that write lands
+ * under the sessionId that was just deleted, leaving message rows no session owns and nothing ever
+ * collects (globalChatDb is not pruned). Ids are cuid2 and never reused, so membership is final.
+ */
+const deletedConversations = new Set<string>();
+
 export async function persistGlobalChatMessage(message: IMessage) {
+	if (deletedConversations.has(message.sessionId)) return;
 	try {
 		if (FLOWPILOT_DEBUG_ENABLED) {
 			await globalChatDb.messages.put(message);
@@ -111,12 +230,17 @@ export async function persistGlobalChatSession(
 	sessionId: string,
 	title: string,
 ) {
+	if (deletedConversations.has(sessionId)) return;
 	try {
 		const existing = await globalChatDb.sessions.get(sessionId);
 		const now = Date.now();
+		// Spread the existing row: this is a whole-row put, so anything not restated here would be
+		// erased on the user's next send — `pinnedAt`, `boardId` and `mode` all live only on the row.
 		await globalChatDb.sessions.put({
+			...existing,
 			id: sessionId,
 			appId: GLOBAL_CHAT_APP_ID,
+			// Sticky: the first title wins, so a user rename survives every later send.
 			summarization: existing?.summarization || title.slice(0, 80),
 			createdAt: existing?.createdAt ?? now,
 			updatedAt: now,
@@ -126,13 +250,84 @@ export async function persistGlobalChatSession(
 	}
 }
 
+/**
+ * Pin/unpin a conversation. Deliberately a partial `update` that leaves `updatedAt` alone —
+ * touching it would yank the conversation into the "Today" group just for being pinned.
+ */
+export async function setGlobalChatSessionPinned(
+	sessionId: string,
+	pinned: boolean,
+) {
+	try {
+		await globalChatDb.sessions.update(sessionId, {
+			pinnedAt: pinned ? Date.now() : undefined,
+		});
+	} catch {
+		// history mutation is best-effort
+	}
+}
+
+/** Rename a conversation. Empty titles are ignored rather than blanking the row. */
+export async function renameGlobalChatSession(
+	sessionId: string,
+	title: string,
+) {
+	const next = title.trim().slice(0, 80);
+	if (!next) return;
+	try {
+		await globalChatDb.sessions.update(sessionId, { summarization: next });
+	} catch {
+		// history mutation is best-effort
+	}
+}
+
+/**
+ * Delete a conversation and its messages. Starts a fresh conversation when the deleted one was
+ * active, so the surface is never left pointing at a session row that no longer exists.
+ *
+ * Live runs are cancelled first. Runs deliberately survive a conversation switch and keep
+ * checkpointing into IndexedDB under their own conversation id, so deleting the rows out from
+ * under one would let it re-create the session moments later — the conversation would visibly
+ * come back from the dead.
+ */
+export async function deleteGlobalChatConversation(sessionId: string) {
+	// Tombstone first: cancellation is not synchronous, so this is what actually stops a run's
+	// in-flight checkpoint or its closing write from re-creating rows behind the delete.
+	deletedConversations.add(sessionId);
+
+	const state = useGlobalChatStore.getState();
+	const liveRunIds = Object.values(state.runs)
+		.filter((run) => run.conversationId === sessionId)
+		.map((run) => run.runId);
+	await Promise.allSettled(
+		liveRunIds.map((runId) => cancelGlobalChatRun(runId)),
+	);
+
+	try {
+		await globalChatDb.messages.where("sessionId").equals(sessionId).delete();
+		await globalChatDb.sessions.delete(sessionId);
+	} catch {
+		// history mutation is best-effort
+	}
+
+	// Re-read: cancelling a run mutates the store, so the pre-cancel snapshot is stale here.
+	const current = useGlobalChatStore.getState();
+	if (current.activeConversationId === sessionId) current.newConversation();
+}
+
 interface DriveOptions {
 	/** The assistant message shell being streamed into; its id MUST equal the run id. */
 	responseMessage: IMessage;
+	/** Immutable parent-turn provider/model/effort, shared with all nested specialists. */
+	agentSelection?: GlobalChatAgentSelection;
+	/** Short human label for this run's stop/steer controls (usually the user's prompt). */
+	label?: string;
 	/** True for a resume re-attach (guards against overwriting a restored checkpoint on a miss). */
 	isResume?: boolean;
 	/** Bounded/redacted user input metadata included in the persisted debug report. */
 	inputPreview?: unknown;
+	/** Exact files from the owning user turn, captured before concurrent turns can change history. */
+	sourceAttachments?: IMessage["files"];
 	/**
 	 * Transport hook. Drives the underlying run and forwards every raw FlowPilot stream chunk to
 	 * `onChunk`; resolves with the transport's result (the desktop Tauri command's return value or,
@@ -161,24 +356,61 @@ export function tauriStart(command: string, args: Record<string, unknown>) {
 
 /**
  * Drive one assistant turn: parse the streamed FlowPilot protocol into the message's content +
- * plan steps, mirror it into the store's `streamingMessage` (throttled checkpoints to IndexedDB),
+ * plan steps, mirror it into the store's per-run `streamingMessages` view (throttled checkpoints
+ * to IndexedDB),
  * and finalize into `messages` when the run ends. Safe to run detached from any component.
  */
 export async function driveGlobalChatStream({
 	responseMessage,
+	agentSelection,
+	label,
 	isResume,
 	inputPreview,
+	sourceAttachments,
 	start,
 }: DriveOptions) {
 	const store = useGlobalChatStore;
+	const runId = responseMessage.id;
 	const acc = createStreamAccumulator();
 	let lastCheckpoint = 0;
 	let streamFailure: string | undefined;
+	const turnSelection = beginGlobalChatTurnSelection(runId, agentSelection);
+	const owningAttachments =
+		sourceAttachments ??
+		(() => {
+			const messages = store.getState().messages;
+			for (let index = messages.length - 1; index >= 0; index -= 1) {
+				const candidate = messages[index];
+				if (
+					candidate.sessionId === responseMessage.sessionId &&
+					candidate.inner.role === IRole.User &&
+					candidate.timestamp <= responseMessage.timestamp
+				) {
+					return [...(candidate.files ?? [])];
+				}
+			}
+			return [];
+		})();
+	// Register the run BEFORE anything streams: every per-run store write (sub-agent buffers, debug
+	// events, the bubble itself) is addressed by run id and is a no-op until the record exists.
+	store.getState().startRun({
+		runId,
+		conversationId: responseMessage.sessionId,
+		selection: turnSelection,
+		label: label?.trim() || "Assistant turn",
+		message: { ...responseMessage },
+		sourceAttachments: owningAttachments,
+	});
+	// Desktop control is derivable from the run id alone. The web transport replaces this with an
+	// SSE-addressed control once the server hands back its own run id.
+	if (isTauri()) {
+		registerGlobalChatRunControl(runId, tauriGlobalChatRunControl(runId));
+	}
 	const initialState = store.getState();
 	initialState.beginDebugReport(responseMessage.id, {
-		provider: initialState.provider,
-		model: initialState.selectedModelId,
-		reasoningEffort: initialState.reasoningEffort,
+		provider: turnSelection.provider,
+		model: turnSelection.selectedModelId,
+		reasoningEffort: turnSelection.reasoningEffort,
 		inputPreview,
 	});
 	initialState.recordDebugEvent(responseMessage.id, {
@@ -199,31 +431,26 @@ export async function driveGlobalChatStream({
 			store.getState().recordDebugEvent(responseMessage.id, event),
 	});
 
+	// The engine only writes the fields IT owns. Nested sub-agent activity (plan steps, widgets,
+	// attachments, usage, app refs) and the debug report are folded in by the store, per run, so a
+	// concurrent turn's nested output can never leak into this bubble.
 	const syncMessage = () => {
 		const state = store.getState();
-		responseMessage.inner.content = acc.content;
-		// Nested sub-agent activity (flowpilot_board) is published by the tool bridge into
-		// subPlanSteps — render it inline after this response's own steps.
-		responseMessage.plan_steps = [...orderedSteps(acc), ...state.subPlanSteps];
+		// New `inner` identity per sync: snapshots in the store must not share a mutating object,
+		// and MessageComponent's memo compares `inner.content` by identity.
+		responseMessage.inner = { ...responseMessage.inner, content: acc.content };
+		responseMessage.plan_steps = orderedSteps(acc);
 		responseMessage.current_step_id = acc.currentStepId;
 		responseMessage.tools = acc.currentStepId ? ["working"] : [];
-		responseMessage.app_refs =
-			state.pendingAppRefs.length > 0 ? [...state.pendingAppRefs] : undefined;
-		responseMessage.files = state.subAttachments;
-		responseMessage.widgets =
-			state.subWidgets.length > 0 ? state.subWidgets : undefined;
-		const combinedUsage = mergeUsageStats(acc.usageStats, state.subUsageStats);
 		responseMessage.usage_stats =
-			combinedUsage.length > 0 ? combinedUsage : undefined;
-		responseMessage.debug_report =
-			state.debugReport?.message_id === responseMessage.id
-				? state.debugReport
-				: undefined;
-		state.setStreamingMessage({ ...responseMessage });
+			acc.usageStats.length > 0 ? acc.usageStats : undefined;
+		state.setRunMessage(runId, { ...responseMessage });
 		const now = Date.now();
 		if (now - lastCheckpoint > 1_000) {
 			lastCheckpoint = now;
-			void persistGlobalChatMessage({ ...responseMessage });
+			// Checkpoint the FOLDED bubble so a restored conversation keeps the nested output too.
+			const folded = store.getState().runs[runId]?.message;
+			if (folded) void persistGlobalChatMessage({ ...folded });
 		}
 	};
 
@@ -238,7 +465,18 @@ export async function driveGlobalChatStream({
 	try {
 		invokeResult = await start(onChunk);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const normalizedProvider = normalizeAIProvider(turnSelection.provider);
+		let message = error instanceof Error ? error.message : String(error);
+		if (isAgentBackendProvider(normalizedProvider)) {
+			const diagnostic = classifyAgentBackendError(normalizedProvider, error);
+			if (diagnostic && shouldPersistAgentBackendDiagnostic(diagnostic)) {
+				copilotBackendConnectionCoordinator.reportFailure(
+					normalizedProvider,
+					error,
+				);
+			}
+			message = formatAgentBackendFailure(turnSelection.provider, error);
+		}
 		streamFailure = message;
 		store.getState().recordDebugEvent(responseMessage.id, {
 			id: `main:${responseMessage.id}:lifecycle:stream-error`,
@@ -258,6 +496,7 @@ export async function driveGlobalChatStream({
 			description: message.slice(0, 300),
 			status: "failed",
 			timestamp: Date.now(),
+			content_offset: acc.content.length,
 		});
 		if (!acc.content) {
 			acc.content = `Something went wrong: ${message}`;
@@ -311,11 +550,8 @@ export async function driveGlobalChatStream({
 					? "The agent stream ended with an error."
 					: "The agent turn completed.",
 		});
-		const reportBeforeFinalize = store.getState().debugReport;
 		const reportEvents =
-			reportBeforeFinalize?.message_id === responseMessage.id
-				? reportBeforeFinalize.events
-				: [];
+			store.getState().runs[runId]?.debugReport?.events ?? [];
 		const { recordedTimeout, recordedPartial, recordedError } =
 			summarizeAgentDebugRootOutcomes(reportEvents);
 		const debugOutcome = recordedTimeout
@@ -364,11 +600,22 @@ export async function driveGlobalChatStream({
 		});
 
 		if (!resumeMissed) {
-			const reportState = store.getState();
-			responseMessage.inner.content = acc.content;
-			responseMessage.plan_steps = [
-				...orderedSteps(acc),
-				...finalState.subPlanSteps.map((step) =>
+			// Settle this run's own steps, push them through the store so the sub-agent buffers fold
+			// in one last time, then read the folded bubble back as the message to commit.
+			responseMessage.inner = {
+				...responseMessage.inner,
+				content: acc.content,
+			};
+			responseMessage.plan_steps = orderedSteps(acc);
+			responseMessage.current_step_id = undefined;
+			responseMessage.tools = [];
+			responseMessage.usage_stats =
+				acc.usageStats.length > 0 ? acc.usageStats : undefined;
+			store.getState().setRunMessage(runId, { ...responseMessage });
+			const folded = store.getState().runs[runId]?.message ?? responseMessage;
+			const finalized: IMessage = {
+				...folded,
+				plan_steps: folded.plan_steps?.map((step) =>
 					step.status === "progress"
 						? {
 								...step,
@@ -376,75 +623,243 @@ export async function driveGlobalChatStream({
 							}
 						: step,
 				),
-			];
-			responseMessage.current_step_id = undefined;
-			responseMessage.tools = [];
-			responseMessage.app_refs =
-				finalState.pendingAppRefs.length > 0
-					? [...finalState.pendingAppRefs]
-					: undefined;
-			responseMessage.files = finalState.subAttachments;
-			responseMessage.widgets =
-				finalState.subWidgets.length > 0
-					? [...finalState.subWidgets]
-					: undefined;
-			const finalUsage = mergeUsageStats(
-				acc.usageStats,
-				finalState.subUsageStats,
-			);
-			responseMessage.usage_stats =
-				finalUsage.length > 0 ? finalUsage : undefined;
-			responseMessage.debug_report =
-				reportState.debugReport?.message_id === responseMessage.id
-					? reportState.debugReport
-					: undefined;
-			const finalized = { ...responseMessage };
-			finalState.commitMessage(finalized);
+			};
+			store.getState().commitMessage(finalized);
 			void persistGlobalChatMessage(finalized);
-			finalState.clearPendingAppRefs();
-			finalState.clearSubPlanSteps();
-			finalState.clearSubAttachments();
-			finalState.clearSubUsageStats();
-			finalState.clearSubWidgets();
 		}
 
-		// Always release the stream regardless of commit vs. kept-checkpoint.
-		finalState.setStreamingMessage(null);
-		finalState.setStreaming(false);
-		finalState.clearDebugReport(responseMessage.id);
-		clearActiveRun();
+		// A turn can end before it reaches a boundary where steering could be folded in. Recover
+		// anything the backend never consumed and re-send it as its own turn — the user watched
+		// that instruction get accepted, so dropping it here would be the worst outcome.
+		const conversationId = responseMessage.sessionId;
+		if (isTauri()) {
+			void takeUnconsumedSteering(runId).then((leftovers) => {
+				for (const content of leftovers) {
+					store.getState().enqueueMessage({ conversationId, content });
+				}
+				if (leftovers.length > 0) void drainGlobalChatQueue?.(conversationId);
+			});
+		}
+
+		// Always release the run regardless of commit vs. kept-checkpoint. endRun drops the record
+		// (and with it every per-run buffer), so no explicit clearSub* calls are needed.
+		store.getState().clearDebugReport(runId);
+		store.getState().endRun(runId);
+		unregisterGlobalChatRunControl(runId);
+		clearActiveRun(runId);
+		void drainGlobalChatQueue?.(conversationId);
 	}
 }
 
 /**
- * If a response was still streaming when the webview reloaded, re-attach to the Rust run and keep
- * rendering it live (the generation never stopped — it just lost its channel). No-op when nothing is
- * in flight, the pending run is for another conversation, or a turn is already streaming. Safe to
- * call from multiple mounted surfaces — the first to flip `isStreaming` claims it; a run the server
- * has already GC'd resolves `attached: false`, leaving the restored checkpoint untouched.
+ * Hook the chat surface installs so a finishing run pulls the next queued message. Lives here (not
+ * in the component) because the run that finishes may outlive the surface that started it.
+ */
+type GlobalChatQueueDrain = (conversationId: string) => void | Promise<void>;
+
+let drainGlobalChatQueue: GlobalChatQueueDrain | undefined;
+
+export function setGlobalChatQueueDrain(drain: GlobalChatQueueDrain) {
+	drainGlobalChatQueue = drain;
+}
+
+/**
+ * Release the hook only if `drain` still owns the slot. The /chat page and the docked overlay are
+ * both chat surfaces and can be mounted together; without the ownership check, whichever unmounts
+ * first would tear out the survivor's hook and the queue would stop draining.
+ */
+export function clearGlobalChatQueueDrain(drain: GlobalChatQueueDrain) {
+	if (drainGlobalChatQueue === drain) drainGlobalChatQueue = undefined;
+}
+
+/**
+ * Stop one in-flight turn. The bubble stays on screen and finalizes with whatever it had — a
+ * cancelled turn is a partial answer, not a disappearance.
+ */
+export async function cancelGlobalChatRun(runId: string): Promise<boolean> {
+	const store = useGlobalChatStore;
+	const run = store.getState().runs[runId];
+	if (!run || run.status === "cancelling") return false;
+	store.getState().setRunStatus(runId, "cancelling");
+	// Tear the transport down locally first so the stream stops rendering even if the backend
+	// request fails; the run's own finally block still commits the partial reply.
+	try {
+		run.abort?.();
+	} catch {
+		// teardown is best-effort
+	}
+	const control = getGlobalChatRunControl(runId);
+	if (!control) return false;
+	try {
+		await control.cancel();
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Push a user instruction into a turn that is already running. The text is committed to the
+ * transcript on success so the next turn's history contains what the user actually said.
+ */
+export async function steerGlobalChatRun(
+	runId: string,
+	content: string,
+): Promise<boolean> {
+	const trimmed = content.trim();
+	if (!trimmed) return false;
+	const store = useGlobalChatStore;
+	const run = store.getState().runs[runId];
+	if (!run || run.status !== "streaming") return false;
+
+	const steerId = createId();
+	store.getState().addRunSteer(runId, {
+		id: steerId,
+		content: trimmed,
+		status: "pending",
+		createdAt: Date.now(),
+	});
+
+	const fail = (message: string) => {
+		store.getState().setRunSteerStatus(runId, steerId, "failed", message);
+		return false;
+	};
+
+	const control = getGlobalChatRunControl(runId);
+	if (!control) {
+		return fail("This run cannot take mid-run messages.");
+	}
+	try {
+		await control.steer(trimmed);
+	} catch (error) {
+		return fail(error instanceof Error ? error.message : String(error));
+	}
+	store.getState().setRunSteerStatus(runId, steerId, "delivered");
+	// Commit it as a real user turn: the agent is acting on it, so the transcript (and therefore
+	// the next turn's history) has to contain it.
+	const steerMessage = makeGlobalChatMessage(
+		IRole.User,
+		trimmed,
+		run.conversationId,
+	);
+	store.getState().appendMessage(steerMessage);
+	void persistGlobalChatMessage(steerMessage);
+	return true;
+}
+
+/**
+ * If responses were still streaming when the webview reloaded, re-attach to EVERY live Rust run of
+ * the active conversation and keep rendering them (the generations never stopped — they just lost
+ * their channels). Runs already attached in this session are skipped, so it is safe to call from
+ * several mounted surfaces; a run the server has already GC'd resolves `attached: false`, leaving
+ * the restored checkpoint untouched.
  */
 export function resumeGlobalChatStream() {
 	// Resume re-attaches to a live Rust run registry that only exists on the desktop; browser runs
 	// are ephemeral (non-resumable), so this is a no-op there.
 	if (!isTauri()) return;
 	const state = useGlobalChatStore.getState();
-	if (state.isStreaming) return;
-	const active = readActiveRun();
-	if (!active || active.conversationId !== state.activeConversationId) return;
-	// Claim the resume synchronously so a concurrently-mounted surface can't double-attach.
-	state.setStreaming(true);
-	const responseMessage = makeGlobalChatMessage(
-		IRole.Assistant,
-		"",
-		active.conversationId,
+	const pending = readActiveRuns().filter(
+		(active) =>
+			active.conversationId === state.activeConversationId &&
+			// Already attached (another surface got here first, or the run never lost its channel).
+			!state.runs[active.runId],
 	);
-	// The message id IS the run id — the Rust replay rebuilds this message from the buffer, and the
-	// finalized result upserts over the restored checkpoint (same id) instead of duplicating it.
-	responseMessage.id = active.runId;
-	state.setStreamingMessage({ ...responseMessage });
-	void driveGlobalChatStream({
-		responseMessage,
-		isResume: true,
-		start: tauriStart("global_chat_resume", { runId: active.runId }),
-	});
+	for (const active of pending) {
+		const agentSelection =
+			active.agentSelection ??
+			Object.freeze({
+				provider: state.provider,
+				selectedModelId: state.selectedModelId,
+				reasoningEffort: state.reasoningEffort,
+			});
+		const responseMessage = makeGlobalChatMessage(
+			IRole.Assistant,
+			"",
+			active.conversationId,
+		);
+		// The message id IS the run id — the Rust replay rebuilds this message from the buffer, and
+		// the finalized result upserts over the restored checkpoint (same id) rather than duplicating.
+		responseMessage.id = active.runId;
+		// Seed the live bubble from the restored checkpoint: the partial reply stays on screen
+		// (instead of an empty "Thinking…" bubble) until the Rust buffer replay catches up, and the
+		// original timestamp is kept so the finalized message doesn't reorder below later turns.
+		const checkpoint = state.messages.find(
+			(message) => message.id === active.runId,
+		);
+		if (checkpoint) {
+			responseMessage.inner = { ...checkpoint.inner };
+			responseMessage.plan_steps = checkpoint.plan_steps;
+			responseMessage.current_step_id = checkpoint.current_step_id;
+			responseMessage.usage_stats = checkpoint.usage_stats;
+			responseMessage.files = checkpoint.files ?? [];
+			responseMessage.widgets = checkpoint.widgets;
+			responseMessage.app_refs = checkpoint.app_refs;
+			responseMessage.timestamp = checkpoint.timestamp;
+		}
+		void driveGlobalChatStream({
+			responseMessage,
+			agentSelection,
+			isResume: true,
+			label: "Resumed turn",
+			start: tauriStart("global_chat_resume", { runId: active.runId }),
+		});
+	}
+}
+
+/**
+ * Mid-stream checkpoints persist unsettled steps — settle them so a restored message doesn't
+ * render an eternal spinner when its run is long gone. A run that IS still live gets re-attached
+ * right after and rebuilds the live statuses from the Rust replay buffer.
+ */
+export function normalizeRestoredCheckpoint(message: IMessage): IMessage {
+	return {
+		...message,
+		current_step_id: undefined,
+		tools: [],
+		plan_steps: message.plan_steps?.map((step) =>
+			step.status === "progress" || step.status === "planned"
+				? { ...step, status: "done" as const }
+				: step,
+		),
+	};
+}
+
+/**
+ * The ONE way to bring a persisted conversation back on screen — used by the mount-restore path
+ * and the history popover. Loads + normalizes the transcript, repoints the reload-restore key,
+ * and re-attaches any of the conversation's still-live runs.
+ *
+ * With `skipIfBusy`, the load is dropped when the store picked up messages, a live run, or a
+ * pending draft while Dexie was reading — mount-time restore must never clobber those.
+ */
+export async function restoreGlobalChatConversation(
+	conversationId: string,
+	options?: { skipIfBusy?: boolean },
+): Promise<boolean> {
+	const restored = await globalChatDb.messages
+		.where("sessionId")
+		.equals(conversationId)
+		.sortBy("timestamp");
+	const state = useGlobalChatStore.getState();
+	if (
+		options?.skipIfBusy &&
+		(restored.length === 0 ||
+			state.messages.length > 0 ||
+			state.isStreaming ||
+			state.draft !== null)
+	) {
+		return false;
+	}
+	state.loadConversation(
+		conversationId,
+		restored.map(normalizeRestoredCheckpoint),
+	);
+	try {
+		sessionStorage.setItem(LAST_CONVERSATION_KEY, conversationId);
+	} catch {
+		// restore pointer is best-effort
+	}
+	resumeGlobalChatStream();
+	return true;
 }

@@ -4,6 +4,7 @@ import {
 	MessageSquareIcon,
 	SlidersHorizontalIcon,
 	SparklesIcon,
+	SquareFunctionIcon,
 	SquarePenIcon,
 	Trash2Icon,
 } from "lucide-react";
@@ -17,6 +18,7 @@ interface LayerNodeToolbarProps {
 	onExtend: () => void;
 	onDelete: () => void;
 	onExplain: () => void;
+	onConvertToFunction?: () => void;
 }
 
 export const ToolbarButton = memo(
@@ -69,6 +71,7 @@ const LayerNodeToolbar = memo(
 		onExtend,
 		onDelete,
 		onExplain,
+		onConvertToFunction,
 	}: LayerNodeToolbarProps) => {
 		return (
 			<>
@@ -98,6 +101,13 @@ const LayerNodeToolbar = memo(
 						icon={SlidersHorizontalIcon}
 						tooltip="Edit"
 					/>
+					{onConvertToFunction && (
+						<ToolbarButton
+							onClick={onConvertToFunction}
+							icon={SquareFunctionIcon}
+							tooltip="Convert to Function"
+						/>
+					)}
 					<Divider />
 					<ToolbarButton
 						onClick={onExplain}

@@ -37,7 +37,7 @@ pub struct AuditQueryParams {
         (status = 403, description = "Forbidden")
     )
 )]
-#[tracing::instrument(name = "GET /audit/entries", skip(state, user))]
+#[tracing::instrument(name = "GET /audit/entries", skip_all)]
 pub async fn query_audit_entries(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

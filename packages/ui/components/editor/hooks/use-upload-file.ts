@@ -1,130 +1,149 @@
+"use client";
+
+import { createId } from "@paralleldrive/cuid2";
 import * as React from "react";
-
-import type {
-	ClientUploadedFileData,
-	UploadFilesOptions,
-} from "uploadthing/types";
-import type { OurFileRouter } from "../lib/uploadthing";
-
-import { generateReactHelpers } from "@uploadthing/react";
 import { toast } from "sonner";
-import { z } from "zod";
 
-export type UploadedFile<T = unknown> = ClientUploadedFileData<T>;
+import { useBackend } from "../../../state/backend-state";
+import {
+	normalizeUploadPrefix,
+	toStorageUrl,
+	useEditorUpload,
+} from "../upload-context";
 
-interface UseUploadFileProps
-	extends Pick<
-		UploadFilesOptions<OurFileRouter["editorUploader"]>,
-		"headers" | "onUploadBegin" | "onUploadProgress" | "skipPolling"
-	> {
-	onUploadComplete?: (file: UploadedFile) => void;
-	onUploadError?: (error: unknown) => void;
+export interface UploadedFile {
+	/** Durable `storage://…` reference written into the document. */
+	url: string;
+	/** Path inside the app's upload area, without the scheme. */
+	key: string;
+	name: string;
+	size: number;
+	type: string;
 }
 
-export function useUploadFile({
-	onUploadComplete,
-	onUploadError,
-	...props
-}: UseUploadFileProps = {}) {
+const EXTENSION_FALLBACKS: Record<string, string> = {
+	"image/jpeg": "jpg",
+	"image/png": "png",
+	"image/gif": "gif",
+	"image/webp": "webp",
+	"image/svg+xml": "svg",
+	"video/mp4": "mp4",
+	"video/webm": "webm",
+	"audio/mpeg": "mp3",
+	"audio/wav": "wav",
+	"application/pdf": "pdf",
+};
+
+function extensionFor(file: File): string {
+	const fromName = file.name.split(".").pop();
+	if (
+		fromName &&
+		fromName !== file.name &&
+		/^[A-Za-z0-9]{1,8}$/.test(fromName)
+	) {
+		return fromName.toLowerCase();
+	}
+	return EXTENSION_FALLBACKS[file.type] ?? file.type.split("/").pop() ?? "bin";
+}
+
+/**
+ * Upload editor media into app storage.
+ *
+ * Replaces the upstream Plate template's uploadthing uploader, which pointed at an endpoint this
+ * product never mounted: every upload failed and fell back to `URL.createObjectURL`, so images
+ * were written into the saved document as `blob:` URLs that died on reload.
+ */
+export function useUploadFile() {
+	const backend = useBackend();
+	const { appId, prefix, scope, onUploaded, onUploadError } = useEditorUpload();
+
 	const [uploadedFile, setUploadedFile] = React.useState<UploadedFile>();
 	const [uploadingFile, setUploadingFile] = React.useState<File>();
-	const [progress, setProgress] = React.useState<number>(0);
+	const [progress, setProgress] = React.useState(0);
 	const [isUploading, setIsUploading] = React.useState(false);
 
-	async function uploadThing(file: File) {
-		setIsUploading(true);
-		setUploadingFile(file);
+	const uploadFile = React.useCallback(
+		async (file: File): Promise<UploadedFile | undefined> => {
+			if (!appId) {
+				const message =
+					"Media upload is not available here — this editor has no app storage configured.";
+				toast.error(message);
+				onUploadError?.(file.name, message);
+				return undefined;
+			}
 
-		try {
-			const res = await uploadFiles("editorUploader", {
-				...props,
-				files: [file],
-				onUploadProgress: ({ progress }) => {
-					setProgress(Math.min(progress, 100));
-				},
-			});
-
-			setUploadedFile(res[0]);
-
-			onUploadComplete?.(res[0]);
-
-			return uploadedFile;
-		} catch (error) {
-			const errorMessage = getErrorMessage(error);
-
-			const message =
-				errorMessage.length > 0
-					? errorMessage
-					: "Something went wrong, please try again later.";
-
-			toast.error(message);
-
-			onUploadError?.(error);
-
-			// Mock upload for unauthenticated users
-			// toast.info('User not logged in. Mocking upload process.');
-			const mockUploadedFile = {
-				key: "mock-key-0",
-				appUrl: `https://mock-app-url.com/${file.name}`,
-				name: file.name,
-				size: file.size,
-				type: file.type,
-				url: URL.createObjectURL(file),
-			} as UploadedFile;
-
-			// Simulate upload progress
-			let progress = 0;
-
-			const simulateProgress = async () => {
-				while (progress < 100) {
-					await new Promise((resolve) => setTimeout(resolve, 50));
-					progress += 2;
-					setProgress(Math.min(progress, 100));
-				}
-			};
-
-			await simulateProgress();
-
-			setUploadedFile(mockUploadedFile);
-
-			return mockUploadedFile;
-		} finally {
+			setIsUploading(true);
+			setUploadingFile(file);
 			setProgress(0);
-			setIsUploading(false);
-			setUploadingFile(undefined);
-		}
-	}
+
+			const folder = normalizeUploadPrefix(prefix);
+			const filename = `${createId()}.${extensionFor(file)}`;
+			const renamed = new File([file], filename, { type: file.type });
+
+			try {
+				const upload =
+					scope === "user"
+						? backend.storageState.uploadStorageItemsUser
+						: backend.storageState.uploadStorageItems;
+
+				await upload.call(
+					backend.storageState,
+					appId,
+					folder,
+					[renamed],
+					(value: number) => setProgress(Math.min(Math.max(value, 0), 100)),
+				);
+
+				const result: UploadedFile = {
+					url: toStorageUrl(folder, filename),
+					key: folder ? `${folder}/${filename}` : filename,
+					name: file.name,
+					size: file.size,
+					type: file.type,
+				};
+
+				setUploadedFile(result);
+				onUploaded?.({
+					url: result.url,
+					path: result.key,
+					name: result.name,
+					size: result.size,
+					type: result.type,
+				});
+				return result;
+			} catch (error) {
+				const message = getErrorMessage(error);
+				toast.error(message);
+				onUploadError?.(file.name, message);
+				return undefined;
+			} finally {
+				setProgress(0);
+				setIsUploading(false);
+				setUploadingFile(undefined);
+			}
+		},
+		[appId, backend.storageState, onUploadError, onUploaded, prefix, scope],
+	);
 
 	return {
 		isUploading,
 		progress,
 		uploadedFile,
-		uploadFile: uploadThing,
+		uploadFile,
 		uploadingFile,
 	};
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: Avoid binding to duplicate UploadThing transitive types across workspace installs.
-export const { uploadFiles, useUploadThing } = generateReactHelpers<any>();
-
-export function getErrorMessage(err: unknown) {
-	const unknownError = "Something went wrong, please try again later.";
-
-	if (err instanceof z.ZodError) {
-		const errors = err.issues.map((issue) => {
-			return issue.message;
-		});
-
-		return errors.join("\n");
-	} else if (err instanceof Error) {
+export function getErrorMessage(err: unknown): string {
+	if (err instanceof Error && err.message) {
 		return err.message;
-	} else {
-		return unknownError;
 	}
+	if (typeof err === "string" && err.length > 0) {
+		return err;
+	}
+	return "Upload failed, please try again.";
 }
 
 export function showErrorToast(err: unknown) {
-	const errorMessage = getErrorMessage(err);
-
-	return toast.error(errorMessage);
+	return toast.error(getErrorMessage(err));
 }

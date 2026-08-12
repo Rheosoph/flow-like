@@ -1,9 +1,10 @@
+import type { IStorageItem, IStorageState } from "@flow-like/flow-like-ui";
+import { stabilizeSignedUrls } from "@flow-like/flow-like-ui/lib/stable-asset-url";
+import type { IStorageItemActionResult } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { invoke } from "@tauri-apps/api/core";
 import { dirname, join, resolve } from "@tauri-apps/api/path";
 import { save } from "@tauri-apps/plugin-dialog";
 import { mkdir, open } from "@tauri-apps/plugin-fs";
-import type { IStorageItem, IStorageState } from "@flow-like/flow-like-ui";
-import type { IStorageItemActionResult } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { fetcher, put } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 
@@ -175,7 +176,7 @@ export class StorageState implements IStorageState {
 				this.backend.auth,
 			);
 
-			return files;
+			return stabilizeSignedUrls(files);
 		}
 
 		console.dir({
@@ -220,7 +221,7 @@ export class StorageState implements IStorageState {
 				this.backend.auth,
 			);
 
-			return files;
+			return stabilizeSignedUrls(files);
 		}
 
 		const items = await invoke<IStorageItemActionResult[]>("storage_user_get", {

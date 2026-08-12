@@ -164,12 +164,10 @@ impl NodeLogic for MLPredictNode {
                     let mut records = {
                         let database = database.read().await;
                         database
-                            .filter(
-                                "true",
-                                Some(vec![records_col.to_string()]),
-                                batch_size,
-                                offset,
-                            )
+                            // Full rows: the upsert below merges with `when_matched_update_all`,
+                            // which replaces the matched row wholesale, so a partial row would
+                            // null out every column that was not fetched.
+                            .filter("true", None, batch_size, offset)
                             .await?
                     };
                     let batch_count = records.len();
@@ -224,8 +222,10 @@ impl NodeLogic for MLPredictNode {
                             );
                             column_added = true;
                         }
-                        database.upsert(records, records_col.clone()).await?;
                     }
+                    cached_db
+                        .upsert_from(context, records, records_col.clone())
+                        .await?;
                     context.log_message(
                         &format!("Upsert batch: {:?}", t0.elapsed()),
                         LogLevel::Debug,

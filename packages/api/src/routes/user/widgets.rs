@@ -35,7 +35,7 @@ use sea_orm::{
         ("bearer_auth" = [])
     )
 )]
-#[tracing::instrument(name = "GET /user/widgets", skip(state, user))]
+#[tracing::instrument(name = "GET /user/widgets", skip_all)]
 pub async fn get_widgets(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

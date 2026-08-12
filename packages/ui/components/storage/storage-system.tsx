@@ -827,7 +827,6 @@ export function StorageSystem({
 										<div className="flex-1 min-h-0 overflow-auto">
 											<FilePreviewer
 												url={preview.url}
-												page={2}
 												filename={preview.file.split("/").pop()}
 												editable={isFileEditable(preview.url, preview.file)}
 												onSave={saveFile}
@@ -944,7 +943,6 @@ export function StorageSystem({
 											<div className="flex-1 min-h-0 overflow-auto">
 												<FilePreviewer
 													url={preview.url}
-													page={2}
 													filename={preview.file.split("/").pop()}
 													editable={isFileEditable(preview.url, preview.file)}
 													onSave={saveFile}

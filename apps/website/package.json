@@ -4,6 +4,8 @@
 	"version": "0.0.1",
 	"scripts": {
 		"dev": "astro dev",
+		"optimize:parallax": "node ./scripts/generate-parallax-images.mjs",
+		"prebuild": "bun run optimize:parallax",
 		"build": "NODE_OPTIONS=--max-old-space-size=8192 astro build",
 		"deploy": "bun run build && bun run deploy:workers-sites",
 		"deploy:force": "bun run build && bun run deploy:workers-sites",
@@ -25,6 +27,7 @@
 		"@flow-like/flow-like-ui": "workspace:*",
 		"@types/react": "^19.2.6",
 		"@types/react-dom": "^19.2.3",
+		"@xyflow/react": "^12.10.0",
 		"astro": "^6.3.3",
 		"astro-robots-txt": "^1.0.0",
 		"react": "^19.2.1",

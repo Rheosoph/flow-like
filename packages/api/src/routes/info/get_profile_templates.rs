@@ -31,6 +31,7 @@ impl From<template_profile::Model> for Profile {
             shortcuts: Some(vec![]),
             secure: model.secure,
             bits: model.bit_ids.unwrap_or_default(),
+            custom_bits: vec![],
             hub: model.hub,
             hubs: model.hubs.unwrap_or_default(),
             interests: model.interests.unwrap_or_default(),

@@ -1,6 +1,9 @@
 use super::element_utils::{extract_element_id_from_pin, find_element};
-use super::schema_utils::set_component_schema_by_type;
-use flow_like::a2ui::A2UIElement;
+use super::schema_utils::{set_component_schema_by_type, set_generic_element_schema};
+use crate::a2ui::micro_widget_utils::{
+    clear_widget_ref_metadata, set_widget_ref_metadata, widget_contract_from_component,
+};
+use flow_like::a2ui::{A2UIElement, SurfaceComponent};
 use flow_like::flow::{
     board::Board,
     execution::{LogLevel, context::ExecutionContext},
@@ -133,32 +136,50 @@ impl NodeLogic for GetElement {
 
         if let Some(id) = &element_id {
             let short_name = id.rsplit('/').next().unwrap_or(id);
-            let component_type = find_component_type_in_board(board, id).await;
+            let component = find_component_in_board(board, id).await;
 
-            if let Some(comp_type) = &component_type {
+            if let Some(component) = component {
+                let comp_type = component.get_component_type_name();
                 node.friendly_name = format!("Get {} ({})", short_name, comp_type);
 
                 if let Some(element_pin) = node.get_pin_mut_by_name("element") {
-                    set_component_schema_by_type(element_pin, comp_type);
+                    set_component_schema_by_type(element_pin, &comp_type);
+                    if let Some(metadata) = widget_contract_from_component(&component.component)
+                        && let Ok(contract) = flow_like_types::json::to_value(&metadata.contract)
+                    {
+                        set_widget_ref_metadata(
+                            element_pin,
+                            &metadata.selector,
+                            &metadata.widget_name,
+                            &contract,
+                        );
+                    }
                 }
             } else {
                 node.friendly_name = format!("Get {}", short_name);
+                if let Some(element_pin) = node.get_pin_mut_by_name("element") {
+                    set_generic_element_schema(element_pin);
+                }
             }
         } else {
             node.friendly_name = "Get Element".to_string();
+            if let Some(element_pin) = node.get_pin_mut_by_name("element") {
+                set_generic_element_schema(element_pin);
+                clear_widget_ref_metadata(element_pin);
+            }
         }
     }
 }
 
-async fn find_component_type_in_board(board: &Board, element_id: &str) -> Option<String> {
-    let pages = board.load_all_pages(None).await.ok()?;
-    for page in pages {
+async fn find_component_in_board(board: &Board, element_id: &str) -> Option<SurfaceComponent> {
+    let loaded = board.load_all_pages(None).await.ok()?;
+    for page in loaded.pages {
         for component in &page.components {
             if component.id == element_id
                 || element_id.ends_with(&format!("/{}", component.id))
                 || element_id == component.id.split('/').next_back().unwrap_or("")
             {
-                return component.get_component_type_name().into();
+                return Some(component.clone());
             }
         }
     }

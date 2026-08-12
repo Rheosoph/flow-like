@@ -163,14 +163,16 @@ export class Bit implements IBit {
 	}
 
 	public async fetchDependencies(): Promise<BitPack> {
-		const cachedDependencies: IBit[] | undefined = await get(
-			this.dependency_tree_hash,
-		);
+		// An empty hash is not a usable cache key — every bit lacking one would
+		// otherwise share a single entry and read back foreign dependencies.
+		const cacheKey = this.dependency_tree_hash || undefined;
+		const cachedDependencies: unknown = cacheKey
+			? await get(cacheKey)
+			: undefined;
 
-		if (cachedDependencies) {
-			const deps: IBit[] = cachedDependencies;
+		if (Array.isArray(cachedDependencies) && cachedDependencies.length > 0) {
 			const pack = new BitPack();
-			pack.bits = deps;
+			pack.bits = cachedDependencies as IBit[];
 
 			console.groupCollapsed("Cached Dependencies for", this.hash);
 			console.dir(pack, { depth: null });
@@ -183,19 +185,19 @@ export class Bit implements IBit {
 			throw new Error("Backend is not set");
 		}
 
-		const bits:
-			| undefined
-			| {
-					bits: IBit[];
-			  } = await this.backend?.bitState?.getPackFromBit(this.toObject());
+		// Backends disagree on the shape: Tauri returns a `BitPack` envelope,
+		// the hub API returns a bare `Bit[]`.
+		const response: undefined | IBit[] | { bits?: IBit[] } =
+			await this.backend?.bitState?.getPackFromBit(this.toObject());
+		const bits = Array.isArray(response) ? response : response?.bits;
 
-		if (!bits) {
-			throw new Error("No dependencies found");
+		if (!Array.isArray(bits)) {
+			throw new Error(`No dependencies found for bit ${this.id || this.hash}`);
 		}
 
-		if (bits.bits.length > 0) await set(this.dependency_tree_hash, bits.bits);
+		if (cacheKey && bits.length > 0) await set(cacheKey, bits);
 		const pack = new BitPack();
-		pack.bits = bits.bits;
+		pack.bits = bits;
 
 		console.groupCollapsed("Fetched Dependencies for", this.hash);
 		console.dir(pack, { depth: null });

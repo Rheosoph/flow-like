@@ -45,6 +45,12 @@ export interface ISystemTime {
 }
 
 export interface ILayer {
+	cache?: ILayerCache | null;
+	/**
+	 * Folder the layer is filed under in the sidebar, nested with forward slashes. Empty
+	 * means the top level. Purely organizational, it does not affect execution.
+	 */
+	category?: null | string;
 	color?: null | string;
 	comment?: null | string;
 	comments: { [key: string]: IComment };
@@ -61,6 +67,36 @@ export interface ILayer {
 	type: ILayerType;
 	variables: { [key: string]: IVariable };
 	[property: string]: any;
+}
+
+/**
+ * Result caching for a layer invoked as a function.
+ *
+ * A hit replaces the whole call: the function body never runs, so its side effects do
+ * not happen either. Only turn this on for layers whose outputs are a function of their
+ * inputs.
+ */
+export interface ILayerCache {
+	enabled?: boolean;
+	/**
+	 * Namespace every entry for this layer is written under, so one layer's cache can be
+	 * invalidated without touching the rest of the app's.
+	 */
+	prefix?: string;
+	scope?: ILayerCacheScope;
+	/**
+	 * Lifetime of an entry in seconds. `None` or `0` keeps it until it is invalidated.
+	 */
+	ttl_seconds?: number | null;
+	[property: string]: any;
+}
+
+/**
+ * Who a layer's cached results belong to.
+ */
+export enum ILayerCacheScope {
+	App = "app",
+	User = "user",
 }
 
 export interface INode {

@@ -12,7 +12,7 @@ import {
 	MarkerContent,
 	MarkerLabel,
 } from "../../ui/map";
-import { useComponentActionTrigger } from "../ActionHandler";
+import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -70,7 +70,7 @@ export function A2UIGeoMap({
 	surfaceId,
 	onAction,
 }: ComponentProps<GeoMapComponent>) {
-	const triggerAction = useComponentActionTrigger(componentId);
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const viewport = useResolved<GeoMapViewport>(component.viewport);
 	const markers = useResolved<GeoMapMarkerDef[]>(component.markers);
 	const routes = useResolved<GeoMapRouteDef[]>(component.routes);
@@ -146,22 +146,25 @@ export function A2UIGeoMap({
 			// Programmatic flights fire `move` per animation frame — those are
 			// not user interactions.
 			if (programmaticMoveRef.current) return;
-			if (!onAction) return;
-			onAction({
+			const context = {
+				center: { latitude: vp.center[1], longitude: vp.center[0] },
+				zoom: vp.zoom,
+				bearing: vp.bearing,
+				pitch: vp.pitch,
+			};
+			onAction?.({
 				type: "userAction",
 				name: "viewportChange",
 				surfaceId,
 				sourceComponentId: componentId,
 				timestamp: Date.now(),
-				context: {
-					center: { latitude: vp.center[1], longitude: vp.center[0] },
-					zoom: vp.zoom,
-					bearing: vp.bearing,
-					pitch: vp.pitch,
-				},
+				context,
+			});
+			void triggerEvent("viewportChange", component, context, {
+				legacyFallback: false,
 			});
 		},
-		[onAction, surfaceId, componentId],
+		[component, componentId, onAction, surfaceId, triggerEvent],
 	);
 
 	const handleMarkerClick = useCallback(
@@ -180,13 +183,13 @@ export function A2UIGeoMap({
 					coordinate: marker.coordinate,
 				},
 			});
-			void triggerAction(component.actions, {
+			void triggerEvent("markerClick", component, {
 				event: "markerClick",
 				markerId: marker.id,
 				coordinate: marker.coordinate,
 			});
 		},
-		[component.actions, componentId, onAction, surfaceId, triggerAction],
+		[component, componentId, onAction, surfaceId, triggerEvent],
 	);
 
 	const handleMarkerDragEnd = useCallback(
@@ -202,13 +205,13 @@ export function A2UIGeoMap({
 					coordinate: { latitude: lngLat.lat, longitude: lngLat.lng },
 				},
 			});
-			void triggerAction(component.actions, {
+			void triggerEvent("markerDragEnd", component, {
 				event: "markerDragEnd",
 				markerId,
 				coordinate: { latitude: lngLat.lat, longitude: lngLat.lng },
 			});
 		},
-		[component.actions, componentId, onAction, surfaceId, triggerAction],
+		[component, componentId, onAction, surfaceId, triggerEvent],
 	);
 
 	const handleRouteClick = useCallback(
@@ -221,12 +224,12 @@ export function A2UIGeoMap({
 				timestamp: Date.now(),
 				context: { routeId },
 			});
-			void triggerAction(component.actions, {
+			void triggerEvent("routeClick", component, {
 				event: "routeClick",
 				routeId,
 			});
 		},
-		[component.actions, componentId, onAction, surfaceId, triggerAction],
+		[component, componentId, onAction, surfaceId, triggerEvent],
 	);
 
 	const handleLocate = useCallback(
@@ -244,7 +247,7 @@ export function A2UIGeoMap({
 					},
 				},
 			});
-			void triggerAction(component.actions, {
+			void triggerEvent("locate", component, {
 				event: "locate",
 				coordinate: {
 					latitude: coords.latitude,
@@ -252,7 +255,7 @@ export function A2UIGeoMap({
 				},
 			});
 		},
-		[component.actions, componentId, onAction, surfaceId, triggerAction],
+		[component, componentId, onAction, surfaceId, triggerEvent],
 	);
 
 	const validControlPosition = (

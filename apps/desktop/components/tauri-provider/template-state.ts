@@ -1,17 +1,63 @@
-import { invoke } from "@tauri-apps/api/core";
 import {
 	type IBoard,
 	type IMetadata,
+	type ITemplatePreview,
+	type ITemplateSearchHit,
+	type ITemplateSearchQuery,
 	type ITemplateState,
 	type IVersionType,
 	injectDataFunction,
 } from "@flow-like/flow-like-ui";
+import { invoke } from "@tauri-apps/api/core";
 import { isEqual } from "lodash-es";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 
 export class TemplateState implements ITemplateState {
 	constructor(private readonly backend: TauriBackend) {}
+
+	/**
+	 * Store-wide template search is a remote-only surface: local templates come
+	 * from `getTemplates`, which already walks every app in the profile.
+	 */
+	async searchTemplates(
+		query: ITemplateSearchQuery,
+	): Promise<ITemplateSearchHit[]> {
+		if (!this.backend.profile) return [];
+
+		const params = new URLSearchParams();
+		params.set("query", query.query);
+		if (query.language) params.set("language", query.language);
+		if (query.category) params.set("category", query.category);
+		if (query.tag) params.set("tag", query.tag);
+		if (query.forkable_only) params.set("forkable_only", "true");
+		if (query.limit !== undefined) params.set("limit", String(query.limit));
+		if (query.offset !== undefined) params.set("offset", String(query.offset));
+
+		try {
+			return await fetcher<ITemplateSearchHit[]>(
+				this.backend.profile,
+				`apps/templates/search?${params}`,
+				{ method: "GET" },
+			);
+		} catch {
+			return [];
+		}
+	}
+
+	async getTemplatePreview(
+		appId: string,
+		templateId: string,
+	): Promise<ITemplatePreview> {
+		if (!this.backend.profile) {
+			throw new Error("Profile not set. Cannot preview a template.");
+		}
+		return fetcher<ITemplatePreview>(
+			this.backend.profile,
+			`apps/${appId}/templates/${templateId}/preview`,
+			{ method: "GET" },
+		);
+	}
 	async getTemplates(
 		appId?: string,
 		language?: string,

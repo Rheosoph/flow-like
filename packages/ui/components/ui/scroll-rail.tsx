@@ -67,7 +67,7 @@ export function ScrollRail({
 						type="button"
 						aria-label="Scroll left"
 						onClick={() => scrollBy("left")}
-						className="absolute left-1 top-1/2 z-10 -translate-y-1/2 rounded-full border border-border/50 bg-background/90 p-2 shadow-md backdrop-blur-sm opacity-0 transition-opacity group-hover/rail:opacity-100 focus-visible:opacity-100 hover:bg-background"
+						className="absolute left-1 top-1/2 z-10 -translate-y-1/2 rounded-full border border-border/50 bg-background/90 p-2 shadow-md backdrop-blur-sm opacity-100 transition-opacity md:opacity-0 md:group-hover/rail:opacity-100 focus-visible:opacity-100 hover:bg-background"
 					>
 						<ChevronLeft className="h-4 w-4" />
 					</button>
@@ -80,7 +80,7 @@ export function ScrollRail({
 						type="button"
 						aria-label="Scroll right"
 						onClick={() => scrollBy("right")}
-						className="absolute right-1 top-1/2 z-10 -translate-y-1/2 rounded-full border border-border/50 bg-background/90 p-2 shadow-md backdrop-blur-sm opacity-0 transition-opacity group-hover/rail:opacity-100 focus-visible:opacity-100 hover:bg-background"
+						className="absolute right-1 top-1/2 z-10 -translate-y-1/2 rounded-full border border-border/50 bg-background/90 p-2 shadow-md backdrop-blur-sm opacity-100 transition-opacity md:opacity-0 md:group-hover/rail:opacity-100 focus-visible:opacity-100 hover:bg-background"
 					>
 						<ChevronRight className="h-4 w-4" />
 					</button>

@@ -37,7 +37,7 @@ pub struct PathQuery {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/routes/by-path", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/routes/by-path", skip(state, user, params))]
 pub async fn get_route_by_path(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

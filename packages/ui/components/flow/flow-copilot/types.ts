@@ -36,6 +36,8 @@ export interface CopilotMessage {
 export interface FlowScriptApplyResultLike {
 	commands?: unknown[];
 	board_commands?: BoardCommand[];
+	/** Non-blocking source repairs that require a canonical FlowScript readback. */
+	corrections?: string[];
 	diagnostics?: string[];
 	final_board_node_count?: number;
 }
@@ -61,6 +63,8 @@ export interface FlowCopilotProps {
 		| Promise<undefined | FlowScriptApplyResultLike>;
 	onApplyFlowIrCommit?: (
 		token: FlowIrCommitToken,
+		deliveryId?: string,
+		historyMode?: "append" | "invalidate",
 	) => Promise<IApplyFlowIrCommitResponse>;
 	onGhostNodesChange?: (suggestions: Suggestion[]) => void;
 	onClearRunContext?: () => void;

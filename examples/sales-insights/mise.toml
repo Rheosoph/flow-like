@@ -1,0 +1,56 @@
+[env]
+# Where the node template drops its component before it is staged at the root.
+FLOW_LIKE_NODE_ARTIFACT = "node/node.wasm"
+
+[tasks."build:node"]
+description = "Build the WASM node (skips if no node/ dir)"
+run = """
+[ -d node ] || { echo "no node project — skipping"; exit 0; }
+(cd node && mise run build)
+cp "$FLOW_LIKE_NODE_ARTIFACT" ./node.wasm
+"""
+
+[tasks."build:widgets"]
+description = "Build every framework group via its own package.json build script"
+run = """
+[ -d widgets ] || { echo "no widgets — skipping"; exit 0; }
+for w in widgets/*/; do
+  echo "=== Building group $w ==="
+  (cd "$w" && bun install && bun run build)
+done
+"""
+
+[tasks."bundle:widgets"]
+description = "Pack all widget dist outputs into the root widgets.flwb artifact"
+depends = ["build:widgets"]
+run = """
+[ -d widgets ] || exit 0
+bunx flow-like-widgets pack --project . --out widgets.flwb
+"""
+
+[tasks.build]
+description = "Build both publishable artifacts (node.wasm + widgets.flwb)"
+depends = ["build:node", "bundle:widgets"]
+
+[tasks.validate]
+description = "Validate widget contracts and the packed bundle"
+run = """
+bunx flow-like-widgets validate .
+[ -f widgets.flwb ] && bunx flow-like-widgets validate widgets.flwb
+"""
+
+[tasks.dev]
+description = "Mock-host dev harness with live reload"
+run = "bunx flow-like-widgets dev --project ."
+
+[tasks.test]
+description = "Run the node's native unit tests"
+run = "(cd node && mise run test)"
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = """
+rm -f node.wasm widgets.flwb
+(cd node && mise run clean)
+rm -rf widgets/*/dist
+"""

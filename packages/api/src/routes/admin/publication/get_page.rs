@@ -35,7 +35,7 @@ pub struct PageQuery {
 )]
 #[tracing::instrument(
     name = "GET /admin/publication/apps/{app_id}/page/{page_id}",
-    skip(state, user)
+    skip(state, user, query)
 )]
 pub async fn get_page(
     State(state): State<AppState>,
@@ -69,10 +69,10 @@ pub async fn get_page(
         }
     };
 
-    if let Some(board_id) = board_hint {
-        if let Some(page) = try_board(board_id).await {
-            return Ok(Json(page));
-        }
+    if let Some(board_id) = board_hint
+        && let Some(page) = try_board(board_id).await
+    {
+        return Ok(Json(page));
     }
 
     for board_id in app.boards.iter() {

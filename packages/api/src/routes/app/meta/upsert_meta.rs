@@ -38,7 +38,7 @@ use sea_orm::{ActiveModelTrait, TransactionTrait};
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PUT /apps/{app_id}/meta", skip(state, user))]
+#[tracing::instrument(name = "PUT /apps/{app_id}/meta", skip(state, user, query, meta))]
 pub async fn upsert_meta(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

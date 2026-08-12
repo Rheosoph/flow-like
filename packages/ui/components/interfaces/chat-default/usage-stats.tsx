@@ -12,8 +12,15 @@ import {
 	RepeatIcon,
 	ZapIcon,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
-import { cn } from "../../../lib";
+import {
+	createContext,
+	useCallback,
+	useContext,
+	useMemo,
+	useState,
+} from "react";
+import { useModelNames } from "../../../hooks/use-model-names";
+import { cn, modelLabel } from "../../../lib";
 import {
 	Badge,
 	Separator,
@@ -54,20 +61,12 @@ function formatDuration(ms: number): string {
 
 // --- Model name helpers ---
 
-const HEX_HASH_RE = /^[0-9a-f]{16,}$/i;
-const UUID_RE =
-	/^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
-
-function isHashLikeId(name: string): boolean {
-	return HEX_HASH_RE.test(name) || UUID_RE.test(name);
-}
-
-function prettifyModelName(raw: string): string {
-	if (!raw || raw === "unknown") return "Unknown Model";
-	if (isHashLikeId(raw)) return `${raw.slice(0, 8)}…`;
-	const parts = raw.split("/");
-	return parts[parts.length - 1];
-}
+/**
+ * Bit id → catalog name, resolved once per sheet and read by every badge below.
+ * Providers report the Bit id as their model whenever the model definition has
+ * no explicit `model_id`, which is what would otherwise be rendered raw.
+ */
+const ModelNamesContext = createContext<ReadonlyMap<string, string>>(new Map());
 
 // --- Token intensity ---
 
@@ -291,39 +290,40 @@ function TokenRatioBar({
 // --- Model badge ---
 
 function ModelBadge({ model }: { model: string }) {
-	const display = prettifyModelName(model);
-	const isHash = isHashLikeId(model);
+	const names = useContext(ModelNamesContext);
+	const { label, resolved, opaque } = modelLabel(model, names);
 
 	const badge = (
 		<Badge
 			variant="outline"
 			className={cn(
-				"text-[11px] font-mono px-1.5 py-0 h-5 border",
+				"text-[11px] px-1.5 py-0 h-5 border",
+				resolved ? "font-medium" : "font-mono",
 				modelColor(model),
 			)}
 		>
-			{isHash && <HashIcon className="w-2.5 h-2.5 mr-0.5 opacity-70" />}
-			{display}
+			{opaque && <HashIcon className="w-2.5 h-2.5 mr-0.5 opacity-70" />}
+			{label}
 		</Badge>
 	);
 
-	if (isHash) {
-		return (
-			<TooltipProvider delayDuration={200}>
-				<Tooltip>
-					<TooltipTrigger asChild>{badge}</TooltipTrigger>
-					<TooltipContent side="top" className="max-w-xs">
-						<p className="font-mono text-xs break-all">{model}</p>
-						<p className="text-[11px] text-muted-foreground mt-1">
-							Internal model / deployment ID
-						</p>
-					</TooltipContent>
-				</Tooltip>
-			</TooltipProvider>
-		);
-	}
+	if (!resolved && !opaque) return badge;
 
-	return badge;
+	return (
+		<TooltipProvider delayDuration={200}>
+			<Tooltip>
+				<TooltipTrigger asChild>{badge}</TooltipTrigger>
+				<TooltipContent side="top" className="max-w-xs">
+					<p className="font-mono text-xs break-all">{model}</p>
+					<p className="text-[11px] text-muted-foreground mt-1">
+						{resolved
+							? "Internal model / deployment ID"
+							: "Unresolved model / deployment ID"}
+					</p>
+				</TooltipContent>
+			</Tooltip>
+		</TooltipProvider>
+	);
 }
 
 // --- Step detail ---
@@ -584,6 +584,9 @@ export function UsageStats({
 	const [sheetOpen, setSheetOpen] = useState(false);
 
 	const aggregated = useMemo(() => aggregateStats(stats), [stats]);
+	const modelNames = useModelNames(
+		useMemo(() => Array.from(aggregated.byModel.keys()), [aggregated.byModel]),
+	);
 
 	const handleClick = useCallback(() => {
 		setSheetOpen(true);
@@ -596,7 +599,7 @@ export function UsageStats({
 	);
 
 	return (
-		<>
+		<ModelNamesContext.Provider value={modelNames}>
 			<TooltipProvider delayDuration={300}>
 				<Tooltip>
 					<TooltipTrigger asChild>
@@ -673,7 +676,7 @@ export function UsageStats({
 												className="flex items-center justify-between gap-3"
 											>
 												<span className="truncate">
-													{prettifyModelName(model)}
+													{modelLabel(model, modelNames).label}
 												</span>
 												<span className="text-muted-foreground tabular-nums shrink-0">
 													{data.calls}x · {formatTokenCount(data.tokens)} tok
@@ -698,7 +701,7 @@ export function UsageStats({
 				    (and its backdrop) above them so the stats aren't hidden behind the panel. */}
 				<SheetContent
 					side="right"
-					className="z-10000 w-md sm:w-lg lg:w-xl sm:max-w-xl"
+					className="z-10000 w-full sm:w-lg lg:w-xl sm:max-w-xl"
 					overlayClassName="z-10000"
 				>
 					<SheetHeader className="px-2 shrink-0">
@@ -823,6 +826,6 @@ export function UsageStats({
 					</div>
 				</SheetContent>
 			</Sheet>
-		</>
+		</ModelNamesContext.Provider>
 	);
 }

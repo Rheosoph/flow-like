@@ -2,7 +2,7 @@
 
 import { Settings } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
 	useCallback,
 	useEffect,
@@ -11,15 +11,15 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { createSanitizedStyleProps, safeScopedCss } from "../../lib/css-utils";
+import { useAuth } from "react-oidc-context";
+import { boardReadinessKey, whenBoardReady } from "../../lib/board-readiness";
 import {
+	type PageSurfaceIdentity,
+	pageSurfaceQueryKey,
 	readPageSurfaceCache,
 	writePageSurfaceCache,
 } from "../../lib/page-surface-cache";
-import {
-	presignCanvasSettings,
-	presignPageAssets,
-} from "../../lib/presign-assets";
+import { presignPageContent } from "../../lib/presign-assets";
 import {
 	resolveEventBoardVersion,
 	withBoardVersion,
@@ -29,19 +29,24 @@ import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import type { IPage } from "../../state/backend-state/page-state";
 import type { IRouteMapping } from "../../state/backend-state/route-state";
+import type { IStorageState } from "../../state/backend-state/storage-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
+// By module path, not through the a2ui barrel: the barrel re-exports every component in the
+// registry, which would pull the 3D scene and the mapping stack into every page load.
+import { A2UIRenderer } from "../a2ui/A2UIRenderer";
+import { DataProvider } from "../a2ui/DataContext";
 import {
-	A2UIRenderer,
-	DataProvider,
 	RouteDialogProvider,
 	useRouteDialog,
-} from "../a2ui";
+} from "../a2ui/RouteDialogProvider";
 import { applyA2UIMessage } from "../a2ui/apply-a2ui-message";
 import type {
 	A2UIServerMessage,
 	Surface,
 	SurfaceComponent,
 } from "../a2ui/types";
+import { handleWidgetQueryMessage } from "../a2ui/widget-query-handler";
+import { ScopedCustomCss } from "../scoped-custom-css";
 import type { IUseInterfaceProps } from "./interfaces";
 import { PageLoadingSkeleton } from "./page-loading-skeleton";
 
@@ -49,10 +54,57 @@ function isBackgroundClass(value: string | undefined): value is string {
 	return value?.startsWith("bg-") ?? false;
 }
 
+interface WidgetWarmup {
+	readonly promise: Promise<void>;
+	completedAt?: number;
+}
+
+/**
+ * Warming widget definitions is shared across every page of an app, so the record outlives any
+ * one interface. It expires so that widgets published mid-session still reach local execution.
+ */
+const widgetWarmups = new Map<string, WidgetWarmup>();
+const WIDGET_WARMUP_TTL_MS = 60_000;
+
 export interface PageInterfaceProps extends Omit<IUseInterfaceProps, "event"> {
 	event?: IUseInterfaceProps["event"];
 	route?: string;
 	page?: IPage;
+}
+
+/**
+ * Signs every storage-backed asset the page renders in one request.
+ *
+ * A failure here is cosmetic — the unsigned paths simply do not resolve — so it must never
+ * stop the page from rendering the rest of its content.
+ */
+async function presignPage(
+	appId: string,
+	page: IPage,
+	storageState: IStorageState,
+): Promise<IPage> {
+	try {
+		const { components, backgroundImage } = await presignPageContent(
+			appId,
+			page.components ?? [],
+			page.canvasSettings,
+			storageState,
+		);
+
+		return {
+			...page,
+			components,
+			canvasSettings: page.canvasSettings
+				? { ...page.canvasSettings, backgroundImage }
+				: page.canvasSettings,
+		};
+	} catch (presignError) {
+		console.warn(
+			"[PageInterface] Failed to presign page assets:",
+			presignError,
+		);
+		return page;
+	}
 }
 
 function buildSurfaceFromPage(page: IPage, pageId: string): Surface | null {
@@ -109,6 +161,9 @@ function PageInterfaceInner({
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
 	const router = useRouter();
+	const search = useSearchParams().toString();
+	const auth = useAuth();
+	const currentUserKey = auth?.user?.profile?.sub ?? "anonymous";
 	const { openDialog, closeDialog } = useRouteDialog();
 	const pageContainerId = useId();
 	const [page, setPage] = useState<IPage | null>(null);
@@ -123,12 +178,24 @@ function PageInterfaceInner({
 	>("idle");
 	const [error, setError] = useState<string | null>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
-	const localWidgetWarmupsRef = useRef<Map<string, Promise<void>>>(new Map());
 	const [cachedSurface, setCachedSurface] = useState<Surface | null>(null);
 
 	const pageRoute = route || (config?.route as string);
 	const cacheSource = providedPage ?? page;
 	const activePageEvent = event ?? routeEvent;
+
+	// A cached surface may only be replayed for the same parameters and the same account that
+	// produced it: the onLoad workflow receives both, and its output is built from them.
+	const surfaceIdentity = useMemo((): PageSurfaceIdentity | null => {
+		if (!appId || !cacheSource?.id || !cacheSource.updatedAt) return null;
+		return {
+			appId,
+			pageId: cacheSource.id,
+			pageUpdatedAt: cacheSource.updatedAt,
+			queryKey: pageSurfaceQueryKey(search),
+			userKey: currentUserKey,
+		};
+	}, [appId, cacheSource?.id, cacheSource?.updatedAt, currentUserKey, search]);
 	const pageExecutionBoardId = activePageEvent?.board_id || page?.boardId;
 	const pageExecutionVersion = useMemo(
 		() =>
@@ -146,65 +213,8 @@ function PageInterfaceInner({
 
 	useEffect(() => {
 		if (providedPage) {
-			console.log("[PageInterface] Using provided page:", {
-				id: providedPage.id,
-				boardId: providedPage.boardId,
-				onLoadEventId: providedPage.onLoadEventId,
-				onUnloadEventId: providedPage.onUnloadEventId,
-				onIntervalEventId: providedPage.onIntervalEventId,
-				onIntervalSeconds: providedPage.onIntervalSeconds,
-			});
-			// Presign assets in the provided page
 			const presignProvidedPage = async () => {
-				let updatedPage = { ...providedPage };
-
-				// Presign components
-				if (providedPage.components && providedPage.components.length > 0) {
-					try {
-						const presignedComponents = await presignPageAssets(
-							appId,
-							providedPage.components,
-							backend.storageState,
-						);
-						updatedPage = { ...updatedPage, components: presignedComponents };
-					} catch (presignError) {
-						console.warn(
-							"[PageInterface] Failed to presign component assets:",
-							presignError,
-						);
-					}
-				}
-
-				// Presign canvasSettings.backgroundImage
-				if (providedPage.canvasSettings?.backgroundImage) {
-					try {
-						const presignedSettings = await presignCanvasSettings(
-							appId,
-							{
-								backgroundColor:
-									providedPage.canvasSettings.backgroundColor ?? "",
-								backgroundImage: providedPage.canvasSettings.backgroundImage,
-								padding: providedPage.canvasSettings.padding ?? "",
-								customCss: providedPage.canvasSettings.customCss,
-							},
-							backend.storageState,
-						);
-						updatedPage = {
-							...updatedPage,
-							canvasSettings: {
-								...updatedPage.canvasSettings,
-								backgroundImage: presignedSettings.backgroundImage,
-							},
-						};
-					} catch (presignError) {
-						console.warn(
-							"[PageInterface] Failed to presign canvas background:",
-							presignError,
-						);
-					}
-				}
-
-				setPage(updatedPage);
+				setPage(await presignPage(appId, providedPage, backend.storageState));
 				setIsLoading(false);
 			};
 			presignProvidedPage();
@@ -249,58 +259,7 @@ function PageInterfaceInner({
 						eventData.board_id || undefined,
 					);
 					if (pageResult) {
-						console.log("[PageInterface] Loaded page:", {
-							id: pageResult.id,
-							boardId: pageResult.boardId,
-							onLoadEventId: pageResult.onLoadEventId,
-							onUnloadEventId: pageResult.onUnloadEventId,
-							onIntervalEventId: pageResult.onIntervalEventId,
-							onIntervalSeconds: pageResult.onIntervalSeconds,
-						});
-						// Presign assets in the page components
-						if (pageResult.components && pageResult.components.length > 0) {
-							try {
-								const presignedComponents = await presignPageAssets(
-									appId,
-									pageResult.components,
-									backend.storageState,
-								);
-								pageResult.components = presignedComponents;
-							} catch (presignError) {
-								console.warn(
-									"[PageInterface] Failed to presign component assets:",
-									presignError,
-								);
-							}
-						}
-
-						// Presign canvasSettings.backgroundImage
-						if (pageResult.canvasSettings?.backgroundImage) {
-							try {
-								const presignedSettings = await presignCanvasSettings(
-									appId,
-									{
-										backgroundColor:
-											pageResult.canvasSettings.backgroundColor ?? "",
-										backgroundImage: pageResult.canvasSettings.backgroundImage,
-										padding: pageResult.canvasSettings.padding ?? "",
-										customCss: pageResult.canvasSettings.customCss,
-									},
-									backend.storageState,
-								);
-								pageResult.canvasSettings = {
-									...pageResult.canvasSettings,
-									backgroundImage: presignedSettings.backgroundImage,
-								};
-							} catch (presignError) {
-								console.warn(
-									"[PageInterface] Failed to presign canvas background:",
-									presignError,
-								);
-							}
-						}
-
-						setPage(pageResult);
+						setPage(await presignPage(appId, pageResult, backend.storageState));
 					} else {
 						setError(`Page not found: ${eventData.default_page_id}`);
 					}
@@ -327,17 +286,21 @@ function PageInterfaceInner({
 		backend.storageState,
 	]);
 
+	// Every page keeps its last rendered surface, not only those that opt in: the alternative
+	// to showing it is a skeleton for the whole length of the onLoad run, and the run replaces
+	// it either way. Pages without an onLoad event build their surface from the payload and
+	// never consult this.
 	useEffect(() => {
 		let cancelled = false;
 
-		if (!cacheSource?.cache || !appId || !cacheSource.id) {
+		if (!surfaceIdentity || !cacheSource?.onLoadEventId) {
 			setCachedSurface(null);
 			setIsCacheLoading(false);
 			return;
 		}
 
 		setIsCacheLoading(true);
-		void readPageSurfaceCache(appId, cacheSource)
+		void readPageSurfaceCache(surfaceIdentity)
 			.then((surface) => {
 				if (cancelled) return;
 				setCachedSurface(surface);
@@ -350,7 +313,7 @@ function PageInterfaceInner({
 		return () => {
 			cancelled = true;
 		};
-	}, [appId, cacheSource?.cache, cacheSource?.id, cacheSource?.updatedAt]);
+	}, [surfaceIdentity, cacheSource?.onLoadEventId]);
 
 	const initialSurface = useMemo(() => {
 		if (cachedSurface) return cachedSurface;
@@ -363,17 +326,22 @@ function PageInterfaceInner({
 		appId,
 	);
 
-	// Save surface to cache after onLoad completes
+	// Written only once the run that produced it has finished, so a half-built surface is never
+	// what the next visit replays.
 	useEffect(() => {
-		if (!page?.cache || !appId || !page.id || !surface || isLoadEventRunning)
-			return;
-		void writePageSurfaceCache(appId, page, surface);
-	}, [page?.cache, page?.id, appId, surface, isLoadEventRunning]);
+		if (!surfaceIdentity || !surface || isLoadEventRunning) return;
+		if (!page?.onLoadEventId) return;
+		void writePageSurfaceCache(surfaceIdentity, surface);
+	}, [surfaceIdentity, page?.onLoadEventId, surface, isLoadEventRunning]);
 
 	// Comprehensive A2UI message handler for page events
 	const handleA2UIMessage = useCallback(
 		(message: A2UIServerMessage) => {
 			console.log("[PageInterface] A2UI message:", message.type, message);
+
+			if (handleWidgetQueryMessage(message)) {
+				return;
+			}
 
 			// Reveal the current screen while the workflow continues running.
 			if (message.type === "showScreen") {
@@ -508,34 +476,45 @@ function PageInterfaceInner({
 	const prepareLocalWidgetDefinitions = useCallback(async () => {
 		if (!appId || !backend.capabilities().canExecuteLocally) return;
 
-		const existingWarmup = localWidgetWarmupsRef.current.get(appId);
-		if (existingWarmup) {
-			await existingWarmup.catch(() => undefined);
+		const tracked = widgetWarmups.get(appId);
+		// A completed warm-up was kept forever, so a widget published or edited later in the
+		// session never reached local execution. Concurrent runs still share one pass; a
+		// finished one only counts as current for as long as the list plausibly is.
+		if (
+			tracked &&
+			(tracked.completedAt === undefined ||
+				Date.now() - tracked.completedAt < WIDGET_WARMUP_TTL_MS)
+		) {
+			await tracked.promise.catch(() => undefined);
 			return;
 		}
 
-		const warmup = (async () => {
-			const widgets = await backend.widgetState.getWidgets(appId);
-			const results = await Promise.allSettled(
-				widgets.map(([widgetAppId, widgetId]) =>
-					backend.widgetState.getWidget(widgetAppId, widgetId),
-				),
-			);
-			const failedCount = results.filter(
-				(result) => result.status === "rejected",
-			).length;
-			if (failedCount > 0) {
-				console.warn(
-					`[PageInterface] Failed to warm ${failedCount} widget definition(s) before local execution`,
+		const entry: WidgetWarmup = {
+			promise: (async () => {
+				const widgets = await backend.widgetState.getWidgets(appId);
+				const results = await Promise.allSettled(
+					widgets.map(([widgetAppId, widgetId]) =>
+						backend.widgetState.getWidget(widgetAppId, widgetId),
+					),
 				);
-			}
-		})();
+				const failedCount = results.filter(
+					(result) => result.status === "rejected",
+				).length;
+				if (failedCount > 0) {
+					console.warn(
+						`[PageInterface] Failed to warm ${failedCount} widget definition(s) before local execution`,
+					);
+				}
+			})(),
+		};
 
-		localWidgetWarmupsRef.current.set(appId, warmup);
+		widgetWarmups.set(appId, entry);
 		try {
-			await warmup;
+			await entry.promise;
+			entry.completedAt = Date.now();
 		} catch (e) {
-			localWidgetWarmupsRef.current.delete(appId);
+			// A failed pass must not be remembered as current, or the next run inherits it.
+			if (widgetWarmups.get(appId) === entry) widgetWarmups.delete(appId);
 			console.warn(
 				"[PageInterface] Failed to warm widget definitions before local execution:",
 				e,
@@ -589,7 +568,18 @@ function PageInterfaceInner({
 				// Use execution service if available (checks runtime variables)
 				const execFn =
 					executionService?.executeBoard ?? backend.boardState.executeBoard;
-				await prepareLocalWidgetDefinitions();
+				// The render no longer waits for the board refresh, so the run does: a device
+				// that has only ever synced the board manifest must not execute the stale copy.
+				await Promise.all([
+					whenBoardReady(
+						boardReadinessKey(
+							appId,
+							boardId,
+							pageExecutionVersion ?? undefined,
+						),
+					),
+					prepareLocalWidgetDefinitions(),
+				]);
 				await execFn(appId, boardId, payload, false, onRunStarted, (events) => {
 					for (const evt of events) {
 						if (evt.event_type === "a2ui") {
@@ -703,9 +693,10 @@ function PageInterfaceInner({
 	const activeSurface = surface;
 	const activeSurfaceForRenderer = surfaceForRenderer;
 
-	const shouldHoldForCachedState =
-		Boolean(cacheSource?.cache) && isCacheLoading;
-	const canRenderFromCache = Boolean(cacheSource?.cache && cachedSurface);
+	// The IndexedDB read is short and its result decides between real content and a skeleton,
+	// so it is worth waiting for rather than flashing a placeholder it would have replaced.
+	const shouldHoldForCachedState = isCacheLoading;
+	const canRenderFromCache = Boolean(cachedSurface);
 	const shouldShowLoading =
 		(isLoading && !canRenderFromCache) ||
 		shouldHoldForCachedState ||
@@ -786,15 +777,14 @@ function PageInterfaceInner({
 
 	return (
 		<div className="h-full w-full overflow-auto bg-background">
-			{customCss && (
-				<style
-					{...createSanitizedStyleProps(
-						safeScopedCss(customCss, `[data-page-id="${pageContainerId}"]`),
-					)}
-				/>
-			)}
+			<ScopedCustomCss
+				css={customCss}
+				scopeSelector={`[data-page-id="${pageContainerId}"]`}
+			/>
 			<div
 				data-page-id={pageContainerId}
+				data-flowpilot-page-event-id={activePageEvent?.id ?? ""}
+				data-flowpilot-page-loading={isLoadEventRunning ? "true" : "false"}
 				className={cn("min-h-full flex flex-col", backgroundClass)}
 				style={canvasStyle}
 			>

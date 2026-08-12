@@ -240,7 +240,10 @@ async fn enforce_embedding_tier(
             user_tier,
             tier
         );
-        return Err(ApiError::FORBIDDEN);
+        return Err(ApiError::payment_required(format!(
+            "This embedding model requires the {} tier, which is not included in your plan.",
+            tier
+        )));
     }
     Ok(())
 }

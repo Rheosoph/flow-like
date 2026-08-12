@@ -1,6 +1,7 @@
 "use client";
 
 import { useDraggable } from "@dnd-kit/core";
+import { useQuery } from "@tanstack/react-query";
 import {
 	AlignCenter,
 	Calendar,
@@ -21,6 +22,8 @@ import {
 	MessageSquare,
 	Mic,
 	MousePointer,
+	Network,
+	Package,
 	PanelLeft,
 	Rows3,
 	Search,
@@ -39,7 +42,12 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInvoke } from "../../hooks";
+import { useSearch } from "../../hooks/use-search-index";
 import { cn } from "../../lib";
+import {
+	type AppPackageWidget,
+	listAppPackageWidgets,
+} from "../../lib/package-widgets";
 import { useBackend } from "../../state/backend-state";
 import type { IUserWidgetInfo } from "../../state/backend-state/user-state";
 import { Badge } from "../ui/badge";
@@ -54,6 +62,8 @@ import { useBuilder } from "./BuilderContext";
 import {
 	COMPONENT_DND_TYPE,
 	type ComponentDragData,
+	PACKAGE_WIDGET_DND_TYPE,
+	type PackageWidgetDragData,
 	WIDGET_DND_TYPE,
 	type WidgetDragData,
 } from "./BuilderDndContext";
@@ -71,6 +81,12 @@ interface GroupedWidgetProject {
 	appId: string;
 	appName: string;
 	widgets: IUserWidgetInfo[];
+}
+
+interface GroupedPackageWidgets {
+	packageId: string;
+	packageName: string;
+	widgets: AppPackageWidget[];
 }
 
 const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
@@ -326,6 +342,13 @@ const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
 		description: "Text input",
 	},
 	{
+		type: "richText",
+		label: "Rich Text",
+		icon: Type,
+		category: "Interactive",
+		description: "Formatted document editor with image uploads",
+	},
+	{
 		type: "select",
 		label: "Select",
 		icon: List,
@@ -547,6 +570,20 @@ const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
 		description: "Interactive geographic map with markers and routes",
 	},
 	{
+		type: "graph",
+		label: "Graph",
+		icon: Network,
+		category: "Display",
+		description: "Node/edge network graph rendered on a WebGL canvas",
+	},
+	{
+		type: "ontologyGraph",
+		label: "Ontology",
+		icon: Network,
+		category: "Display",
+		description: "Live explorer for one of this project's ontologies",
+	},
+	{
 		type: "calendar",
 		label: "Calendar",
 		icon: Calendar,
@@ -591,14 +628,34 @@ export function ComponentPalette({
 		useState(false);
 	const [recentlyUsed, setRecentlyUsed] = useState<string[]>([]);
 	const [widgetsSectionOpen, setWidgetsSectionOpen] = useState(true);
+	const [openPackages, setOpenPackages] = useState<Set<string>>(new Set());
+	const [packagesInitialized, setPackagesInitialized] = useState(false);
 
-	const { addComponent } = useBuilder();
+	const { addComponent, actionContext } = useBuilder();
+	const effectiveAppId = currentAppId ?? actionContext?.appId;
 
 	const { data: widgets, isLoading: widgetsLoading } = useInvoke(
 		backend.userState.getUserWidgets,
 		backend.userState,
 		[],
 	);
+
+	// Package widgets of the current app (§6.1) — resolved from the installed
+	// manifests of packages added to the app; empty on hosts without the
+	// per-app package listing (see listAppPackageWidgets).
+	const { data: packageWidgets } = useQuery({
+		queryKey: ["app-package-widgets", effectiveAppId],
+		queryFn: () =>
+			listAppPackageWidgets(
+				{
+					listPackages: backend.appState.listPackages?.bind(backend.appState),
+					getPackage: (packageId) =>
+						backend.registryState.getPackage(packageId),
+				},
+				effectiveAppId as string,
+			),
+		enabled: !!effectiveAppId && showWidgets,
+	});
 
 	const { data: apps } = useInvoke(
 		backend.appState.getApps,
@@ -618,21 +675,14 @@ export function ComponentPalette({
 		return names;
 	}, [apps]);
 
-	const filteredComponents = useMemo(() => {
-		if (!searchQuery.trim()) return COMPONENT_DEFINITIONS;
-		const query = searchQuery.toLowerCase();
-		return COMPONENT_DEFINITIONS.filter(
-			(c) =>
-				c.label.toLowerCase().includes(query) ||
-				c.type.toLowerCase().includes(query) ||
-				c.category.toLowerCase().includes(query) ||
-				c.description?.toLowerCase().includes(query),
-		);
-	}, [searchQuery]);
+	const filteredComponents = useSearch(COMPONENT_DEFINITIONS, searchQuery, {
+		fields: ["label", "type", "category", "description"],
+		boost: { label: 3, type: 2 },
+	});
 
-	const filteredWidgets = useMemo(() => {
+	const validWidgets = useMemo(() => {
 		if (!widgets || !showWidgets) return [];
-		const validWidgets = widgets.flatMap((widget) => {
+		return widgets.flatMap((widget) => {
 			const name = getWidgetDisplayName(widget);
 			if (!name) return [];
 
@@ -646,15 +696,12 @@ export function ComponentPalette({
 				},
 			];
 		});
-		if (!searchQuery.trim()) return validWidgets;
-		const query = searchQuery.toLowerCase();
-		return validWidgets.filter(
-			(w) =>
-				w.metadata.name.toLowerCase().includes(query) ||
-				w.metadata.description?.toLowerCase().includes(query) ||
-				w.metadata.tags?.some((tag) => tag.toLowerCase().includes(query)),
-		);
-	}, [widgets, searchQuery, showWidgets]);
+	}, [widgets, showWidgets]);
+
+	const filteredWidgets = useSearch(validWidgets, searchQuery, {
+		fields: ["metadata.name", "metadata.description", "metadata.tags"],
+		boost: { "metadata.name": 3, "metadata.tags": 1.5 },
+	});
 
 	const groupedWidgets = useMemo<GroupedWidgetProject[]>(() => {
 		const groups = new Map<string, IUserWidgetInfo[]>();
@@ -686,6 +733,59 @@ export function ComponentPalette({
 		setOpenWidgetProjects(new Set(groupedWidgets.map((group) => group.appId)));
 		setWidgetProjectsInitialized(true);
 	}, [groupedWidgets, widgetProjectsInitialized]);
+
+	const filteredPackageWidgets = useMemo(() => {
+		const available = showWidgets ? (packageWidgets ?? []) : [];
+		if (!searchQuery.trim()) return available;
+		const query = searchQuery.toLowerCase();
+		return available.filter(
+			(pw) =>
+				pw.widget.name.toLowerCase().includes(query) ||
+				pw.widget.description.toLowerCase().includes(query) ||
+				pw.packageName.toLowerCase().includes(query) ||
+				pw.widget.keywords?.some((keyword) =>
+					keyword.toLowerCase().includes(query),
+				),
+		);
+	}, [packageWidgets, searchQuery, showWidgets]);
+
+	const groupedPackageWidgets = useMemo<GroupedPackageWidgets[]>(() => {
+		const groups = new Map<string, AppPackageWidget[]>();
+		for (const pw of filteredPackageWidgets) {
+			const entry = groups.get(pw.packageId) ?? [];
+			entry.push(pw);
+			groups.set(pw.packageId, entry);
+		}
+		return Array.from(groups.entries())
+			.map(([packageId, pkgWidgets]) => ({
+				packageId,
+				packageName: pkgWidgets[0]?.packageName ?? packageId,
+				widgets: [...pkgWidgets].sort((a, b) =>
+					a.widget.name.localeCompare(b.widget.name),
+				),
+			}))
+			.sort((a, b) => a.packageName.localeCompare(b.packageName));
+	}, [filteredPackageWidgets]);
+
+	useEffect(() => {
+		if (packagesInitialized || groupedPackageWidgets.length === 0) return;
+		setOpenPackages(
+			new Set(groupedPackageWidgets.map((group) => group.packageId)),
+		);
+		setPackagesInitialized(true);
+	}, [groupedPackageWidgets, packagesInitialized]);
+
+	const setPackageOpen = useCallback((packageId: string, open: boolean) => {
+		setOpenPackages((prev) => {
+			const next = new Set(prev);
+			if (open) {
+				next.add(packageId);
+			} else {
+				next.delete(packageId);
+			}
+			return next;
+		});
+	}, []);
 
 	const groupedComponents = useMemo(() => {
 		const groups: Record<string, ComponentDefinition[]> = {};
@@ -850,7 +950,8 @@ export function ComponentPalette({
 										<Loader2 className="h-4 w-4 animate-spin" />
 										<span>Loading widgets...</span>
 									</div>
-								) : filteredWidgets.length === 0 ? (
+								) : filteredWidgets.length === 0 &&
+									groupedPackageWidgets.length === 0 ? (
 									<div className="px-3 py-2 text-sm text-muted-foreground">
 										{searchQuery ? "No widgets match" : "No widgets available"}
 									</div>
@@ -898,6 +999,56 @@ export function ComponentPalette({
 										);
 									})
 								)}
+								{/* Package widgets (§6.1) — same list, package provenance */}
+								{!widgetsLoading &&
+									groupedPackageWidgets.map((group) => {
+										const isOpen =
+											!!searchQuery.trim() || openPackages.has(group.packageId);
+
+										return (
+											<Collapsible
+												key={`pkg-${group.packageId}`}
+												open={isOpen}
+												onOpenChange={(open) =>
+													setPackageOpen(group.packageId, open)
+												}
+											>
+												<CollapsibleTrigger
+													className="flex w-full items-center justify-between rounded px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
+													title={group.packageId}
+												>
+													<span className="flex min-w-0 items-center gap-1.5">
+														<Package className="h-3.5 w-3.5 shrink-0" />
+														<span className="truncate">
+															{group.packageName}
+														</span>
+													</span>
+													<div className="flex items-center gap-2">
+														<Badge
+															variant="secondary"
+															className="h-5 text-[10px]"
+														>
+															{group.widgets.length}
+														</Badge>
+														<ChevronRight
+															className={cn(
+																"h-3.5 w-3.5 transition-transform duration-200",
+																isOpen && "rotate-90",
+															)}
+														/>
+													</div>
+												</CollapsibleTrigger>
+												<CollapsibleContent className="ml-2 border-l pt-1 pl-2 space-y-0.5">
+													{group.widgets.map((pw) => (
+														<PackageWidgetItem
+															key={`${pw.packageId}-${pw.widget.id}`}
+															packageWidget={pw}
+														/>
+													))}
+												</CollapsibleContent>
+											</Collapsible>
+										);
+									})}
 							</CollapsibleContent>
 						</Collapsible>
 					)}
@@ -962,6 +1113,59 @@ function ComponentItem({
 		>
 			<Icon className="h-4 w-4 text-muted-foreground shrink-0" />
 			<span className="truncate">{definition.label}</span>
+		</div>
+	);
+}
+
+interface PackageWidgetItemProps {
+	packageWidget: AppPackageWidget;
+}
+
+function PackageWidgetItem({ packageWidget }: PackageWidgetItemProps) {
+	const { packageId, packageVersion, bundleHash, widget } = packageWidget;
+	const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+		id: `package-widget-${packageId}-${widget.id}`,
+		data: {
+			type: PACKAGE_WIDGET_DND_TYPE,
+			packageId,
+			widgetId: widget.id,
+			packageVersion,
+			bundleHash,
+			name: widget.name,
+			contract: widget.contract,
+		} satisfies PackageWidgetDragData,
+	});
+	const thumbnail = widget.thumbnail ?? widget.icon;
+
+	return (
+		<div
+			ref={setNodeRef}
+			{...listeners}
+			{...attributes}
+			className={cn(
+				"group flex items-center gap-2 px-3 py-2 text-sm rounded cursor-grab hover:bg-muted active:cursor-grabbing select-none touch-none",
+				isDragging && "opacity-50",
+			)}
+			title={
+				widget.description
+					? `${widget.description}\n${packageId}@${packageVersion}`
+					: `${packageId}@${packageVersion}`
+			}
+		>
+			{thumbnail ? (
+				<img
+					src={thumbnail}
+					alt=""
+					className="h-4 w-4 rounded object-cover shrink-0"
+				/>
+			) : (
+				<Layers className="h-4 w-4 text-muted-foreground shrink-0" />
+			)}
+			<span className="truncate">{widget.name}</span>
+			<Package
+				className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground/70"
+				aria-label={`From package ${packageId}`}
+			/>
 		</div>
 	);
 }

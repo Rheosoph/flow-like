@@ -1,4 +1,6 @@
-use super::{DirDiffSession, DirManifest, MANIFEST_VERSION, ManifestEntry};
+use super::{
+    DirDiffSession, DirManifest, MANIFEST_PREFIX, MANIFEST_VERSION, ManifestEntry, ManifestKind,
+};
 use crate::data::path::FlowPath;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
@@ -6,11 +8,15 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
+use flow_like_storage::object_store::{ObjectMeta, ObjectStore};
 use flow_like_types::{Error, async_trait, json::json};
 use futures::{StreamExt, stream};
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
-/// Bounded parallelism when Blake3-hashing file bodies (Checksum mode / weak ETags).
+/// Bounded parallelism for marker probes and Blake3 content hashing.
 const HASH_CONCURRENCY: usize = 16;
 
 #[crate::register_node]
@@ -29,9 +35,10 @@ impl NodeLogic for GetChangesNode {
         let mut node = Node::new(
             "path_get_changes",
             "Diff Directory",
-            "Diffs a folder against a manifest, emitting added, updated and deleted files. Auto mode trusts store ETags (hashing only weak/missing ones); Checksum mode always Blake3-hashes contents",
+            "Diffs a folder against a manifest, emitting added, updated and deleted files while ignoring directory manifests. Auto mode trusts store ETags (hashing only weak/missing ones); Checksum mode always Blake3-hashes contents",
             "Data/Files/Operations",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/path.svg");
 
         node.add_input_pin(
@@ -44,7 +51,7 @@ impl NodeLogic for GetChangesNode {
         node.add_input_pin(
             "manifest",
             "Manifest",
-            "FlowPath to the manifest file. May not exist yet — everything is then reported as added",
+            "FlowPath to this workflow's manifest file. It may have any name and need not exist yet; use a distinct name when workflows share a root",
             VariableType::Struct,
         )
         .set_schema::<FlowPath>()
@@ -184,15 +191,35 @@ impl NodeLogic for GetChangesNode {
                 .objects
         };
 
-        // Skip the manifest file itself only when it lives in the same store as the
-        // scanned root; an identical path in a different store is a real file. Compare
-        // normalized object-store paths so a stray leading/trailing slash never leaks
-        // the manifest back into the scan as phantom churn.
+        // An identical manifest path in a different store is a real file. Compare
+        // normalized object-store paths so stray slashes never create phantom churn.
         let same_store = root.store_ref == manifest_path.store_ref;
         let manifest_key = flow_like_storage::Path::from(manifest_path.path.as_str());
+        let mut ignored_manifest_keys = HashSet::new();
+        if same_store {
+            ignored_manifest_keys.insert(manifest_key.as_ref().to_string());
+        }
+
+        let (detected_manifest_keys, probe_failures) =
+            detect_manifest_keys(generic.clone(), &objects, &ignored_manifest_keys).await;
+        ignored_manifest_keys.extend(detected_manifest_keys);
+        if probe_failures > 0 {
+            context.log_message(
+                &format!(
+                    "Failed to inspect {} files for the directory-manifest marker; treating them as regular files",
+                    probe_failures
+                ),
+                LogLevel::Warn,
+            );
+        }
+
+        // A manifest from an older snapshot must be forgotten silently rather than
+        // emitted as deleted now that manifests are excluded from directory state.
+        previous.retain(|key, _| !ignored_manifest_keys.contains(key));
+
         let candidates: Vec<_> = objects
             .into_iter()
-            .filter(|object| !same_store || object.location != manifest_key)
+            .filter(|object| !ignored_manifest_keys.contains(object.location.as_ref()))
             .collect();
 
         // Only read file bodies when we cannot trust the ETag: Checksum mode, or
@@ -271,9 +298,16 @@ impl NodeLogic for GetChangesNode {
             .map(|key| root.with_path(&key))
             .collect::<Vec<FlowPath>>();
 
+        entries.sort_unstable_by(|left, right| left.path.cmp(&right.path));
+        let mut ignored_manifest_paths = ignored_manifest_keys.into_iter().collect::<Vec<_>>();
+        ignored_manifest_paths.sort_unstable();
+
         let session = DirDiffSession {
             manifest: manifest_path,
+            root: Some(root),
+            ignored_manifest_paths,
             manifest_content: DirManifest {
+                kind: ManifestKind::Directory,
                 version: MANIFEST_VERSION,
                 recursive,
                 entries,
@@ -290,12 +324,58 @@ impl NodeLogic for GetChangesNode {
     }
 }
 
+async fn detect_manifest_keys(
+    store: Arc<dyn ObjectStore>,
+    objects: &[ObjectMeta],
+    known_manifest_keys: &HashSet<String>,
+) -> (HashSet<String>, usize) {
+    let prefix_len = MANIFEST_PREFIX.len() as u64;
+    let probes = objects
+        .iter()
+        .filter(|object| {
+            object.size >= prefix_len && !known_manifest_keys.contains(object.location.as_ref())
+        })
+        .map(|object| {
+            (
+                object.location.as_ref().to_string(),
+                object.location.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let results = stream::iter(probes)
+        .map(|(key, location)| {
+            let store = store.clone();
+            async move {
+                let bytes = store.get_range(&location, 0..prefix_len).await;
+                (key, bytes)
+            }
+        })
+        .buffer_unordered(HASH_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+
+    let mut manifest_keys = HashSet::new();
+    let mut failures = 0;
+    for (key, result) in results {
+        match result {
+            Ok(bytes) if bytes.as_ref().starts_with(MANIFEST_PREFIX) => {
+                manifest_keys.insert(key);
+            }
+            Ok(_) => {}
+            Err(_) => failures += 1,
+        }
+    }
+
+    (manifest_keys, failures)
+}
+
 /// Reads and parses the manifest. A genuinely missing manifest (the store reports
 /// `NotFound`) yields an empty one, so every file is reported as added; malformed
 /// JSON is tolerated the same way with a warning. Any other store error (network,
 /// permission, throttling, …) is propagated instead of silently producing an empty
 /// baseline that would report every file as added.
-async fn load_manifest(
+pub(super) async fn load_manifest(
     manifest: &FlowPath,
     context: &mut ExecutionContext,
 ) -> flow_like_types::Result<DirManifest> {
@@ -350,5 +430,61 @@ fn etag_trustworthy(e_tag: &Option<String>) -> bool {
     match e_tag {
         Some(tag) => !tag.is_empty() && !tag.starts_with("W/"),
         None => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_storage::object_store::{PutPayload, memory::InMemory, path::Path};
+    use flow_like_types::Bytes;
+
+    async fn put(store: &Arc<dyn ObjectStore>, path: &str, bytes: impl Into<Bytes>) {
+        store
+            .put(&Path::from(path), PutPayload::from_bytes(bytes.into()))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn detects_all_marked_manifests_regardless_of_name() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let manifest = flow_like_types::json::to_vec(&DirManifest::default()).unwrap();
+        put(&store, "root/workflow-a.state", manifest.clone()).await;
+        put(&store, "root/completely-different-name", manifest).await;
+        put(
+            &store,
+            "root/data.json",
+            br#"{"version":1,"recursive":true,"entries":[],"padding":"this is ordinary user data and must remain visible"}"#
+                .to_vec(),
+        )
+        .await;
+        put(&store, "root/short", b"regular".to_vec()).await;
+
+        let objects = store
+            .list(Some(&Path::from("root")))
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let (manifest_keys, failures) =
+            detect_manifest_keys(store, &objects, &HashSet::new()).await;
+
+        assert_eq!(failures, 0);
+        assert_eq!(
+            manifest_keys,
+            HashSet::from([
+                "root/workflow-a.state".to_string(),
+                "root/completely-different-name".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn diff_node_version_tracks_the_session_schema_change() {
+        let node = GetChangesNode::new().get_node();
+
+        assert_eq!(node.version, Some(1));
     }
 }

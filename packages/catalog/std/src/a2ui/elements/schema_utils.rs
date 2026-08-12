@@ -45,6 +45,22 @@ pub fn set_component_schema_by_type(pin: &mut Pin, component_type: &str) -> bool
             pin.set_schema::<AbsoluteProps>();
             true
         }
+        "box" => {
+            pin.set_schema::<BoxProps>();
+            true
+        }
+        "center" => {
+            pin.set_schema::<CenterProps>();
+            true
+        }
+        "spacer" => {
+            pin.set_schema::<SpacerProps>();
+            true
+        }
+        "widgetinstance" => {
+            pin.set_schema::<WidgetInstanceProps>();
+            true
+        }
 
         // Display components
         "text" => {
@@ -103,6 +119,26 @@ pub fn set_component_schema_by_type(pin: &mut Pin, component_type: &str) -> bool
             pin.set_schema::<SkeletonProps>();
             true
         }
+        "table" => {
+            pin.set_schema::<TableProps>();
+            true
+        }
+        "tablerow" => {
+            pin.set_schema::<TableRowProps>();
+            true
+        }
+        "tablecell" => {
+            pin.set_schema::<TableCellProps>();
+            true
+        }
+        "filepreview" => {
+            pin.set_schema::<FilePreviewProps>();
+            true
+        }
+        "boundingboxoverlay" => {
+            pin.set_schema::<BoundingBoxOverlayProps>();
+            true
+        }
 
         // Interactive components
         "button" => {
@@ -159,6 +195,14 @@ pub fn set_component_schema_by_type(pin: &mut Pin, component_type: &str) -> bool
         }
         "link" => {
             pin.set_schema::<LinkProps>();
+            true
+        }
+        "imagelabeler" => {
+            pin.set_schema::<ImageLabelerProps>();
+            true
+        }
+        "imagehotspot" => {
+            pin.set_schema::<ImageHotspotProps>();
             true
         }
 
@@ -251,6 +295,18 @@ pub fn set_component_schema_by_type(pin: &mut Pin, component_type: &str) -> bool
             pin.set_schema::<PlotlyChartProps>();
             true
         }
+        "nivochart" => {
+            pin.set_schema::<NivoChartProps>();
+            true
+        }
+        "graph" => {
+            pin.set_schema::<GraphProps>();
+            true
+        }
+        "ontologygraph" => {
+            pin.set_schema::<OntologyGraphProps>();
+            true
+        }
 
         // Planning
         "calendar" => {
@@ -287,6 +343,10 @@ pub fn valid_component_types() -> &'static [&'static str] {
         "aspectRatio",
         "overlay",
         "absolute",
+        "box",
+        "center",
+        "spacer",
+        "widgetInstance",
         // Display
         "text",
         "image",
@@ -302,11 +362,17 @@ pub fn valid_component_types() -> &'static [&'static str] {
         "progress",
         "spinner",
         "skeleton",
+        "table",
+        "tableRow",
+        "tableCell",
+        "filePreview",
+        "boundingBoxOverlay",
         // Interactive
         "button",
         "feedback",
         "appLink",
         "textField",
+        "richText",
         "select",
         "slider",
         "checkbox",
@@ -317,6 +383,8 @@ pub fn valid_component_types() -> &'static [&'static str] {
         "imageInput",
         "voiceInput",
         "link",
+        "imageLabeler",
+        "imageHotspot",
         // Container
         "card",
         "modal",
@@ -341,6 +409,9 @@ pub fn valid_component_types() -> &'static [&'static str] {
         // Embeds
         "iframe",
         "plotlyChart",
+        "nivoChart",
+        "graph",
+        "ontologyGraph",
         // Planning
         "calendar",
         "gantt",

@@ -1,16 +1,18 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/core";
 import {
-	IAppVisibility,
-	IVersionType,
 	type IApp,
+	IAppVisibility,
 	type IBoard,
 	type IEvent,
+	type IEventRegistration,
 	type IMetadata,
 	type IPage,
+	IVersionType,
 	type IWidget,
 	type PageListItem,
+	normalizePageForPersistence,
+	normalizeWidgetForPersistence,
 	useBackend,
 	useInvalidateInvoke,
 } from "@flow-like/flow-like-ui";
@@ -22,6 +24,8 @@ import type {
 	IForkBundleSummary,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
 import type { IProfileApp } from "@flow-like/flow-like-ui/lib/schema/profile/profile";
+import type { IBackendRole } from "@flow-like/flow-like-ui/state/backend-state/types";
+import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
@@ -43,6 +47,38 @@ const TOKEN_FIELD_NAMES = new Set([
 	"personal_access_token",
 	"refresh_token",
 ]);
+
+/**
+ * Roles the destination already owns — `/fork/online/begin` inserts a
+ * fresh Owner / Admin / User trio. Anything the source added on top is
+ * copied; the server rejects roles carrying the Owner bit outright, so
+ * those surface as skips.
+ */
+const SYSTEM_ROLE_NAMES = new Set(["Owner", "Admin", "User"]);
+
+/**
+ * Local sink registrations for one app, keyed by event id. Sinks are
+ * auto-created server-side from the event on upsert, so the only thing
+ * that has to travel is the credential the local sink was registered
+ * with.
+ */
+async function loadLocalSinks(
+	sinkState: { listEventSinks(): Promise<IEventRegistration[]> } | undefined,
+	appId: string,
+): Promise<Map<string, IEventRegistration>> {
+	if (!sinkState) return new Map();
+	try {
+		const registrations = await sinkState.listEventSinks();
+		return new Map(
+			registrations
+				.filter((registration) => registration.app_id === appId)
+				.map((registration) => [registration.event_id, registration]),
+		);
+	} catch (error) {
+		console.warn("Could not read local event sinks during fork:", error);
+		return new Map();
+	}
+}
 
 function createProfileApp(appId: string): IProfileApp {
 	return {
@@ -170,7 +206,29 @@ export function useOfflineToOnlineFork() {
 					sourceAppId,
 					LANGUAGE,
 				);
-				const pageList = uniquePages(await backend.pageState.getPages(sourceAppId));
+				const pageList = uniquePages(
+					await backend.pageState.getPages(sourceAppId),
+				);
+
+				// Best-effort extras. None of these are load-bearing for the
+				// fork itself, so every lookup degrades to "nothing to carry"
+				// rather than failing the whole operation: a purely local app
+				// has no server-side roles, its packages may not resolve on
+				// this deployment, and its sinks may hold credentials that
+				// cannot travel.
+				const localPackages = await invoke<Record<string, string>>(
+					"app_list_packages",
+					{ appId: sourceAppId },
+				).catch(() => ({}) as Record<string, string>);
+				const sinksByEvent = await loadLocalSinks(
+					backend.sinkState,
+					sourceAppId,
+				);
+				const sourceRoles = await backend.roleState
+					.getRoles(sourceAppId)
+					.catch(() => [undefined, []] as [string | undefined, IBackendRole[]]);
+				const skipped: string[] = [];
+				const needsReauth: string[] = [];
 
 				const contentUpload = await invoke<UploadLocalAppContentResponse>(
 					"upload_local_app_content_bundle",
@@ -205,7 +263,7 @@ export function useOfflineToOnlineFork() {
 							.catch(() => undefined);
 					}
 					preparedWidgets.push({
-						widget: stripForkSecrets(widget),
+						widget: normalizeWidgetForPersistence(stripForkSecrets(widget)),
 						metadata: metadata ? stripForkSecrets(metadata) : undefined,
 					});
 				}
@@ -213,11 +271,13 @@ export function useOfflineToOnlineFork() {
 				const preparedPages: IPage[] = [];
 				for (const page of pageList) {
 					preparedPages.push(
-						stripForkSecrets(
-							await backend.pageState.getPage(
-								sourceAppId,
-								page.pageId,
-								page.boardId,
+						normalizePageForPersistence(
+							stripForkSecrets(
+								await backend.pageState.getPage(
+									sourceAppId,
+									page.pageId,
+									page.boardId,
+								),
 							),
 						),
 					);
@@ -287,14 +347,56 @@ export function useOfflineToOnlineFork() {
 
 				for (const event of events) {
 					const preparedEvent = stripForkSecrets(event) as IEvent;
+					// The destination's sink row is derived from the event on
+					// upsert. Carry the local sink's PAT so triggered flows keep
+					// their model/file access; OAuth grants are provider-bound
+					// and always need a fresh consent, so they are reported
+					// instead of copied — same rule the online → online fork
+					// applies.
+					const sink = sinksByEvent.get(event.id);
+					const oauthProviders = Object.keys(sink?.oauth_tokens ?? {});
+					if (oauthProviders.length > 0) {
+						needsReauth.push(event.name ?? event.id);
+					}
 					await backend.apiState.put<IEvent>(
 						profile,
 						`apps/${begin.new_app_id}/events/${preparedEvent.id}`,
 						{
 							event: preparedEvent,
 							profile_id: profile.id,
+							...(sink?.personal_access_token
+								? { pat: sink.personal_access_token }
+								: {}),
 						},
 					);
+				}
+
+				for (const [packageId, version] of Object.entries(localPackages)) {
+					try {
+						await backend.apiState.post<unknown>(
+							profile,
+							`apps/${begin.new_app_id}/packages`,
+							{ packageId, version, autoUpdate: false },
+						);
+					} catch (error) {
+						console.warn("Skipping package during fork:", packageId, error);
+						skipped.push(`package ${packageId}`);
+					}
+				}
+
+				const [sourceDefaultRoleId, roles] = sourceRoles;
+				for (const role of roles) {
+					if (role.id === sourceDefaultRoleId) continue;
+					if (SYSTEM_ROLE_NAMES.has(role.name)) continue;
+					try {
+						await backend.roleState.upsertRole(begin.new_app_id, {
+							...role,
+							app_id: begin.new_app_id,
+						});
+					} catch (error) {
+						console.warn("Skipping role during fork:", role.name, error);
+						skipped.push(`role ${role.name}`);
+					}
 				}
 
 				const destinationBoardIds = new Set(boards.map((board) => board.id));
@@ -365,6 +467,14 @@ export function useOfflineToOnlineFork() {
 					)})`,
 					{ id: toastId },
 				);
+				if (skipped.length > 0) {
+					toast.warning(`Not copied: ${skipped.join(", ")}`);
+				}
+				if (needsReauth.length > 0) {
+					toast.warning(
+						`Reconnect the accounts for: ${needsReauth.join(", ")}`,
+					);
+				}
 				router.push(`/library/config?id=${begin.new_app_id}`);
 			} catch (error) {
 				const message =

@@ -1,7 +1,7 @@
 //! Stateful tool surface for planning, building, validating, and atomically committing typed IR.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -13,8 +13,8 @@ use std::sync::Condvar;
 
 use flow_like_ast::model::{
     Arg as AstArg, Block as AstBlock, BoardAst, Call as AstCall, EventBlock as AstEventBlock,
-    Expr as AstExpr, FnDecl as AstFnDecl, Literal as AstLiteral, Param as AstParam,
-    Stmt as AstStmt,
+    Expr as AstExpr, FnDecl as AstFnDecl, FunctionCacheScope as AstFunctionCacheScope,
+    Literal as AstLiteral, Param as AstParam, Stmt as AstStmt,
 };
 use flow_like_types::create_id;
 use rig::{completion::ToolDefinition, tool::Tool};
@@ -24,18 +24,18 @@ use serde_json::json;
 
 use super::ir::{
     FlowCapabilityPlan, FlowCapabilityPlanRequest, FlowIrArg, FlowIrCompileResult, FlowIrContainer,
-    FlowIrDataType, FlowIrDiagnostic, FlowIrInterface, FlowIrLiteral, FlowIrModule,
-    FlowIrObjectField, FlowIrParam, FlowIrProgram, FlowIrStep, FlowIrType, FlowIrValue,
-    FlowIrVariable, FlowModuleKind, MAX_FLOW_IR_CAPABILITY_REQUIREMENTS,
-    MAX_FLOW_IR_PIN_REQUIREMENTS_PER_DIRECTION, ReachableFlowIrOccurrence, compile_flow_ir,
-    plan_flow_capabilities, reachable_flow_ir_occurrences, validate_flow_capability_usage,
-    validate_ir_resource_limits,
+    FlowIrDataType, FlowIrDiagnostic, FlowIrFunctionCache, FlowIrFunctionCacheScope,
+    FlowIrInterface, FlowIrLiteral, FlowIrModule, FlowIrObjectField, FlowIrParam, FlowIrProgram,
+    FlowIrStep, FlowIrType, FlowIrValue, FlowIrVariable, FlowModuleKind,
+    MAX_FLOW_IR_CAPABILITY_REQUIREMENTS, MAX_FLOW_IR_PIN_REQUIREMENTS_PER_DIRECTION,
+    ReachableFlowIrOccurrence, compile_flow_ir, plan_flow_capabilities,
+    reachable_flow_ir_occurrences, validate_flow_capability_usage, validate_ir_resource_limits,
 };
 use super::provider::{CatalogProvider, metadata_to_signature};
 use super::tools::{
     FlowScriptCandidateProfile, FlowScriptCandidateRegression, board_has_no_nodes,
     detect_flowscript_candidate_regression, flowscript_workspace_tag, profile_flowscript_candidate,
-    render_edit_flowscript_result,
+    render_committed_flowscript_result,
 };
 use super::types::{BoardCommand, FlowIrCommitToken, NodeMetadata, PinMetadata};
 use crate::flow::ast::{
@@ -173,6 +173,11 @@ pub fn typed_ir_schema_hint() -> serde_json::Value {
             "function": "helper",
             "args": []
         },
+        "function_cache": {
+            "namespace": "global",
+            "ttl_seconds": 300,
+            "scope": "app"
+        },
         "if_step": {
             "kind": "if",
             "id": "branch",
@@ -193,6 +198,7 @@ pub fn typed_ir_schema_hint() -> serde_json::Value {
             "use canonical type objects with boolean and integer",
             "references use kind=ref; function calls use kind=call_function",
             "if bodies use then_steps and else_steps",
+            "an empty function cache object defaults to namespace=global, ttl_seconds=300, scope=app; ttl_seconds=0 is permanent",
             "every required capability must select exact_node_type from a selection_required candidate before feasible can be true"
         ]
     })
@@ -1602,23 +1608,29 @@ impl FlowIrDraftStore {
             );
         }
         if retained.evaluation.commands.is_empty() {
-            let mut response = FlowScriptDraftResponse::for_draft(
-                "no_changes",
-                "FlowScript is valid but derives no board changes.",
-                args.draft_id,
-                &retained,
-            );
+            // On a non-empty board this is the SUCCESS shape of a repair round: everything the
+            // source describes is already applied. Without saying so, hosts and models read
+            // "no changes" as "nothing was accomplished" and burn their remaining budget
+            // rewriting an already-correct board.
+            let message = if board.nodes.is_empty() {
+                "FlowScript is valid but derives no board changes."
+            } else {
+                "FlowScript is valid and derives no board changes: everything this source describes is already applied and persisted on the live board. Treat this as success — do not rewrite or repair further; continue with registration/summary."
+            };
+            let mut response =
+                FlowScriptDraftResponse::for_draft("no_changes", message, args.draft_id, &retained);
             response.code = Some("FLOWSCRIPT_NO_CHANGES".to_string());
             return response;
         }
-        let mut message = if retained.evaluation.review_notes.is_empty() {
+        let human_review_notes = human_review_note_count(&retained.evaluation.review_notes);
+        let mut message = if human_review_notes == 0 {
             "FlowScript is valid and its exact command batch is retained for commit.".to_string()
         } else {
             format!(
-                "FlowScript is valid and its exact command batch is retained for commit. Commit may proceed; {} non-blocking acceptance review note(s) will be surfaced in the human review.",
-                retained.evaluation.review_notes.len()
+                "FlowScript is valid and its exact command batch is retained for commit. Commit may proceed; {human_review_notes} non-blocking acceptance review note(s) will be surfaced in the human review."
             )
         };
+        append_prohibited_node_directive(&mut message, &retained.evaluation.review_notes);
         append_omitted_prohibition_notice(&mut message, &retained.request_acceptance_contract);
         FlowScriptDraftResponse::for_draft("valid", message, args.draft_id, &retained)
     }
@@ -1751,6 +1763,45 @@ impl FlowIrDraftStore {
             self.reopen_request_acceptance_contract(binding, &snapshot);
             return flowscript_base_revision_conflict_response(args.draft_id, &snapshot);
         }
+        // An unchecked head used to bounce with FLOWSCRIPT_CHECK_REQUIRED — a full model round
+        // spent asking for work the store can do right here. Run the same check inline: the
+        // committed batch is exactly what this evaluation derives, so the checked-commit
+        // guarantee is unchanged, and a failing inline check returns the same validation_errors
+        // response a separate check would have.
+        let head_is_checked = snapshot.checked.as_ref().is_some_and(|checked| {
+            checked.revision == snapshot.revision
+                && checked.board_fingerprint == snapshot.base_fingerprint
+        });
+        if !head_is_checked {
+            let catalog_fingerprint = flowscript_catalog_fingerprint(catalog);
+            if snapshot.evaluation_catalog_fingerprint != catalog_fingerprint {
+                snapshot.evaluation = self.evaluate_flowscript(
+                    board,
+                    catalog,
+                    &snapshot.source,
+                    snapshot.mode,
+                    Some(&snapshot.request_acceptance_contract),
+                );
+                snapshot.evaluation_catalog_fingerprint = catalog_fingerprint.clone();
+            }
+            if !snapshot.evaluation.is_valid() {
+                // Shape this exactly like a failing check_flowscript: a special code here reads
+                // as a mechanical "you must call check" failure and makes models/orchestrators
+                // stop instead of repairing the listed diagnostics.
+                return FlowScriptDraftResponse::for_draft(
+                    "validation_errors",
+                    "Commit ran the required check inline and it failed; nothing was queued. Apply a unique text patch to this retained revision, then commit again.",
+                    args.draft_id,
+                    &snapshot,
+                );
+            }
+            snapshot.checked = Some(CheckedFlowScriptRevision {
+                revision: snapshot.revision,
+                board_fingerprint: snapshot.base_fingerprint.clone(),
+                catalog_fingerprint,
+                commands: snapshot.evaluation.commands.clone(),
+            });
+        }
         let Some(checked) = snapshot.checked.as_ref().filter(|checked| {
             checked.revision == snapshot.revision
                 && checked.board_fingerprint == snapshot.base_fingerprint
@@ -1835,12 +1886,13 @@ impl FlowIrDraftStore {
                 retained.revision
             ));
         }
-        if !retained.evaluation.review_notes.is_empty() {
+        let human_review_notes = human_review_note_count(&retained.evaluation.review_notes);
+        if human_review_notes > 0 {
             message.push_str(&format!(
-                " {} non-blocking acceptance review note(s) accompany this batch for the human review.",
-                retained.evaluation.review_notes.len()
+                " {human_review_notes} non-blocking acceptance review note(s) accompany this batch for the human review."
             ));
         }
+        append_prohibited_node_directive(&mut message, &retained.evaluation.review_notes);
         append_omitted_prohibition_notice(&mut message, &retained.request_acceptance_contract);
         let mut response =
             FlowScriptDraftResponse::for_draft("queued", message, args.draft_id, &retained);
@@ -3646,6 +3698,55 @@ impl FlowIrDraftStore {
         })
     }
 
+    /// Atomically clone the exact retained batch and its host-derived replacement policy when the
+    /// live board and every claim field still match. Hosts persisting a review for cross-process
+    /// delivery must read these together so a concurrent disposition can never pair commands from
+    /// one claim state with policy from another.
+    pub fn pending_commit_payload_if_current(
+        &self,
+        board: &Board,
+        draft_id: &str,
+        revision: u64,
+        base_fingerprint: &str,
+        claim_id: &str,
+    ) -> Option<(Vec<BoardCommand>, bool)> {
+        if board_fingerprint(board) != base_fingerprint {
+            return None;
+        }
+        let typed = self.drafts.lock().ok().and_then(|drafts| {
+            let draft = drafts.get(draft_id.trim())?;
+            (draft.revision == revision
+                && draft.committed_revision == Some(revision)
+                && draft.pending_revision == Some(revision)
+                && draft.base_fingerprint == base_fingerprint
+                && draft.pending_claim_id.as_deref() == Some(claim_id))
+            .then(|| {
+                draft
+                    .pending_commands
+                    .clone()
+                    .map(|commands| (commands, draft.mode == FlowIrDraftMode::Replace))
+            })
+            .flatten()
+        });
+        typed.or_else(|| {
+            self.source_drafts.lock().ok().and_then(|drafts| {
+                let draft = drafts.get(draft_id.trim())?;
+                (draft.revision == revision
+                    && draft.committed_revision == Some(revision)
+                    && draft.pending_revision == Some(revision)
+                    && draft.base_fingerprint == base_fingerprint
+                    && draft.pending_claim_id.as_deref() == Some(claim_id))
+                .then(|| {
+                    draft
+                        .pending_commands
+                        .clone()
+                        .map(|commands| (commands, draft.mode == FlowIrDraftMode::Replace))
+                })
+                .flatten()
+            })
+        })
+    }
+
     /// Clone the exact retained command batch only when the live board and every component of the
     /// pending delivery token still match. The caller must hold the live board lock from this call
     /// through application so the fingerprint cannot change between validation and mutation.
@@ -4485,6 +4586,40 @@ fn flowscript_request_mismatch_response(
 
 /// Surface the prohibitions the machine could not enforce exactly where the batch is handed
 /// onward, so the human review sees which bans it alone must verify.
+/// Review notes destined for the human reviewer. Prohibited-node findings are excluded: they are
+/// addressed to the model and carry their own directive, so counting them here would tell the model
+/// its own outstanding work is somebody else's to look at.
+fn human_review_note_count(review_notes: &[FlowScriptDiagnostic]) -> usize {
+    review_notes
+        .iter()
+        .filter(|note| note.code != FlowScriptDiagnosticCode::FsProhibitedNode)
+        .count()
+}
+
+/// Turn prohibited-node review notes into an explicit instruction to write another revision. The
+/// batch still commits — stranding a whole edit over a replaceable node costs more than the node
+/// does — so without this the model reads "valid" and stops with the wrong nodes on the board.
+fn append_prohibited_node_directive(message: &mut String, review_notes: &[FlowScriptDiagnostic]) {
+    let prohibited = review_notes
+        .iter()
+        .filter(|note| note.code == FlowScriptDiagnosticCode::FsProhibitedNode)
+        .collect::<Vec<_>>();
+    if prohibited.is_empty() {
+        return;
+    }
+    let repairs = prohibited
+        .iter()
+        .filter_map(|note| note.fix.as_ref().map(|fix| fix.summary.as_str()))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(" ");
+    message.push_str(&format!(
+        " NOT DONE: {} prohibited node(s) remain on the board and must be replaced before you finish — this is your work, not the human reviewer's. Write a corrected revision now: {repairs}",
+        prohibited.len()
+    ));
+}
+
 fn append_omitted_prohibition_notice(message: &mut String, contract: &RequestAcceptanceContract) {
     if contract.omitted_prohibitions.is_empty() {
         return;
@@ -4865,6 +5000,14 @@ impl<'a> FlowScriptAcceptanceProjection<'a> {
             name: function.name.clone(),
             params: project_ast_params(&function.params),
             returns: project_ast_params(&function.returns),
+            cache: function.cache.as_ref().map(|cache| FlowIrFunctionCache {
+                namespace: cache.namespace.clone(),
+                ttl_seconds: cache.ttl_seconds,
+                scope: match cache.scope {
+                    AstFunctionCacheScope::App => FlowIrFunctionCacheScope::App,
+                    AstFunctionCacheScope::User => FlowIrFunctionCacheScope::User,
+                },
+            }),
             steps,
             anchor: function.anchor.clone(),
         }
@@ -5431,6 +5574,8 @@ fn project_acceptance_diagnostic_for_flowscript(
         phase: FlowScriptDiagnosticPhase::Validation,
         message,
         source_span: None,
+        spans: Vec::new(),
+        additional_sites: 0,
         ast_path: Some(if diagnostic.code.starts_with("IR_REQUEST_APPROVAL_") {
             "workflow.humanApprovalLoop".to_string()
         } else {
@@ -5960,6 +6105,20 @@ fn derive_request_acceptance_contract(prompt: &str) -> RequestAcceptanceContract
         objects.sort();
         objects.dedup();
 
+        // Authoring-format guidance is not a runtime capability prohibition. In particular,
+        // "do not substitute command JSON" tells the agent to use FlowScript instead of raw
+        // command payloads; treating it as "no reachable JSON node" rejects legitimate JSON
+        // parsing and chart configuration. Keep the omission visible for human review, while
+        // retaining action-scoped runtime bans such as "never parse JSON".
+        if forbidden
+            && authoring_representation_prohibition_requires_human_review(
+                &tokens, &actions, &objects,
+            )
+        {
+            record_omitted_prohibition(&mut omitted_prohibitions, bounded_summary(&clause));
+            continue;
+        }
+
         // Prose is accepted only when it contains an explicit operation. A marked list is a
         // stronger host signal, so noun-only entries such as "Slack notification" are retained.
         if actions.is_empty() && (!explicit_list_item || objects.is_empty()) {
@@ -6087,6 +6246,29 @@ fn forbidden_criterion_is_presence_only(criterion: &RequestAcceptanceCriterion) 
             .actions
             .iter()
             .all(|action| action == "create" || action == "change")
+}
+
+fn authoring_representation_prohibition_requires_human_review(
+    tokens: &[String],
+    actions: &[String],
+    objects: &[String],
+) -> bool {
+    actions.is_empty()
+        && objects == ["json"]
+        && tokens
+            .iter()
+            .any(|token| matches!(token.as_str(), "command" | "commands"))
+        && tokens.iter().any(|token| {
+            matches!(
+                token.as_str(),
+                "substitute"
+                    | "substitutes"
+                    | "substituted"
+                    | "substituting"
+                    | "placeholder"
+                    | "placeholders"
+            )
+        })
 }
 
 fn record_omitted_prohibition(omitted: &mut Vec<String>, summary: String) {
@@ -8920,7 +9102,10 @@ fn module_scope_items(module: &FlowIrModule) -> HashMap<String, usize> {
     items
 }
 
-fn board_fingerprint(board: &Board) -> String {
+/// Stable semantic board fingerprint shared by retained compiler claims and provider-neutral
+/// session manifests. Keeping one implementation prevents an adapter from auditing a different
+/// base than the exact CAS token used at Apply time.
+pub fn board_fingerprint(board: &Board) -> String {
     let source = board_to_flowscript(
         board,
         &RenderOptions {
@@ -9114,6 +9299,461 @@ pub struct CommitFlowScriptArgs {
     pub remove_comment_ids: Vec<String>,
 }
 
+/// Upper bound on one bounded scope plan. A plan larger than this is not a decomposition, it is an
+/// unbounded backlog: every segment costs wall clock and source-operation budget that the nested run
+/// must still fit under the outer dispatch bound.
+pub const MAX_BOARD_SCOPE_SEGMENTS: usize = 8;
+/// Beyond this many segments a single retained draft cannot reach its commit inside one nested run,
+/// so the host forces per-segment commits regardless of the strategy the planner asked for.
+pub const FORCED_INCREMENTAL_SEGMENT_THRESHOLD: usize = 5;
+/// A segment whose behavior does not carry at least this much concrete text is a title, not an
+/// executable slice.
+const MIN_SEGMENT_BEHAVIOR_CHARS: usize = 24;
+const MIN_SEGMENT_BEHAVIOR_WORDS: usize = 4;
+/// Openers that mark deferred work. A segment may *contain* placeholder literals — those are
+/// encouraged for missing credentials — but its declared behavior may not itself be deferred.
+const SEGMENT_STUB_MARKERS: [&str; 8] = [
+    "todo",
+    "tbd",
+    "stub",
+    "to be implemented",
+    "to be determined",
+    "implement later",
+    "fill in later",
+    "same as above",
+];
+
+/// How the planned segments reach the board.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ScopeStrategy {
+    /// One segment. Identical to the historical single full-shape draft.
+    #[default]
+    Single,
+    /// Grow one retained draft segment by segment and commit once. The live board is untouched
+    /// until the whole plan validates.
+    Staged,
+    /// Commit and apply each segment on its own draft. Trades atomicity for wall-clock headroom
+    /// and visible progress.
+    Incremental,
+    /// Independent entry points authored onto separate boards. Only legal when no segment needs
+    /// in-memory data from another: boards of one app share app data at rest, nothing else.
+    MultiBoard,
+}
+
+impl ScopeStrategy {
+    /// Whether each segment reaches the board on its own commit.
+    pub fn commits_per_segment(self) -> bool {
+        matches!(self, Self::Incremental | Self::MultiBoard)
+    }
+}
+
+/// One individually executable slice of the requested behavior.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlannedSegment {
+    pub id: String,
+    pub title: String,
+    /// Concrete description of what this slice does end to end. Not a heading and not deferred work.
+    pub behavior: String,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// `current` for the board under edit, or `new:<slug>` under `multi_board`.
+    #[serde(default = "default_segment_board_ref")]
+    pub board_ref: String,
+}
+
+fn default_segment_board_ref() -> String {
+    CURRENT_BOARD_REF.to_string()
+}
+
+pub const CURRENT_BOARD_REF: &str = "current";
+pub const NEW_BOARD_REF_PREFIX: &str = "new:";
+
+impl PlannedSegment {
+    pub fn targets_new_board(&self) -> bool {
+        self.board_ref.starts_with(NEW_BOARD_REF_PREFIX)
+    }
+
+    /// Slug of the board this segment allocates, if it allocates one.
+    pub fn new_board_slug(&self) -> Option<&str> {
+        self.board_ref.strip_prefix(NEW_BOARD_REF_PREFIX)
+    }
+}
+
+/// Ask the host for more wall clock on a long build.
+///
+/// Both fields are recorded for the user and for telemetry and are deliberately NOT inputs to the
+/// decision: the host grants time from its own progress ledger, because a model can always write a
+/// convincing account of how well it is doing.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExtendTimeBudgetArgs {
+    /// What concretely advanced since the last extension.
+    pub progress: String,
+    /// What is still left to build.
+    pub remaining_work: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanBoardScopeArgs {
+    #[serde(default)]
+    pub strategy: ScopeStrategy,
+    pub segments: Vec<PlannedSegment>,
+    #[serde(default)]
+    pub rationale: String,
+}
+
+/// Host-owned execution state for an accepted plan. The model proposes; only this type decides what
+/// is active, what is already on the board, and whether the plan may still be revised.
+#[derive(Debug, Clone, Serialize)]
+pub struct BoardScopePlan {
+    pub strategy: ScopeStrategy,
+    pub segments: Vec<PlannedSegment>,
+    /// Index of the segment currently being authored.
+    pub active: usize,
+    /// Ids of segments whose commands are queued or applied. Immutable across a revision.
+    pub committed: Vec<String>,
+    /// Bounded re-planning counter. One revision per run.
+    pub revisions: u8,
+    pub rationale: String,
+}
+
+/// Rejection of a proposed plan. Always retryable: the model reshapes the plan and calls again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopePlanRejection {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl ScopePlanRejection {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// Model-facing payload. Always retryable: reshape the plan and call again.
+    pub fn payload(&self) -> serde_json::Value {
+        json!({
+            "status": "scope_plan_rejected",
+            "code": self.code,
+            "retryable": true,
+            "next_action": "plan_board_scope",
+            "message": self.message,
+        })
+    }
+}
+
+fn segment_behavior_is_concrete(behavior: &str) -> bool {
+    let trimmed = behavior.trim();
+    if trimmed.chars().count() < MIN_SEGMENT_BEHAVIOR_CHARS {
+        return false;
+    }
+    if trimmed.split_whitespace().count() < MIN_SEGMENT_BEHAVIOR_WORDS {
+        return false;
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    !SEGMENT_STUB_MARKERS
+        .iter()
+        .any(|marker| lowered.starts_with(marker))
+}
+
+fn valid_board_slug(slug: &str) -> bool {
+    !slug.is_empty()
+        && slug.len() <= 48
+        && slug
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// Validate a proposed plan and resolve the strategy the host will actually run.
+///
+/// The returned strategy may differ from the requested one: a plan too large to reach a single
+/// commit inside one nested run is forced to per-segment commits rather than accepted and then
+/// starved.
+pub fn accept_scope_plan(args: PlanBoardScopeArgs) -> Result<BoardScopePlan, ScopePlanRejection> {
+    let PlanBoardScopeArgs {
+        strategy,
+        segments,
+        rationale,
+    } = args;
+
+    if segments.is_empty() {
+        return Err(ScopePlanRejection::new(
+            "SCOPE_PLAN_EMPTY",
+            "A scope plan needs at least one segment. A small edit is a valid one-segment plan.",
+        ));
+    }
+    if segments.len() > MAX_BOARD_SCOPE_SEGMENTS {
+        return Err(ScopePlanRejection::new(
+            "SCOPE_PLAN_TOO_LARGE",
+            format!(
+                "A scope plan may declare at most {MAX_BOARD_SCOPE_SEGMENTS} segments; {} were proposed. Merge the finest-grained slices into coherent executable units.",
+                segments.len()
+            ),
+        ));
+    }
+    if matches!(strategy, ScopeStrategy::Single) && segments.len() != 1 {
+        return Err(ScopePlanRejection::new(
+            "SCOPE_PLAN_STRATEGY_MISMATCH",
+            format!(
+                "strategy \"single\" declares exactly one segment; {} were proposed. Use \"staged\" or \"incremental\" for a decomposed build.",
+                segments.len()
+            ),
+        ));
+    }
+    if !matches!(strategy, ScopeStrategy::Single) && segments.len() == 1 {
+        return Err(ScopePlanRejection::new(
+            "SCOPE_PLAN_STRATEGY_MISMATCH",
+            "A one-segment plan is strategy \"single\". Decomposed strategies need at least two segments.",
+        ));
+    }
+
+    let mut seen: HashSet<&str> = HashSet::new();
+    for (index, segment) in segments.iter().enumerate() {
+        let id = segment.id.trim();
+        if id.is_empty() || id.split_whitespace().count() != 1 {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_INVALID_SEGMENT",
+                format!("Segment {index} needs a non-empty whitespace-free id."),
+            ));
+        }
+        if !seen.insert(id) {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_DUPLICATE_SEGMENT",
+                format!("Segment id \"{id}\" is declared more than once."),
+            ));
+        }
+        if segment.title.trim().is_empty() {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_INVALID_SEGMENT",
+                format!("Segment \"{id}\" needs a title."),
+            ));
+        }
+        if !segment_behavior_is_concrete(&segment.behavior) {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_SEGMENT_NOT_CONCRETE",
+                format!(
+                    "Segment \"{id}\" describes deferred or empty work. Every segment must be an executable slice that fully feeds its own new nodes; describe what it actually does, not that it will be done later."
+                ),
+            ));
+        }
+        for dependency in &segment.depends_on {
+            let dependency = dependency.trim();
+            if dependency == id {
+                return Err(ScopePlanRejection::new(
+                    "SCOPE_PLAN_CYCLE",
+                    format!("Segment \"{id}\" depends on itself."),
+                ));
+            }
+            if !seen.contains(dependency) {
+                return Err(ScopePlanRejection::new(
+                    "SCOPE_PLAN_CYCLE",
+                    format!(
+                        "Segment \"{id}\" depends on \"{dependency}\", which is not an earlier segment. Segments are built in order, so every dependency must precede its dependent."
+                    ),
+                ));
+            }
+        }
+
+        let board_ref = segment.board_ref.trim();
+        if board_ref == CURRENT_BOARD_REF {
+            continue;
+        }
+        let Some(slug) = board_ref.strip_prefix(NEW_BOARD_REF_PREFIX) else {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_INVALID_BOARD_REF",
+                format!(
+                    "Segment \"{id}\" has board_ref \"{board_ref}\". Use \"current\" for the board under edit, or \"new:<slug>\" under strategy \"multi_board\"."
+                ),
+            ));
+        };
+        if !matches!(strategy, ScopeStrategy::MultiBoard) {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_INVALID_BOARD_REF",
+                format!(
+                    "Segment \"{id}\" allocates a new board, which only strategy \"multi_board\" may do. Boards of one app cannot call each other, so connected logic belongs in one board as function layers."
+                ),
+            ));
+        }
+        if !valid_board_slug(slug) {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_INVALID_BOARD_REF",
+                format!(
+                    "Segment \"{id}\" has board slug \"{slug}\". Use lowercase letters, digits and dashes."
+                ),
+            ));
+        }
+    }
+
+    if matches!(strategy, ScopeStrategy::MultiBoard)
+        && !segments.iter().any(PlannedSegment::targets_new_board)
+    {
+        return Err(ScopePlanRejection::new(
+            "SCOPE_PLAN_STRATEGY_MISMATCH",
+            "strategy \"multi_board\" declares no segment with a \"new:<slug>\" board_ref. If every segment targets the current board, this is a \"staged\" or \"incremental\" plan.",
+        ));
+    }
+
+    // A plan this long cannot grow one draft to a single commit inside the nested wall clock. Force
+    // per-segment commits now rather than accepting it and letting it die at the budget.
+    let strategy = if matches!(strategy, ScopeStrategy::Staged)
+        && segments.len() > FORCED_INCREMENTAL_SEGMENT_THRESHOLD
+    {
+        ScopeStrategy::Incremental
+    } else {
+        strategy
+    };
+
+    Ok(BoardScopePlan {
+        strategy,
+        segments,
+        active: 0,
+        committed: Vec::new(),
+        revisions: 0,
+        rationale,
+    })
+}
+
+impl BoardScopePlan {
+    pub fn active_segment(&self) -> Option<&PlannedSegment> {
+        self.segments.get(self.active)
+    }
+
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    pub fn is_multi_segment(&self) -> bool {
+        self.segments.len() > 1
+    }
+
+    /// Segments still to be authored, including the active one.
+    pub fn remaining(&self) -> usize {
+        self.segments.len().saturating_sub(self.active)
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.active >= self.segments.len()
+    }
+
+    /// Advance past the active segment once its source is in the retained draft.
+    pub fn mark_active_authored(&mut self) {
+        if self.active < self.segments.len() {
+            self.active += 1;
+        }
+    }
+
+    /// Record every segment authored so far as reaching the board. Called on a queued commit.
+    pub fn mark_authored_committed(&mut self) {
+        for segment in self.segments.iter().take(self.active) {
+            if !self.committed.iter().any(|id| id == &segment.id) {
+                self.committed.push(segment.id.clone());
+            }
+        }
+    }
+
+    pub fn committed_count(&self) -> usize {
+        self.committed.len()
+    }
+
+    /// Titles of segments that have not reached the board, for an honest partial report.
+    pub fn uncommitted_titles(&self) -> Vec<String> {
+        self.segments
+            .iter()
+            .filter(|segment| !self.committed.iter().any(|id| id == &segment.id))
+            .map(|segment| segment.title.clone())
+            .collect()
+    }
+
+    /// Model-facing payload for an accepted plan: what was accepted, what to author now, and the
+    /// invariant that makes a segment executable rather than a stub.
+    pub fn acceptance_payload(&self) -> serde_json::Value {
+        let active = self.active_segment();
+        let strategy_rule = match self.strategy {
+            ScopeStrategy::Single => {
+                "Author the whole request as one full-shape document, exactly as before."
+            }
+            ScopeStrategy::Staged => {
+                "Write segment 1 alone first, then grow that SAME draft_id segment by segment, checking after each. Commit once, after the final segment checks valid."
+            }
+            ScopeStrategy::Incremental => {
+                "Author, check and commit ONE segment per draft. After a queued commit, stop; the host applies it and starts the next segment on a fresh draft_id."
+            }
+            ScopeStrategy::MultiBoard => {
+                "Each board_ref is authored on its own board and committed separately. Segments on different boards share only app data at rest — never in-memory values."
+            }
+        };
+        json!({
+            "status": "scope_plan_accepted",
+            "strategy": self.strategy,
+            "segment_count": self.segment_count(),
+            "segments": self.segments,
+            "active_segment": active.map(|segment| json!({
+                "id": segment.id,
+                "title": segment.title,
+                "behavior": segment.behavior,
+                "board_ref": segment.board_ref,
+                "index": self.active + 1,
+            })),
+            "committed_segments": self.committed,
+            "next_action": "write_flowscript",
+            "strategy_rule": strategy_rule,
+            "message": "Plan accepted. Every segment must be executable on its own: fully feed the required inputs of the nodes it adds. Unfinished exec tails between segments are fine, unfed required inputs are not. Do not write a segment as stubs, TODOs, or comments.",
+        })
+    }
+
+    /// Re-segment the work that has not reached the board yet. Committed segments are immutable and
+    /// are carried into the revised plan unchanged.
+    pub fn revise(&self, args: PlanBoardScopeArgs) -> Result<Self, ScopePlanRejection> {
+        if self.revisions > 0 {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_REVISION_EXHAUSTED",
+                "This run already revised its scope plan once. Continue repairing the active segment and report honestly if it cannot be completed.",
+            ));
+        }
+
+        let committed: Vec<PlannedSegment> = self
+            .segments
+            .iter()
+            .filter(|segment| self.committed.iter().any(|id| id == &segment.id))
+            .cloned()
+            .collect();
+
+        for segment in &args.segments {
+            if committed.iter().any(|done| done.id == segment.id) {
+                return Err(ScopePlanRejection::new(
+                    "SCOPE_PLAN_COMMITTED_SEGMENT_REDECLARED",
+                    format!(
+                        "Segment \"{}\" already reached the board and cannot be re-planned. Declare only the remaining work.",
+                        segment.id
+                    ),
+                ));
+            }
+        }
+
+        let mut merged = committed;
+        let active = merged.len();
+        merged.extend(args.segments);
+
+        let revised = accept_scope_plan(PlanBoardScopeArgs {
+            strategy: args.strategy,
+            segments: merged,
+            rationale: args.rationale,
+        })?;
+
+        Ok(Self {
+            active,
+            committed: self.committed.clone(),
+            revisions: self.revisions.saturating_add(1),
+            ..revised
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct FlowScriptDraftResponse {
     pub status: String,
@@ -9209,6 +9849,46 @@ impl FlowScriptDraftResponse {
 
     /// Render the retained source on every successful write/patch/check so a streaming client can
     /// preview the same FlowScript document inline. Queued commits reuse the existing command tag.
+    /// Structured envelope for the model, with `source` replaced by its size. The identical text is
+    /// already present once in the `<flowscript_workspace>` tag beside it and, for
+    /// `write_flowscript`, a third time in the model's own retained tool-call arguments. The
+    /// struct's own `Serialize` is deliberately untouched: SDK adapters hand
+    /// `to_string_pretty(&response)` to the model and the desktop workspace panel is built from
+    /// that JSON's `source` field.
+    ///
+    /// The projection is built by explicit insertion rather than by removing a key: `serde_json` is
+    /// compiled with `preserve_order` in this workspace (via `schemars`), so `Map::remove` is
+    /// `swap_remove` and would reorder the surviving fields.
+    fn model_envelope(&self) -> String {
+        let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(self) else {
+            return self.message.clone();
+        };
+        let mut projected = serde_json::Map::with_capacity(fields.len() + 1);
+        for (key, value) in fields {
+            if key == "source" {
+                if let serde_json::Value::String(source) = &value {
+                    projected.insert(
+                        "source_bytes".to_string(),
+                        serde_json::Value::from(source.len()),
+                    );
+                    projected.insert(
+                        "source_lines".to_string(),
+                        serde_json::Value::from(source.lines().count()),
+                    );
+                }
+                continue;
+            }
+            projected.insert(key, value);
+        }
+        serde_json::to_string(&serde_json::Value::Object(projected))
+            .unwrap_or_else(|_| self.message.clone())
+    }
+
+    /// Render the retained source exactly once, in the `<flowscript_workspace>` tag, so a streaming
+    /// client can preview the same FlowScript document inline. The structured envelope beside it
+    /// omits `source` on purpose: repeating a 72 KB document inside the same tool result doubled
+    /// every FlowScript round's context cost and told the model nothing the tag had not already.
+    /// Queued commits reuse the existing command tag.
     pub fn render_for_model(&self, board: &Board) -> String {
         if self.status == "queued"
             && let Some(source) = self.source.as_deref()
@@ -9218,14 +9898,18 @@ impl FlowScriptDraftResponse {
                 corrections: self.corrections.clone(),
                 diagnostics: Vec::new(),
             };
-            let legacy =
-                render_edit_flowscript_result(source, &result, board_has_no_nodes(board), true);
-            let envelope = serde_json::to_string(self).unwrap_or_else(|_| self.message.clone());
+            let legacy = render_committed_flowscript_result(
+                source,
+                &result,
+                board_has_no_nodes(board),
+                true,
+            );
+            let envelope = self.model_envelope();
             return format!(
                 "{legacy}\n<flowscript_commit_result>{envelope}</flowscript_commit_result>"
             );
         }
-        let envelope = serde_json::to_string_pretty(self).unwrap_or_else(|_| self.message.clone());
+        let envelope = self.model_envelope();
         match self.source.as_deref() {
             Some(source) => format!(
                 "{}\n<flowscript_draft_result>{envelope}</flowscript_draft_result>",
@@ -9581,7 +10265,7 @@ impl FlowIrCommitResult {
                 corrections: Vec::new(),
                 diagnostics: Vec::new(),
             };
-            let legacy = render_edit_flowscript_result(
+            let legacy = render_committed_flowscript_result(
                 flowscript,
                 &result,
                 board_has_no_nodes(board),
@@ -9737,7 +10421,7 @@ impl Tool for UpsertFlowIrModuleTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Add or replace one typed function/Event module, compile the whole draft, and retain the previous revision if diagnostics worsen or executable scope shrinks without explicit user authorization."
+            description: "Add or replace one typed function/Event module, compile the whole draft, and retain the previous revision if diagnostics worsen or executable scope shrinks without explicit user authorization. Function modules accept an optional cache object; an empty object defaults to namespace `global`, ttl_seconds 300, and app scope, while ttl_seconds 0 is permanent. A cache hit skips the entire function body and its side effects, so cache only input-determined functions."
                 .to_string(),
             parameters: json_schema::<UpsertFlowIrModuleArgs>(),
         }
@@ -9811,6 +10495,114 @@ impl Tool for CommitFlowIrDraftTool {
 }
 
 #[cfg(test)]
+mod scope_plan_tests {
+    use super::*;
+
+    fn segment(id: &str) -> PlannedSegment {
+        PlannedSegment {
+            id: id.to_string(),
+            title: format!("Segment {id}"),
+            behavior: format!("Build and fully wire every node belonging to slice {id}."),
+            depends_on: Vec::new(),
+            board_ref: CURRENT_BOARD_REF.to_string(),
+        }
+    }
+
+    fn staged(ids: &[&str]) -> PlanBoardScopeArgs {
+        PlanBoardScopeArgs {
+            strategy: ScopeStrategy::Staged,
+            segments: ids.iter().map(|id| segment(id)).collect(),
+            rationale: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_revision_keeps_applied_segments_and_resumes_after_them() {
+        let mut plan = accept_scope_plan(staged(&["s1", "s2", "s3"])).expect("plan");
+        plan.mark_active_authored();
+        plan.mark_authored_committed();
+        assert_eq!(plan.committed, ["s1"]);
+
+        let revised = plan
+            .revise(staged(&["s2a", "s2b"]))
+            .expect("the remaining work may be re-split once");
+        assert_eq!(
+            revised
+                .segments
+                .iter()
+                .map(|segment| segment.id.as_str())
+                .collect::<Vec<_>>(),
+            ["s1", "s2a", "s2b"],
+            "applied segments are carried through unchanged"
+        );
+        assert_eq!(
+            revised.active, 1,
+            "authoring resumes after the applied work"
+        );
+        assert_eq!(revised.committed, ["s1"]);
+        assert_eq!(revised.revisions, 1);
+    }
+
+    #[test]
+    fn a_revision_cannot_re_declare_an_applied_segment_or_happen_twice() {
+        let mut plan = accept_scope_plan(staged(&["s1", "s2"])).expect("plan");
+        plan.mark_active_authored();
+        plan.mark_authored_committed();
+
+        let redeclared = plan
+            .revise(staged(&["s1", "s2"]))
+            .expect_err("an applied segment is immutable");
+        assert_eq!(redeclared.code, "SCOPE_PLAN_COMMITTED_SEGMENT_REDECLARED");
+
+        let revised = plan
+            .revise(staged(&["s2a", "s2b"]))
+            .expect("first revision");
+        let second = revised
+            .revise(staged(&["s2c", "s2d"]))
+            .expect_err("only one revision per run");
+        assert_eq!(second.code, "SCOPE_PLAN_REVISION_EXHAUSTED");
+    }
+
+    #[test]
+    fn uncommitted_titles_name_exactly_what_is_missing() {
+        let mut plan = accept_scope_plan(staged(&["s1", "s2", "s3"])).expect("plan");
+        assert_eq!(plan.uncommitted_titles().len(), 3);
+
+        plan.mark_active_authored();
+        plan.mark_active_authored();
+        plan.mark_authored_committed();
+        assert_eq!(plan.committed_count(), 2);
+        assert_eq!(plan.uncommitted_titles(), ["Segment s3"]);
+        assert_eq!(plan.remaining(), 1);
+    }
+
+    /// A staged plan commits once, so a placeholder-only behavior would smuggle an unbuilt segment
+    /// into an otherwise valid document. Concreteness is checked before anything is authored.
+    #[test]
+    fn behavior_must_be_concrete_prose_not_a_heading_or_a_deferral() {
+        for behavior in ["", "TODO", "Parser", "tbd for now", "stub this out later"] {
+            let args = PlanBoardScopeArgs {
+                strategy: ScopeStrategy::Staged,
+                segments: vec![
+                    segment("s1"),
+                    PlannedSegment {
+                        behavior: behavior.to_string(),
+                        ..segment("s2")
+                    },
+                ],
+                rationale: String::new(),
+            };
+            let rejection = accept_scope_plan(args)
+                .expect_err(&format!("{behavior:?} is not an executable slice"));
+            assert_eq!(rejection.code, "SCOPE_PLAN_SEGMENT_NOT_CONCRETE");
+        }
+
+        let accepted = accept_scope_plan(staged(&["s1", "s2"]));
+        assert!(accepted.is_ok());
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::super::ir::{
         FlowCapabilityRequirement, FlowIrArg, FlowIrLiteral, FlowIrStep, FlowIrValue,
@@ -9847,6 +10639,41 @@ mod tests {
             payload["schema_hint"]["capability_selection"]["selected"]["exact_node_type"],
             "utils_hash_sha256"
         );
+    }
+
+    #[test]
+    fn typed_function_cache_is_exposed_by_the_upsert_schema() {
+        let schema = json_schema::<UpsertFlowIrModuleArgs>();
+        let schema = serde_json::to_string(&schema).expect("serialize upsert schema");
+        for field in ["cache", "namespace", "ttl_seconds", "scope"] {
+            assert!(schema.contains(field), "schema omits {field}: {schema}");
+        }
+        assert!(
+            schema.contains("global"),
+            "schema omits namespace default: {schema}"
+        );
+        assert!(schema.contains("300"), "schema omits TTL default: {schema}");
+    }
+
+    #[test]
+    fn flowscript_function_cache_projects_into_typed_ir() {
+        let ast = flow_like_ast::parse(
+            r#"@cache({ namespace: "pricing", ttlSeconds: 3600, scope: "user" })
+function calculatePricing() {
+}
+"#,
+        )
+        .expect("cached function source parses");
+        let projected = FlowScriptAcceptanceProjection::new(&ast, &[]).project(&ast);
+        let FlowIrModule::Function {
+            cache: Some(cache), ..
+        } = &projected.modules[0]
+        else {
+            panic!("expected projected cached function")
+        };
+        assert_eq!(cache.namespace, "pricing");
+        assert_eq!(cache.ttl_seconds, Some(3_600));
+        assert_eq!(cache.scope, FlowIrFunctionCacheScope::User);
     }
 
     fn pin(name: &str, data_type: &str) -> PinMetadata {
@@ -10352,6 +11179,7 @@ mod tests {
             log_level: LogLevel::Info,
             execution_mode: ExecutionMode::Hybrid,
             refs: HashMap::new(),
+            internal_refs: HashMap::new(),
             layers: HashMap::new(),
             page_ids: Vec::new(),
             hash: None,
@@ -10673,6 +11501,43 @@ eventsSimple() {
         assert!(
             contract.omitted_prohibitions.is_empty(),
             "manner-scoped clauses are whitelisted by the exclusivity/manner guard, not dropped as contradictions: {:#?}",
+            contract.omitted_prohibitions
+        );
+    }
+
+    #[test]
+    fn command_json_authoring_ban_is_deferred_without_banning_runtime_json() {
+        let contract = derive_request_acceptance_contract(
+            "- Send a Slack notification.\n\
+             - Do not substitute command JSON or leave placeholder logic.",
+        );
+        assert!(
+            contract
+                .criteria
+                .iter()
+                .all(|criterion| !criterion.objects.iter().any(|object| object == "json")),
+            "authoring-format guidance must not ban runtime JSON capabilities: {:#?}",
+            contract.criteria
+        );
+        assert_eq!(
+            contract.omitted_prohibitions,
+            ["Do not substitute command JSON or leave placeholder logic"],
+            "{:#?}",
+            contract.omitted_prohibitions
+        );
+    }
+
+    #[test]
+    fn explicit_runtime_json_parse_ban_remains_enforced() {
+        let contract = derive_request_acceptance_contract("Never parse JSON.");
+        assert_eq!(contract.criteria.len(), 1, "{:#?}", contract.criteria);
+        let ban = &contract.criteria[0];
+        assert!(ban.forbidden, "{ban:#?}");
+        assert_eq!(ban.actions, ["parse"], "{ban:#?}");
+        assert_eq!(ban.objects, ["json"], "{ban:#?}");
+        assert!(
+            contract.omitted_prohibitions.is_empty(),
+            "{:#?}",
             contract.omitted_prohibitions
         );
     }
@@ -12473,6 +13338,7 @@ eventsSimple() {
             name: "notifySlack".to_string(),
             params: Vec::new(),
             returns: Vec::new(),
+            cache: None,
             steps: acceptance_program().modules[0].steps()[1..].to_vec(),
             anchor: None,
         };
@@ -13403,6 +14269,7 @@ eventsSimple() {
             name: "reviewLoop".to_string(),
             params: Vec::new(),
             returns: Vec::new(),
+            cache: None,
             steps: vec![
                 FlowIrStep::If {
                     id: "decision".to_string(),
@@ -13511,6 +14378,7 @@ eventsSimple() {
             name: "eventsSimple".to_string(),
             params: Vec::new(),
             returns: Vec::new(),
+            cache: None,
             steps: vec![FlowIrStep::Node {
                 id: "message".to_string(),
                 node_type: "string_format".to_string(),
@@ -14088,6 +14956,28 @@ eventsSimple() {
                 &claim_id,
             ),
             Some(true),
+        );
+        let (retained_commands, replacement_mode) = store
+            .pending_commit_payload_if_current(
+                &board,
+                "replacement-review",
+                0,
+                &base_fingerprint,
+                &claim_id,
+            )
+            .expect("batch and policy are read from one claim state");
+        assert!(!retained_commands.is_empty());
+        assert!(replacement_mode);
+        assert!(
+            store
+                .pending_commit_payload_if_current(
+                    &board,
+                    "replacement-review",
+                    0,
+                    &base_fingerprint,
+                    "forged-claim",
+                )
+                .is_none()
         );
         assert!(
             store

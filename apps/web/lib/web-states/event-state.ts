@@ -129,12 +129,10 @@ export class WebEventState implements IEventState {
 		);
 	}
 
+	// Errors propagate: returning [] here makes a failed fetch look like an app
+	// with no events, which callers cannot distinguish from the real thing.
 	async getEvents(appId: string, _force?: boolean): Promise<IEvent[]> {
-		try {
-			return await apiGet<IEvent[]>(`apps/${appId}/events`, this.backend.auth);
-		} catch {
-			return [];
-		}
+		return await apiGet<IEvent[]>(`apps/${appId}/events`, this.backend.auth);
 	}
 
 	async getEventVersions(

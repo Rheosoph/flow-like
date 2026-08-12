@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-labelledby="title desc">
+  <title id="title">Flow-Like desktop and browser automation strategy</title>
+  <desc id="desc">Choose a browser, computer, or vision surface, resolve the target with the most deterministic method available, interact, then verify and recover with Flow-Like automation controls.</desc>
+  <defs>
+    <linearGradient id="desktop-bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#17191f"/></linearGradient>
+    <linearGradient id="desktop-coral" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ff8a68"/><stop offset="1" stop-color="#ff5d3d"/></linearGradient>
+    <pattern id="desktop-grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <marker id="desktop-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 10 5 0 10z" fill="#ff7656"/></marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.desktop-kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.4px}.desktop-heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}.desktop-sub{fill:#a7adb8;font-size:17px}.desktop-section{fill:#f7f8fa;font-size:21px;font-weight:720}.desktop-item{fill:#d8dbe1;font-size:15px;font-weight:650}.desktop-note{fill:#929aa7;font-size:14px}.desktop-tiny{fill:#89919e;font-size:13px;font-weight:700;letter-spacing:1.1px}
+    </style>
+  </defs>
+  <rect width="1440" height="720" rx="28" fill="url(#desktop-bg)"/><rect width="1440" height="720" rx="28" fill="url(#desktop-grid)"/>
+  <rect x="64" y="58" width="298" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/><circle cx="84" cy="75" r="5" fill="#ff7656"/><text x="99" y="81" class="desktop-kicker">DESKTOP AUTOMATION</text>
+  <text x="64" y="136" class="desktop-heading">Automate the UI with deliberate fallbacks</text>
+  <text x="64" y="169" class="desktop-sub">Choose deterministic targeting first, make the interaction explicit, then verify the result.</text>
+
+  <path d="M302 365H338" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#desktop-arrow)"/>
+  <path d="M660 365H696" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#desktop-arrow)"/>
+  <path d="M984 365H1020" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#desktop-arrow)"/>
+
+  <g>
+    <rect x="64" y="220" width="238" height="290" rx="25" fill="#191c22" stroke="#373d48" stroke-width="2"/>
+    <text x="94" y="261" class="desktop-tiny">01 • SURFACE</text><text x="94" y="295" class="desktop-section">Choose a surface</text>
+    <rect x="94" y="322" width="178" height="44" rx="12" fill="#292327" stroke="#5d3c35"/><circle cx="116" cy="344" r="6" fill="#ff7656"/><text x="136" y="350" class="desktop-item">Browser</text>
+    <rect x="94" y="378" width="178" height="44" rx="12" fill="#282534" stroke="#574e71"/><circle cx="116" cy="400" r="6" fill="#a78bfa"/><text x="136" y="406" class="desktop-item">Computer</text>
+    <rect x="94" y="434" width="178" height="44" rx="12" fill="#202b28" stroke="#3e6759"/><circle cx="116" cy="456" r="6" fill="#34d399"/><text x="136" y="462" class="desktop-item">Vision</text>
+  </g>
+
+  <g>
+    <rect x="350" y="202" width="310" height="326" rx="28" fill="#1d1d22" stroke="#ff7656" stroke-width="2"/>
+    <rect x="380" y="232" width="62" height="62" rx="18" fill="url(#desktop-coral)"/>
+    <path d="M396 250h30v23h-30zM402 279h18" fill="none" stroke="#16181c" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="466" y="254" class="desktop-tiny">02 • TARGET</text><text x="466" y="287" class="desktop-section">Resolve the target</text>
+    <rect x="380" y="322" width="250" height="40" rx="11" fill="#292327" stroke="#5d3c35"/><text x="404" y="348" class="desktop-item">Browser selectors</text>
+    <rect x="380" y="374" width="250" height="40" rx="11" fill="#282534" stroke="#574e71"/><text x="404" y="400" class="desktop-item">Accessibility elements</text>
+    <rect x="380" y="426" width="250" height="40" rx="11" fill="#202b28" stroke="#3e6759"/><text x="404" y="452" class="desktop-item">Image templates</text>
+    <rect x="380" y="478" width="250" height="40" rx="11" fill="#232730" stroke="#414754"/><text x="404" y="504" class="desktop-item">Coordinates</text>
+  </g>
+
+  <g>
+    <rect x="708" y="220" width="276" height="290" rx="25" fill="#1d1c24" stroke="#5b5278" stroke-width="2"/>
+    <text x="738" y="261" class="desktop-tiny">03 • INTERACT</text><text x="738" y="295" class="desktop-section">Perform the action</text>
+    <rect x="738" y="322" width="216" height="44" rx="12" fill="#282534" stroke="#574e71"/><text x="762" y="350" class="desktop-item">Click and type</text>
+    <rect x="738" y="378" width="216" height="44" rx="12" fill="#282534" stroke="#574e71"/><text x="762" y="406" class="desktop-item">Mouse and keyboard</text>
+    <rect x="738" y="434" width="216" height="44" rx="12" fill="#282534" stroke="#574e71"/><text x="762" y="462" class="desktop-item">Extract or capture</text>
+  </g>
+
+  <g>
+    <rect x="1032" y="202" width="344" height="326" rx="28" fill="#1b2422" stroke="#34d399" stroke-width="2"/>
+    <text x="1062" y="243" class="desktop-tiny">04 • VERIFY</text><text x="1062" y="277" class="desktop-section">Prove the outcome</text>
+    <rect x="1062" y="306" width="284" height="48" rx="12" fill="#202b28" stroke="#3e6759"/><path d="M1084 330l7 7 14-16" fill="none" stroke="#34d399" stroke-width="4" stroke-linecap="round"/><text x="1120" y="337" class="desktop-item">Assert the resulting state</text>
+    <rect x="1062" y="368" width="284" height="48" rx="12" fill="#202b28" stroke="#3e6759"/><path d="M1084 381h20v22h-20z" fill="none" stroke="#34d399" stroke-width="3"/><text x="1120" y="399" class="desktop-item">Save a checkpoint</text>
+    <rect x="1062" y="430" width="284" height="48" rx="12" fill="#202b28" stroke="#3e6759"/><circle cx="1094" cy="454" r="11" fill="none" stroke="#34d399" stroke-width="3"/><circle cx="1094" cy="454" r="3" fill="#34d399"/><text x="1120" y="461" class="desktop-item">Capture diagnostic evidence</text>
+  </g>
+
+  <rect x="64" y="570" width="1312" height="78" rx="20" fill="#1d2026" stroke="#3a404a" stroke-width="2"/>
+  <circle cx="98" cy="609" r="8" fill="#ff7656"/><text x="120" y="603" class="desktop-item">RPA controls</text><text x="120" y="625" class="desktop-note">timeouts • bounded retries • recovery</text>
+  <circle cx="504" cy="609" r="8" fill="#a78bfa"/><text x="526" y="603" class="desktop-item">Selector + Fingerprint</text><text x="526" y="625" class="desktop-note">ranked deterministic fallbacks</text>
+  <circle cx="952" cy="609" r="8" fill="#34d399"/><text x="974" y="603" class="desktop-item">Optional LLM assistance</text><text x="974" y="625" class="desktop-note">observe, plan, or heal—then validate</text>
+</svg>

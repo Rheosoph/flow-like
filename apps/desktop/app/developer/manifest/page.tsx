@@ -1,7 +1,5 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
 	Badge,
 	Button,
@@ -19,6 +17,8 @@ import {
 	Switch,
 	Textarea,
 } from "@flow-like/flow-like-ui";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { AnimatePresence, motion } from "framer-motion";
 import {
 	AlertCircle,

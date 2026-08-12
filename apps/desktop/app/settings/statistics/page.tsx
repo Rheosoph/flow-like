@@ -1,9 +1,5 @@
 "use client";
 
-import { ResponsiveBar } from "@nivo/bar";
-import { ResponsivePie } from "@nivo/pie";
-import { ResponsiveTreeMap } from "@nivo/treemap";
-import { Channel, invoke } from "@tauri-apps/api/core";
 import {
 	Badge,
 	Button,
@@ -23,6 +19,10 @@ import {
 	TooltipTrigger,
 } from "@flow-like/flow-like-ui";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
+import { ResponsiveBar } from "@nivo/bar";
+import { ResponsivePie } from "@nivo/pie";
+import { ResponsiveTreeMap } from "@nivo/treemap";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import {
 	BarChart3,
 	Boxes,
@@ -881,17 +881,25 @@ export default function StatisticsPage() {
 				</div>
 
 				<Tabs defaultValue="overview" className="space-y-4">
-					<TabsList className="grid w-full grid-cols-5">
-						<TabsTrigger value="overview">Overview</TabsTrigger>
-						<TabsTrigger value="nodes">Top Nodes</TabsTrigger>
-						<TabsTrigger value="patterns">
+					<TabsList className="flex w-full overflow-x-auto no-scrollbar sm:grid sm:grid-cols-5">
+						<TabsTrigger value="overview" className="flex-none">
+							Overview
+						</TabsTrigger>
+						<TabsTrigger value="nodes" className="flex-none">
+							Top Nodes
+						</TabsTrigger>
+						<TabsTrigger value="patterns" className="flex-none">
 							Patterns
 							{phase === "mining-patterns" && (
 								<Loader2 className="h-3 w-3 animate-spin ml-1" />
 							)}
 						</TabsTrigger>
-						<TabsTrigger value="categories">Categories</TabsTrigger>
-						<TabsTrigger value="boards">Boards</TabsTrigger>
+						<TabsTrigger value="categories" className="flex-none">
+							Categories
+						</TabsTrigger>
+						<TabsTrigger value="boards" className="flex-none">
+							Boards
+						</TabsTrigger>
 					</TabsList>
 
 					<TabsContent value="overview" className="space-y-4">

@@ -1,0 +1,24 @@
+---
+title: "Ordinal Grid Search Node"
+description: "Ordinal Grid Search Flow-Like node: Exhaustively searches the hyperparameters of ONE ordinal model family with cross-validation, for a target whose levels..."
+sidebar:
+  label: "Ordinal Grid Search"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Ordinal Grid Search, Ordinal Grid Search node, Flow-Like node, Flow-Like node catalog, workflow automation node, AI/ML/Tuning, ml, ai_ml_tuning_ordinal_grid_search, AI, Tuning, pins, schemas, security rating"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "AI/ML/Tuning"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"Ordinal Grid Search Node\",\"name\":\"Ordinal Grid Search\",\"description\":\"Ordinal Grid Search Flow-Like node: Exhaustively searches the hyperparameters of ONE ordinal model family with cross-validation, for a target whose levels...\",\"url\":\"https://docs.flow-like.com/nodes/ai/ml/tuning/ai-ml-tuning-ordinal-grid-search/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"AI/ML/Tuning\",\"keywords\":\"Ordinal Grid Search, Ordinal Grid Search node, Flow-Like node, Flow-Like node catalog, workflow automation node, AI/ML/Tuning, ml, ai_ml_tuning_ordinal_grid_search, AI, Tuning, pins, schemas, security rating\",\"programmingLanguage\":\"Rust\",\"mainEntity\":{\"@type\":\"SoftwareSourceCode\",\"name\":\"Ordinal Grid Search\",\"description\":\"Exhaustively searches the hyperparameters of ONE ordinal model family with cross-validation, for a target whose levels are ORDERED (1 < 2 < ... < 5, or low < medium < high). Every combination in the Parameter Grid is scored on the SAME folds and ranked by an ordinal metric that knows how far a miss was. Use this rather than Grid Search, which resolves the target without its order and tunes against accuracy, scoring a five-level miss exactly like a one-level one. Model Type accepts the names Auto Ordinal reports as its best model, so the usual chain is Auto Ordinal to pick the family, then this node to tune it. Every family here is a gradient or a least-squares fit on the raw columns, so scale your features with the Fit Feature Scaler node first: unscaled columns change which hyperparameters win, not just how fast they converge.\",\"codeSampleType\":\"Flow-Like node\",\"runtimePlatform\":\"Flow-Like\",\"programmingLanguage\":\"Rust\"}}"
+---
+
+import { NodeReference } from "../../../../../../components/node-docs/NodeReference";
+import { nodesBySlug } from "../../../../../../generated/catalog-nodes";
+
+<NodeReference node={nodesBySlug["nodes/ai/ml/tuning/ai-ml-tuning-ordinal-grid-search"]} />

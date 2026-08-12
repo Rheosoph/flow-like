@@ -48,6 +48,14 @@ const DYNAMIC_PIN_NODE_TYPES: &[&str] = &[
 const VARIABLE_GET_NODE_TYPE: &str = "variable_get";
 const VARIABLE_SET_NODE_TYPE: &str = "variable_set";
 const VARIABLE_REF_PIN: &str = "var_ref";
+/// Node types a generated board must never contain, with the repair that replaces them. Writing
+/// into a surface's raw data model does not drive the rendered page: elements read their own
+/// state, and package widget instances read typed contract inputs. Both are unreachable from a
+/// `$.data.*` path write, so the node is rejected instead of merely discouraged.
+const PROHIBITED_NODE_TYPES: &[(&str, &str)] = &[(
+    "a2ui_data_update",
+    "Replace it with the setter for the target element (`a2uiSetElementText`, `a2uiSetElementValue`, `a2uiSetMarkdownContent`, `a2uiSetBadgeContent`, `a2uiSetProgress`, `a2uiSetSelectValue`, `a2uiSetSliderValue`, `a2uiWriteCsvToTable`, `a2uiUpdateTable`, `a2uiPushCsvToChart`). For package widgets, pass the values as `dyn*` inputs of `a2uiInstantiateWidget` and push the instance into its container with `a2uiPushChild`/`a2uiPushToContainer`, or patch a live instance with `a2uiWidgetUpdateInputs`.",
+)];
 
 #[derive(Debug, Default)]
 pub(crate) struct ExecutabilityReport {
@@ -68,6 +76,11 @@ pub(crate) fn lint_flowscript_executability(
     let reachable = exec_reachable(&graph);
 
     let mut report = ExecutabilityReport::default();
+    push_capped(
+        &mut report.review_notes,
+        check_prohibited_nodes(&graph),
+        "prohibited node",
+    );
     push_capped(
         &mut report.blocking,
         check_missing_required_inputs(&graph, &reachable),
@@ -918,6 +931,7 @@ fn project_graph(
             | BoardCommand::CreateLayer { .. }
             | BoardCommand::CreateVariable { .. }
             | BoardCommand::MoveNode { .. }
+            | BoardCommand::UpdateLayerCache { .. }
             | BoardCommand::SetNodeFunctionRefs { .. }
             | BoardCommand::AddComment { .. }
             | BoardCommand::RemoveComment { .. } => {}
@@ -967,6 +981,39 @@ fn exec_reachable(graph: &ProjectedGraph) -> Vec<bool> {
         }
     }
     reachable
+}
+
+/// Review note: a node of a prohibited type, whether this batch adds it or the base board already
+/// carries it. This never blocks — a rejected batch would strand the whole edit over a node the
+/// model can simply rewrite — so the finding rides back as an actionable note and the caller turns
+/// it into an explicit instruction to write a corrected revision. Unlike the other checks this
+/// needs neither reachability nor pin resolution, so an opaque node is still reported.
+fn check_prohibited_nodes(graph: &ProjectedGraph) -> Vec<FlowScriptDiagnostic> {
+    graph
+        .nodes
+        .iter()
+        .filter(|node| !node.removed && !node.is_layer)
+        .filter_map(|node| {
+            let (_, repair) = PROHIBITED_NODE_TYPES
+                .iter()
+                .find(|(node_type, _)| *node_type == node.node_type)?;
+            let origin = if node.is_new {
+                "This batch adds it"
+            } else {
+                "This board already carries it"
+            };
+            Some(executability_diagnostic(
+                FlowScriptDiagnosticCode::FsProhibitedNode,
+                format!(
+                    "`{}` (`{}`) does not change what the page renders: a `$.data.*` write is observed by neither elements nor widget instances. {origin}; replace it.",
+                    node.display, node.node_type
+                ),
+                Some(node.display.clone()),
+                None,
+                repair,
+            ))
+        })
+        .collect()
 }
 
 /// BLOCKING: a required input (per catalog metadata, no default anywhere) on a reachable, newly
@@ -1239,6 +1286,8 @@ fn executability_diagnostic(
         phase: FlowScriptDiagnosticPhase::Validation,
         message,
         source_span: None,
+        spans: Vec::new(),
+        additional_sites: 0,
         ast_path: None,
         scope,
         expected: None,
@@ -1265,7 +1314,8 @@ mod tests {
     use serde_json::json;
 
     use super::super::ir_tools::{
-        CheckFlowScriptArgs, FlowIrDraftMode, FlowIrDraftStore, WriteFlowScriptArgs,
+        CheckFlowScriptArgs, CommitFlowScriptArgs, FlowIrDraftMode, FlowIrDraftStore,
+        WriteFlowScriptArgs,
     };
     use super::super::types::PinMetadata;
     use super::*;
@@ -1316,6 +1366,7 @@ mod tests {
             log_level: LogLevel::Info,
             execution_mode: ExecutionMode::Hybrid,
             refs: HashMap::new(),
+            internal_refs: HashMap::new(),
             layers: HashMap::new(),
             page_ids: Vec::new(),
             hash: None,
@@ -1384,6 +1435,16 @@ mod tests {
                     pin_meta("exec_out", "Execution"),
                     pin_meta("string", "String"),
                 ],
+            ),
+            meta(
+                "a2ui_data_update",
+                vec![
+                    pin_meta("exec_in", "Execution"),
+                    pin_meta("surface_id", "String"),
+                    pin_meta("path", "String"),
+                    pin_meta("value", "Generic"),
+                ],
+                vec![pin_meta("exec_out", "Execution")],
             ),
         ]
     }
@@ -1601,6 +1662,73 @@ mod tests {
     }
 
     #[test]
+    fn new_data_update_node_notes_setter_repair_without_blocking() {
+        let commands = vec![
+            add_node("events_simple", "$0"),
+            add_node("a2ui_data_update", "$1"),
+            update_pin("$1", "surface_id", json!("main")),
+            update_pin("$1", "path", json!("data/sources")),
+            update_pin("$1", "value", json!("[]")),
+            connect("$0", "exec_out", "$1", "exec_in"),
+        ];
+        let report = lint_flowscript_executability(&empty_board(), &catalog(), &commands);
+        assert!(
+            report.blocking.is_empty(),
+            "a prohibited node must not strand the batch: {:#?}",
+            report.blocking
+        );
+        assert_eq!(report.review_notes.len(), 1, "{:#?}", report.review_notes);
+        let finding = &report.review_notes[0];
+        assert_eq!(finding.code, FlowScriptDiagnosticCode::FsProhibitedNode);
+        assert!(
+            finding.message.contains("This batch adds it"),
+            "{}",
+            finding.message
+        );
+        let fix = finding.fix.as_ref().expect("prohibited node carries a fix");
+        assert!(
+            fix.summary.contains("a2uiSetElementText"),
+            "{}",
+            fix.summary
+        );
+        assert!(
+            fix.summary.contains("a2uiInstantiateWidget"),
+            "{}",
+            fix.summary
+        );
+    }
+
+    #[test]
+    fn existing_data_update_node_notes_replacement_without_blocking() {
+        let mut board = empty_board();
+        let mut legacy = Node::new("a2ui_data_update", "Data Update", "", "UI/Data");
+        legacy.add_input_pin("exec_in", "Exec In", "", VariableType::Execution);
+        legacy.add_input_pin("path", "Path", "", VariableType::String);
+        legacy.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+        board.nodes.insert(legacy.id.clone(), legacy);
+        let commands = vec![
+            add_node("events_simple", "$0"),
+            add_node("http_fetch", "$1"),
+            update_pin("$1", "url", json!("https://example.com")),
+            connect("$0", "exec_out", "$1", "exec_in"),
+        ];
+        let report = lint_flowscript_executability(&board, &catalog(), &commands);
+        assert!(
+            report.blocking.is_empty(),
+            "an inherited node must not wedge unrelated edits: {:#?}",
+            report.blocking
+        );
+        assert_eq!(report.review_notes.len(), 1, "{:#?}", report.review_notes);
+        let note = &report.review_notes[0];
+        assert_eq!(note.code, FlowScriptDiagnosticCode::FsProhibitedNode);
+        assert!(
+            note.message.contains("This board already carries it"),
+            "{}",
+            note.message
+        );
+    }
+
+    #[test]
     fn existing_disconnected_impure_node_is_not_flagged() {
         let mut board = empty_board();
         let mut stale = Node::new("http_fetch", "Stale Fetch", "", "web");
@@ -1777,6 +1905,7 @@ mod tests {
             position: None,
             color: None,
             target_layer: None,
+            cache: None,
             summary: None,
         };
         let mut commands = vec![
@@ -1830,6 +1959,7 @@ mod tests {
             position: None,
             color: None,
             target_layer: None,
+            cache: None,
             summary: None,
         }
     }
@@ -2002,6 +2132,79 @@ mod tests {
         assert_eq!(checked.status, "valid", "{checked:#?}");
         assert!(checked.diagnostics.is_empty(), "{checked:#?}");
         assert!(checked.review_notes.is_empty(), "{checked:#?}");
+    }
+
+    #[test]
+    fn script_using_data_update_stays_valid_but_directs_another_revision() {
+        let store = FlowIrDraftStore::new();
+        let board = empty_board();
+        let source = r#"eventsSimple() {
+    a2uiDataUpdate({ surfaceId: "main", path: "data/sources", value: "[]" })
+}
+"#;
+        let written = store.write_flowscript(
+            &board,
+            &catalog(),
+            WriteFlowScriptArgs {
+                draft_id: "prohibited-data-update".to_string(),
+                replace_existing: false,
+                mode: FlowIrDraftMode::Additive,
+                source: source.to_string(),
+                allow_scope_reduction: false,
+            },
+        );
+        assert!(written.diagnostics.is_empty(), "{written:#?}");
+        let checked = store.check_flowscript(
+            &board,
+            &catalog(),
+            CheckFlowScriptArgs {
+                draft_id: "prohibited-data-update".to_string(),
+                expected_revision: 0,
+            },
+        );
+        assert_eq!(checked.status, "valid", "{checked:#?}");
+        assert!(checked.diagnostics.is_empty(), "{checked:#?}");
+        let prohibited = checked
+            .review_notes
+            .iter()
+            .find(|note| note.code == FlowScriptDiagnosticCode::FsProhibitedNode)
+            .unwrap_or_else(|| panic!("{checked:#?}"));
+        assert!(
+            prohibited
+                .fix
+                .as_ref()
+                .is_some_and(|fix| fix.summary.contains("a2uiInstantiateWidget")),
+            "{prohibited:#?}"
+        );
+        // The model must read this as its own outstanding work, not as a human-review note.
+        assert!(checked.message.contains("NOT DONE"), "{}", checked.message);
+        assert!(
+            checked.message.contains("Write a corrected revision now"),
+            "{}",
+            checked.message
+        );
+        assert!(
+            !checked.message.contains("acceptance review note"),
+            "{}",
+            checked.message
+        );
+
+        let queued = store.commit_flowscript(
+            &board,
+            &catalog(),
+            CommitFlowScriptArgs {
+                draft_id: "prohibited-data-update".to_string(),
+                expected_revision: 0,
+                allow_deletions: false,
+                remove_node_ids: Vec::new(),
+                remove_variable_ids: Vec::new(),
+                remove_layer_ids: Vec::new(),
+                remove_comment_ids: Vec::new(),
+            },
+        );
+        assert_eq!(queued.status, "queued", "{queued:#?}");
+        assert!(!queued.commands.is_empty(), "{queued:#?}");
+        assert!(queued.message.contains("NOT DONE"), "{}", queued.message);
     }
 
     #[test]

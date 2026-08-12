@@ -1,135 +1,110 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "UpsertVariableCommand",
-  "type": "object",
-  "properties": {
-    "variable": {
-      "$ref": "#/$defs/Variable"
-    },
-    "old_variable": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/Variable"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "layer_id": {
-      "description": "When set, operate on a layer's variables instead of board-level variables",
-      "type": [
-        "string",
-        "null"
-      ],
-      "default": null
-    }
-  },
-  "required": [
-    "variable"
-  ],
-  "$defs": {
-    "Variable": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "category": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "default_value": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0,
-            "maximum": 255
-          }
-        },
-        "data_type": {
-          "$ref": "#/$defs/VariableType"
-        },
-        "value_type": {
-          "$ref": "#/$defs/ValueType"
-        },
-        "exposed": {
-          "type": "boolean"
-        },
-        "secret": {
-          "type": "boolean"
-        },
-        "editable": {
-          "type": "boolean"
-        },
-        "hash": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "schema": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "runtime_configured": {
-          "description": "If true, this variable is configured per-user at runtime (stored locally, not in flow)",
-          "type": "boolean",
-          "default": false
-        }
-      },
-      "required": [
-        "id",
-        "name",
-        "data_type",
-        "value_type",
-        "exposed",
-        "secret",
-        "editable"
-      ]
-    },
-    "VariableType": {
-      "type": "string",
-      "enum": [
-        "Execution",
-        "String",
-        "Integer",
-        "Float",
-        "Boolean",
-        "Date",
-        "PathBuf",
-        "Generic",
-        "Struct",
-        "Byte"
-      ]
-    },
-    "ValueType": {
-      "type": "string",
-      "enum": [
-        "Array",
-        "Normal",
-        "HashMap",
-        "HashSet"
-      ]
-    }
-  }
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "UpsertVariableCommand",
+	"type": "object",
+	"properties": {
+		"variable": {
+			"$ref": "#/$defs/Variable"
+		},
+		"old_variable": {
+			"anyOf": [
+				{
+					"$ref": "#/$defs/Variable"
+				},
+				{
+					"type": "null"
+				}
+			]
+		},
+		"layer_id": {
+			"description": "When set, operate on a layer's variables instead of board-level variables",
+			"type": ["string", "null"],
+			"default": null
+		}
+	},
+	"required": ["variable"],
+	"$defs": {
+		"Variable": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"name": {
+					"type": "string"
+				},
+				"category": {
+					"type": ["string", "null"]
+				},
+				"description": {
+					"type": ["string", "null"]
+				},
+				"default_value": {
+					"type": ["array", "null"],
+					"items": {
+						"type": "integer",
+						"format": "uint8",
+						"minimum": 0,
+						"maximum": 255
+					}
+				},
+				"data_type": {
+					"$ref": "#/$defs/VariableType"
+				},
+				"value_type": {
+					"$ref": "#/$defs/ValueType"
+				},
+				"exposed": {
+					"type": "boolean"
+				},
+				"secret": {
+					"type": "boolean"
+				},
+				"editable": {
+					"type": "boolean"
+				},
+				"hash": {
+					"type": ["integer", "null"],
+					"format": "uint64",
+					"minimum": 0
+				},
+				"schema": {
+					"type": ["string", "null"]
+				},
+				"runtime_configured": {
+					"description": "If true, this variable is configured per-user at runtime (stored locally, not in flow)",
+					"type": "boolean",
+					"default": false
+				}
+			},
+			"required": [
+				"id",
+				"name",
+				"data_type",
+				"value_type",
+				"exposed",
+				"secret",
+				"editable"
+			]
+		},
+		"VariableType": {
+			"type": "string",
+			"enum": [
+				"Execution",
+				"String",
+				"Integer",
+				"Float",
+				"Boolean",
+				"Date",
+				"PathBuf",
+				"Generic",
+				"Struct",
+				"Byte"
+			]
+		},
+		"ValueType": {
+			"type": "string",
+			"enum": ["Array", "Normal", "HashMap", "HashSet"]
+		}
+	}
 }

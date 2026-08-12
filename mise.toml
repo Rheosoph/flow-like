@@ -8,7 +8,7 @@
 
 [tools]
 bun = "latest"
-rust = "latest"
+rust = "1.97.1"
 node = "22"
 python = "3.12"
 uv = "latest"

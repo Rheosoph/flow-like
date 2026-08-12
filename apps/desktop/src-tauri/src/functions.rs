@@ -20,6 +20,7 @@ pub mod settings;
 pub mod statistics;
 pub mod storage_management;
 pub mod system;
+pub mod telemetry;
 pub mod tmp;
 
 #[derive(Debug, Serialize)]

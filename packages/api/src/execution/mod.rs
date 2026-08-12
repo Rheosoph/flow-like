@@ -16,7 +16,7 @@ pub mod wasm_resolve;
 pub use crate::backend_jwt::TokenType;
 pub use dispatch::{
     ByteStream, DispatchConfig, DispatchError, DispatchRequest, DispatchResponse, Dispatcher,
-    ExecutionBackend, StreamChunk, fetch_profile_for_dispatch,
+    ExecutionBackend, StreamChunk, fetch_profile_for_dispatch, hydrate_profile_custom_bit_secrets,
 };
 pub use interaction_jwt::{
     InteractionClaims, InteractionJwtError, InteractionJwtParams,
@@ -32,6 +32,7 @@ pub use jwt::{
 pub use queue::QueueWorker;
 pub use queue::{OAuthTokenInput, QueueConfig, QueueError, QueuedJob};
 pub use run_sweeper::{RunSweeperConfig, spawn_run_sweeper};
+pub(crate) use sse_proxy::completed_run_status;
 pub use sse_proxy::{
     collect_generic_result, collect_generic_result_bytes, proxy_sse_response,
     update_run_on_completion,

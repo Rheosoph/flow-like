@@ -880,14 +880,15 @@ declare function aiGenerativeBuildHyperbolic({ endpoint?: string, apiKey?: strin
 declare function aiGenerativeBuildLmstudio({ endpoint?: string, modelId?: string }): Struct;
 
 /**
- * Prepares a Bit for MiniMax's OpenAI-compatible API using the provided credentials
- * @param endpoint (optional) — MiniMax OpenAI-compatible base URL (override only for a proxy)
+ * Prepares a Bit for the MiniMax API using the provided credentials
+ * @param region (optional) — MiniMax API region used when no custom endpoint is provided
+ * @param endpoint (optional) — Optional MiniMax API base URL override for a proxy
  * @param apiKey (optional) — MiniMax API key used for authentication
  * @param modelId (optional) — MiniMax model identifier to request
  * @returns model — Bit containing the provider configuration
  * @impure has side effects / drives control flow
  */
-declare function aiGenerativeBuildMinimax({ endpoint?: string, apiKey?: string, modelId?: string }): Struct;
+declare function aiGenerativeBuildMinimax({ region?: string, endpoint?: string, apiKey?: string, modelId?: string }): Struct;
 
 /**
  * Builds the Mira model based on certain selection criteria
@@ -1966,6 +1967,23 @@ declare function onnxFaceEmbedding({ model: Struct, image: Struct, inputSize?: i
 
 
 // === AI/ML/ONNX/NLP ===
+
+/**
+ * Extract entities for any labels you name at runtime, with no fixed label set and no retraining. Load a GLiNER ONNX export (e.g. https://huggingface.co/onnx-community/gliner_small-v2.1, gliner_multi-v2.1, gliner_medium_news-v2.1, gliner_multi_pii-v1, NuNER_Zero) plus the tokenizer.json from the same repository. For models with a fixed label set, use the Named Entity Recognition node instead.
+ * @param model — ONNX GLiNER Model Session
+ * @param tokenizer — HuggingFace tokenizer.json from the same model repository
+ * @param text — Input text to analyze for named entities
+ * @param labels — Entity types to look for, in plain language (e.g. person, company, medication, invoice number)
+ * @param threshold (optional) — Minimum confidence for a span to be reported (0.0-1.0)
+ * @param maxWidth (optional) — Longest entity in words. Must match the model's max_width from gliner_config.json (12 for most GLiNER models, 1 for NuNER Zero)
+ * @param multiLabel (optional) — Report every label that clears the threshold for a span instead of only the best one
+ * @param mergeAdjacent (optional) — Join neighbouring same-label entities separated only by whitespace. Required for token-level models such as NuNER Zero, which score one word at a time
+ * @returns result — Full zero-shot result with entities and the labels that were requested
+ * @returns entities — Extracted entities as array
+ * @returns entityCount — Number of entities found
+ * @impure has side effects / drives control flow
+ */
+declare function onnxGliner({ model: Struct, tokenizer: Struct, text: string, labels: string[], threshold?: float, maxWidth?: int, multiLabel?: bool, mergeAdjacent?: bool }): { result: Struct, entities: Struct[], entityCount: int };
 
 /**
  * Extract named entities (persons, organizations, locations, dates, etc.) from text using ONNX models. Supports BERT, RoBERTa, and other transformer-based NER models with automatic tokenization. Download models from: BERT-base-NER (https://huggingface.co/dslim/bert-base-NER), Multilingual NER (https://huggingface.co/Davlan/bert-base-multilingual-cased-ner-hrl), spaCy NER (https://huggingface.co/spacy). Download tokenizer.json from the same model repository.

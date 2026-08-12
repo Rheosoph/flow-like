@@ -1,4 +1,5 @@
 pub mod atlassian;
+pub mod cache;
 pub mod databricks;
 pub mod datafusion;
 pub mod db;

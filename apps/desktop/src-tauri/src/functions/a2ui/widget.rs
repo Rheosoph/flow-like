@@ -34,11 +34,9 @@ pub async fn get_widget(
 ) -> Result<Widget, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
 
-    // Check widget registry first
-    if let Some(widget) = flow_like_state.widget_registry.get(&widget_id) {
-        return Ok(widget.value().clone());
-    }
-
+    // The legacy open-widget registry is keyed only by bare widget id, so consulting it here can
+    // return another app's widget before app scope is validated. Nothing currently inserts into
+    // that registry; use authoritative app storage until the cache key carries (app_id, widget_id).
     let app = App::load(app_id, flow_like_state.clone()).await?;
     let widget = app.open_widget(widget_id, version).await?;
     Ok(widget)
@@ -199,4 +197,16 @@ pub async fn push_widget_meta(
     let app = App::load(app_id, flow_like_state).await?;
     app.push_widget_meta(&widget_id, language, metadata).await?;
     Ok(())
+}
+
+/// Deliver a micro-widget query result from a live surface back to the run
+/// awaiting it. Returns false when the request already timed out, was
+/// answered by another surface, or is unknown.
+#[tauri::command(async)]
+pub async fn respond_widget_query(
+    _handler: AppHandle,
+    request_id: String,
+    response: flow_like_types::Value,
+) -> Result<bool, TauriFunctionError> {
+    Ok(flow_like_types::frontend_request::resolve_frontend_request(&request_id, response).await)
 }

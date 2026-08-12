@@ -201,7 +201,7 @@ impl NodeLogic for RegisterPostgresNode {
             .unwrap_or_else(|_| "prefer".to_string());
         let readonly: bool = context.evaluate_pin("readonly").await.unwrap_or(true);
 
-        let cached_session = session.load(context).await?;
+        let cached_session = session.load_lazy(context).await?;
         let conn_url = format!(
             "postgresql://{}:****@{}:{}/{}?sslmode={}",
             username, host, port, database, ssl_mode
@@ -413,7 +413,7 @@ impl NodeLogic for RegisterMysqlNode {
             .unwrap_or_else(|_| "preferred".to_string());
         let readonly: bool = context.evaluate_pin("readonly").await.unwrap_or(true);
 
-        let cached_session = session.load(context).await?;
+        let cached_session = session.load_lazy(context).await?;
         let conn_url = format!(
             "mysql://{}:****@{}:{}/{}?ssl-mode={}",
             username, host, port, database, ssl_mode
@@ -589,7 +589,7 @@ impl NodeLogic for RegisterSqliteNode {
         let table_name: String = context.evaluate_pin("table_name").await?;
         let readonly: bool = context.evaluate_pin("readonly").await.unwrap_or(true);
 
-        let cached_session = session.load(context).await?;
+        let cached_session = session.load_lazy(context).await?;
 
         if !std::path::Path::new(&file_path).exists() {
             return Err(flow_like_types::anyhow!(
@@ -758,7 +758,7 @@ impl NodeLogic for RegisterDuckdbNode {
         let table_name: String = context.evaluate_pin("table_name").await?;
         let readonly: bool = context.evaluate_pin("readonly").await.unwrap_or(true);
 
-        let cached_session = session.load(context).await?;
+        let cached_session = session.load_lazy(context).await?;
 
         if file_path != ":memory:" && !std::path::Path::new(&file_path).exists() {
             return Err(flow_like_types::anyhow!(
@@ -972,7 +972,7 @@ impl NodeLogic for RegisterClickhouseNode {
         let table_name: String = context.evaluate_pin("table_name").await?;
         let readonly: bool = context.evaluate_pin("readonly").await.unwrap_or(true);
 
-        let cached_session = session.load(context).await?;
+        let cached_session = session.load_lazy(context).await?;
         let conn_url = format!("http://{}:****@{}:{}/{}", username, host, port, database);
 
         #[cfg(feature = "clickhouse")]
@@ -1232,7 +1232,7 @@ impl NodeLogic for RegisterOracleNode {
             use flow_like_storage::datafusion::common::TableReference;
             use std::collections::HashMap;
 
-            let cached_session = session.load(context).await?;
+            let cached_session = session.load_lazy(context).await?;
             let effective_schema = if schema.is_empty() {
                 username.to_uppercase()
             } else {
@@ -1455,7 +1455,7 @@ impl NodeLogic for RegisterFlightSqlNode {
         let use_tls: bool = context.evaluate_pin("use_tls").await.unwrap_or(true);
         let _skip_verify: bool = context.evaluate_pin("skip_verify").await.unwrap_or(false);
 
-        let cached_session = session.load(context).await?;
+        let cached_session = session.load_lazy(context).await?;
         let scheme = if use_tls { "https" } else { "http" };
         let endpoint = format!("{}://{}:{}", scheme, host, port);
 
@@ -1714,7 +1714,7 @@ impl NodeLogic for RegisterAthenaNode {
             use flow_like_storage::datafusion::common::TableReference;
             use std::collections::HashMap;
 
-            let cached_session = session.load(context).await?;
+            let cached_session = session.load_lazy(context).await?;
             let conn_info = format!(
                 "athena://{}@{}.{} (region: {}, workgroup: {})",
                 catalog, database, source_table, region, workgroup

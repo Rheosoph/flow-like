@@ -25,8 +25,8 @@ use crate::{
     error::ApiError,
     execution::{
         ByteStream, DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType,
-        fetch_profile_for_dispatch, is_jwt_configured, payload_storage, proxy_sse_response,
-        resolve_wasm_packages, sign_execution_jwt, update_run_on_completion,
+        completed_run_status, fetch_profile_for_dispatch, is_jwt_configured, payload_storage,
+        proxy_sse_response, resolve_wasm_packages, sign_execution_jwt, update_run_on_completion,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -129,7 +129,7 @@ fn get_credentials_access() -> crate::credentials::CredentialsAccess {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/events/{event_id}/invoke",
-    skip(state, user, params)
+    skip(state, user, query, params)
 )]
 pub async fn invoke_event(
     State(state): State<AppState>,
@@ -365,10 +365,28 @@ async fn invoke_event_impl(
         .into_response());
     }
 
+    // Remote dispatch always runs the event's configured board version. A
+    // request asking for a different version cannot be honored here (there is no
+    // validation against the app's available board versions), so reject it
+    // rather than silently executing a different version than the caller asked
+    // for. A malformed version string is likewise a bad request.
+    if let Some(requested) = params.version.as_deref() {
+        let parsed = super::parse_version_tuple(requested).ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "Invalid version '{requested}': expected MAJOR_MINOR_PATCH"
+            ))
+        })?;
+        if event.board_version != Some(parsed) {
+            return Err(ApiError::bad_request(
+                "Executing a board version other than the event's configured version is not supported",
+            ));
+        }
+    }
+
     // Check JWT signing is configured for remote execution
     if !is_jwt_configured() {
         return Err(ApiError::internal_error(anyhow!(
-            "Execution JWT signing not configured (missing EXECUTION_KEY/EXECUTION_PUB env vars)"
+            "Execution JWT signing not configured (missing BACKEND_KEY/BACKEND_PUB)"
         )));
     }
 
@@ -403,7 +421,7 @@ async fn invoke_event_impl(
     })?;
 
     let profile =
-        fetch_profile_for_dispatch(&state.db, &sub, params.profile_id.as_deref(), &app_id).await;
+        fetch_profile_for_dispatch(&state, &sub, params.profile_id.as_deref(), &app_id, true).await;
 
     let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
 
@@ -550,15 +568,9 @@ fn proxy_lambda_sse_response(
                                             .unwrap_or(0) as i32;
                                         let status = parsed.get("payload")
                                             .and_then(|p| p.get("status"))
-                                            .and_then(|s| s.as_str())
-                                            .unwrap_or("Completed");
+                                            .and_then(|s| s.as_str());
 
-                                        let run_status = match status {
-                                            "Failed" => RunStatus::Failed,
-                                            "Cancelled" => RunStatus::Cancelled,
-                                            "Timeout" => RunStatus::Timeout,
-                                            _ => RunStatus::Completed,
-                                        };
+                                        let run_status = completed_run_status(status);
 
                                         if let Err(e) = update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await {
                                             tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
@@ -575,7 +587,7 @@ fn proxy_lambda_sse_response(
                     tracing::warn!(run_id = %run_id, error = %e, "Lambda stream error");
                     let error_event = Event::default()
                         .event("error")
-                        .data(format!(r#"{{"error":"{}"}}"#, e));
+                        .data(flow_like_types::json::json!({ "error": e.to_string() }).to_string());
                     yield Ok(error_event);
                     break;
                 }
@@ -600,32 +612,35 @@ struct ParsedSseEvent {
 
 /// Extract a complete SSE event from the buffer, if available
 fn extract_sse_event(buffer: &mut Vec<u8>) -> Option<ParsedSseEvent> {
-    // Look for double newline which marks end of SSE event
-    let s = String::from_utf8_lossy(buffer);
-    if let Some(end_pos) = s.find("\n\n") {
-        let event_str = &s[..end_pos];
-        let remainder = &s[end_pos + 2..];
+    // Find the double newline that terminates a complete SSE frame by scanning
+    // raw bytes. Decoding the whole (partial) buffer here would replace the lead
+    // bytes of a multi-byte codepoint straddling a chunk boundary with U+FFFD
+    // and persist that corruption back into the tail.
+    let end_pos = buffer.windows(2).position(|window| window == b"\n\n")?;
 
-        let mut event_type = "message".to_string();
-        let mut data_parts = Vec::new();
+    // Split the complete frame off the buffer, keeping the raw undecoded tail.
+    let tail = buffer.split_off(end_pos + 2);
+    let frame = std::mem::replace(buffer, tail);
 
-        for line in event_str.lines() {
-            if let Some(value) = line.strip_prefix("event:") {
-                event_type = value.trim().to_string();
-            } else if let Some(value) = line.strip_prefix("data:") {
-                data_parts.push(value.trim_start().to_string());
-            }
+    // Only the complete frame is decoded — it is a whole, valid UTF-8 region.
+    let event_str = String::from_utf8_lossy(&frame[..end_pos]);
+
+    let mut event_type = "message".to_string();
+    let mut data_parts = Vec::new();
+
+    for line in event_str.lines() {
+        if let Some(value) = line.strip_prefix("event:") {
+            event_type = value.trim().to_string();
+        } else if let Some(value) = line.strip_prefix("data:") {
+            data_parts.push(value.trim_start().to_string());
         }
+    }
 
-        // Update buffer with remainder
-        *buffer = remainder.as_bytes().to_vec();
-
-        if !data_parts.is_empty() {
-            return Some(ParsedSseEvent {
-                event_type,
-                data: data_parts.join("\n"),
-            });
-        }
+    if !data_parts.is_empty() {
+        return Some(ParsedSseEvent {
+            event_type,
+            data: data_parts.join("\n"),
+        });
     }
     None
 }

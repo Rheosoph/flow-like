@@ -255,7 +255,7 @@ pub async fn get_sales_overview(
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/sales/stats", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/sales/stats", skip(state, user, query))]
 pub async fn get_sales_stats(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

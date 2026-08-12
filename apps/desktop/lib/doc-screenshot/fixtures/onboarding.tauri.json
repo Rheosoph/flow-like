@@ -1,0 +1,403 @@
+{
+	"schema": "flow-like.doc-screenshot-tauri-fixture/v1",
+	"strict": false,
+	"responses": {
+		"get_default_profiles": [
+			[
+				[
+					{
+						"hub_profile": {
+							"id": "starter-chatting",
+							"name": "Chatting",
+							"description": "A friendly setup for conversations, brainstorming, and everyday assistance.",
+							"icon": "/flow/icons/message.svg",
+							"thumbnail": "/swimlanes/0-6.jpg",
+							"interests": ["conversation", "brainstorming", "productivity"],
+							"tags": ["starter", "chat"],
+							"hub": "api.flow-like.com",
+							"secure": true,
+							"hubs": [],
+							"apps": null,
+							"shortcuts": null,
+							"theme": null,
+							"bits": ["docs:starter-chat"],
+							"settings": {
+								"connection_mode": "simplebezier"
+							},
+							"created": "2026-01-15T12:00:00Z",
+							"updated": "2026-01-15T12:00:00Z"
+						},
+						"execution_settings": {
+							"gpu_mode": false,
+							"max_context_size": 8192
+						},
+						"created": "2026-01-15T12:00:00Z",
+						"updated": "2026-01-15T12:00:00Z"
+					},
+					[
+						{
+							"authors": ["Flow-Like"],
+							"created": "2026-01-15T12:00:00Z",
+							"dependencies": [],
+							"dependency_tree_hash": "docs-starter-chat-tree-v1",
+							"download_link": null,
+							"file_name": null,
+							"hash": "docs-starter-chat-v1",
+							"hub": "docs",
+							"id": "starter-chat",
+							"license": "MIT",
+							"meta": {
+								"en": {
+									"age_rating": null,
+									"created_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"description": "Conversation and brainstorming starter tools.",
+									"docs_url": null,
+									"icon": "/flow/icons/message.svg",
+									"long_description": "A deterministic documentation fixture for the Chatting starter profile.",
+									"name": "Chat Assistant",
+									"organization_specific_values": [],
+									"preview_media": [],
+									"release_notes": null,
+									"support_url": null,
+									"tags": ["chat", "assistant"],
+									"thumbnail": null,
+									"updated_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"use_case": "Conversation",
+									"website": null
+								}
+							},
+							"model_evaluation": null,
+							"model_slug": null,
+							"parameters": {},
+							"repository": null,
+							"size": 0,
+							"type": "Board",
+							"updated": "2026-01-15T12:00:00Z",
+							"version": "1.0.0"
+						}
+					]
+				],
+				[
+					{
+						"hub_profile": {
+							"id": "starter-gaming",
+							"name": "Gaming",
+							"description": "Build playful automations, game helpers, and interactive experiences.",
+							"icon": "/flow/icons/play.svg",
+							"thumbnail": "/swimlanes/0-7.jpg",
+							"interests": ["games", "interactive", "creative"],
+							"tags": ["starter", "gaming"],
+							"hub": "api.flow-like.com",
+							"secure": true,
+							"hubs": [],
+							"apps": null,
+							"shortcuts": null,
+							"theme": null,
+							"bits": ["docs:starter-gaming"],
+							"settings": {
+								"connection_mode": "simplebezier"
+							},
+							"created": "2026-01-15T12:00:00Z",
+							"updated": "2026-01-15T12:00:00Z"
+						},
+						"execution_settings": {
+							"gpu_mode": false,
+							"max_context_size": 8192
+						},
+						"created": "2026-01-15T12:00:00Z",
+						"updated": "2026-01-15T12:00:00Z"
+					},
+					[
+						{
+							"authors": ["Flow-Like"],
+							"created": "2026-01-15T12:00:00Z",
+							"dependencies": [],
+							"dependency_tree_hash": "docs-starter-gaming-tree-v1",
+							"download_link": null,
+							"file_name": null,
+							"hash": "docs-starter-gaming-v1",
+							"hub": "docs",
+							"id": "starter-gaming",
+							"license": "MIT",
+							"meta": {
+								"en": {
+									"age_rating": null,
+									"created_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"description": "Interactive building blocks for playful workflows.",
+									"docs_url": null,
+									"icon": "/flow/icons/play.svg",
+									"long_description": "A deterministic documentation fixture for the Gaming starter profile.",
+									"name": "Game Builder",
+									"organization_specific_values": [],
+									"preview_media": [],
+									"release_notes": null,
+									"support_url": null,
+									"tags": ["gaming", "interactive"],
+									"thumbnail": null,
+									"updated_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"use_case": "Interactive experiences",
+									"website": null
+								}
+							},
+							"model_evaluation": null,
+							"model_slug": null,
+							"parameters": {},
+							"repository": null,
+							"size": 0,
+							"type": "Media",
+							"updated": "2026-01-15T12:00:00Z",
+							"version": "1.0.0"
+						}
+					]
+				],
+				[
+					{
+						"hub_profile": {
+							"id": "starter-learning",
+							"name": "Learning",
+							"description": "Explore guided projects, explainers, and reusable learning workflows.",
+							"icon": "/flow/icons/book-key.svg",
+							"thumbnail": "/swimlanes/0-8.jpg",
+							"interests": ["learning", "research", "education"],
+							"tags": ["starter", "learning"],
+							"hub": "api.flow-like.com",
+							"secure": true,
+							"hubs": [],
+							"apps": null,
+							"shortcuts": null,
+							"theme": null,
+							"bits": ["docs:starter-learning"],
+							"settings": {
+								"connection_mode": "simplebezier"
+							},
+							"created": "2026-01-15T12:00:00Z",
+							"updated": "2026-01-15T12:00:00Z"
+						},
+						"execution_settings": {
+							"gpu_mode": false,
+							"max_context_size": 8192
+						},
+						"created": "2026-01-15T12:00:00Z",
+						"updated": "2026-01-15T12:00:00Z"
+					},
+					[
+						{
+							"authors": ["Flow-Like"],
+							"created": "2026-01-15T12:00:00Z",
+							"dependencies": [],
+							"dependency_tree_hash": "docs-starter-learning-tree-v1",
+							"download_link": null,
+							"file_name": null,
+							"hash": "docs-starter-learning-v1",
+							"hub": "docs",
+							"id": "starter-learning",
+							"license": "MIT",
+							"meta": {
+								"en": {
+									"age_rating": null,
+									"created_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"description": "Guided tools for structured exploration and study.",
+									"docs_url": null,
+									"icon": "/flow/icons/book-key.svg",
+									"long_description": "A deterministic documentation fixture for the Learning starter profile.",
+									"name": "Learning Guide",
+									"organization_specific_values": [],
+									"preview_media": [],
+									"release_notes": null,
+									"support_url": null,
+									"tags": ["learning", "education"],
+									"thumbnail": null,
+									"updated_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"use_case": "Guided learning",
+									"website": null
+								}
+							},
+							"model_evaluation": null,
+							"model_slug": null,
+							"parameters": {},
+							"repository": null,
+							"size": 0,
+							"type": "Course",
+							"updated": "2026-01-15T12:00:00Z",
+							"version": "1.0.0"
+						}
+					]
+				],
+				[
+					{
+						"hub_profile": {
+							"id": "starter-coding",
+							"name": "Coding",
+							"description": "Prototype software, inspect data, and automate developer workflows.",
+							"icon": "/flow/icons/computer.svg",
+							"thumbnail": "/swimlanes/wasm-nodes.jpg",
+							"interests": ["coding", "automation", "developer tools"],
+							"tags": ["starter", "coding"],
+							"hub": "api.flow-like.com",
+							"secure": true,
+							"hubs": [],
+							"apps": null,
+							"shortcuts": null,
+							"theme": null,
+							"bits": ["docs:starter-coding"],
+							"settings": {
+								"connection_mode": "simplebezier"
+							},
+							"created": "2026-01-15T12:00:00Z",
+							"updated": "2026-01-15T12:00:00Z"
+						},
+						"execution_settings": {
+							"gpu_mode": false,
+							"max_context_size": 8192
+						},
+						"created": "2026-01-15T12:00:00Z",
+						"updated": "2026-01-15T12:00:00Z"
+					},
+					[
+						{
+							"authors": ["Flow-Like"],
+							"created": "2026-01-15T12:00:00Z",
+							"dependencies": [],
+							"dependency_tree_hash": "docs-starter-coding-tree-v1",
+							"download_link": null,
+							"file_name": null,
+							"hash": "docs-starter-coding-v1",
+							"hub": "docs",
+							"id": "starter-coding",
+							"license": "MIT",
+							"meta": {
+								"en": {
+									"age_rating": null,
+									"created_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"description": "Developer-focused workflow and prototyping tools.",
+									"docs_url": null,
+									"icon": "/flow/icons/computer.svg",
+									"long_description": "A deterministic documentation fixture for the Coding starter profile.",
+									"name": "Code Workspace",
+									"organization_specific_values": [],
+									"preview_media": [],
+									"release_notes": null,
+									"support_url": null,
+									"tags": ["coding", "automation"],
+									"thumbnail": null,
+									"updated_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"use_case": "Software development",
+									"website": null
+								}
+							},
+							"model_evaluation": null,
+							"model_slug": null,
+							"parameters": {},
+							"repository": null,
+							"size": 0,
+							"type": "Project",
+							"updated": "2026-01-15T12:00:00Z",
+							"version": "1.0.0"
+						}
+					]
+				]
+			],
+			{
+				"name": "Flow-Like Documentation",
+				"description": "Deterministic local data for documentation screenshots.",
+				"thumbnail": "/swimlanes/studio.jpg",
+				"icon": "/app-logo.webp",
+				"features": {},
+				"hubs": [],
+				"domain": "api.flow-like.com",
+				"secure": true,
+				"terms_of_service": "https://flow-like.com/terms",
+				"legal_notice": "https://flow-like.com/legal",
+				"privacy_policy": "https://flow-like.com/privacy",
+				"contact": {},
+				"environment": {},
+				"tiers": {}
+			}
+		],
+		"get_current_profile": {
+			"hub_profile": {
+				"id": "starter-chatting",
+				"name": "Chatting",
+				"description": "A friendly setup for conversations, brainstorming, and everyday assistance.",
+				"icon": "/flow/icons/message.svg",
+				"thumbnail": "/swimlanes/0-6.jpg",
+				"interests": ["conversation", "brainstorming", "productivity"],
+				"tags": ["starter", "chat"],
+				"hub": "api.flow-like.com",
+				"secure": true,
+				"hubs": [],
+				"apps": null,
+				"shortcuts": null,
+				"theme": null,
+				"bits": ["docs:starter-chat"],
+				"settings": {
+					"connection_mode": "simplebezier"
+				},
+				"created": "2026-01-15T12:00:00Z",
+				"updated": "2026-01-15T12:00:00Z"
+			},
+			"execution_settings": {
+				"gpu_mode": false,
+				"max_context_size": 8192
+			},
+			"created": "2026-01-15T12:00:00Z",
+			"updated": "2026-01-15T12:00:00Z"
+		},
+		"get_current_profile_id": "starter-chatting",
+		"get_profiles": {},
+		"get_profiles_raw": {},
+		"get_apps": [],
+		"get_open_boards": [],
+		"search_bits": [],
+		"flowpilot_list_board_edit_jobs": [],
+		"get_stable_device_id": null,
+		"get_pending_notification_tap": null,
+		"init_downloads": {},
+		"get_downloads": {},
+		"get_bit_size": 6291456,
+		"plugin:http|fetch": 1,
+		"plugin:http|fetch_send": {
+			"status": 204,
+			"statusText": "No Content",
+			"url": "https://api.flow-like.com/api/v1/auth/openid",
+			"headers": [],
+			"rid": 2
+		},
+		"plugin:event|listen": 1,
+		"plugin:event|unlisten": null,
+		"plugin:event|emit": null,
+		"plugin:updater|check": null,
+		"plugin:deep-link|get_current": null,
+		"plugin:notification|is_permission_granted": false,
+		"registry_init": null,
+		"registry_set_auth_token": null,
+		"tray_update_state": null,
+		"set_current_profile": null,
+		"upsert_profile": null,
+		"update": null
+	}
+}

@@ -1,380 +1,251 @@
 ---
 title: kubectl Basics
-description: Essential kubectl commands for managing Flow-Like on Kubernetes.
+description: Essential commands for operating Flow-Like on Kubernetes.
 sidebar:
   order: 15
 ---
 
-This guide covers the essential `kubectl` commands you'll need to manage Flow-Like on Kubernetes. No prior Kubernetes experience required.
+This guide assumes the Helm release and namespace are both named `flow-like`. Replace either name if your installation uses different values; chart resource names are derived from the Helm release.
 
-## What is kubectl?
-
-`kubectl` (pronounced "kube-control" or "kube-cuddle") is the command-line tool for interacting with Kubernetes clusters. Think of it as your remote control for the cluster.
-
----
-
-## Connecting to Your Cluster
-
-### Check Connection
+## Confirm the cluster and namespace
 
 ```bash
-# See which cluster you're connected to
 kubectl config current-context
-
-# List all available clusters
 kubectl config get-contexts
-
-# Switch to a different cluster
-kubectl config use-context <context-name>
+kubectl cluster-info
+kubectl get namespace flow-like
 ```
 
-### Verify Access
+Set the namespace on the current context if you do not want to repeat `-n flow-like`:
 
 ```bash
-# List all namespaces (should show 'flow-like')
-kubectl get namespaces
-
-# If you don't see flow-like, you may need to install it first
-```
-
----
-
-## Working with Namespaces
-
-Flow-Like runs in its own namespace called `flow-like`. Always specify `-n flow-like` or set it as your default.
-
-```bash
-# Set flow-like as your default namespace
 kubectl config set-context --current --namespace=flow-like
-
-# Now you don't need -n flow-like every time
-kubectl get pods  # Same as: kubectl get pods -n flow-like
 ```
 
----
+This changes your local kubeconfig context, not the cluster resources.
 
-## Viewing Resources
-
-### List All Flow-Like Components
+## Inspect the installation
 
 ```bash
-# All pods (running containers)
-kubectl get pods -n flow-like
-
-# All services (network endpoints)
-kubectl get services -n flow-like
-
-# All deployments (manages pods)
-kubectl get deployments -n flow-like
-
-# Everything at once
-kubectl get all -n flow-like
+kubectl get deployment,statefulset,job,cronjob,pod,service,pvc,hpa -n flow-like
+kubectl get events -n flow-like --sort-by=.lastTimestamp
 ```
 
-### Example Output
+With default chart values, expect:
 
-```
-NAME                                      READY   STATUS    RESTARTS   AGE
-pod/flow-like-api-7d4b8c9f5-abc12         1/1     Running   0          2h
-pod/flow-like-api-7d4b8c9f5-def34         1/1     Running   0          2h
-pod/flow-like-executor-pool-6ddf4bdc5-x1  1/1     Running   0          2h
-pod/flow-like-cockroachdb-0               1/1     Running   0          2h
-pod/flow-like-redis-master-0              1/1     Running   0          2h
+| Resource | Default form |
+|---|---|
+| API | Deployment and ClusterIP Service |
+| Web app | Deployment and ClusterIP Service |
+| Executor pool | Deployment and ClusterIP Service |
+| Redis | Single-replica Deployment, Service named `flow-like-redis-master`, and optional PVC |
+| Internal CockroachDB | Single-replica StatefulSet plus headless and public Services |
+| Database migration | Job |
+| Compiler | Disabled unless configured |
+| HPAs | Absent unless autoscaling is enabled |
 
-NAME                          TYPE        CLUSTER-IP      PORT(S)
-service/flow-like-api         ClusterIP   10.43.100.50    8080/TCP
-service/flow-like-cockroachdb ClusterIP   10.43.100.51    26257/TCP
-service/flow-like-redis       ClusterIP   10.43.100.52    6379/TCP
-```
-
-### Detailed Information
+Use labels when Pod names include generated hashes:
 
 ```bash
-# Describe a specific pod (shows events and config)
-kubectl describe pod <pod-name> -n flow-like
+kubectl get pods -n flow-like \
+  -l app.kubernetes.io/component=api \
+  -o wide
+```
 
-# Describe the API deployment
+For details and recent events:
+
+```bash
 kubectl describe deployment flow-like-api -n flow-like
-
-# See resource usage (CPU/memory)
-kubectl top pods -n flow-like
+kubectl describe pod <pod-name> -n flow-like
 ```
 
----
+`kubectl top pods -n flow-like` requires the cluster metrics API, commonly provided by Metrics Server.
 
-## Accessing the API
-
-### Port Forwarding (Development)
-
-Port forwarding creates a tunnel from your local machine to a service in the cluster.
+## Port-forward the API
 
 ```bash
-# Forward local port 8083 to the API service port 8080
-kubectl port-forward svc/flow-like-api 8083:8080 -n flow-like
-
-# Now open another terminal and test:
-curl http://localhost:8083/api/v1/health
+kubectl port-forward service/flow-like-api 8083:8080 -n flow-like
 ```
 
-:::tip
-Add `&` at the end to run in the background:
-```bash
-kubectl port-forward svc/flow-like-api 8083:8080 -n flow-like &
-```
-:::
-
-### Port Forwarding Breakdown
-
-```
-kubectl port-forward svc/flow-like-api 8083:8080 -n flow-like
-                     │                  │    │       │
-                     │                  │    │       └─ Namespace
-                     │                  │    └─ Service port (inside cluster)
-                     │                  └─ Your local port
-                     └─ Service name
-```
-
-### Other Services You Might Access
+In another terminal:
 
 ```bash
-# CockroachDB Admin UI (port 8080)
-kubectl port-forward svc/flow-like-cockroachdb 8084:8080 -n flow-like
-# Open http://localhost:8084
-
-# Redis (port 6379)
-kubectl port-forward svc/flow-like-redis-master 6379:6379 -n flow-like
+curl -fsS http://localhost:8083/health/ready
+curl -fsS http://localhost:8083/api/v1/health
 ```
 
----
+The command parts are:
 
-## Viewing Logs
+| Part | Meaning |
+|---|---|
+| `service/flow-like-api` | Kubernetes resource receiving the forwarded connection |
+| first `8083` | Local port |
+| second `8080` | Service port inside the cluster |
+| `-n flow-like` | Namespace containing the Service |
 
-### Basic Log Commands
+The port forward lasts only while the command is running.
+
+### Optional operator-only services
+
+Forward the internal CockroachDB Admin UI to localhost:
 
 ```bash
-# Logs from the API (last 100 lines)
+kubectl port-forward service/flow-like-cockroachdb-public 8084:8080 -n flow-like
+```
+
+Open `http://localhost:8084`. Keep database and metrics interfaces bound to localhost; do not publish them through an unauthenticated Ingress.
+
+## Read logs
+
+```bash
+# Recent API logs
 kubectl logs deployment/flow-like-api -n flow-like --tail=100
 
-# Follow logs in real-time (like tail -f)
-kubectl logs deployment/flow-like-api -n flow-like -f
+# Follow API logs
+kubectl logs deployment/flow-like-api -n flow-like --follow
 
-# Logs from a specific pod
-kubectl logs flow-like-api-7d4b8c9f5-abc12 -n flow-like
-```
-
-### When There Are Multiple Containers
-
-```bash
-# List containers in a pod
-kubectl get pod <pod-name> -n flow-like -o jsonpath='{.spec.containers[*].name}'
-
-# Logs from a specific container
+# Logs from a specific Pod and container
 kubectl logs <pod-name> -c <container-name> -n flow-like
+
+# Previous container instance after a restart
+kubectl logs <pod-name> -c <container-name> -n flow-like --previous
 ```
 
-### View Previous Logs (after restart)
+List container names before selecting one:
 
 ```bash
-# Logs from the previous container instance
-kubectl logs deployment/flow-like-api -n flow-like --previous
+kubectl get pod <pod-name> -n flow-like \
+  -o jsonpath='{.spec.containers[*].name}'
 ```
 
----
-
-## Restarting Services
-
-### Restart a Deployment
+## Restart or watch a rollout
 
 ```bash
-# Graceful restart (rolling)
 kubectl rollout restart deployment/flow-like-api -n flow-like
+kubectl rollout status deployment/flow-like-api -n flow-like
+kubectl rollout history deployment/flow-like-api -n flow-like
+```
 
-# Watch the restart progress
+A rollout restart changes live cluster state and briefly replaces Pods. Check readiness and logs after it completes.
+
+## Diagnose an unhealthy Pod
+
+```bash
+kubectl get pods -n flow-like
+kubectl describe pod <pod-name> -n flow-like
+kubectl logs <pod-name> -n flow-like --tail=200
+kubectl logs <pod-name> -n flow-like --previous --tail=200
+```
+
+| Status | First checks |
+|---|---|
+| `Pending` | Scheduling events, resource requests, PVC binding, node selectors |
+| `ImagePullBackOff` | Image name/tag, pull policy, registry credentials |
+| `CrashLoopBackOff` | Current and previous logs, environment references, probes |
+| `Running` but not ready | Readiness probe, dependencies, Service endpoints |
+
+Check which Pods back the API Service:
+
+```bash
+kubectl get endpointslice -n flow-like \
+  -l kubernetes.io/service-name=flow-like-api
+```
+
+## Test from inside the cluster
+
+```bash
+kubectl run flow-like-debug \
+  --image=curlimages/curl \
+  --restart=Never \
+  --rm -it \
+  -n flow-like \
+  -- sh
+```
+
+Inside the temporary Pod:
+
+```bash
+curl -fsS http://flow-like-api:8080/health/ready
+curl -fsS http://flow-like-api:8080/api/v1/health/db
+```
+
+The Pod is deleted when the interactive session exits.
+
+## Inspect configuration safely
+
+List names and metadata:
+
+```bash
+kubectl get configmap,secret -n flow-like
+kubectl describe configmap flow-like-sink-config -n flow-like
+kubectl describe secret flow-like-storage -n flow-like
+```
+
+`kubectl describe secret` shows key names and sizes without printing secret values. Avoid `-o yaml`, JSONPath decoding, shell tracing, or screenshots when handling production Secrets.
+
+Check which environment sources the API Pod references without resolving their values:
+
+```bash
+kubectl get deployment flow-like-api -n flow-like \
+  -o jsonpath='{.spec.template.spec.containers[0].envFrom[*].secretRef.name}'
+```
+
+## Scale the API
+
+When `api.autoscaling.enabled=false`:
+
+```bash
+kubectl scale deployment/flow-like-api --replicas=3 -n flow-like
 kubectl rollout status deployment/flow-like-api -n flow-like
 ```
 
-### Delete a Pod (Kubernetes recreates it)
+Manual scale changes can be overwritten by a later Helm upgrade. Record the intended count in `api.replicaCount`.
+
+When autoscaling is enabled:
 
 ```bash
-# Force a specific pod to restart
-kubectl delete pod flow-like-api-7d4b8c9f5-abc12 -n flow-like
-
-# Kubernetes automatically creates a new pod to replace it
-```
-
----
-
-## Debugging Problems
-
-### Check Pod Status
-
-```bash
-# Quick overview
-kubectl get pods -n flow-like
-
-# Common statuses:
-# Running     - Everything is good
-# Pending     - Waiting for resources
-# CrashLoopBackOff - Container keeps crashing
-# ImagePullBackOff - Can't download the container image
-# Error       - Container exited with error
-```
-
-### Investigate a Failing Pod
-
-```bash
-# See events and conditions
-kubectl describe pod <pod-name> -n flow-like
-
-# Look at the end for "Events:" section
-# Common issues:
-# - FailedScheduling: Not enough CPU/memory
-# - ImagePullBackOff: Wrong image name or no access
-# - CrashLoopBackOff: Check logs for errors
-```
-
-### Shell Into a Running Container
-
-```bash
-# Open a shell inside the API container
-kubectl exec -it deployment/flow-like-api -n flow-like -- /bin/sh
-
-# Run a single command
-kubectl exec deployment/flow-like-api -n flow-like -- cat /app/config.yaml
-```
-
-### Test from Inside the Cluster
-
-```bash
-# Create a temporary debug pod
-kubectl run debug --image=curlimages/curl -it --rm -n flow-like -- sh
-
-# Inside the pod, test internal services:
-curl http://flow-like-api:8080/api/v1/health
-curl http://flow-like-cockroachdb:26257
-```
-
----
-
-## Configuration and Secrets
-
-### View ConfigMaps
-
-```bash
-# List all configmaps
-kubectl get configmaps -n flow-like
-
-# View a specific configmap
-kubectl describe configmap flow-like-api -n flow-like
-
-# Get the raw data
-kubectl get configmap flow-like-api -n flow-like -o yaml
-```
-
-### View Secrets (names only for security)
-
-```bash
-# List secrets
-kubectl get secrets -n flow-like
-
-# View secret structure (values are base64 encoded)
-kubectl get secret flow-like-storage -n flow-like -o yaml
-```
-
-### Decode a Secret Value
-
-```bash
-# Get and decode a specific value
-kubectl get secret flow-like-storage -n flow-like \
-  -o jsonpath='{.data.access-key-id}' | base64 -d
-```
-
----
-
-## Scaling
-
-### Manual Scaling
-
-```bash
-# Scale API to 5 replicas
-kubectl scale deployment/flow-like-api --replicas=5 -n flow-like
-
-# Scale down to 1 replica
-kubectl scale deployment/flow-like-api --replicas=1 -n flow-like
-```
-
-### Check Autoscaler
-
-```bash
-# View horizontal pod autoscaler
-kubectl get hpa -n flow-like
-
-# Detailed autoscaler status
+kubectl get hpa flow-like-api -n flow-like
 kubectl describe hpa flow-like-api -n flow-like
 ```
 
----
+Let the HPA own the replica count and adjust the chart's autoscaling values instead of repeatedly using `kubectl scale`.
 
-## Helm Commands
+## Helm operations
 
-Helm is used to install and upgrade Flow-Like.
+From the repository root:
 
 ```bash
-# List installed releases
-helm list -n flow-like
-
-# View current values
+# Inspect the installed release
+helm status flow-like -n flow-like
 helm get values flow-like -n flow-like
+helm history flow-like -n flow-like
 
-# Upgrade with new values
-helm upgrade flow-like ./helm -n flow-like -f values.yaml
+# Apply checked-in chart changes and your private values
+helm upgrade --install flow-like apps/backend/kubernetes/helm \
+  -n flow-like \
+  --create-namespace \
+  -f values.yaml
 
-# Rollback to previous version
-helm rollback flow-like -n flow-like
-
-# Uninstall
-helm uninstall flow-like -n flow-like
+# Roll back to a known revision
+helm rollback flow-like <revision> -n flow-like
 ```
 
----
+Keep credentials in an existing Secret or an ignored secrets-values file. Review rendered changes before applying them to a production cluster.
 
-## Quick Reference Card
+## Quick reference
 
 | Task | Command |
-|------|---------|
-| List pods | `kubectl get pods -n flow-like` |
-| View logs | `kubectl logs deploy/flow-like-api -n flow-like` |
-| Follow logs | `kubectl logs deploy/flow-like-api -n flow-like -f` |
-| Port forward | `kubectl port-forward svc/flow-like-api 8083:8080 -n flow-like` |
-| Restart | `kubectl rollout restart deploy/flow-like-api -n flow-like` |
-| Describe | `kubectl describe pod <name> -n flow-like` |
-| Shell access | `kubectl exec -it deploy/flow-like-api -n flow-like -- sh` |
-| Scale | `kubectl scale deploy/flow-like-api --replicas=3 -n flow-like` |
+|---|---|
+| List workloads | `kubectl get deploy,sts,job,cronjob,pod -n flow-like` |
+| Recent events | `kubectl get events -n flow-like --sort-by=.lastTimestamp` |
+| API logs | `kubectl logs deploy/flow-like-api -n flow-like --tail=100` |
+| API port forward | `kubectl port-forward svc/flow-like-api 8083:8080 -n flow-like` |
+| API rollout | `kubectl rollout status deploy/flow-like-api -n flow-like` |
+| Describe a Pod | `kubectl describe pod <pod-name> -n flow-like` |
+| List Service backends | `kubectl get endpointslice -n flow-like` |
 
----
+## Related
 
-## Common Issues
-
-### "No resources found"
-- Check if you're in the right namespace: `-n flow-like`
-- Check if Flow-Like is installed: `helm list -n flow-like`
-
-### "Connection refused"
-- Pod might not be running: `kubectl get pods -n flow-like`
-- Wrong port: Check `kubectl get svc -n flow-like`
-
-### "Pod stuck in Pending"
-- Not enough resources: `kubectl describe pod <name> -n flow-like`
-- Check cluster capacity: `kubectl top nodes`
-
-### "CrashLoopBackOff"
-- Application is crashing. Check logs: `kubectl logs <pod> -n flow-like`
-- Check previous logs: `kubectl logs <pod> -n flow-like --previous`
-
----
-
-## Next Steps
-
-- [API Reference](/self-hosting/kubernetes/api-reference/) — All available endpoints
-- [Configuration](/self-hosting/kubernetes/configuration/) — Environment variables
-- [Local Development](/self-hosting/kubernetes/local-development/) — Using k3d
+- [API Reference](/self-hosting/kubernetes/api-reference/)
+- [Configuration](/self-hosting/kubernetes/configuration/)
+- [Local Development](/self-hosting/kubernetes/local-development/)

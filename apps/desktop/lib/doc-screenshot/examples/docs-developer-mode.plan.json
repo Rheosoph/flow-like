@@ -1,0 +1,83 @@
+{
+	"schema": "flow-like.doc-screenshot-plan/v1",
+	"app": "desktop",
+	"outputDir": "apps/docs/src/assets",
+	"tauriFixture": "../fixtures/docs-developer-mode.tauri.json",
+	"defaults": {
+		"viewport": {
+			"width": 1624,
+			"height": 1060,
+			"deviceScaleFactor": 2
+		},
+		"theme": "dark",
+		"format": "webp",
+		"timeoutMs": 120000,
+		"settleMs": 350,
+		"disableAnimations": true,
+		"hideScrollbars": true
+	},
+	"scenarios": [
+		{
+			"name": "welcome-tour-developer-mode",
+			"path": "/",
+			"query": {
+				"capture": "docs"
+			},
+			"localStorage": {
+				"sidebar_state": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Welcome to"
+				},
+				{
+					"type": "click",
+					"selector": "button[aria-label=\"Step 4: Community\"]"
+				},
+				{
+					"type": "waitFor",
+					"text": "Planning to build?"
+				},
+				{
+					"type": "capture",
+					"name": "welcome-tour-developer-mode",
+					"output": "DeveloperModeTour.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "settings-developer-mode",
+			"path": "/settings",
+			"query": {
+				"capture": "docs"
+			},
+			"localStorage": {
+				"sidebar_state": "true",
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "#developer-mode-card",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "settings-developer-mode-card",
+					"output": "DeveloperModeCard.webp",
+					"mode": "element",
+					"selector": "#developer-mode-card",
+					"padding": 16
+				},
+				{
+					"type": "capture",
+					"name": "settings-developer-mode",
+					"output": "DeveloperModeSettings.webp",
+					"mode": "viewport"
+				}
+			]
+		}
+	]
+}

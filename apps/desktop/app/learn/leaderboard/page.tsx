@@ -1,5 +1,4 @@
 "use client";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	Button,
 	Input,
@@ -10,6 +9,7 @@ import {
 	useInvoke,
 } from "@flow-like/flow-like-ui";
 import type { LeaderboardOptIn } from "@flow-like/flow-like-ui/lib/learn/types";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Eye, EyeOff, Pencil, Trophy } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";

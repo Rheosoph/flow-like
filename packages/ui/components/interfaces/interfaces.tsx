@@ -43,6 +43,12 @@ export interface IConfigInterfaceProps {
 	 * server endpoint. Defaults to Local when unset.
 	 */
 	eventExecutionMode?: IEventExecutionMode;
+	/**
+	 * Which slice of this config to render, from `getEventSections`. Components
+	 * that declare sections render only the matching part; the rest ignore it and
+	 * render everything, so splitting a component is opt-in and incremental.
+	 */
+	section?: string;
 }
 
 /** Where a sink can run */
@@ -55,6 +61,25 @@ export interface ISinkConfig {
 	/** Description for users about execution context */
 	description?: string;
 }
+
+/**
+ * The slice of the event mapping a running interface needs.
+ *
+ * Everything else in `IEventMapping` — the configuration panels, the default payloads, the
+ * sink availability table — belongs to the builder. Keeping the runtime contract narrow is
+ * what lets `/use` load the interfaces it renders without also pulling in every editor
+ * surface behind them.
+ */
+export type IUseEventMapping = Record<
+	string,
+	{
+		eventTypes: string[];
+		useInterfaces: Record<
+			string,
+			(props: IUseInterfaceProps) => JSX.Element | null
+		>;
+	}
+>;
 
 export type IEventMapping = Record<
 	string,

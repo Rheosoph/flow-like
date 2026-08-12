@@ -28,7 +28,7 @@ use linfa::DatasetBase;
 #[cfg(feature = "execute")]
 use linfa::traits::Fit;
 #[cfg(feature = "execute")]
-use linfa_trees::DecisionTree as LinfaDecisionTree;
+use linfa_trees::{DecisionTree as LinfaDecisionTree, SplitQuality};
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
 
@@ -51,6 +51,7 @@ impl NodeLogic for FitDecisionTreeNode {
             "Fit/Train a Decision Tree classifier. Native multi-class support with interpretable rules.",
             "AI/ML/Classification",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(
@@ -100,6 +101,36 @@ impl NodeLogic for FitDecisionTreeNode {
         )
         .set_default_value(Some(json!(2)));
 
+        node.add_input_pin(
+            "split_quality",
+            "Split Quality",
+            "Impurity metric that scores candidate splits. Gini is cheaper, Entropy favours balanced information gain.",
+            VariableType::String,
+        )
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec!["Gini".to_string(), "Entropy".to_string()])
+                .build(),
+        )
+        .set_default_value(Some(json!("Gini")));
+
+        node.add_input_pin(
+            "min_weight_leaf",
+            "Min Samples Leaf",
+            "Minimum number of samples (total sample weight) a split has to place in each leaf",
+            VariableType::Float,
+        )
+        .set_options(PinOptions::new().set_range((0., 10000.)).build())
+        .set_default_value(Some(json!(1.0)));
+
+        node.add_input_pin(
+            "min_impurity_decrease",
+            "Min Impurity Decrease",
+            "Minimum impurity decrease a split has to bring to be applied. Must be greater than zero; larger values prune harder.",
+            VariableType::Float,
+        )
+        .set_default_value(Some(json!(0.00001)));
+
         node.add_output_pin(
             "exec_out",
             "Done",
@@ -125,6 +156,41 @@ impl NodeLogic for FitDecisionTreeNode {
         let source: String = context.evaluate_pin("source").await?;
         let max_depth: i64 = context.evaluate_pin("max_depth").await?;
         let min_samples_split: i64 = context.evaluate_pin("min_samples_split").await?;
+        // Boards placed before these pins existed fall back to the linfa defaults, which is exactly
+        // what the node used to pass.
+        let split_quality: String = context
+            .evaluate_pin("split_quality")
+            .await
+            .unwrap_or_else(|_| "Gini".to_string());
+        let min_weight_leaf: f64 = context.evaluate_pin("min_weight_leaf").await.unwrap_or(1.0);
+        let min_impurity_decrease: f64 = context
+            .evaluate_pin("min_impurity_decrease")
+            .await
+            .unwrap_or(0.00001);
+
+        let split_quality = match split_quality.as_str() {
+            "Gini" => SplitQuality::Gini,
+            "Entropy" => SplitQuality::Entropy,
+            other => {
+                return Err(anyhow!(
+                    "Unknown split quality `{other}`, expected `Gini` or `Entropy`"
+                ));
+            }
+        };
+        if !min_weight_leaf.is_finite() || min_weight_leaf < 0.0 {
+            return Err(anyhow!(
+                "Min Samples Leaf has to be a finite value >= 0, got {min_weight_leaf}"
+            ));
+        }
+        // linfa rejects anything below f64::EPSILON, and a NaN would slip past its `<` check and
+        // silently disable the impurity criterion altogether.
+        if !min_impurity_decrease.is_finite() || min_impurity_decrease < f64::EPSILON {
+            return Err(anyhow!(
+                "Min Impurity Decrease has to be greater than {:e}, got {}",
+                f64::EPSILON,
+                min_impurity_decrease
+            ));
+        }
 
         let t0 = std::time::Instant::now();
         let (ds, classes) = match source.as_str() {
@@ -165,6 +231,12 @@ impl NodeLogic for FitDecisionTreeNode {
                     &format!("Got {} records for training", records.len()),
                     LogLevel::Debug,
                 );
+                // linfa unwraps the modal class of the root node, which panics on an empty dataset.
+                if records.is_empty() {
+                    return Err(anyhow!(
+                        "No training records in the database; Decision Tree fitting needs at least one row"
+                    ));
+                }
 
                 let train_array = values_to_array2_f64(&records, &records_col)?;
                 let (target_array, classes) = values_to_array1_target(&records, &targets_col)?;
@@ -179,7 +251,10 @@ impl NodeLogic for FitDecisionTreeNode {
         context.log_message(&format!("Preprocess data: {elapsed:?}"), LogLevel::Debug);
 
         let t0 = std::time::Instant::now();
-        let mut params = LinfaDecisionTree::params();
+        let mut params = LinfaDecisionTree::params()
+            .split_quality(split_quality)
+            .min_weight_leaf(min_weight_leaf as f32)
+            .min_impurity_decrease(min_impurity_decrease);
         if max_depth > 0 {
             params = params.max_depth(Some(max_depth as usize));
         }
@@ -189,6 +264,22 @@ impl NodeLogic for FitDecisionTreeNode {
         let tree_model = params.fit(&ds)?;
         let elapsed = t0.elapsed();
         context.log_message(&format!("Fit model: {elapsed:?}"), LogLevel::Debug);
+
+        let num_leaves = tree_model.num_leaves();
+        context.log_message(
+            &format!(
+                "Fitted tree with {} leaves and depth {}",
+                num_leaves,
+                tree_model.max_depth()
+            ),
+            LogLevel::Debug,
+        );
+        if num_leaves <= 1 {
+            context.log_message(
+                "Decision tree collapsed to a single leaf and predicts one class for every input. Lower Min Impurity Decrease / Min Samples Split or raise Max Depth.",
+                LogLevel::Warn,
+            );
+        }
 
         let model = MLModel::DecisionTree(ModelWithMeta {
             model: tree_model,

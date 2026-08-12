@@ -17,7 +17,10 @@ import {
 	useState,
 } from "react";
 import { cn } from "../../lib";
-import { createSanitizedStyleProps, safeScopedCss } from "../../lib/css-utils";
+import {
+	DEFAULT_SHORTCUTS,
+	createShortcutManager,
+} from "../../lib/builder/KeyboardShortcuts";
 import {
 	presignCanvasSettings,
 	presignPageAssets,
@@ -40,6 +43,8 @@ import type {
 	Surface,
 	SurfaceComponent,
 } from "../a2ui/types";
+import { handleWidgetQueryMessage } from "../a2ui/widget-query-handler";
+import { ScopedCustomCss } from "../scoped-custom-css";
 import { Button } from "../ui/button";
 import {
 	ResizableHandle,
@@ -105,6 +110,10 @@ export const CONTAINER_TYPES = new Set([
 // Root component ID constant
 export const ROOT_ID = "root";
 
+const BUILDER_DELETE_SHORTCUTS = DEFAULT_SHORTCUTS.filter(
+	(shortcut) => shortcut.action === "delete",
+);
+
 function isBackgroundClass(value: string | undefined): value is string {
 	return value?.startsWith("bg-") ?? false;
 }
@@ -158,10 +167,15 @@ export interface WidgetBuilderProps {
 	actionContext?: {
 		appId?: string;
 		boardId?: string;
+		pageId?: string;
 		pages?: { id: string; name: string; boardId?: string }[];
 		workflowEvents?: { nodeId: string; name: string }[];
 		widgetActions?: { id: string; label: string; description?: string }[];
 		eventId?: string;
+		onLoadEventId?: string;
+		onUnloadEventId?: string;
+		onIntervalEventId?: string;
+		onIntervalSeconds?: number;
 	};
 	/** Current page ID for the page switcher */
 	currentPageId?: string;
@@ -178,6 +192,7 @@ export function WidgetBuilder({
 	className,
 	initialComponents = [],
 	initialWidgetRefs,
+	widgetId,
 	surfaceId = "builder-surface",
 	onSave,
 	onExport,
@@ -215,6 +230,7 @@ export function WidgetBuilder({
 			<WidgetBuilderWithDnd
 				className={className}
 				surfaceId={surfaceId}
+				widgetId={widgetId}
 				mode={mode}
 				setMode={setMode}
 				leftTab={leftTab}
@@ -236,6 +252,7 @@ export function WidgetBuilder({
 interface WidgetBuilderContentProps {
 	className?: string;
 	surfaceId: string;
+	widgetId?: string;
 	mode: "edit" | "preview";
 	setMode: (mode: "edit" | "preview") => void;
 	leftTab: "palette" | "hierarchy";
@@ -269,6 +286,7 @@ function WidgetBuilderWithDnd(props: WidgetBuilderContentProps) {
 function WidgetBuilderContent({
 	className,
 	surfaceId,
+	widgetId,
 	mode,
 	setMode,
 	leftTab,
@@ -289,12 +307,30 @@ function WidgetBuilderContent({
 		addComponent,
 		updateComponent,
 		getComponent,
+		deleteComponents,
 		widgetRefs,
 		actionContext,
 		setCanvasSettings,
 	} = useBuilder();
 	const { activeId } = useBuilderDnd();
 	const isDragging = activeId !== null;
+
+	useEffect(() => {
+		const shortcutManager = createShortcutManager((_action, event) => {
+			event.stopPropagation();
+			if (event.repeat || mode !== "edit") return;
+
+			const selectedComponentIds = selection.componentIds.filter(
+				(id) => id !== ROOT_ID,
+			);
+			if (selectedComponentIds.length > 0) {
+				deleteComponents(selectedComponentIds);
+			}
+		}, BUILDER_DELETE_SHORTCUTS);
+
+		shortcutManager.bind();
+		return shortcutManager.unbind;
+	}, [deleteComponents, mode, selection.componentIds]);
 
 	// Ref for capturing screenshots of the canvas
 	const canvasContainerRef = useRef<HTMLDivElement>(null);
@@ -423,9 +459,15 @@ function WidgetBuilderContent({
 
 	// Publish the live widget surface for the global assistant while the builder is mounted.
 	useEffect(() => {
+		const pageId = actionContext?.pageId ?? currentPageId;
+		const kind = pageId ? "page" : "widget";
 		const surface: AssistantWidgetSurface = {
 			surfaceId,
+			kind,
 			appId: actionContext?.appId,
+			boardId: actionContext?.boardId,
+			pageId,
+			widgetId: kind === "widget" ? widgetId : undefined,
 			currentComponents,
 			selectedComponentIds: selectedIds,
 			captureScreenshot,
@@ -439,7 +481,11 @@ function WidgetBuilderContent({
 		};
 	}, [
 		surfaceId,
+		widgetId,
 		actionContext?.appId,
+		actionContext?.boardId,
+		actionContext?.pageId,
+		currentPageId,
 		currentComponents,
 		selectedIds,
 		captureScreenshot,
@@ -910,16 +956,10 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 			style={{ userSelect: isDragging ? "none" : undefined }}
 		>
 			{/* Custom CSS injection (scoped and sanitized) */}
-			{presignedCanvasSettings.customCss && (
-				<style
-					{...createSanitizedStyleProps(
-						safeScopedCss(
-							presignedCanvasSettings.customCss,
-							`[data-canvas-id="${canvasId}"]`,
-						),
-					)}
-				/>
-			)}
+			<ScopedCustomCss
+				css={presignedCanvasSettings.customCss}
+				scopeSelector={`[data-canvas-id="${canvasId}"]`}
+			/>
 
 			{/* Canvas header with breadcrumb */}
 			<div className="flex items-center gap-2 px-3 py-2 border-b bg-background text-xs text-muted-foreground shrink-0">
@@ -1204,6 +1244,9 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 				await execFn(appId, boardId, payload, false, undefined, (events) => {
 					for (const evt of events) {
 						if (evt.event_type === "a2ui") {
+							if (handleWidgetQueryMessage(evt.payload)) {
+								continue;
+							}
 							handleA2UIMessage(evt.payload as A2UIServerMessage);
 						}
 					}
@@ -1261,6 +1304,9 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 				await execFn(appId, boardId, payload, false, undefined, (events) => {
 					for (const evt of events) {
 						if (evt.event_type === "a2ui") {
+							if (handleWidgetQueryMessage(evt.payload)) {
+								continue;
+							}
 							handleA2UIMessage(evt.payload as A2UIServerMessage);
 						}
 					}
@@ -1297,16 +1343,10 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 			}}
 		>
 			{/* Custom CSS injection (scoped and sanitized) */}
-			{presignedCanvasSettings.customCss && (
-				<style
-					{...createSanitizedStyleProps(
-						safeScopedCss(
-							presignedCanvasSettings.customCss,
-							`[data-canvas-id="${previewCanvasId}"]`,
-						),
-					)}
-				/>
-			)}
+			<ScopedCustomCss
+				css={presignedCanvasSettings.customCss}
+				scopeSelector={`[data-canvas-id="${previewCanvasId}"]`}
+			/>
 			<A2UIRenderer
 				surface={surface}
 				widgetRefs={Object.fromEntries(widgetRefs)}

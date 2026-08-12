@@ -31,7 +31,7 @@ const MAX_BITS: u64 = 100;
         (status = 404, description = "Profile not found")
     )
 )]
-#[tracing::instrument(name = "GET /profile/{profile_id}/bits", skip(state, user))]
+#[tracing::instrument(name = "GET /profile/{profile_id}/bits", skip(state, user, query))]
 pub async fn get_profile_bits(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -64,8 +64,17 @@ pub async fn get_profile_bits(
         .ok_or(ApiError::NOT_FOUND)?;
 
     let bit_ids = profile.bit_ids.unwrap_or_default();
+
+    // Custom bits this profile activated (without provider secrets — this
+    // response feeds UI lists). The full library lives at GET /user/bits.
+    let custom_bits =
+        crate::routes::user::bits::load_custom_bits_for_profile(&state, &sub, &bit_ids, false)
+            .await
+            .unwrap_or_default();
+
     if bit_ids.is_empty() {
-        return Ok(Json(vec![]));
+        state.set_cache(cache_key, &custom_bits);
+        return Ok(Json(custom_bits));
     }
 
     let raw_ids: Vec<&str> = bit_ids
@@ -81,7 +90,8 @@ pub async fn get_profile_bits(
         .collect();
 
     if paginated.is_empty() {
-        return Ok(Json(vec![]));
+        state.set_cache(cache_key, &custom_bits);
+        return Ok(Json(custom_bits));
     }
 
     let models = bit::Entity::find()
@@ -117,6 +127,8 @@ pub async fn get_profile_bits(
             *bit = temporary_bit(bit.clone(), &state.cdn_bucket).await?;
         }
     }
+
+    bits.extend(custom_bits);
 
     state.set_cache(cache_key, &bits);
 

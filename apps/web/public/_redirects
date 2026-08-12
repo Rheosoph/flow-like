@@ -1,0 +1,4 @@
+# The AASA claims /store/*, and the website links packages as /store/packages/<id>, but the
+# static export only ships /store/packages with an ?id= query. Translate the path form so the
+# link works in a browser when the app is not installed.
+/store/packages/:id  /store/packages?id=:id  302

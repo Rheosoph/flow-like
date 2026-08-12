@@ -47,7 +47,7 @@ numbers. Data can be bound using either literal values or data paths:
 - **divider**: Horizontal/vertical separator
 - **badge**: Status indicator
 - **avatar**: User avatar
-- **userProfile**: User lookup display by sub, with avatar/chip/row/detailed/card variants
+- **userProfile**: User lookup display by sub, with avatar/chip/row/detailed/card variants (the "local" sub of an unauthenticated execution renders the current user)
 - **progress**: Progress bar
 - **spinner**: Loading indicator
 - **skeleton**: Loading placeholder
@@ -94,11 +94,13 @@ Use className for Tailwind classes (preferred for sizing, spacing, colors):
 \`\`\`
 
 For dynamic/complex styles, use structured properties:
-- background: { color, gradient, image, blur }
+- background: { color }, { gradient: { type, angle, direction, stops } }, { image }, or { blur }
 - border: { width, style, color, radius }
 - shadow: { x, y, blur, spread, color, inset }
+- margin/padding: { top, right, bottom, left }
+- width/height/minWidth/maxWidth/minHeight/maxHeight: CSS strings such as "100%"
 - position: { type, top, right, bottom, left }
-- transform: { translate, rotate, scale }
+- transform: { translate, rotate, scale, skew, transformOrigin }
 - overflow: "visible" | "hidden" | "scroll" | "auto"
 
 ## Response Format

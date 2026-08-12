@@ -6,12 +6,14 @@ use flow_like::{
     flow_like_storage::{
         Path,
         arrow_schema::Schema,
+        databases::table_cascade::prune_table_references,
         databases::vector::{
             VectorStore,
             lancedb::{IndexConfigDto, LanceDBVectorStore, record_batches_to_vec},
             schema::{DatabaseSchemaField, database_fields_to_arrow_schema},
         },
         datafusion::prelude::SessionContext,
+        lancedb::Connection,
     },
 };
 use tauri::AppHandle;
@@ -52,19 +54,16 @@ fn validate_table_name(name: &str) -> flow_like_types::Result<()> {
 /// Max offset to prevent unbounded scans.
 const MAX_OFFSET: u64 = 100_000;
 
-async fn db_connection_inner(
+async fn db_connection_handle(
     app_handle: &AppHandle,
-    app_id: String,
-    table_name: Option<String>,
+    app_id: &str,
     credentials: Option<Arc<SharedCredentials>>,
     user_scoped: bool,
     sub: Option<String>,
-) -> flow_like_types::Result<LanceDBVectorStore> {
+) -> flow_like_types::Result<Connection> {
     let flow_like_state = TauriFlowLikeState::construct(app_handle).await?;
-    let table_name = table_name.unwrap_or("default".to_string());
-    validate_table_name(&table_name)?;
     let project_db_dir = Path::from("apps")
-        .child(app_id.clone())
+        .child(app_id)
         .child("storage")
         .child("db");
     let db = if let Some(credentials) = &credentials {
@@ -74,9 +73,9 @@ async fn db_connection_inner(
                     "User subject (sub) is required for user-scoped database access"
                 )
             })?;
-            credentials.to_db_scoped(&sub, &app_id).await?
+            credentials.to_db_scoped(&sub, app_id).await?
         } else {
-            credentials.to_db(&app_id).await?
+            credentials.to_db(app_id).await?
         }
     } else if user_scoped {
         let sub = match sub {
@@ -88,7 +87,7 @@ async fn db_connection_inner(
         let user_db_dir = Path::from("users")
             .child(sub)
             .child("apps")
-            .child(app_id.clone())
+            .child(app_id)
             .child("db");
         flow_like_state
             .config
@@ -109,8 +108,23 @@ async fn db_connection_inner(
             .ok_or(flow_like_types::anyhow!("No database builder found"))?(project_db_dir)
     };
 
-    let db = db.execute().await?;
-    let mut db = LanceDBVectorStore::from_connection(db, table_name).await;
+    Ok(db.execute().await?)
+}
+
+async fn db_connection_inner(
+    app_handle: &AppHandle,
+    app_id: String,
+    table_name: Option<String>,
+    credentials: Option<Arc<SharedCredentials>>,
+    user_scoped: bool,
+    sub: Option<String>,
+) -> flow_like_types::Result<LanceDBVectorStore> {
+    let table_name = table_name.unwrap_or("default".to_string());
+    validate_table_name(&table_name)?;
+    let connection =
+        db_connection_handle(app_handle, &app_id, credentials, user_scoped, sub).await?;
+    let mut db = LanceDBVectorStore::from_connection(connection, table_name).await;
+    let flow_like_state = TauriFlowLikeState::construct(app_handle).await?;
     if let Some(opts) = &flow_like_state
         .config
         .read()
@@ -236,6 +250,46 @@ pub async fn db_create_table(
         table_name,
         created,
         if_not_exists,
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DropTableResponse {
+    pub table_name: String,
+    pub dropped: bool,
+    pub ontologies: Vec<String>,
+    pub saved_queries: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[tauri::command(async)]
+pub async fn db_drop_table(
+    app_handle: AppHandle,
+    app_id: String,
+    table_name: String,
+    credentials: Option<Arc<SharedCredentials>>,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
+) -> Result<DropTableResponse, TauriFunctionError> {
+    validate_table_name(&table_name)?;
+    let connection = db_connection_handle(
+        &app_handle,
+        &app_id,
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
+    let mut db = LanceDBVectorStore::from_connection(connection.clone(), table_name.clone()).await;
+    let dropped = db.list_tables().await?.iter().any(|n| n == &table_name);
+    let report = prune_table_references(&connection, &table_name).await;
+    db.drop_table().await?;
+    Ok(DropTableResponse {
+        table_name,
+        dropped,
+        ontologies: report.ontologies,
+        saved_queries: report.saved_queries,
+        warnings: report.warnings,
     })
 }
 

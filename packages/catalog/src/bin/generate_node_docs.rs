@@ -279,7 +279,7 @@ fn build_categories(nodes: &[DocNode]) -> Vec<DocCategory> {
         .into_values()
         .map(|category| DocCategory {
             description: format!(
-                "Browse {} generated Flow-Like node reference{} in {} with pins, schemas, metadata, and security ratings.",
+                "Browse {} generated Flow-Like node reference{} in {} with pin details and available schema, package, and risk-rating metadata.",
                 category.nodes.len(),
                 if category.nodes.len() == 1 { "" } else { "s" },
                 display_category_path(&category.path)
@@ -510,7 +510,7 @@ fn write_node_pages(
             &docs_src.join("generated/catalog-nodes"),
         );
         let node_prop = format!("{{nodesBySlug[{}]}}", json_string(&node.slug));
-        let title = format!("{} Node", node.friendly_name);
+        let title = node_page_title(&node.friendly_name);
         let description = node_seo_description(node);
         let head = frontmatter_head(
             &node_keywords(node),
@@ -580,14 +580,7 @@ fn node_seo_description(node: &DocNode) -> String {
         return bounded_description(
             &[
                 format!("{} Flow-Like node reference.", node.friendly_name),
-                format!(
-                    "Includes {} input{}, {} output{}, pins, schemas, ratings, and {} package metadata.",
-                    node.input_count,
-                    if node.input_count == 1 { "" } else { "s" },
-                    node.output_count,
-                    if node.output_count == 1 { "" } else { "s" },
-                    node.package_name
-                ),
+                node_metadata_summary(node),
             ],
             158,
         );
@@ -596,10 +589,22 @@ fn node_seo_description(node: &DocNode) -> String {
     bounded_description(
         &[
             format!("{} Flow-Like node: {}", node.friendly_name, description),
-            "Includes pins, schemas, package metadata, and security ratings.".to_string(),
+            node_metadata_summary(node),
         ],
         158,
     )
+}
+
+fn node_metadata_summary(node: &DocNode) -> String {
+    let has_schemas = node.pins.iter().any(|pin| pin.schema.is_some());
+    match (has_schemas, node.scores.is_some()) {
+        (true, true) => {
+            "Includes pin details, schemas, package metadata, and risk ratings.".to_string()
+        }
+        (true, false) => "Includes pin details, schemas, and package metadata.".to_string(),
+        (false, true) => "Includes pin details, package metadata, and risk ratings.".to_string(),
+        (false, false) => "Includes pin details and package metadata.".to_string(),
+    }
 }
 
 fn seo_detail(value: &str) -> String {
@@ -608,16 +613,44 @@ fn seo_detail(value: &str) -> String {
         return value;
     }
 
-    for delimiter in ['.', '!', '?'] {
-        if let Some(index) = value.find(delimiter) {
-            let sentence = value[..=index].trim();
-            if sentence.chars().count() >= 24 {
-                return sentence.to_string();
-            }
+    for (index, delimiter) in value.char_indices() {
+        if !matches!(delimiter, '.' | '!' | '?') || !is_sentence_boundary(&value, index, delimiter)
+        {
+            continue;
+        }
+
+        let sentence = value[..=index].trim();
+        if sentence.chars().count() >= 24 {
+            return sentence.to_string();
         }
     }
 
     value
+}
+
+fn is_sentence_boundary(value: &str, index: usize, delimiter: char) -> bool {
+    if delimiter == '.' {
+        let prefix = value[..=index].to_ascii_lowercase();
+        if prefix.ends_with("e.g.") || prefix.ends_with("i.e.") {
+            return false;
+        }
+    }
+
+    let remainder = &value[index + delimiter.len_utf8()..];
+    remainder.is_empty() || remainder.chars().next().is_some_and(char::is_whitespace)
+}
+
+fn node_page_title(friendly_name: &str) -> String {
+    let friendly_name = compact_whitespace(friendly_name);
+    if friendly_name
+        .split_whitespace()
+        .last()
+        .is_some_and(|word| word.eq_ignore_ascii_case("node"))
+    {
+        friendly_name
+    } else {
+        format!("{friendly_name} Node")
+    }
 }
 
 fn with_terminal_punctuation(value: &str) -> String {
@@ -643,7 +676,7 @@ fn category_seo_description(category: &DocCategory) -> String {
                 category.count,
                 if category.count == 1 { "" } else { "s" }
             ),
-            "Browse pins, schemas, package metadata, and security ratings for workflow automation."
+            "Browse pin details plus available schema, package, and risk-rating metadata for workflow automation."
                 .to_string(),
         ],
         158,
@@ -674,7 +707,7 @@ fn bounded_description(parts: &[String], max_chars: usize) -> String {
     }
 
     if out.is_empty() {
-        "Generated Flow-Like node catalog documentation with pins, schemas, metadata, and ratings."
+        "Generated Flow-Like node catalog documentation with pin details and available schema, package, and risk-rating metadata."
             .to_string()
     } else {
         out
@@ -691,10 +724,10 @@ fn truncate_at_word(value: &str, max_chars: usize) -> String {
     }
 
     let mut out = value.chars().take(max_chars - 3).collect::<String>();
-    if let Some(index) = out.rfind(|ch: char| ch.is_whitespace()) {
-        if index > max_chars / 2 {
-            out.truncate(index);
-        }
+    if let Some(index) = out.rfind(|ch: char| ch.is_whitespace())
+        && index > max_chars / 2
+    {
+        out.truncate(index);
     }
 
     format!(
@@ -1173,4 +1206,34 @@ fn normalized_components(path: &Path) -> Vec<String> {
             Component::RootDir | Component::Prefix(_) => None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{node_page_title, seo_detail};
+
+    #[test]
+    fn seo_detail_ignores_non_sentence_periods() {
+        assert_eq!(
+            seo_detail("Convert Image Color/Pixel Type (e.g. to Grayscale)"),
+            "Convert Image Color/Pixel Type (e.g. to Grayscale)"
+        );
+        assert_eq!(
+            seo_detail("Creates typed video options for fal.ai video models."),
+            "Creates typed video options for fal.ai video models."
+        );
+        assert_eq!(
+            seo_detail(
+                "Connect to Jira and Confluence using OAuth 2.0. Requires OAuth provider configuration."
+            ),
+            "Connect to Jira and Confluence using OAuth 2.0."
+        );
+    }
+
+    #[test]
+    fn node_page_title_does_not_repeat_node_suffix() {
+        assert_eq!(node_page_title("Delay"), "Delay Node");
+        assert_eq!(node_page_title("Upsert Graph Node"), "Upsert Graph Node");
+        assert_eq!(node_page_title("Custom NODE"), "Custom NODE");
+    }
 }

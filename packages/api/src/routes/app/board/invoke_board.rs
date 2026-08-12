@@ -24,8 +24,8 @@ use crate::{
     error::ApiError,
     execution::{
         ByteStream, DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType,
-        fetch_profile_for_dispatch, is_jwt_configured, payload_storage, proxy_sse_response,
-        resolve_wasm_packages, sign_execution_jwt, update_run_on_completion,
+        completed_run_status, fetch_profile_for_dispatch, is_jwt_configured, payload_storage,
+        proxy_sse_response, resolve_wasm_packages, sign_execution_jwt, update_run_on_completion,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -125,7 +125,7 @@ fn get_credentials_access() -> crate::credentials::CredentialsAccess {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/board/{board_id}/invoke",
-    skip(state, user, params)
+    skip(state, user, query, params)
 )]
 pub async fn invoke_board(
     State(state): State<AppState>,
@@ -295,7 +295,7 @@ pub async fn invoke_board(
     if !is_jwt_configured() {
         println!("Execution JWT signing not configured");
         return Err(ApiError::internal_error(anyhow!(
-            "Execution JWT signing not configured (missing EXECUTION_KEY/EXECUTION_PUB env vars)"
+            "Execution JWT signing not configured (missing BACKEND_KEY/BACKEND_PUB)"
         )));
     }
 
@@ -307,7 +307,7 @@ pub async fn invoke_board(
         use flow_like_types::tokio;
         tokio::join!(
             state.scoped_credentials(&sub, &app_id, access),
-            fetch_profile_for_dispatch(&state.db, &sub, params.profile_id.as_deref(), &app_id),
+            fetch_profile_for_dispatch(&state, &sub, params.profile_id.as_deref(), &app_id, true),
             resolve_wasm_packages(&state, &app_id),
         )
     };
@@ -481,15 +481,9 @@ fn proxy_lambda_sse_response(
                                             .unwrap_or(0) as i32;
                                         let status = parsed.get("payload")
                                             .and_then(|p| p.get("status"))
-                                            .and_then(|s| s.as_str())
-                                            .unwrap_or("Completed");
+                                            .and_then(|s| s.as_str());
 
-                                        let run_status = match status {
-                                            "Failed" => RunStatus::Failed,
-                                            "Cancelled" => RunStatus::Cancelled,
-                                            "Timeout" => RunStatus::Timeout,
-                                            _ => RunStatus::Completed,
-                                        };
+                                        let run_status = completed_run_status(status);
 
                                         if let Err(e) = update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await {
                                             tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");

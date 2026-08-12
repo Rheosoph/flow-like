@@ -1,212 +1,128 @@
 ---
-title: FlowPilot AI Assistant
-description: Using AI to build and edit your Flows with FlowPilot
+title: FlowPilot
+description: Build, inspect, run, and improve Flow-Like apps with the built-in AI assistant
 sidebar:
   order: 15
 ---
 
-**FlowPilot** is Flow-Like's integrated AI assistant that helps you build, edit, and understand your workflow automations using natural language. It supports multiple AI providers and specialized agents for different tasks.
+**FlowPilot** is Flow-Like's built-in AI assistant. It can answer questions about Flow-Like, work on the app or editor you currently have open, and coordinate workflow, interface, and data tasks from one conversation.
 
-## Overview
+FlowPilot is available in the web and desktop apps. The tools it can use depend on your current context and the selected model provider.
+
+:::caution[Choose a capable model]
+The free profile model is useful for questions and small changes, but will probably not be enough to create a complete app reliably. For larger builds, select a higher-tier model in your Flow-Like profile or use **GitHub Copilot**, **Claude Code**, or **Codex** in the desktop app.
+:::
+
+## What FlowPilot can do
+
+### Build and explain workflows
 
 FlowPilot can:
-- **Create nodes and connections** from natural language descriptions
-- **Explain existing flows** and help you understand complex automations
-- **Debug issues** by analyzing execution logs and suggesting fixes
-- **Search the node catalog** to find the right nodes for your task
-- **Generate complete workflows** from high-level requirements
 
-## AI Providers
+- Explain the current board, selected nodes, and connections without changing them
+- Add, connect, configure, move, and remove workflow nodes
+- Find appropriate nodes and declarations in the live catalog
+- Generate and repair FlowScript against the current board
+- Use run context and execution logs to investigate failures
+- Run safe verification steps and inspect their logs when runtime tools are available
 
-FlowPilot supports two AI provider modes:
+Board edits are compiled and validated before they are offered for application. The **FlowScript** workspace shows the generated source, status, and compiler diagnostics.
 
-### Bits (Default)
-Uses your configured model bits from your user profile. This is the default mode and works with any LLM provider you've set up in Flow-Like.
+### Design pages and widgets
 
-### GitHub Copilot
-Uses the GitHub Copilot SDK directly for AI-powered assistance in the desktop app. This mode provides access to GitHub's latest AI models and uses your local Copilot CLI session.
+FlowPilot can create a new A2UI page, build reusable widgets, or modify the interface currently open in the page or widget builder. It understands the existing component tree and selected components, and can generate responsive layouts, data bindings, theme-aware styling, and custom canvas settings.
 
-## Setting Up GitHub Copilot
+Generated UI is shown as a preview before it is applied. See [FlowPilot UI generation](/reference/flowpilot-ui/) for UI-specific examples.
 
-To use FlowPilot with GitHub Copilot, you need to install and configure the GitHub Copilot CLI.
+### Work with app data
 
-### Prerequisites
+From the global assistant, FlowPilot can delegate data work to Data Studio. This includes:
 
-- An active [GitHub Copilot subscription](https://github.com/features/copilot/plans)
-- One of the supported platforms:
-  - macOS
-  - Linux
-  - Windows (PowerShell v6 or higher)
+- Inspecting and managing databases and tables
+- Creating and editing ontologies and overlays
+- Writing and running SQL or Cypher queries
+- Exploring paths, neighbors, and subgraphs
+- Running analytics and presenting inline charts
+- Inspecting or executing ontology actions
 
-:::note
-If you have access to GitHub Copilot via your organization or enterprise, ensure your administrator has enabled GitHub Copilot CLI in the organization settings. See [Managing policies for Copilot](https://docs.github.com/copilot/managing-copilot/managing-github-copilot-in-your-organization/managing-github-copilot-features-in-your-organization/managing-policies-for-copilot-in-your-organization) for more information.
-:::
+When Data Studio is open, FlowPilot receives the current app, overlay, and selected-table context. Read-only inspection can proceed directly; data mutations use the current approval mode.
 
-### Installation
+### Operate Flow-Like and use your apps
 
-Choose your preferred installation method:
+The global FlowPilot can also:
 
-#### macOS and Linux (Homebrew)
-```bash
-brew install copilot-cli
-```
+- Create an app and coordinate its workflow, UI, data, and Events
+- Navigate to supported Flow-Like views
+- Create or update app Events and page-load behavior
+- Open an app page or app chat inline in the conversation
+- Call chat and headless app interfaces on your behalf
+- Pass relevant attached files to an app chat
+- Search and read public web sources when your request needs current external information
 
-For the prerelease version:
-```bash
-brew install copilot-cli@prerelease
-```
+## Where to use FlowPilot
 
-#### Windows (WinGet)
-```powershell
-winget install GitHub.Copilot
-```
+### Global FlowPilot
 
-For the prerelease version:
-```powershell
-winget install GitHub.Copilot.Prerelease
-```
+Open the full FlowPilot chat or use its docked assistant. This is the platform-level assistant: it can create and navigate apps, use app interfaces, and route work to the workflow, UI, or Data Studio specialist.
 
-#### npm (All Platforms)
-```bash
-npm install -g @github/copilot
-```
+If a board or Data Studio view is open, the global assistant receives that context. Requests such as "explain this workflow" or "query this overlay" therefore target the visible item without requiring you to copy its ID.
 
-For the prerelease version:
-```bash
-npm install -g @github/copilot@prerelease
-```
+### Board editor
 
-#### Install Script (macOS and Linux)
-```bash
-curl -fsSL https://gh.io/copilot-install | bash
-```
+Open FlowPilot inside a board when you want to focus on workflow logic. The panel receives the current board, layer, selected nodes, and optional run-log context. Board changes are staged as commands or a compiled FlowScript review.
 
-Or with wget:
-```bash
-wget -qO- https://gh.io/copilot-install | bash
-```
+### Page and widget builders
 
-:::tip
-Use `| sudo bash` to run as root and install to `/usr/local/bin`. Set `PREFIX` to install to a custom directory.
-:::
+Open FlowPilot inside a page or widget builder when you want to focus on the current A2UI surface. Selecting components before sending a request narrows the context. You can also attach a reference image or, where offered, include a screenshot of the current builder.
 
-### Authentication
+FlowPilot selects the appropriate scope from the surface you are using. The older **Frontend Agent**, **Backend Agent**, and **General Agent** choices are no longer separate user-facing modes.
 
-After installation, you need to authenticate with your GitHub account:
+## Review and apply changes
 
-1. **Launch the CLI** by running `copilot` in your terminal
-2. **Follow the login prompt** - enter the `/login` command if prompted
-3. **Complete the authentication** in your browser
+With **Auto mode off**, FlowPilot asks before side-effecting tool calls and keeps generated editor changes in a review step:
 
-#### Alternative: Personal Access Token (PAT)
+1. Describe the result you want.
+2. FlowPilot inspects the current app, board, UI, or data context and uses the relevant specialist.
+3. Review the generated FlowScript, board commands, or UI preview.
+4. Select **Apply** to accept it or dismiss it to leave the editor unchanged.
 
-You can also authenticate using a fine-grained PAT:
+A board review that no longer matches the live board is marked stale instead of being applied over newer work. Deleting existing board items always requires explicit confirmation.
 
-1. Visit [GitHub Token Settings](https://github.com/settings/personal-access-tokens/new)
-2. Under "Permissions," add the "Copilot Requests" permission
-3. Generate your token
-4. Set the `GH_TOKEN` or `GITHUB_TOKEN` environment variable with your token
+With **Auto mode on**, FlowPilot runs tools and applies completed reviews without asking each time, including destructive actions. Deletion of existing board items is the exception and still requires confirmation. Use Auto mode only when you are comfortable reviewing the result after it has been applied.
 
-### Verifying Installation
+## Context, attachments, and memory
 
-Run `copilot` in your terminal. You should see the Copilot CLI interface with authentication status.
+- **Visible context:** FlowPilot receives the relevant open board, selected nodes or components, active Data Studio selection, and run context rather than the entire workspace indiscriminately.
+- **Attachments:** Images can be sent as visual context when the selected model supports vision. In the global assistant, other attached files can be forwarded to a compatible app chat; FlowPilot does not read arbitrary non-image files itself.
+- **History:** Conversations are saved locally in FlowPilot history. Long conversations are compacted so recent work and accepted results remain useful without sending an unbounded transcript.
+- **Optional memory:** If your profile contains an embedding model, global FlowPilot can use profile-scoped memory. You can select the memory model and review or delete saved memories from the chat toolbar.
 
-## Using FlowPilot
+## Model providers
 
-### Switching Providers
+The provider/model picker shows the models and reasoning levels available to the selected backend:
 
-In the FlowPilot panel, you'll see provider toggle buttons:
-- **Bits** - Use your configured model bits
-- **Copilot** - Use GitHub Copilot
+- **Profile/Bits** uses a model configured in your Flow-Like profile and works in both the browser and desktop app.
+- **GitHub Copilot**, **Claude Code**, and **Codex** use a signed-in CLI on your computer and are available in the desktop app only.
 
-Click on the Copilot button to switch. In the desktop app, FlowPilot connects to the local Copilot CLI. In browser-based FlowPilot sessions, the Copilot option stays disabled and Bits remains the available provider.
+Model availability depends on the provider account, subscription, and organization policy. Installation, sign-in, CLI lookup paths, the temporary MCP connection, and macOS permission troubleshooting are documented in the [external coding agent setup guide](/studio/flowpilot-external-agents/).
 
-### Selecting Models
+## Prompt examples
 
-When using GitHub Copilot, you can choose from available models:
-- **Claude Sonnet 4.5** (default)
-- **Claude Sonnet 4**
-- **GPT-5**
-- And other available models
+Try giving FlowPilot an outcome and enough context to verify it:
 
-Use the model selector dropdown to switch between models.
+- `Explain this workflow and point out where errors are handled. Do not change it.`
+- `Build a webhook workflow that validates the payload, stores it, and returns a useful error response.`
+- `Create a responsive customer dashboard and wire its table and chart to the workflow.`
+- `Why did this run fail? Use the attached log context and suggest a fix.`
+- `In this ontology, show orders connected to customers with overdue invoices as a chart.`
+- `Open the support app chat here so I can talk to it.`
 
-### Chat Interface
+For a complete app, describe the interface, behavior, data, and entry point together. FlowPilot can coordinate those parts, but generated work should still be reviewed and tested with representative data before production use.
 
-The FlowPilot chat interface allows you to:
-1. **Ask questions** about your current flow
-2. **Request modifications** to nodes and connections
-3. **Get explanations** of what specific nodes do
-4. **Debug errors** by sharing log output
+## Related guides
 
-Example prompts:
-- "Add an HTTP request node that calls the OpenAI API"
-- "Connect the output of the JSON parser to the email sender"
-- "Explain what this flow does"
-- "Why is this node failing? Here's the error..."
-
-### Specialized Agents
-
-FlowPilot includes specialized agents optimized for different tasks:
-
-#### Frontend Agent
-Focused on UI/UX development:
-- Creating responsive UI components
-- React patterns and hooks
-- CSS/Tailwind styling
-- A2UI component system
-
-#### Backend Agent
-Focused on workflow and data processing:
-- Flow graph design and node connections
-- Data transformation and processing
-- API integrations
-- Error handling and retry logic
-
-#### General Agent
-Can handle both frontend and backend tasks, automatically determining the best approach based on your request.
-
-## How It Works
-
-When you send a message to FlowPilot, it:
-
-1. **Analyzes your request** and the current board context
-2. **Searches the node catalog** to find relevant nodes
-3. **Plans the changes** needed to fulfill your request
-4. **Generates commands** to modify the board
-5. **Applies changes** while maintaining undo/redo history
-
-All changes are applied through the same command system used by manual editing, so you can always undo AI-generated changes.
-
-## Rolling Context Budget
-
-FlowPilot compacts older conversation turns before each request instead of sending the full transcript every time. It keeps recent turns verbatim, summarizes accepted work from older turns, and sends current-turn images separately from the text prompt.
-
-This keeps long workflow sessions usable without duplicating the latest request or letting the prompt grow without bound.
-
-## Privacy and Security
-
-- **Local processing**: The Copilot CLI runs locally on your machine
-- **GitHub authentication**: Uses your existing GitHub credentials
-- **No data storage**: Conversations are not stored on GitHub's servers beyond what's needed for processing
-- **Explicit approval**: All changes require your approval before being applied
-
-## Troubleshooting
-
-### Copilot CLI not found
-Ensure the Copilot CLI is installed and in your PATH. Try running `copilot` directly in your terminal.
-
-### Authentication issues
-Run `copilot` in your terminal and use the `/login` command to re-authenticate.
-
-### Copilot option is disabled
-GitHub Copilot in FlowPilot currently runs only in the desktop app. Use the Bits provider in web sessions.
-
-### Model not available
-Some models may require specific Copilot subscription tiers. Check your subscription level if a model is unavailable.
-
-## Resources
-
-- [GitHub Copilot CLI Documentation](https://docs.github.com/copilot/concepts/agents/about-copilot-cli)
-- [GitHub Copilot CLI Repository](https://github.com/github/copilot-cli)
-- [Copilot Plans](https://github.com/features/copilot/plans)
+- [External coding agents in FlowPilot](/studio/flowpilot-external-agents/)
+- [FlowPilot UI generation](/reference/flowpilot-ui/)
+- [Widget Builder](/reference/widget-builder/)
+- [Data Studio](/apps/data-studio/)
+- [App Events](/apps/events/)

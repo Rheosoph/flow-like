@@ -1,380 +1,198 @@
 ---
-title: Routes API
-description: Programmatically manage app routes and navigation
+title: Routes
+description: Map app paths to Events with the current route-state API
 sidebar:
   order: 4
 ---
 
-Routes in Flow-Like map URL paths to pages or events. This guide covers the technical implementation of the routing system.
-
-## Route Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Request Flow                              │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│   User Request                                               │
-│       │                                                      │
-│       ▼                                                      │
-│   ┌─────────────────┐                                       │
-│   │  Route Matcher  │ ← Priority & Path Matching             │
-│   └────────┬────────┘                                       │
-│            │                                                 │
-│            ▼                                                 │
-│   ┌─────────────────────────────────────────────┐           │
-│   │              Target Resolution               │           │
-│   ├─────────────────────┬───────────────────────┤           │
-│   │   targetType: page  │  targetType: event    │           │
-│   │         │           │         │             │           │
-│   │         ▼           │         ▼             │           │
-│   │   ┌─────────┐       │   ┌─────────┐         │           │
-│   │   │  Page   │       │   │  Event  │         │           │
-│   │   │ Render  │       │   │ Handler │         │           │
-│   │   └─────────┘       │   └─────────┘         │           │
-│   └─────────────────────┴───────────────────────┘           │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Route Interface
-
-### IAppRoute
-
-The full route object stored in the system:
+A Flow-Like route is a small mapping from a URL path to an app Event:
 
 ```typescript
-interface IAppRoute {
-  id: string;                    // Unique route identifier
-  appId: string;                 // Parent app ID
-  path: string;                  // URL path (e.g., "/dashboard")
-  targetType: RouteTargetType;   // "page" | "event"
-  pageId?: string;               // Target page ID (if targetType is "page")
-  boardId?: string;              // Associated board/flow ID
-  pageVersion?: Version;         // Specific page version to use
-  eventId?: string;              // Target event ID (if targetType is "event")
-  isDefault: boolean;            // Is this the default/home route
-  priority: number;              // Route matching priority (higher = first)
-  label?: string;                // Display label for navigation
-  icon?: string;                 // Icon identifier for navigation
-  createdAt: string;             // ISO timestamp
-  updatedAt: string;             // ISO timestamp
+interface IRouteMapping {
+  path: string;
+  eventId: string;
 }
 ```
 
-### RouteTargetType
+The Event decides what happens next. It can render a Page, open a built-in UI such as Chat or Quick Action, or execute workflow behavior.
 
-```typescript
-type RouteTargetType = "page" | "event";
-```
+![How Flow-Like resolves a pathname through an Event](../../../../assets/RouteEventArchitecture.svg)
 
-| Value | Description |
-|-------|-------------|
-| `"page"` | Route renders an A2UI page |
-| `"event"` | Route triggers a flow event |
+## Why Routes Point to Events
 
-## Route State API
+Putting the Event between navigation and presentation gives one routing model to every app experience:
 
-### Interface
+- a Page-target Event uses `default_page_id` to select a Page;
+- a Chat Event opens the chat interface;
+- a Quick Action or Generic Form Event opens its form interface;
+- a backend-only Event can run without a UI route.
+
+The route does not store a Page ID, board ID, version, label, icon, priority, timestamps, or target type. Those fields belonged to an older route model and should not be used by new integrations.
+
+## Configure Routes in the UI
+
+Routes are managed with their Events, not in a separate route editor.
+
+![Route badges in the Events workspace](../../../../assets/RoutesOverview.webp)
+
+For a UI-capable Event:
+
+1. Open the app's **Events** workspace.
+2. Create or select the Event.
+3. Edit its route badge inline, or open the Event configuration.
+4. Enter a unique **Route Path**.
+5. Save the Event.
+
+![The Route Path field in Event configuration](../../../../assets/RouteConfiguration.webp)
+
+The UI normalizes a route path by:
+
+- trimming whitespace;
+- removing a query string before storing the path;
+- adding a leading `/` when it is missing;
+- using `/` for an empty path.
+
+The Events workspace rejects a path already owned by another Event. Deleting an Event also removes mappings that point to it, and the workspace cleans up mappings whose Event no longer exists.
+
+## Route-State API
+
+The current state interface is:
 
 ```typescript
 interface IAppRouteState {
-  // Query routes
-  getRoutes(appId: string): Promise<IAppRoute[]>;
-  getRouteByPath(appId: string, path: string): Promise<IAppRoute | null>;
-  getDefaultRoute(appId: string): Promise<IAppRoute | null>;
+  getRoutes(appId: string, force?: boolean): Promise<IRouteMapping[]>;
+  getRouteByPath(
+    appId: string,
+    path: string,
+  ): Promise<IRouteMapping | null>;
+  getDefaultRoute(appId: string): Promise<IRouteMapping | null>;
 
-  // Mutate routes
-  createRoute(appId: string, route: CreateAppRoute): Promise<IAppRoute>;
-  updateRoute(appId: string, routeId: string, route: UpdateAppRoute): Promise<IAppRoute>;
-  deleteRoute(appId: string, routeId: string): Promise<void>;
+  setRoute(
+    appId: string,
+    path: string,
+    eventId: string,
+  ): Promise<IRouteMapping>;
+  setRoutes(
+    appId: string,
+    routes: Record<string, string>,
+  ): Promise<IRouteMapping[]>;
+
+  deleteRouteByPath(appId: string, path: string): Promise<void>;
+  deleteRouteByEvent(appId: string, eventId: string): Promise<void>;
 }
 ```
 
-### CreateAppRoute
-
-When creating a route, you don't need to specify `id`, `appId`, `createdAt`, or `updatedAt`:
-
-```typescript
-interface CreateAppRoute {
-  path: string;                  // Required: URL path
-  targetType: RouteTargetType;   // Required: "page" or "event"
-  pageId?: string;               // Required if targetType is "page"
-  boardId?: string;              // Optional: associated board
-  pageVersion?: Version;         // Optional: pin to specific version
-  eventId?: string;              // Required if targetType is "event"
-  isDefault?: boolean;           // Default: false
-  priority?: number;             // Default: 0
-  label?: string;                // Optional: display label
-  icon?: string;                 // Optional: icon name
-}
-```
-
-### UpdateAppRoute
-
-All fields are optional when updating:
-
-```typescript
-interface UpdateAppRoute {
-  path?: string;
-  targetType?: RouteTargetType;
-  pageId?: string;
-  boardId?: string;
-  pageVersion?: Version;
-  eventId?: string;
-  isDefault?: boolean;
-  priority?: number;
-  label?: string;
-  icon?: string;
-}
-```
-
-## Usage Examples
-
-### Get All Routes
+### Read Routes
 
 ```typescript
 const routes = await backend.routeState.getRoutes(appId);
-console.log(`App has ${routes.length} routes`);
+const reports = await backend.routeState.getRouteByPath(appId, "/reports");
+const home = await backend.routeState.getDefaultRoute(appId);
 ```
 
-### Get Route by Path
+`getDefaultRoute` is a lookup for the path `/`; there is no separate `isDefault` flag.
+
+The browser-backed implementation sorts `getRoutes` results by path. Do not use that order as a navigation priority—the runtime resolves exact configured paths.
+
+### Set a Route
 
 ```typescript
-const route = await backend.routeState.getRouteByPath(appId, "/dashboard");
-if (route) {
-  console.log(`Dashboard route points to ${route.targetType}: ${route.pageId || route.eventId}`);
-}
+const mapping = await backend.routeState.setRoute(
+  appId,
+  "/reports",
+  reportsEventId,
+);
 ```
 
-### Get Default Route
+`setRoute` is an upsert by path. If `/reports` already exists, the method changes its `eventId`; otherwise it creates the mapping.
+
+To set several mappings:
 
 ```typescript
-const homeRoute = await backend.routeState.getDefaultRoute(appId);
-if (homeRoute) {
-  // Redirect to home page
-  navigateTo(homeRoute.path);
-}
-```
-
-### Create a Page Route
-
-```typescript
-const newRoute = await backend.routeState.createRoute(appId, {
-  path: "/reports",
-  targetType: "page",
-  pageId: "page_abc123",
-  boardId: "board_xyz789",
-  label: "Reports",
-  icon: "chart",
+await backend.routeState.setRoutes(appId, {
+  "/": homeEventId,
+  "/reports": reportsEventId,
+  "/support": supportEventId,
 });
 ```
 
-### Create an Event Route
+`setRoutes` applies the provided entries. It does not delete mappings omitted from the object.
+
+### Delete Routes
+
+Delete one path:
 
 ```typescript
-const webhookRoute = await backend.routeState.createRoute(appId, {
-  path: "/api/webhook",
-  targetType: "event",
-  eventId: "event_webhook_handler",
-  priority: 10, // Higher priority for API routes
-});
+await backend.routeState.deleteRouteByPath(appId, "/reports");
 ```
 
-### Update a Route
+Delete every path owned by an Event:
 
 ```typescript
-// Make a route the default
-await backend.routeState.updateRoute(appId, routeId, {
-  isDefault: true,
-});
-
-// Change route target
-await backend.routeState.updateRoute(appId, routeId, {
-  targetType: "page",
-  pageId: "new_page_id",
-  eventId: undefined, // Clear the event ID
-});
+await backend.routeState.deleteRouteByEvent(appId, eventId);
 ```
 
-### Delete a Route
+The second form is useful when removing an Event because it prevents orphaned navigation entries.
 
-```typescript
-await backend.routeState.deleteRoute(appId, routeId);
+## Runtime Resolution
+
+The app-use surface reads the current route from the `route` query parameter:
+
+```text
+/use?id=<appId>&route=/reports
 ```
 
-## Route Resolution
+Resolution follows this behavior:
 
-### Path Matching
+1. Load active Events and all route mappings for the app.
+2. Resolve the requested path exactly.
+3. If it has no mapping, fall back to the `/` mapping.
+4. Load the mapped Event.
+5. Render its Page or built-in interface when it has one.
 
-Routes are matched in this order:
+A direct `eventId` can be used when no effective route mapping is active, but user-facing navigation should prefer stable route paths.
 
-1. **Exact match** - Path matches exactly
-2. **Priority order** - Higher `priority` value checked first
-3. **Creation order** - Earlier routes checked first
+## Query Parameters
 
-### Default Route
+Query parameters are navigation context, not route identity. For example:
 
-The default route (`isDefault: true`) is used when:
-
-- User navigates to the app root (`/`)
-- No other route matches the requested path
-- Only one route can be default per app
-
-### Version Pinning
-
-For page routes, you can pin to a specific page version:
-
-```typescript
-{
-  path: "/stable-dashboard",
-  targetType: "page",
-  pageId: "dashboard",
-  pageVersion: {
-    major: 1,
-    minor: 0,
-    patch: 0,
-    type: "stable"
-  }
-}
+```text
+/use?id=<appId>&route=/reports&period=30d&team=sales
 ```
 
-Version types:
-
-| Type | Description |
-|------|-------------|
-| `"draft"` | Work in progress |
-| `"preview"` | Testing version |
-| `"stable"` | Production-ready |
-| `"archived"` | Deprecated |
-
-## Navigation
-
-### From Flows
-
-Use navigation nodes to redirect users:
-
-```
-[Navigate Node]
-├── Route Path: "/success"
-└── Mode: "replace" | "push"
-```
-
-### From Components
-
-A2UI components can trigger navigation:
+The stored mapping is still:
 
 ```json
 {
-  "type": "Button",
-  "props": {
-    "label": "Go to Reports"
-  },
-  "actions": {
-    "onClick": {
-      "type": "navigate",
-      "path": "/reports"
-    }
+  "path": "/reports",
+  "eventId": "evt_reports"
+}
+```
+
+A2UI navigation can include parameters in the route string or in the message's `queryParams` object. Flow-Like carries them into the destination URL while resolving only `/reports`.
+
+```json
+{
+  "type": "navigateTo",
+  "route": "/reports",
+  "replace": false,
+  "queryParams": {
+    "period": "30d",
+    "team": "sales"
   }
 }
 ```
 
-### Programmatic Navigation
+## Error and Conflict Handling
 
-From frontend code:
+- Check for `null` when reading a route directly.
+- Configure `/` so an unknown path has a useful fallback.
+- Verify that the mapped Event exists, is active, and exposes a usable interface before treating a path as user-facing.
+- In custom tooling, check for an existing path before assigning it to a different Event if you want the same conflict behavior as the Events UI.
+- Use `deleteRouteByEvent` as part of Event deletion.
 
-```typescript
-// Using the router
-router.push(`/use?app=${appId}&route=/dashboard`);
+## Related Guides
 
-// With route state
-const route = await backend.routeState.getRouteByPath(appId, targetPath);
-if (route) {
-  // Handle the route target
-}
-```
-
-## Error Handling
-
-### Route Not Found
-
-When no route matches:
-
-```typescript
-const route = await backend.routeState.getRouteByPath(appId, requestedPath);
-if (!route) {
-  // Fall back to default route
-  const defaultRoute = await backend.routeState.getDefaultRoute(appId);
-  if (!defaultRoute) {
-    // Show 404 or app landing
-  }
-}
-```
-
-### Duplicate Path Prevention
-
-Creating a route with a duplicate path will fail:
-
-```typescript
-try {
-  await backend.routeState.createRoute(appId, {
-    path: "/existing-path", // Already exists
-    targetType: "page",
-    pageId: "some-page",
-  });
-} catch (error) {
-  // Handle duplicate path error
-}
-```
-
-## Best Practices
-
-### API Routes
-
-For event-based API routes:
-
-- Use `/api/` prefix for clarity
-- Set higher priority to avoid page route conflicts
-- Consider authentication requirements
-
-```typescript
-{
-  path: "/api/data",
-  targetType: "event",
-  eventId: "data_handler",
-  priority: 100, // High priority
-}
-```
-
-### Page Routes
-
-For page routes:
-
-- Use descriptive, lowercase paths
-- Group related pages under common prefixes
-- Set appropriate labels for navigation UI
-
-```typescript
-{
-  path: "/settings/profile",
-  targetType: "page",
-  pageId: "profile_settings_page",
-  label: "Profile Settings",
-  icon: "user",
-}
-```
-
-### Default Route
-
-Always have a default route:
-
-```typescript
-{
-  path: "/",
-  targetType: "page",
-  pageId: "home_page",
-  isDefault: true,
-  label: "Home",
-  icon: "home",
-}
-```
+- [Pages](/dev/a2ui/pages/) — connect a route Event to a Page
+- [Visual Builder](/dev/a2ui/visual-builder/) — author route-aware Page actions
+- [A2UI overview](/dev/a2ui/overview/) — understand navigation messages

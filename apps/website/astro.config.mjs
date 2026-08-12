@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import cloudflare from "@astrojs/cloudflare";
 import react from "@astrojs/react";
 import tailwindcss from "@tailwindcss/vite";
@@ -44,11 +45,26 @@ export default defineConfig({
 		compressor(),
 	],
 	vite: {
+		// React's jsx-dev-runtime is conditional on NODE_ENV. Keep Vite's client,
+		// SSR, and Astro dependency caches physically separate so a production
+		// pre-bundle can never be reused by development transforms that call jsxDEV.
+		cacheDir:
+			process.env.NODE_ENV === "production"
+				? "node_modules/.vite-production"
+				: "node_modules/.vite-development",
 		define: {
 			"process.env": {},
 		},
 		resolve: {
 			dedupe: ["react", "react-dom"],
+			alias: {
+				// flow-like-ui leaf components import Next App Router hooks; this
+				// site has no Next runtime, so alias them to inert no-ops so those
+				// components (FlowPilot bubble, interactive a2ui) run in Astro islands.
+				"next/navigation": fileURLToPath(
+					new URL("./src/shims/next-navigation.ts", import.meta.url),
+				),
+			},
 		},
 		ssr: {
 			noExternal: [

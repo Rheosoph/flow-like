@@ -45,7 +45,8 @@ impl NodeLogic for SetElementVisibility {
             "Visible",
             "Whether the element should be visible",
             VariableType::Boolean,
-        );
+        )
+        .set_default_value(Some(json!(true)));
 
         node.add_output_pin("exec_out", "▶", "Execution output", VariableType::Execution);
 

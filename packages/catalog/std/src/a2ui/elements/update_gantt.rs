@@ -18,10 +18,10 @@ use flow_like_types::{Value, async_trait, json::json};
 /// Unwrap a component prop's `BoundValue` wrapper into its underlying value.
 fn unwrap_bound(value: &Value) -> Value {
     if let Some(obj) = value.as_object() {
-        if let Some(json_str) = obj.get("literalJson").and_then(|v| v.as_str()) {
-            if let Ok(parsed) = flow_like_types::json::from_str::<Value>(json_str) {
-                return parsed;
-            }
+        if let Some(json_str) = obj.get("literalJson").and_then(|v| v.as_str())
+            && let Ok(parsed) = flow_like_types::json::from_str::<Value>(json_str)
+        {
+            return parsed;
         }
         for key in [
             "literalString",
@@ -84,6 +84,58 @@ fn operation_options() -> PinOptions {
     PinOptions::new()
         .set_valid_values(OPERATIONS.iter().map(|op| op.to_string()).collect())
         .build()
+}
+
+/// Reapply operation-owned schemas without recreating pins, so template pins keep their IDs and
+/// connections while still picking up the latest generated schema.
+fn refresh_dynamic_schemas(node: &mut Node, operation: &str) {
+    match operation {
+        "Set Tasks" | "Add Tasks" | "Get Tasks" => {
+            for pin in node.pins.values_mut().filter(|pin| pin.name == "tasks") {
+                pin.set_schema::<GanttTask>();
+            }
+        }
+        "Add Task" => {
+            for pin in node.pins.values_mut().filter(|pin| pin.name == "task") {
+                pin.set_schema::<GanttTask>();
+            }
+        }
+        "Update Task" => {
+            for pin in node.pins.values_mut().filter(|pin| pin.name == "task") {
+                pin.set_schema::<GanttTaskUpdate>();
+            }
+        }
+        "Update Tasks" => {
+            for pin in node.pins.values_mut().filter(|pin| pin.name == "tasks") {
+                pin.set_schema::<GanttTaskUpdate>();
+            }
+        }
+        "Add Dependency" | "Remove Dependency" => {
+            for pin in node
+                .pins
+                .values_mut()
+                .filter(|pin| pin.name == "dependency")
+            {
+                pin.set_schema::<GanttDependencyUpdate>();
+            }
+        }
+        "Set Config" | "Get Config" => {
+            for pin in node.pins.values_mut().filter(|pin| pin.name == "config") {
+                pin.set_schema::<GanttConfig>();
+            }
+        }
+        "Diff Tasks" => {
+            let schema_pins = ["previous", "created", "updated", "deleted", "current"];
+            for pin in node
+                .pins
+                .values_mut()
+                .filter(|pin| schema_pins.contains(&pin.name.as_str()))
+            {
+                pin.set_schema::<GanttTask>();
+            }
+        }
+        _ => {}
+    }
 }
 
 impl UpdateGantt {
@@ -557,18 +609,71 @@ impl NodeLogic for UpdateGantt {
                     );
                 }
             }
-            "Get Config" => {
-                if count_matching_pins(node, &("config", "Config", false)) == 0 {
-                    node.add_output_pin(
-                        "config",
-                        "Config",
-                        "Current view configuration",
-                        VariableType::Struct,
-                    )
-                    .set_options(PinOptions::new().set_enforce_schema(false).build());
-                }
+            "Get Config" if count_matching_pins(node, &("config", "Config", false)) == 0 => {
+                node.add_output_pin(
+                    "config",
+                    "Config",
+                    "Current view configuration",
+                    VariableType::Struct,
+                )
+                .set_options(PinOptions::new().set_enforce_schema(false).build());
             }
             _ => {}
         }
+
+        refresh_dynamic_schemas(node, &operation);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refreshes_existing_update_tasks_schema_without_replacing_pin() {
+        let mut node = UpdateGantt::new().get_node();
+        let pin = node
+            .get_pin_mut_by_name("tasks")
+            .expect("catalog node should contain the tasks pin");
+        let original_id = pin.id.clone();
+        pin.friendly_name = "Task Patches".to_string();
+        pin.schema = Some(r#"{"type":"object","title":"stale"}"#.to_string());
+        let mut expected = pin.clone();
+        expected.set_schema::<GanttTaskUpdate>();
+
+        refresh_dynamic_schemas(&mut node, "Update Tasks");
+
+        let refreshed = node.get_pin_by_name("tasks").unwrap();
+        assert_eq!(refreshed.id, original_id);
+        assert_eq!(refreshed.schema, expected.schema);
+    }
+
+    #[test]
+    fn refreshes_every_legacy_add_task_pin() {
+        let mut node = UpdateGantt::new().get_node();
+        let first_id = {
+            let pin = node.add_input_pin("task", "Task", "", VariableType::Struct);
+            pin.schema = Some("stale-one".to_string());
+            pin.id.clone()
+        };
+        let second_id = {
+            let pin = node.add_input_pin("task", "Task", "", VariableType::Struct);
+            pin.schema = Some("stale-two".to_string());
+            pin.id.clone()
+        };
+        let mut expected = node.get_pin_by_name("task").unwrap().clone();
+        expected.set_schema::<GanttTask>();
+
+        refresh_dynamic_schemas(&mut node, "Add Task");
+
+        let refreshed: Vec<_> = node
+            .pins
+            .values()
+            .filter(|pin| pin.name == "task")
+            .collect();
+        assert_eq!(refreshed.len(), 2);
+        assert!(refreshed.iter().all(|pin| pin.schema == expected.schema));
+        assert!(refreshed.iter().any(|pin| pin.id == first_id));
+        assert!(refreshed.iter().any(|pin| pin.id == second_id));
     }
 }

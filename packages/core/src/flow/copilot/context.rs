@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-use crate::flow::board::Board;
+use crate::flow::board::{Board, LayerType};
 use crate::flow::node::Node;
 use crate::flow::pin::PinType;
 use flow_like_types::Result;
 
 /// Compact node representation for context
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NodeContext {
     pub id: String,
     #[serde(rename = "t")] // "type" abbreviated
@@ -24,7 +24,7 @@ pub struct NodeContext {
 }
 
 /// Compact pin representation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PinContext {
     #[serde(rename = "n")] // "name" abbreviated
     pub name: String,
@@ -36,7 +36,7 @@ pub struct PinContext {
 }
 
 /// Compact edge representation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EdgeContext {
     #[serde(rename = "f")] // "from" abbreviated
     pub from_node_id: String,
@@ -48,12 +48,32 @@ pub struct EdgeContext {
     pub to_pin_name: String,
 }
 
+/// Result-cache settings attached to a Function layer.
+///
+/// The persisted board calls the grouping value a `prefix`; FlowScript and FlowPilot expose the
+/// behavior-oriented name `namespace`, matching the cache invalidation surface users interact
+/// with. Keeping this as a small, owned context type avoids leaking board serialization details
+/// into the provider-neutral manifest.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LayerCacheContext {
+    pub enabled: bool,
+    pub namespace: String,
+    /// `None` means permanent on persisted boards. When re-authoring it, FlowPilot must use
+    /// explicit zero because omission on a new cache object now defaults to 300 seconds.
+    pub ttl_seconds: Option<u64>,
+    /// `app` for a shared result or `user` for a result private to the triggering user.
+    pub scope: String,
+}
+
 /// Compact layer representation for context
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LayerContext {
     pub id: String,
     #[serde(rename = "n")] // "name" abbreviated
     pub name: String,
+    /// Layer kind (`Function`, `Macro`, or `Collapsed`). Kept compact in provider context.
+    #[serde(rename = "t", default)]
+    pub layer_type: String,
     /// Parent layer ID if nested, None if at root
     #[serde(rename = "p", skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
@@ -68,10 +88,13 @@ pub struct LayerContext {
     /// Output pins (for connecting FROM this layer)
     #[serde(rename = "o", skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<PinContext>,
+    /// Function result-cache settings. `None` means the function is not cache-configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<LayerCacheContext>,
 }
 
 /// Compact variable representation for context
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VariableContext {
     pub id: String,
     #[serde(rename = "n")] // "name" abbreviated
@@ -87,7 +110,7 @@ pub struct VariableContext {
 }
 
 /// Complete graph context for the LLM
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GraphContext {
     pub nodes: Vec<NodeContext>,
     pub edges: Vec<EdgeContext>,
@@ -244,11 +267,23 @@ pub fn prepare_context(board: &Board, selected_node_ids: &[String]) -> Result<Gr
             LayerContext {
                 id: layer.id.clone(),
                 name: layer.name.clone(),
+                layer_type: match &layer.r#type {
+                    LayerType::Function => "Function",
+                    LayerType::Macro => "Macro",
+                    LayerType::Collapsed => "Collapsed",
+                }
+                .to_string(),
                 parent_id: layer.parent_id.clone(),
                 node_ids: layer.nodes.keys().cloned().collect(),
                 position: (x, y),
                 inputs,
                 outputs,
+                cache: layer.cache.as_ref().map(|cache| LayerCacheContext {
+                    enabled: cache.enabled,
+                    namespace: cache.prefix.clone(),
+                    ttl_seconds: cache.ttl_seconds,
+                    scope: cache.scope.as_str().to_string(),
+                }),
             }
         })
         .collect();
@@ -281,4 +316,92 @@ pub fn prepare_context(board: &Board, selected_node_ids: &[String]) -> Result<Gr
         variables: variable_contexts,
         selected_nodes: selected_node_ids.to_vec(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow::board::{Layer, LayerCache, LayerCacheScope, LayerType};
+    use flow_like_storage::Path;
+
+    #[test]
+    fn default_function_cache_is_exposed_in_graph_context_with_flowscript_names() {
+        let mut board = Board::new_detached(Some("cache-context".to_string()), Path::default());
+        let mut layer = Layer::new(
+            "pricing-layer".to_string(),
+            "calculatePricing".to_string(),
+            LayerType::Function,
+        );
+        layer.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "global".to_string(),
+            ttl_seconds: Some(300),
+            scope: LayerCacheScope::App,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+
+        let context = prepare_context(&board, &[]).expect("graph context");
+        assert_eq!(context.layers[0].layer_type, "Function");
+        let cache = context.layers[0]
+            .cache
+            .as_ref()
+            .expect("function cache context");
+        assert!(cache.enabled);
+        assert_eq!(cache.namespace, "global");
+        assert_eq!(cache.ttl_seconds, Some(300));
+        assert_eq!(cache.scope, "app");
+
+        let json = serde_json::to_value(&context).expect("serialized graph context");
+        assert_eq!(json["layers"][0]["cache"]["namespace"], "global");
+        assert_eq!(json["layers"][0]["cache"]["ttl_seconds"], 300);
+        assert_eq!(json["layers"][0]["cache"]["scope"], "app");
+    }
+
+    #[test]
+    fn disabled_function_cache_settings_remain_visible_to_flowpilot() {
+        let mut board = Board::new_detached(Some("cache-context".to_string()), Path::default());
+        let mut layer = Layer::new(
+            "pricing-layer".to_string(),
+            "calculatePricing".to_string(),
+            LayerType::Function,
+        );
+        layer.cache = Some(LayerCache {
+            enabled: false,
+            prefix: "remembered-pricing".to_string(),
+            ttl_seconds: Some(0),
+            scope: LayerCacheScope::User,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+
+        let context = prepare_context(&board, &[]).expect("graph context");
+        let cache = context.layers[0]
+            .cache
+            .as_ref()
+            .expect("disabled settings should remain inspectable");
+        assert!(!cache.enabled);
+        assert_eq!(cache.namespace, "remembered-pricing");
+        assert_eq!(cache.ttl_seconds, Some(0));
+        assert_eq!(cache.scope, "user");
+    }
+
+    #[test]
+    fn permanent_cache_exposes_null_ttl_to_flowpilot() {
+        let mut board = Board::new_detached(Some("cache-context".to_string()), Path::default());
+        let mut layer = Layer::new(
+            "legacy-cache".to_string(),
+            "legacyCached".to_string(),
+            LayerType::Function,
+        );
+        layer.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "global".to_string(),
+            ttl_seconds: None,
+            scope: LayerCacheScope::App,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+
+        let context = prepare_context(&board, &[]).expect("graph context");
+        let json = serde_json::to_value(&context).expect("serialized graph context");
+        assert!(json["layers"][0]["cache"]["ttl_seconds"].is_null());
+    }
 }

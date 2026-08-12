@@ -6,22 +6,12 @@ import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../hooks/use-invoke";
 import { addAppToProfile } from "../../lib/add-app-to-profile";
+import { openExternalUrl } from "../../lib/open-external";
 import type { IApp } from "../../lib/schema/app/app";
 import { IAppVisibility } from "../../lib/schema/app/app";
 import type { IMetadata } from "../../lib/schema/bit/bit-pack";
 import { useBackend } from "../../state/backend-state";
 import type { IEventMapping } from "../interfaces/interfaces";
-
-async function openCheckoutUrl(url: string) {
-	if (typeof window !== "undefined" && "__TAURI__" in window) {
-		const { openUrl } = await import("@tauri-apps/plugin-opener");
-		await openUrl(url);
-		toast.info("Opening checkout in your browser...");
-	} else {
-		window.open(url, "_blank");
-		toast.info("Opening checkout in a new tab...");
-	}
-}
 
 export function useStoreData(
 	id: string | undefined,
@@ -125,7 +115,16 @@ export function useStoreData(
 		}
 
 		try {
-			await auth.signinRedirect();
+			// Carry the current location through the OAuth round trip so the
+			// web callback can land the user back here (no-op on desktop).
+			await auth.signinRedirect({
+				url_state:
+					typeof window === "undefined"
+						? undefined
+						: window.location.pathname +
+							window.location.search +
+							window.location.hash,
+			});
 		} catch (error) {
 			console.error("Failed to start sign in:", error);
 			toast.error("Failed to start sign in. Please try again.");
@@ -163,7 +162,7 @@ export function useStoreData(
 			}
 
 			if (result.checkoutUrl) {
-				await openCheckoutUrl(result.checkoutUrl);
+				await openExternalUrl(result.checkoutUrl, "checkout");
 			} else {
 				toast.error("Unable to start purchase. Please try again.");
 			}

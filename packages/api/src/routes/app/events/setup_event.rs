@@ -213,7 +213,7 @@ pub(crate) async fn run_event_setup(
 ) -> Result<SetupEventResponse, ApiError> {
     if !is_jwt_configured() {
         return Err(ApiError::internal_error(flow_like_types::anyhow!(
-            "Execution JWT signing not configured (missing EXECUTION_KEY/EXECUTION_PUB env vars)"
+            "Execution JWT signing not configured (missing BACKEND_KEY/BACKEND_PUB)"
         )));
     }
 
@@ -298,7 +298,7 @@ pub(crate) async fn run_event_setup(
     let credentials_json = serde_json::to_string(&shared_credentials)
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
     let profile =
-        fetch_profile_for_dispatch(&state.db, &sub, body.profile_id.as_deref(), &app_id).await;
+        fetch_profile_for_dispatch(&state, &sub, body.profile_id.as_deref(), &app_id, true).await;
     let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
 
     // Persist a run record. Setup runs are tracked as `Http` mode runs
@@ -665,13 +665,13 @@ async fn persist_registrations(
                     continue;
                 }
                 let mut config_json = env.config.clone();
-                if let Some(auth) = env.config.get("auth") {
-                    if let Some(obj) = config_json.as_object_mut() {
-                        obj.insert(
-                            "auth".to_string(),
-                            protect_auth_config_for_storage(auth, &state.encryption_key),
-                        );
-                    }
+                if let Some(auth) = env.config.get("auth")
+                    && let Some(obj) = config_json.as_object_mut()
+                {
+                    obj.insert(
+                        "auth".to_string(),
+                        protect_auth_config_for_storage(auth, &state.encryption_key),
+                    );
                 }
                 event_remote_registration::ActiveModel {
                     id: Set(flow_like_types::create_id()),
@@ -1427,7 +1427,7 @@ fn build_rest_openapi_spec(config: &Value) -> Value {
             .to_string();
         let openapi_path = rest_file_openapi_path(route);
         let mut op = json!({
-            "operationId": format!("get_{}", openapi_path.trim_start_matches('/').replace('/', "_").replace('{', "").replace('}', "")),
+            "operationId": format!("get_{}", openapi_path.trim_start_matches('/').replace('/', "_").replace(['{', '}'], "")),
             "summary": if directory { "Static directory file" } else { "Static file" },
             "responses": {
                 "200": {

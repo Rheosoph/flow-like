@@ -16,19 +16,17 @@ function generateRouteId(): string {
 export class WebRouteState implements IAppRouteState {
 	constructor(private readonly backend: WebBackendRef) {}
 
+	// Errors propagate: an empty list means "this app has no routes", and callers
+	// act on that distinction (see the route path draft in events-page).
 	async getRoutes(appId: string, _force?: boolean): Promise<IRouteMapping[]> {
-		try {
-			const routes = await apiGet<any[]>(
-				`apps/${appId}/routes`,
-				this.backend.auth,
-			);
-			return routes.map((r) => ({
-				path: r.path,
-				eventId: r.eventId ?? r.event_id,
-			}));
-		} catch {
-			return [];
-		}
+		const routes = await apiGet<any[]>(
+			`apps/${appId}/routes`,
+			this.backend.auth,
+		);
+		return routes.map((r) => ({
+			path: r.path,
+			eventId: r.eventId ?? r.event_id,
+		}));
 	}
 
 	async getRouteByPath(

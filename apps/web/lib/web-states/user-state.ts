@@ -12,22 +12,24 @@ import type {
 	INotificationsOverview,
 	IUserLookup,
 } from "@flow-like/flow-like-ui/state/backend-state/types";
-import type {
-	IBillingSession,
-	IPricingResponse,
-	IPushTargetStatus,
-	IRegisterPushTargetRequest,
-	IRegisterPushTargetResponse,
-	ISubscribeRequest,
-	ISubscribeResponse,
-	IUserInfo,
-	IUserTemplateInfo,
-	IUserUpdate,
-	IUserWidgetInfo,
+import {
+	type IBillingSession,
+	type IPricingResponse,
+	type IPushTargetStatus,
+	type IRegisterPushTargetRequest,
+	type IRegisterPushTargetResponse,
+	type ISubscribeRequest,
+	type ISubscribeResponse,
+	type IUserInfo,
+	type IUserTemplateInfo,
+	type IUserUpdate,
+	type IUserWidgetInfo,
+	isLocalUserSub,
+	userLookupFromClaims,
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { createId } from "@paralleldrive/cuid2";
-import { appsDB, type IShortcut } from "../apps-db";
+import { type IShortcut, appsDB } from "../apps-db";
 import {
 	type WebBackendRef,
 	apiDelete,
@@ -36,6 +38,22 @@ import {
 	apiPost,
 	apiPut,
 } from "./api-utils";
+
+// The hub serializes the sea-orm model directly: JSON key `type` with values
+// "Workflow"/"System". The UI contract is `notification_type` with
+// "WORKFLOW"/"SYSTEM", so map it here at the boundary.
+function normalizeRemoteNotification(raw: INotification): INotification {
+	const rawType =
+		(raw as { notification_type?: string }).notification_type ??
+		(raw as { type?: string }).type;
+	return {
+		...raw,
+		notification_type:
+			typeof rawType === "string" && rawType.toUpperCase() === "WORKFLOW"
+				? "WORKFLOW"
+				: "SYSTEM",
+	};
+}
 
 // API returns snake_case fields, frontend expects camelCase
 interface ApiProfile {
@@ -118,17 +136,50 @@ export class WebUserState implements IUserState {
 		);
 	}
 
+	/**
+	 * Local executions report the "local" sub, which no account matches —
+	 * resolve it to the signed-in user, falling back to cached auth claims
+	 * when the hub is unreachable.
+	 */
+	private async lookupCurrentUser(): Promise<IUserLookup> {
+		const claims = this.backend.auth?.user?.profile;
+		const sub = claims?.sub;
+
+		if (sub && !isLocalUserSub(sub) && this.hasRemoteAccessToken()) {
+			try {
+				return await this.lookupUser(sub);
+			} catch (error) {
+				console.warn(
+					"[WebUserState.lookupUser] falling back to auth claims for the local sub:",
+					error,
+				);
+			}
+		}
+
+		return userLookupFromClaims(claims);
+	}
+
 	async lookupUser(userId: string): Promise<IUserLookup> {
+		if (isLocalUserSub(userId)) {
+			return await this.lookupCurrentUser();
+		}
+
 		return apiGet<IUserLookup>(`user/lookup/${userId}`, this.backend.auth);
 	}
 
 	async searchUsers(query: string): Promise<IUserLookup[]> {
+		const trimmed = query.trim();
+		if (!trimmed) return [];
+
 		try {
-			return await apiGet<IUserLookup[]>(
-				`user/search/${encodeURIComponent(query)}`,
-				this.backend.auth,
+			return (
+				(await apiGet<IUserLookup[]>(
+					`user/search/${encodeURIComponent(trimmed)}`,
+					this.backend.auth,
+				)) ?? []
 			);
-		} catch {
+		} catch (error) {
+			console.warn("[UserState.searchUsers] search failed:", error);
 			return [];
 		}
 	}
@@ -163,10 +214,11 @@ export class WebUserState implements IUserState {
 		}
 
 		try {
-			return await apiGet<INotification[]>(
+			const remote = await apiGet<INotification[]>(
 				`user/notifications/list?${params}`,
 				this.backend.auth,
 			);
+			return remote.map(normalizeRemoteNotification);
 		} catch {
 			return [];
 		}
@@ -300,7 +352,9 @@ export class WebUserState implements IUserState {
 	}
 
 	private async prepareProfile(apiProfile: ApiProfile): Promise<IProfile> {
-		const profile = await this.mergeOfflineApps(transformApiProfile(apiProfile));
+		const profile = await this.mergeOfflineApps(
+			transformApiProfile(apiProfile),
+		);
 		return this.syncRemoteShortcuts(profile);
 	}
 
@@ -491,11 +545,7 @@ export class WebUserState implements IUserState {
 			throw new Error("Profile ID is required");
 		}
 
-		await apiPost(
-			`profile/${profileId}`,
-			{ shortcuts },
-			this.backend.auth,
-		);
+		await apiPost(`profile/${profileId}`, { shortcuts }, this.backend.auth);
 	}
 
 	private async saveToOfflineStorage(

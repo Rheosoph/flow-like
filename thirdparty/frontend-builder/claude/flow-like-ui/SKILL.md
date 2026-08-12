@@ -1,15 +1,24 @@
 ---
 name: flow-like-ui
-description: Generate valid A2UI JSON for FlowLike application frontends. Use when asked to create, design, or build user interfaces, dashboards, forms, pages, layouts, or any visual UI components as A2UI JSON. Supports 60+ component types including layout (row, column, grid), display (text, image, charts), interactive (button, textField, select), containers (card, modal, tabs), game (canvas2d, scene3d, sprite), and geo (geoMap).
+description: Generate complete, valid A2UI JSON for FlowLike frontends. Use when asked to create, design, or build an interface, dashboard, form, page, responsive layout, reusable widget, chart, calendar, Gantt view, media experience, game UI, map, or other visual UI as A2UI JSON. Covers all 71 runtime component types, BoundValue data binding, actions, inline widgets, theme-aware styling, and responsive design.
 ---
 
-# A2UI Frontend Generator
+# Generate FlowLike A2UI
 
-Convert UI descriptions into valid A2UI (Agent-to-UI) JSON that renders directly in the FlowLike runtime. A2UI is a declarative, flat-list protocol — components reference children by ID, not by nesting.
+Convert a UI request into a complete A2UI surface that can be imported or rendered by FlowLike. A2UI uses a flat component array: parent components reference child IDs instead of nesting component objects.
 
-## Response Format
+## Workflow
 
-Always respond with ONLY a JSON code block. No explanatory text before or after.
+1. Design the complete surface without asking follow-up questions when sensible defaults suffice.
+2. Select only registered components from [references/components-reference.md](references/components-reference.md).
+3. Build one flat component array with one main root and valid child references.
+4. Use an inline `widgetInstance` for a genuinely reusable or data-repeated element. Keep a page to at most one or two widgets.
+5. Add BoundValue wrappers, initial `dataModel` entries, actions, theme classes, and mobile-first layout.
+6. Check every ID, required prop, wrapper, child reference, binding path, and structured value before responding.
+
+## Output contract
+
+Respond with only one `json` code block. Put the complete surface in that block; do not split it or add prose.
 
 ```json
 {
@@ -36,640 +45,205 @@ Always respond with ONLY a JSON code block. No explanatory text before or after.
 }
 ```
 
-## Absolute Rules
+Enforce these invariants:
 
-1. **JSON only** — No explanations, just the JSON code block
-2. **Exactly one root component named root** — `rootComponentId` MUST be exactly `"root"`, and `components[]` MUST contain exactly one component with `"id": "root"`
-3. **Root wraps the whole UI** — Put every top-level section inside the root component's `children`
-4. **Flat component list** — All components are siblings in `components[]`; hierarchy is expressed via children references, NEVER by nesting
-5. **Unique IDs** — Every non-root component gets a unique kebab-case ID (`header-row`, `submit-btn`)
-6. **BoundValue wrapper** — ALL prop values MUST use BoundValue format unless the field is structural
-7. **Reference children by ID** — Use `{"explicitList": ["id1", "id2"]}`
-8. **Prefer theme tokens** — Use `bg-background`, `text-foreground`, etc. Hardcoded colors only if user requests them
-9. **Include dataModel** — When using data binding paths, always provide a `dataModel` array with initial values
+- Set `rootComponentId` to exactly `"root"`.
+- Include exactly one top-level component with `id: "root"` and make it own every top-level section through `children`.
+- Put every component in the top-level `components` array. Never nest component objects inside another component's `children`.
+- Give every non-root component a unique, descriptive kebab-case ID.
+- Keep all components in one response and stay within 120 top-level components.
+- Include `dataModel`, using an empty array when the surface has no initial bound data.
 
-Structural fields that are not BoundValues: `id`, `style.className`, `component.type`, `children`, `actions`, `canvasSettings`, `dataModel`, and raw objects inside option/data arrays.
-
-## BoundValue Format
-
-Every component property value MUST be wrapped:
-
-| Type | Format |
-|------|--------|
-| String | `{"literalString": "text"}` |
-| Number | `{"literalNumber": 42}` |
-| Boolean | `{"literalBool": true}` |
-| Options | `{"literalOptions": [{"value": "v", "label": "L"}]}` |
-| JSON | `{"literalJson": "..."}` |
-| Data Binding | `{"path": "$.data.field", "defaultValue": "fallback"}` |
-
-For full data binding patterns, see [references/bound-value-guide.md](references/bound-value-guide.md).
-
-## Children Format
-
-Static children:
-```json
-"children": {"explicitList": ["child-id-1", "child-id-2"]}
-```
-
-Data-driven repeated children (templating):
-```json
-"children": {"template": {"dataPath": "$.items", "itemIdPath": "id", "templateComponentId": "item-template"}}
-```
-
-## Theme Variables
-
-**Backgrounds:** `bg-background`, `bg-muted`, `bg-card`, `bg-primary`, `bg-secondary`, `bg-accent`, `bg-destructive`
-**Text:** `text-foreground`, `text-muted-foreground`, `text-primary-foreground`, `text-secondary-foreground`, `text-destructive`
-**Borders:** `border-border`, `border-input`, `ring-ring`
-
-For full styling guide with Tailwind utilities and responsive design, see [references/styling-guide.md](references/styling-guide.md).
-
-## Responsive Breakpoints (Mobile-First)
-
-Base = mobile, `sm:` >=640px, `md:` >=768px, `lg:` >=1024px, `xl:` >=1280px, `2xl:` >=1536px
-
-## UI Quality Checklist
-
-- Build mobile-first. Base classes must work on phones, then use `sm:`, `md:`, `lg:`, `xl:`, and `2xl:` for larger screens.
-- Prevent horizontal overflow with `w-full`, `max-w-*`, `min-w-0`, `overflow-hidden`, `break-words`, and responsive grid columns.
-- Prefer responsive grids: `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`, or `repeat(auto-fit, minmax(220px, 1fr))` for card lists.
-- Keep touch targets comfortable. Buttons, links, and inputs should usually have at least `h-10`, `px-3`, or generous padding.
-- Use clean hierarchy: root wrapper, page sections, rows/grids, cards or controls, then content.
-- Avoid fixed desktop-only widths. Use `max-w-* mx-auto` for centered layouts and `w-full` for forms, charts, images, tables, and maps.
-- Give charts, media, maps, and 3D scenes stable dimensions with `aspectRatio`, `min-h-*`, or height props.
-- Make dashboards scannable with stat cards first, charts/tables below, clear labels, muted helper text, and consistent spacing.
-- Prefer icons for common actions when appropriate, but keep text labels for primary actions and navigation.
-- Use theme tokens so the UI remains readable in light and dark mode.
-
-## Custom CSS
-
-For effects beyond Tailwind, use `canvasSettings.customCss`:
+## Component shape
 
 ```json
-"canvasSettings": {
-  "customCss": ".glow { animation: pulse 2s infinite; }"
+{
+  "id": "submit-button",
+  "style": {
+    "className": "w-full sm:w-auto"
+  },
+  "component": {
+    "type": "button",
+    "label": {
+      "literalString": "Submit"
+    },
+    "actions": [
+      {
+        "name": "submit",
+        "context": {
+          "formId": "contact-form"
+        }
+      }
+    ]
+  }
 }
 ```
+
+Place `id`, `style`, and optional `eventRelevant` on the surface-component wrapper. Place `type`, props, `children`, `actions`, and `hidden` inside `component`.
+
+## BoundValue and raw fields
+
+Wrap component prop values unless the reference explicitly marks a field as raw or structural.
+
+| Value | Wrapper |
+|---|---|
+| String | `{"literalString":"text"}` |
+| Number | `{"literalNumber":42}` |
+| Boolean | `{"literalBool":true}` |
+| Select/radio options | `{"literalOptions":[{"value":"v","label":"Label"}]}` |
+| JSON array/object | `{"literalJson":"[{\"id\":1}]"}` |
+| Data binding | `{"path":"$.data.field","defaultValue":"fallback"}` |
+
+Do not wrap these structural or raw values:
+
+- Surface fields: `rootComponentId`, `canvasSettings`, `components`, `dataModel`, wrapper `id`, wrapper `style`, and wrapper `eventRelevant`.
+- Component fields: `type`, `children`, and `actions`.
+- Raw schema fields: `overlay.baseComponentId`, `overlay.overlays`, `popover.contentComponentId`, `tabs.tabs`, `tabs.listStyle`, `tabs.triggerStyle`, `tabs.contentStyle`, `accordion.items`, `plotlyChart.series`, `plotlyChart.xAxis`, and `plotlyChart.yAxis`.
+- Plain `link` fields: `external`, `target`, `variant`, and `underline`.
+- `widgetInstance` wiring: `instanceId`, `widgetId`, `appId`, `inlineWidgetDef`, `exposedPropValues`, `actionBindings`, and `styleOverride`.
+
+Within raw arrays, follow the nested schema in the component reference. Nested display values such as a tab label still use BoundValue where specified.
+
+Read [references/bound-value-guide.md](references/bound-value-guide.md) when the surface uses data paths, forms, repeated templates, or structured JSON props.
+
+## Children
+
+Use explicit children for a fixed layout:
+
+```jsonc
+"children": {
+  "explicitList": ["page-header", "main-content"]
+}
+```
+
+Use a template to repeat one component or inline widget over an array:
+
+```jsonc
+"children": {
+  "template": {
+    "dataPath": "$.projects",
+    "itemIdPath": "id",
+    "templateComponentId": "project-card-template"
+  }
+}
+```
+
+Inside the template component and its descendants, bind with `$item` and `$index`, such as `{"path":"$item.name"}`. `itemIdPath` is relative to each item and stabilizes React keys.
+
+## Reusable and repeated widgets
+
+Use `widgetInstance` when a card, row, list item, or other element is reused or data-repeated. Use plain components for a one-off page section.
+
+```json
+{
+  "id": "project-card-template",
+  "component": {
+    "type": "widgetInstance",
+    "widgetId": "project-card",
+    "instanceId": "project-card-template",
+    "inlineWidgetDef": {
+      "name": "Project Card",
+      "rootComponentId": "project-card-root",
+      "components": [
+        {
+          "id": "project-card-root",
+          "style": {
+            "className": "h-full rounded-lg border border-border bg-card p-4"
+          },
+          "component": {
+            "type": "column",
+            "children": {
+              "explicitList": ["project-card-title"]
+            }
+          }
+        },
+        {
+          "id": "project-card-title",
+          "component": {
+            "type": "text",
+            "content": {
+              "path": "$item.name",
+              "defaultValue": "Project"
+            },
+            "weight": {
+              "literalString": "semibold"
+            }
+          }
+        }
+      ],
+      "exposedProps": []
+    },
+    "exposedPropValues": {},
+    "actionBindings": {}
+  }
+}
+```
+
+An inline widget has its own flat component tree and its own matching `rootComponentId`. Its internal IDs are local to the widget. Use `exposedProps` only for caller-settable overrides; bind dynamic row/item content to `$item`.
 
 ## Actions
 
-Interactive components can fire actions back to the agent/backend:
+Put actions inside the component object:
 
-```json
-"actions": [{"name": "submit", "context": {"formId": "contact-form"}}]
+```jsonc
+"actions": [
+  {
+    "name": "navigate_page",
+    "context": {
+      "route": "/projects",
+      "queryParams": {
+        "view": "active"
+      }
+    }
+  }
+]
 ```
 
----
+- An action invokes an event; it does not carry the current value of a text field, select, checkbox, file input, calendar, or Gantt item.
+- Keep `context` to static routing or identity data. The handler reads live element values from the surface.
+- Use `workflow_event` only when a real workflow `nodeId` is supplied; optionally include real `boardId` and `appId`. Never invent these IDs.
+- Use `navigate_page` with `context.route`, or `external_link` with `context.url`, for built-in navigation.
+- Custom action names are forwarded as `userAction` messages.
+- Calendar and Gantt components add an `interaction` such as `open`, `create`, `update`, `move`, `resize`, `delete`, `link`, or `reorder` to the configured action context.
+- Mark relevant input wrappers with `eventRelevant: true` when a workflow should receive them in its input-value collection.
 
-## Available Components
+## Styling and responsiveness
 
-For complete prop documentation, see [references/components-reference.md](references/components-reference.md).
+- Prefer `style.className` with Tailwind utilities.
+- Always use shadcn theme tokens: `bg-background`, `bg-card`, `bg-muted`, `bg-primary`, `bg-secondary`, `bg-accent`, `bg-destructive`, `text-foreground`, `text-muted-foreground`, `text-primary-foreground`, `text-secondary-foreground`, `text-destructive`, `border-border`, `border-input`, and `ring-ring`.
+- Do not use fixed palette colors such as `bg-white`, `text-black`, or `bg-gray-*`; they break theme adaptation.
+- Design mobile-first. Base classes must work below 640px, then enhance with `sm:`, `md:`, `lg:`, `xl:`, and `2xl:`.
+- Prevent horizontal overflow with `w-full`, `max-w-full`, `min-w-0`, `overflow-hidden`, `break-words`, and responsive grid columns.
+- Give charts, calendars, Gantt timelines, maps, iframes, media, canvases, stacks, and 3D scenes stable dimensions.
+- Keep controls touch-friendly and visible; use text labels for primary actions.
+- Use `canvasSettings.customCss` only for effects that Tailwind cannot express.
 
-### Layout
-| Component | Purpose | Key Props |
-|-----------|---------|-----------|
-| `column` | Vertical flex container | gap, align, justify, wrap, children |
-| `row` | Horizontal flex container | gap, align, justify, wrap, children |
-| `grid` | CSS Grid container | columns, rows, gap, autoFlow, children |
-| `stack` | Z-axis layering (**MUST set width/height**) | align, width, height, children |
-| `scrollArea` | Scrollable container | direction, children |
-| `aspectRatio` | Maintain ratio | ratio* (required), children |
-| `overlay` | Items over a base | baseComponentId, overlays |
-| `absolute` | Free positioning | width, height, children |
-| `box` | Semantic HTML container | as (div/section/header/etc.), children |
-| `center` | Center content | inline, children |
-| `spacer` | Flexible/fixed space | size, flex |
+Read [references/styling-guide.md](references/styling-guide.md) for the style object, layout patterns, scoped custom CSS, and responsive examples.
 
-### Display
-| Component | Purpose | Key Props |
-|-----------|---------|-----------|
-| `text` | Typography | content*, variant, size, weight, color, align |
-| `image` | Image display | src*, alt, fit, loading, aspectRatio |
-| `icon` | Lucide icons | name*, size, color, strokeWidth |
-| `video` | Video player | src*, poster, autoplay, loop, muted, controls |
-| `lottie` | Lottie animations | src*, autoplay, loop, speed |
-| `markdown` | Rendered markdown | content*, allowHtml |
-| `badge` | Small label/tag | content*, variant |
-| `avatar` | User avatar | src, fallback, size |
-| `userProfile` | Flow-Like user lookup | value*, variant, avatarSize, showHover |
-| `progress` | Progress bar | value*, max, showLabel, variant |
-| `spinner` | Loading spinner | size, color |
-| `skeleton` | Loading placeholder | width, height, rounded |
-| `divider` | Separator line | orientation, thickness |
-| `iframe` | Embedded content / HTML preview | src, srcdoc, title, width, height, sandbox |
-| `table` | Data table | columns*, data*, striped, searchable, paginated |
-| `tableRow` | Manual table row | cells*, selected, disabled |
-| `tableCell` | Manual table cell | content*, isHeader, colSpan, rowSpan |
-| `plotlyChart` | Plotly.js charts | chartType, title, data, layout |
-| `nivoChart` | Nivo charts (25+ types) | chartType*, data, indexBy, keys |
-| `filePreview` | File preview | src/url, mimeType, fileType |
-| `boundingBoxOverlay` | Boxes on image | src*, boxes*, showLabels |
-| `geoMap` | Interactive map | center, zoom, markers, mapStyle |
+## Component catalog
 
-### Interactive
-| Component | Purpose | Key Props |
-|-----------|---------|-----------|
-| `button` | Clickable button | label*, variant, size, icon, disabled, loading |
-| `feedback` | User feedback control | mode, title, showComment, feedbackId |
-| `appLink` | Link into app shell | target, label, variant, icon |
-| `textField` | Text input | value*, label, placeholder, inputType, multiline |
-| `select` | Dropdown | value*, options*, label, multiple, searchable |
-| `slider` | Range slider | value*, min, max, step, label |
-| `checkbox` | Boolean toggle | checked*, label, disabled |
-| `switch` | Toggle switch | checked*, label, disabled |
-| `radioGroup` | Radio buttons | value*, options*, orientation, label |
-| `dateTimeInput` | Date/time picker | value*, mode, label |
-| `fileInput` | File upload | value, label, accept, multiple |
-| `imageInput` | Image upload | value, label, showPreview |
-| `voiceInput` | Voice recording input | value*, label, maxDuration, visualizer |
-| `link` | Navigation link | href*, label, variant, external |
-| `imageLabeler` | Draw boxes on image | src*, labels*, boxes |
-| `imageHotspot` | Clickable hotspots | src*, hotspots*, markerStyle |
+Use exact, case-sensitive type names.
 
-### Container
-| Component | Purpose | Key Props |
-|-----------|---------|-----------|
-| `card` | Content container | title, description, variant, children |
-| `modal` | Dialog overlay | open*, title, size, children |
-| `tabs` | Tabbed content | value*, tabs (array), variant |
-| `accordion` | Collapsible sections | items (array), multiple |
-| `drawer` | Slide-out panel | open*, side, title, children |
-| `tooltip` | Hover tooltip | content*, side, children |
-| `popover` | Click popover | contentComponentId*, side, trigger |
+- Layout: `row`, `column`, `stack`, `grid`, `scrollArea`, `aspectRatio`, `overlay`, `absolute`, `box`, `center`, `spacer`
+- Display and data: `text`, `image`, `icon`, `video`, `lottie`, `markdown`, `divider`, `badge`, `avatar`, `userProfile`, `progress`, `spinner`, `skeleton`, `table`, `tableRow`, `tableCell`, `iframe`, `filePreview`, `diffView`, `plotlyChart`, `nivoChart`, `boundingBoxOverlay`, `geoMap`, `graph`, `ontologyGraph`, `calendar`, `gantt`
+- Interactive: `button`, `feedback`, `appLink`, `textField`, `select`, `slider`, `checkbox`, `switch`, `radioGroup`, `dateTimeInput`, `fileInput`, `imageInput`, `voiceInput`, `link`, `imageLabeler`, `imageHotspot`
+- Containers: `card`, `modal`, `tabs`, `accordion`, `drawer`, `tooltip`, `popover`
+- Game and 3D: `canvas2d`, `sprite`, `shape`, `scene3d`, `model3d`, `dialogue`, `characterPortrait`, `choiceMenu`, `inventoryGrid`, `healthBar`, `miniMap`
+- Widget: `widgetInstance`
 
-### Game / Visual
-| Component | Purpose | Key Props |
-|-----------|---------|-----------|
-| `canvas2d` | 2D drawing canvas | width*, height*, backgroundColor, children |
-| `sprite` | 2D sprite | src*, x*, y*, rotation, scale, flipX, flipY |
-| `shape` | 2D vector shape | shapeType*, x*, y*, fill, stroke, strokeWidth |
-| `scene3d` | 3D scene (Three.js) | width*, height*, cameraType, controlMode |
-| `model3d` | 3D model viewer | src*, lightingPreset, environment, autoRotate |
-| `dialogue` | Visual novel dialogue | text*, speakerName, typewriter, portrait |
-| `characterPortrait` | Character portrait | image*, position, expression, flip |
-| `choiceMenu` | Interactive choices | choices*, title, layout, columns |
-| `inventoryGrid` | Item grid | items*, columns, rows, cellSize |
-| `healthBar` | HP/resource bar | value*, maxValue*, variant, fillColor |
-| `miniMap` | Game mini-map | mapImage*, width*, height*, markers, playerX, playerY |
+Read [references/components-reference.md](references/components-reference.md) before using unfamiliar or complex components. It is the accepted-prop and required-prop authority for this skill.
 
-### Special
-| Component | Purpose | Key Props |
-|-----------|---------|-----------|
-| `widgetInstance` | Embed reusable widget | widgetId, widgetInputs, bindOutputs |
+For full working surfaces, read [references/layout-examples.md](references/layout-examples.md).
 
-*= required prop
+## Final check
 
----
+Before responding, verify:
 
-## Quick Examples
-
-### Login Form
-
-User: "Login form with email, password, and submit button"
-
-```json
-{
-  "rootComponentId": "root",
-  "canvasSettings": {
-    "backgroundColor": "bg-background",
-    "padding": "1rem"
-  },
-  "components": [
-    {
-      "id": "root",
-      "style": {
-        "className": "min-h-screen w-full bg-background text-foreground p-4"
-      },
-      "component": {
-        "type": "center",
-        "children": {
-          "explicitList": [
-            "login-card"
-          ]
-        }
-      }
-    },
-    {
-      "id": "login-card",
-      "style": {
-        "className": "w-full max-w-sm mx-auto"
-      },
-      "component": {
-        "type": "card",
-        "title": {
-          "literalString": "Welcome Back"
-        },
-        "description": {
-          "literalString": "Enter your credentials to sign in"
-        },
-        "children": {
-          "explicitList": [
-            "login-form"
-          ]
-        }
-      }
-    },
-    {
-      "id": "login-form",
-      "component": {
-        "type": "column",
-        "gap": {
-          "literalString": "1rem"
-        },
-        "children": {
-          "explicitList": [
-            "email-field",
-            "password-field",
-            "submit-btn"
-          ]
-        }
-      }
-    },
-    {
-      "id": "email-field",
-      "component": {
-        "type": "textField",
-        "value": {
-          "path": "$.form.email",
-          "defaultValue": ""
-        },
-        "label": {
-          "literalString": "Email"
-        },
-        "placeholder": {
-          "literalString": "you@example.com"
-        },
-        "inputType": {
-          "literalString": "email"
-        },
-        "required": {
-          "literalBool": true
-        }
-      }
-    },
-    {
-      "id": "password-field",
-      "component": {
-        "type": "textField",
-        "value": {
-          "path": "$.form.password",
-          "defaultValue": ""
-        },
-        "label": {
-          "literalString": "Password"
-        },
-        "placeholder": {
-          "literalString": "********"
-        },
-        "inputType": {
-          "literalString": "password"
-        },
-        "required": {
-          "literalBool": true
-        }
-      }
-    },
-    {
-      "id": "submit-btn",
-      "style": {
-        "className": "w-full"
-      },
-      "component": {
-        "type": "button",
-        "label": {
-          "literalString": "Sign In"
-        },
-        "variant": {
-          "literalString": "default"
-        },
-        "actions": [
-          {
-            "name": "login",
-            "context": {
-              "form": "login"
-            }
-          }
-        ]
-      }
-    }
-  ],
-  "dataModel": [
-    {
-      "path": "$.form.email",
-      "value": ""
-    },
-    {
-      "path": "$.form.password",
-      "value": ""
-    }
-  ]
-}
-```
-
-### Stats Dashboard
-
-User: "Dashboard with 3 stat cards and a chart"
-
-```json
-{
-  "rootComponentId": "root",
-  "canvasSettings": {
-    "backgroundColor": "bg-background",
-    "padding": "1.5rem"
-  },
-  "components": [
-    {
-      "id": "root",
-      "style": {
-        "className": "min-h-screen w-full bg-background text-foreground"
-      },
-      "component": {
-        "type": "column",
-        "gap": {
-          "literalString": "1.5rem"
-        },
-        "children": {
-          "explicitList": [
-            "stats-grid",
-            "chart-card"
-          ]
-        }
-      }
-    },
-    {
-      "id": "stats-grid",
-      "component": {
-        "type": "grid",
-        "columns": {
-          "literalString": "repeat(auto-fit, minmax(200px, 1fr))"
-        },
-        "gap": {
-          "literalString": "1rem"
-        },
-        "children": {
-          "explicitList": [
-            "stat-users",
-            "stat-revenue",
-            "stat-orders"
-          ]
-        }
-      }
-    },
-    {
-      "id": "stat-users",
-      "component": {
-        "type": "card",
-        "padding": {
-          "literalString": "1.5rem"
-        },
-        "children": {
-          "explicitList": [
-            "stat-users-content"
-          ]
-        }
-      }
-    },
-    {
-      "id": "stat-users-content",
-      "component": {
-        "type": "column",
-        "gap": {
-          "literalString": "0.5rem"
-        },
-        "children": {
-          "explicitList": [
-            "stat-users-label",
-            "stat-users-value"
-          ]
-        }
-      }
-    },
-    {
-      "id": "stat-users-label",
-      "component": {
-        "type": "text",
-        "content": {
-          "literalString": "Total Users"
-        },
-        "size": {
-          "literalString": "sm"
-        },
-        "color": {
-          "literalString": "text-muted-foreground"
-        }
-      }
-    },
-    {
-      "id": "stat-users-value",
-      "component": {
-        "type": "text",
-        "content": {
-          "path": "$.stats.users",
-          "defaultValue": "0"
-        },
-        "variant": {
-          "literalString": "h3"
-        },
-        "weight": {
-          "literalString": "bold"
-        }
-      }
-    },
-    {
-      "id": "stat-revenue",
-      "component": {
-        "type": "card",
-        "padding": {
-          "literalString": "1.5rem"
-        },
-        "children": {
-          "explicitList": [
-            "stat-revenue-content"
-          ]
-        }
-      }
-    },
-    {
-      "id": "stat-revenue-content",
-      "component": {
-        "type": "column",
-        "gap": {
-          "literalString": "0.5rem"
-        },
-        "children": {
-          "explicitList": [
-            "stat-revenue-label",
-            "stat-revenue-value"
-          ]
-        }
-      }
-    },
-    {
-      "id": "stat-revenue-label",
-      "component": {
-        "type": "text",
-        "content": {
-          "literalString": "Revenue"
-        },
-        "size": {
-          "literalString": "sm"
-        },
-        "color": {
-          "literalString": "text-muted-foreground"
-        }
-      }
-    },
-    {
-      "id": "stat-revenue-value",
-      "component": {
-        "type": "text",
-        "content": {
-          "path": "$.stats.revenue",
-          "defaultValue": "$0"
-        },
-        "variant": {
-          "literalString": "h3"
-        },
-        "weight": {
-          "literalString": "bold"
-        }
-      }
-    },
-    {
-      "id": "stat-orders",
-      "component": {
-        "type": "card",
-        "padding": {
-          "literalString": "1.5rem"
-        },
-        "children": {
-          "explicitList": [
-            "stat-orders-content"
-          ]
-        }
-      }
-    },
-    {
-      "id": "stat-orders-content",
-      "component": {
-        "type": "column",
-        "gap": {
-          "literalString": "0.5rem"
-        },
-        "children": {
-          "explicitList": [
-            "stat-orders-label",
-            "stat-orders-value"
-          ]
-        }
-      }
-    },
-    {
-      "id": "stat-orders-label",
-      "component": {
-        "type": "text",
-        "content": {
-          "literalString": "Orders"
-        },
-        "size": {
-          "literalString": "sm"
-        },
-        "color": {
-          "literalString": "text-muted-foreground"
-        }
-      }
-    },
-    {
-      "id": "stat-orders-value",
-      "component": {
-        "type": "text",
-        "content": {
-          "path": "$.stats.orders",
-          "defaultValue": "0"
-        },
-        "variant": {
-          "literalString": "h3"
-        },
-        "weight": {
-          "literalString": "bold"
-        }
-      }
-    },
-    {
-      "id": "chart-card",
-      "component": {
-        "type": "card",
-        "title": {
-          "literalString": "Revenue Over Time"
-        },
-        "children": {
-          "explicitList": [
-            "revenue-chart"
-          ]
-        }
-      }
-    },
-    {
-      "id": "revenue-chart",
-      "component": {
-        "type": "nivoChart",
-        "chartType": {
-          "literalString": "bar"
-        },
-        "data": {
-          "path": "$.charts.revenue"
-        },
-        "height": {
-          "literalString": "300px"
-        },
-        "animate": {
-          "literalBool": true
-        }
-      }
-    }
-  ],
-  "dataModel": [
-    {
-      "path": "$.stats.users",
-      "value": "12,458"
-    },
-    {
-      "path": "$.stats.revenue",
-      "value": "$48,200"
-    },
-    {
-      "path": "$.stats.orders",
-      "value": "384"
-    },
-    {
-      "path": "$.charts.revenue",
-      "value": [
-        {
-          "month": "Jan",
-          "revenue": 4200
-        },
-        {
-          "month": "Feb",
-          "revenue": 5800
-        },
-        {
-          "month": "Mar",
-          "revenue": 4900
-        }
-      ]
-    }
-  ]
-}
-```
-
-## References
-
-For detailed documentation, consult these files as needed:
-
-- **[references/components-reference.md](references/components-reference.md)** -- Complete component props with all accepted values
-- **[references/bound-value-guide.md](references/bound-value-guide.md)** -- Data binding patterns, JSONPath syntax, form input binding
-- **[references/styling-guide.md](references/styling-guide.md)** -- Tailwind CSS utilities, theme variables, responsive patterns, custom CSS
-- **[references/layout-examples.md](references/layout-examples.md)** -- Full JSON examples: page layouts, forms, dashboards, cards, tables
-
-Generate A2UI JSON for any UI request. Output ONLY valid JSON.
+- The response is one JSON code block and parses as JSON.
+- `rootComponentId` and the only main root ID are both `root`.
+- Every component type is in the 71-type catalog.
+- Every required prop exists and every component prop uses the correct BoundValue or raw shape.
+- Every explicit child, template component, tab content, accordion content, popover content, and overlay reference exists in its component scope.
+- Every binding uses a supported path and has useful initial data or a fallback.
+- Actions contain no invented runtime IDs or copied live input values.
+- The layout is usable on mobile and uses theme tokens.

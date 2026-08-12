@@ -30,6 +30,17 @@ impl Default for DownloadManager {
 }
 
 impl DownloadManager {
+    fn artifact_key(bit: &Bit) -> String {
+        let file_name = bit.file_name.as_deref().unwrap_or_default();
+        format!(
+            "v2:{}:{}:{}{}",
+            bit.hash.len(),
+            file_name.len(),
+            bit.hash,
+            file_name
+        )
+    }
+
     pub fn new() -> Self {
         DownloadManager {
             download_list: HashMap::new(),
@@ -71,20 +82,21 @@ impl DownloadManager {
     }
 
     pub fn add_download(&mut self, bit: &Bit) -> Option<reqwest::Client> {
-        if self.download_list.contains_key(&bit.hash) {
+        let key = Self::artifact_key(bit);
+        if self.download_list.contains_key(&key) {
             return None;
         }
-        self.download_list.insert(bit.hash.to_string(), bit.clone());
+        self.download_list.insert(key, bit.clone());
         self.save();
         Some(self.client.clone())
     }
 
     pub fn download_exists(&self, bit: &Bit) -> bool {
-        self.download_list.contains_key(&bit.hash)
+        self.download_list.contains_key(&Self::artifact_key(bit))
     }
 
     pub fn remove_download(&mut self, bit: &Bit) {
-        self.download_list.remove(&bit.hash);
+        self.download_list.remove(&Self::artifact_key(bit));
         self.save();
     }
 
@@ -106,5 +118,28 @@ impl DownloadManager {
                 println!("Error saving download manager: {:?}", e);
             }
         }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identical_content_at_different_paths_has_distinct_download_keys() {
+        let first = Bit {
+            hash: "same-hash".to_string(),
+            file_name: Some("config.json".to_string()),
+            ..Bit::default()
+        };
+        let second = Bit {
+            hash: first.hash.clone(),
+            file_name: Some("nested/config.json".to_string()),
+            ..Bit::default()
+        };
+        assert_ne!(
+            DownloadManager::artifact_key(&first),
+            DownloadManager::artifact_key(&second)
+        );
     }
 }

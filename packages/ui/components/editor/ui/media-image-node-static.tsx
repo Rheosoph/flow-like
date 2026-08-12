@@ -10,11 +10,13 @@ import type {
 import { NodeApi, SlateElement } from "platejs";
 
 import { cn } from "../../../lib/utils";
+import { useEditorAssetUrl } from "../hooks/use-editor-asset-url";
 
 export function ImageElementStatic(
 	props: SlateElementProps<TImageElement & TCaptionProps & TResizableProps>,
 ) {
 	const { align = "center", caption, url, width } = props.element;
+	const src = useEditorAssetUrl(url);
 
 	return (
 		<SlateElement {...props} className="py-2.5">
@@ -29,7 +31,7 @@ export function ImageElementStatic(
 							"rounded-sm",
 						)}
 						alt={(props.attributes as any).alt}
-						src={url}
+						src={src}
 					/>
 					{caption && (
 						<figcaption className="mx-auto mt-2 h-[24px] max-w-full">

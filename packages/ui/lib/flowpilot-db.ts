@@ -51,6 +51,11 @@ export interface IFlowPilotConversation {
 	messageCount: number;
 	/** When the conversation was created */
 	createdAt: string;
+	/**
+	 * ISO timestamp of when the user pinned this conversation; absent means unpinned. A timestamp
+	 * rather than a boolean because booleans are not valid IndexedDB keys.
+	 */
+	pinnedAt?: string;
 	/** When the conversation was last updated */
 	updatedAt: string;
 }
@@ -65,6 +70,11 @@ const flowpilotDB = new Dexie("FlowPilotHistory") as Dexie & {
 
 flowpilotDB.version(1).stores({
 	conversations: "id, mode, boardId, appId, updatedAt",
+	messages: "id, conversationId, createdAt",
+});
+
+flowpilotDB.version(2).stores({
+	conversations: "id, mode, boardId, appId, updatedAt, pinnedAt",
 	messages: "id, conversationId, createdAt",
 });
 
@@ -113,17 +123,55 @@ export async function deleteConversation(id: string): Promise<void> {
 }
 
 /**
- * Get recent conversations, sorted by updatedAt descending
+ * Get recent conversations, sorted by updatedAt descending.
+ *
+ * Pinned conversations are fetched separately and merged in front, so a pinned-but-old
+ * conversation is never cut by the recency window.
  */
 export async function getRecentConversations(
 	limit = 20,
 	mode?: "board" | "ui" | "both",
 ): Promise<IFlowPilotConversation[]> {
-	let query = flowpilotDB.conversations.orderBy("updatedAt").reverse();
-	if (mode) {
-		query = query.filter((c) => c.mode === mode);
-	}
-	return query.limit(limit).toArray();
+	const matchesMode = (c: IFlowPilotConversation) => !mode || c.mode === mode;
+
+	const pinned = (
+		await flowpilotDB.conversations.where("pinnedAt").above("").toArray()
+	)
+		.filter(matchesMode)
+		.sort((a, b) => (b.pinnedAt ?? "").localeCompare(a.pinnedAt ?? ""));
+
+	const pinnedIds = new Set(pinned.map((c) => c.id));
+	const recent = await flowpilotDB.conversations
+		.orderBy("updatedAt")
+		.reverse()
+		.filter((c) => matchesMode(c) && !pinnedIds.has(c.id))
+		.limit(limit)
+		.toArray();
+
+	return [...pinned, ...recent];
+}
+
+/**
+ * Pin/unpin a conversation. Writes the row directly rather than going through
+ * `updateConversation`, which stamps `updatedAt` — pinning must not reorder history.
+ */
+export async function setConversationPinned(
+	id: string,
+	pinned: boolean,
+): Promise<void> {
+	await flowpilotDB.conversations.update(id, {
+		pinnedAt: pinned ? new Date().toISOString() : undefined,
+	});
+}
+
+/** Rename a conversation without touching `updatedAt`. Empty titles are ignored. */
+export async function renameConversation(
+	id: string,
+	title: string,
+): Promise<void> {
+	const next = title.trim().slice(0, 80);
+	if (!next) return;
+	await flowpilotDB.conversations.update(id, { title: next });
 }
 
 /**

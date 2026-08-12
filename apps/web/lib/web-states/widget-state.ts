@@ -1,4 +1,8 @@
-import type { IMetadata, IWidgetState } from "@flow-like/flow-like-ui";
+import {
+	type IMetadata,
+	type IWidgetState,
+	normalizeWidgetForPersistence,
+} from "@flow-like/flow-like-ui";
 import type {
 	IWidget,
 	Version,
@@ -72,9 +76,10 @@ export class WebWidgetState implements IWidgetState {
 	}
 
 	async updateWidget(appId: string, widget: IWidget): Promise<void> {
+		const normalizedWidget = normalizeWidgetForPersistence(widget);
 		await apiPut(
 			`apps/${appId}/widgets/${widget.id}`,
-			{ widget },
+			{ widget: normalizedWidget },
 			this.backend.auth,
 		);
 	}

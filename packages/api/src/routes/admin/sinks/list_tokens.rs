@@ -54,7 +54,7 @@ pub struct ListTokensResponse {
         (status = 403, description = "Forbidden")
     )
 )]
-#[tracing::instrument(name = "GET /admin/sinks", skip(state, user))]
+#[tracing::instrument(name = "GET /admin/sinks", skip_all)]
 pub async fn list_tokens(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

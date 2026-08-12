@@ -4,8 +4,12 @@ use crate::{
     middleware::jwt::AppUser,
     permission::fork_permission::{ForkTargetKind, check_can_fork},
     state::AppState,
-    utils::fork::preview::{
-        RemoteTokenSite, compute_app_size_and_count, detect_remote_token_sites,
+    utils::fork::{
+        ForkPolicy,
+        preview::{
+            ForkSizeBreakdown, RemoteTokenSite, compute_fork_size_breakdown,
+            detect_remote_token_sites,
+        },
     },
 };
 use axum::{
@@ -52,8 +56,20 @@ pub struct ForkPreviewResponse {
     pub max_size_bytes: u64,
     /// Hard cap from the deployment config (`forking.max_file_count`).
     pub max_file_count: u64,
-    /// Whether the source fits within both caps.
+    /// Whether the fork — after applying the owner's policy — fits within
+    /// both caps. An app that is too large as a whole can still be
+    /// forkable if the policy excludes its database or files.
     pub within_limits: bool,
+    /// The source owner's fork policy. Read-only for the forker: the owner
+    /// decides what a fork of their app contains.
+    pub fork_policy: ForkPolicy,
+    /// Per-category sizes of the source, so the UI can show what each
+    /// category costs and what the policy excludes.
+    pub size_breakdown: ForkSizeBreakdown,
+    /// Bytes that will actually be copied once the policy is applied.
+    pub selected_size_bytes: u64,
+    /// Objects that will actually be copied once the policy is applied.
+    pub selected_object_count: u64,
     /// True if any remote-event tokens were detected on the source —
     /// caller should prompt the user for one before invoking the fork.
     pub requires_token: bool,
@@ -91,7 +107,7 @@ pub struct ForkPreviewResponse {
         (status = 404, description = "Source app not found")
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/fork/preview", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/fork/preview", skip(state, user, params))]
 pub async fn get_fork_preview(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -118,13 +134,19 @@ pub async fn get_fork_preview(
             }
         };
 
-    let (total_size_bytes, total_object_count) =
-        compute_app_size_and_count(&state, &app_id).await?;
+    let fork_policy = ForkPolicy::from_app_row(&app_row);
+    let size_breakdown = compute_fork_size_breakdown(&state, &app_id).await?;
+    let (total_size_bytes, total_object_count) = size_breakdown.total();
+    let (selected_size_bytes, selected_object_count) = size_breakdown.selected(&fork_policy);
     let remote_token_sites = detect_remote_token_sites(&state, &app_id).await?;
 
     let max_size_bytes = state.platform_config.forking.max_size_bytes;
     let max_file_count = state.platform_config.forking.max_file_count;
-    let within_limits = total_size_bytes <= max_size_bytes && total_object_count <= max_file_count;
+    // Caps apply to what will actually be copied, not to the whole app —
+    // otherwise the policy could never rescue an over-cap app, which is
+    // the main reason to exclude a category.
+    let within_limits =
+        selected_size_bytes <= max_size_bytes && selected_object_count <= max_file_count;
 
     Ok(Json(ForkPreviewResponse {
         source_app_id: app_id,
@@ -133,6 +155,10 @@ pub async fn get_fork_preview(
         max_size_bytes,
         max_file_count,
         within_limits,
+        fork_policy,
+        size_breakdown,
+        selected_size_bytes,
+        selected_object_count,
         requires_token: !remote_token_sites.is_empty(),
         remote_token_sites,
         allow_forking: app_row.allow_forking,

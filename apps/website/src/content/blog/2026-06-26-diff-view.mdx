@@ -9,7 +9,9 @@ draft: false
 
 {/* Cover image prompt: A clean, modern developer-tool UI illustration of a side-by-side code diff viewer floating in a dark editor canvas — left panel showing removed lines tinted soft red, right panel showing added lines tinted soft green, syntax-highlighted TypeScript, line numbers, and a small toolbar of split/unified/inline toggle icons. Subtle grid background, glassy panels, crisp monospaced type, cool teal-and-violet accent palette, sharp vector style, high detail, techy and minimal. No text labels. */}
 
-"Show the user what changed" is one of those deceptively simple requirements. An approval flow wants to show the before and after of a document. An AI-review app wants to highlight what the model rewrote. A config tool wants to preview an edit before it's applied. Until now, building that in Flow-Like meant hand-rolling a component. Now it's a element you drag onto the canvas.
+import { BlogInteractiveDemo } from "../../components/blog/BlogInteractiveDemo";
+
+"Show the user what changed" is one of those deceptively simple requirements. An approval flow wants to show the before and after of a document. An AI-review app wants to highlight what the model rewrote. A config tool wants to preview an edit before it's applied. Until now, building that in Flow-Like meant hand-rolling a component. Now it's an element you drag onto the canvas.
 
 Say hello to **`diffView`**.
 
@@ -26,6 +28,8 @@ Say hello to **`diffView`**.
 You don't have to pick, either. Leave `kind` on `auto` and the component figures it out: two URLs become a document view, a set language becomes code, two parseable JSON blobs become a JSON diff, and everything else falls back to text.
 
 There are three layouts — **split**, **unified**, and **inline** — and the viewer ships a little toolbar so end users can flip between them live, toggle word-wrap, and collapse the unchanged regions to just a few lines of context. Changed *words* inside a line are highlighted, not just changed lines: additions glow green, deletions red, right down to the token.
+
+<BlogInteractiveDemo client:only="react" preset="diff" />
 
 ## Drop it in, or drive it from a flow
 

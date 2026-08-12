@@ -21,51 +21,73 @@ import {
 
 const WORD_RE = /[A-Za-z_$][\w$]*/;
 
-/** Variable decorators recognized by the FlowScript parser. Mirrors
- * `render::var_decorators_of` / `parser::apply_var_decorators` in flow-like-ast. */
+/** Decorators recognized by the FlowScript parser. Mirrors the decorator
+ * handling in flow-like-ast. */
+export type DecoratorArgumentKind =
+	| "none"
+	| "required-string"
+	| "optional-cache-settings";
+
 export interface DecoratorDef {
 	readonly name: string;
-	readonly hasArg: boolean;
+	readonly argumentKind: DecoratorArgumentKind;
 	readonly detail: string;
 	readonly doc: string;
+	readonly snippet: string;
 }
 
 export const FLOW_DECORATORS: readonly DecoratorDef[] = [
 	{
 		name: "description",
-		hasArg: true,
+		argumentKind: "required-string",
 		detail: '@description("…")',
 		doc: "Human-facing description of the variable, shown in the UI.",
+		snippet: '@description("$1")',
 	},
 	{
 		name: "category",
-		hasArg: true,
+		argumentKind: "required-string",
 		detail: '@category("…")',
 		doc: "UI grouping category for the variable.",
+		snippet: '@category("$1")',
 	},
 	{
 		name: "schema",
-		hasArg: true,
+		argumentKind: "required-string",
 		detail: '@schema("…")',
 		doc: "JSON schema for a struct-typed variable, preserved verbatim.",
+		snippet: '@schema("$1")',
 	},
 	{
 		name: "secret",
-		hasArg: false,
+		argumentKind: "none",
 		detail: "@secret",
 		doc: "Marks the variable as a secret (masked and stored securely).",
+		snippet: "@secret",
 	},
 	{
 		name: "readonly",
-		hasArg: false,
+		argumentKind: "none",
 		detail: "@readonly",
 		doc: "Marks the variable as not user-editable.",
+		snippet: "@readonly",
 	},
 	{
 		name: "runtime",
-		hasArg: false,
+		argumentKind: "none",
 		detail: "@runtime",
 		doc: "Variable is configured per-user at runtime.",
+		snippet: "@runtime",
+	},
+	{
+		name: "cache",
+		argumentKind: "optional-cache-settings",
+		detail:
+			'@cache, @cache({}), or @cache({ namespace: "…", ttlSeconds: 300, scope: "user" })',
+		doc:
+			'Caches this function\'s outputs. A cache hit skips the entire function body, including side effects, so use it only when outputs are determined by inputs. Bare `@cache` and `@cache({})` use the `"global"` namespace, a 300-second lifetime, and app scope. In the settings object, `namespace` separates cache keys, `ttlSeconds` is a non-negative integer (`0` means no expiry), and `scope` is `"app"` or `"user"`.',
+		snippet:
+			'@cache({ namespace: "${1:global}", ttlSeconds: ${2:300}, scope: "${3|app,user|}" })',
 	},
 ];
 
@@ -195,7 +217,7 @@ export class FlowCompletionProvider implements vscode.CompletionItemProvider {
 	}
 }
 
-/** Completion for `@` variable decorators (`@description`, `@secret`, …). */
+/** Completion for FlowScript decorators (`@description`, `@cache`, …). */
 export class FlowDecoratorCompletionProvider
 	implements vscode.CompletionItemProvider
 {
@@ -222,9 +244,7 @@ export class FlowDecoratorCompletionProvider
 			item.detail = dec.detail;
 			item.documentation = new vscode.MarkdownString(dec.doc);
 			item.range = range;
-			item.insertText = dec.hasArg
-				? new vscode.SnippetString(`@${dec.name}("$1")`)
-				: `@${dec.name}`;
+			item.insertText = new vscode.SnippetString(dec.snippet);
 			return item;
 		});
 	}
@@ -510,9 +530,9 @@ function toDocumentSymbol(sym: FlowSymbol): vscode.DocumentSymbol {
 			? vscode.SymbolKind.Variable
 			: sym.kind === "interface"
 				? vscode.SymbolKind.Interface
-			: sym.kind === "event"
-				? vscode.SymbolKind.Event
-				: vscode.SymbolKind.Function;
+				: sym.kind === "event"
+					? vscode.SymbolKind.Event
+					: vscode.SymbolKind.Function;
 	return new vscode.DocumentSymbol(
 		sym.name,
 		sym.detail,

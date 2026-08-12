@@ -14,6 +14,11 @@ import {
 import type { ReactNode } from "react";
 import { useFeatures } from "../../../hooks/use-features";
 import {
+	userAvatarUrl,
+	userDisplayName,
+	userInitials,
+} from "../../../lib/user-display";
+import {
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
@@ -86,7 +91,7 @@ function statusConfig(status: string): {
 }
 
 function actorLabel(log: AppPublicationLogItem) {
-	return log.author?.name ?? log.author?.username ?? log.authorId ?? "System";
+	return userDisplayName(log.author, "System");
 }
 
 function StepIndicator({
@@ -334,7 +339,6 @@ export function AppPublicationPage({
 										<div className="space-y-4">
 											{request.logs.map((log) => {
 												const label = actorLabel(log);
-												const initial = label.charAt(0).toUpperCase();
 
 												return (
 													<div
@@ -344,11 +348,11 @@ export function AppPublicationPage({
 														<div className="relative z-10 bg-background">
 															<Avatar className="h-8 w-8 border">
 																<AvatarImage
-																	src={log.author?.avatar}
+																	src={userAvatarUrl(log.author)}
 																	alt={label}
 																/>
 																<AvatarFallback className="text-xs">
-																	{initial || "?"}
+																	{userInitials(label)}
 																</AvatarFallback>
 															</Avatar>
 														</div>
@@ -469,17 +473,16 @@ export function AppPublicationPage({
 										<div className="mt-3 space-y-2">
 											{request.logs.map((log) => {
 												const label = actorLabel(log);
-												const initial = label.charAt(0).toUpperCase();
 
 												return (
 													<div key={log.id} className="flex items-start gap-3">
 														<Avatar className="h-6 w-6">
 															<AvatarImage
-																src={log.author?.avatar}
+																src={userAvatarUrl(log.author)}
 																alt={label}
 															/>
 															<AvatarFallback className="text-xs">
-																{initial || "?"}
+																{userInitials(label)}
 															</AvatarFallback>
 														</Avatar>
 														<div className="min-w-0 flex-1">

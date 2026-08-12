@@ -12,6 +12,7 @@ const nextConfig = {
 	transpilePackages: [
 		"@flow-like/flow-like-ui",
 		"@flow-like/dexie-tauri-blob-offload",
+		"@flow-like/widget-sdk",
 		"tauri-plugin-remote-push-api",
 	],
 	staticPageGenerationTimeout: 120,

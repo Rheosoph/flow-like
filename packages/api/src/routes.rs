@@ -15,6 +15,7 @@ pub mod health;
 pub mod inbound;
 pub mod info;
 pub mod interaction;
+pub mod maintenance;
 pub mod oauth;
 pub mod og;
 pub mod profile;
@@ -22,10 +23,12 @@ pub mod registry;
 pub mod sink;
 pub mod solution;
 pub mod store;
+pub mod telemetry;
 pub mod tmp;
 pub mod usage;
 pub mod user;
 pub mod webhook;
+pub mod widget_query;
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct LanguageParams {

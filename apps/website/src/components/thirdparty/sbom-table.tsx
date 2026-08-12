@@ -49,7 +49,9 @@ interface FeaturedLibrary {
 
 function parseNpmLicenses(npmLicenses: NpmLicenses): License[] {
 	return Object.entries(npmLicenses)
-		.filter(([key]) => !key.includes("flow-like") && !key.includes("@flow-like"))
+		.filter(
+			([key]) => !key.includes("flow-like") && !key.includes("@flow-like"),
+		)
 		.map(([key, value]) => {
 			const match = key.match(/^(.+)@(\d+\.\d+\.\d+.*)$/);
 			const name = match ? match[1] : key;
@@ -165,13 +167,6 @@ const FEATURED_LIBRARIES: FeaturedLibrary[] = [
 			"Extensible query engine written in Rust that uses Apache Arrow.",
 		url: "https://datafusion.apache.org",
 		category: "Query Engine",
-	},
-	{
-		name: "polars",
-		displayName: "Polars",
-		description: "Lightning-fast DataFrame library for Rust and Python.",
-		url: "https://pola.rs",
-		category: "Data Processing",
 	},
 	{
 		name: "arrow",

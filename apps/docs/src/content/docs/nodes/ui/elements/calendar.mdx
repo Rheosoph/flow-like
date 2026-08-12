@@ -1,0 +1,30 @@
+---
+title: "Calendar Node Catalog"
+description: "UI/Elements/Calendar Flow-Like node category with 1 generated node reference."
+sidebar:
+  order: 0
+  label: "Calendar"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Calendar nodes, UI/Elements/Calendar, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "UI/Elements/Calendar"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Calendar Node Catalog\",\"description\":\"UI/Elements/Calendar Flow-Like node category with 1 generated node reference.\",\"url\":\"https://docs.flow-like.com/nodes/ui/elements/calendar/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"UI/Elements/Calendar\",\"keywords\":\"Calendar nodes, UI/Elements/Calendar, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"UI/Elements/Calendar"}
+	label="Calendar"
+	nodes={nodesByCategory["UI/Elements/Calendar"] ?? []}
+	client:load
+/>

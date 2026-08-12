@@ -9,8 +9,10 @@ import type { IAppSearchSort } from "../../lib/schema/app/app-search-query";
 import type {
 	IBeginOfflineForkBody,
 	IBeginOfflineForkResponse,
+	IForkPolicy,
 	IForkPreviewResponse,
 	IForkPreviewTarget,
+	IForkSettings,
 	IOnlineForkBody,
 	IOnlineForkResponse,
 } from "../../lib/schema/app/fork";
@@ -95,6 +97,17 @@ export interface IAppState {
 	 * (PATCH /apps/{app_id}/settings/forking).
 	 */
 	changeAppAllowForking(appId: string, allow: boolean): Promise<void>;
+	/**
+	 * Read the opt-in plus the owner-defined policy. Owner-only on the backend
+	 * (GET /apps/{app_id}/settings/forking).
+	 */
+	getForkSettings(appId: string): Promise<IForkSettings>;
+	/**
+	 * Replace the owner-defined policy describing what a fork of this app
+	 * copies. Owner-only on the backend
+	 * (PATCH /apps/{app_id}/settings/forking).
+	 */
+	changeAppForkPolicy(appId: string, policy: IForkPolicy): Promise<void>;
 	/**
 	 * Pre-fork dry run — returns size totals, remote-token requirements, and
 	 * the permission verdict. Safe to call as a probe before committing to a

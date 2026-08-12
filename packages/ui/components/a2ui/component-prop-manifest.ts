@@ -35,6 +35,7 @@ export const COMPONENT_BASE_PROPS = [
 	"style",
 	"children",
 	"actions",
+	"eventHandlers",
 	"hidden",
 ] as const satisfies readonly (keyof ComponentBase)[];
 
@@ -180,6 +181,21 @@ export const COMPONENT_PROPS = {
 		"rows",
 		"maxLength",
 		"required",
+		"debounceMs",
+	],
+	richText: [
+		"value",
+		"label",
+		"helperText",
+		"placeholder",
+		"error",
+		"disabled",
+		"readOnly",
+		"uploadPrefix",
+		"uploadScope",
+		"minHeight",
+		"maxHeight",
+		"debounceMs",
 	],
 	select: [
 		"value",
@@ -190,7 +206,16 @@ export const COMPONENT_PROPS = {
 		"multiple",
 		"searchable",
 	],
-	slider: ["value", "min", "max", "step", "disabled", "showValue", "label"],
+	slider: [
+		"value",
+		"min",
+		"max",
+		"step",
+		"disabled",
+		"showValue",
+		"label",
+		"debounceMs",
+	],
 	checkbox: ["checked", "label", "disabled", "indeterminate"],
 	switch: ["checked", "label", "disabled"],
 	radioGroup: ["value", "options", "disabled", "orientation", "label"],
@@ -557,6 +582,33 @@ export const COMPONENT_PROPS = {
 		"clusterMaxZoom",
 	],
 
+	// Graphs
+	graph: [
+		"nodes",
+		"edges",
+		"labelStyles",
+		"showToolbar",
+		"showSearch",
+		"showLegend",
+		"showInspector",
+		"height",
+	],
+	ontologyGraph: [
+		"ontologyId",
+		"appId",
+		"limit",
+		"allowExpand",
+		"allowSearch",
+		"allowPaths",
+		"allowActions",
+		"allowCypher",
+		"allowStyleEdit",
+		"allowLimitChange",
+		"showToolbar",
+		"showLegend",
+		"height",
+	],
+
 	// Planning
 	calendar: [
 		"events",
@@ -609,6 +661,17 @@ export const COMPONENT_PROPS = {
 		"exposedPropValues",
 		"actionBindings",
 		"styleOverride",
+	],
+	microWidgetInstance: [
+		"instanceId",
+		"packageId",
+		"widgetId",
+		"packageVersion",
+		"bundleHash",
+		"contract",
+		"props",
+		"preview",
+		"actionBindings",
 	],
 } as const satisfies {
 	[K in A2UIComponentType]: readonly PropsOf<K>[];

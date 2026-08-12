@@ -1,4 +1,3 @@
-import { createId } from "@paralleldrive/cuid2";
 import {
 	ChatInterface,
 	CronJobConfig,
@@ -17,6 +16,7 @@ import {
 	TelegramConfig,
 	UserMailConfig,
 } from "@flow-like/flow-like-ui";
+import { createId } from "@paralleldrive/cuid2";
 
 export const EVENT_CONFIG: IEventMapping = {
 	events_chat: {

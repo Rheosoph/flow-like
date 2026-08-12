@@ -1,0 +1,387 @@
+---
+import { FlowPilotBubbleOrb } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-orb";
+import type { Lang, TranslationKey } from "../../i18n";
+import { defaultLang, translations } from "../../i18n";
+import dataStudio from "../../images/parallax/data-studio.png";
+import governance from "../../images/parallax/governance.png";
+import uiBuilder from "../../images/parallax/ui-builder.png";
+import workflowCore from "../../images/parallax/workflow-core.png";
+
+interface Props { id: string; lang?: Lang; }
+const { id, lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const localized = translations[lang] as Record<string, string>;
+  const english = translations.en as Record<string, string>;
+  return localized?.[key] ?? english[key] ?? key;
+};
+const tList = (key: TranslationKey): string[] => t(key).split("|");
+
+const previewBars = [45, 59, 51, 73, 66, 89, 78];
+const storeApps = ["Deal Desk", "People Hub", "Incident OS", "Research", "Vendor Risk", "Field Ops"];
+
+const execSteps: [string, string, string][] = [
+  ["01", "Customer 360", t("v5.platform.exec.d1")],
+  ["02", t("v5.platform.exec.email"), t("v5.platform.exec.d2")],
+  ["03", t("v5.platform.exec.notes"), t("v5.platform.exec.d3")],
+  ["04", t("v5.platform.exec.calendar"), t("v5.platform.exec.d4")],
+];
+
+const builderTabs = tList("v5.platform.builder.tabs");
+const parallaxWidths = [640, 960, 1150, 1440, 1725, 1920];
+const parallaxSrcset = (name: string) =>
+	parallaxWidths
+		.map((width) => `/parallax/optimized/${name}-${width}.webp ${width}w`)
+		.join(", ");
+const parallaxMask = (name: string) =>
+	`image-set(url("/parallax/optimized/${name}-1150.webp") 1x, url("/parallax/optimized/${name}-1920.webp") 2x)`;
+---
+
+{id === "builder" && (
+  <div class="mock builder">
+    <aside><label>FLOWPILOT</label><p>{t("v5.platform.builder.prompt")}</p><div class="building"><i></i><span><b>{t("v5.platform.builder.building")}</b><small>{t("v5.platform.builder.connecting")}</small></span></div><ul><li>✓ {t("v5.platform.builder.li1")}</li><li>✓ {t("v5.platform.builder.li2")}</li><li>✓ {t("v5.platform.builder.li3")}</li></ul></aside>
+    <section class="app-preview light-screen"><header><b>SupplyOS</b><span>{builderTabs[0]} &nbsp; {builderTabs[1]} &nbsp; {builderTabs[2]}</span><i>FL</i></header><main><label>{t("v5.platform.builder.screenLabel")}</label><h4>Good morning, Felix.</h4><div class="preview-metrics"><span><b>214</b><small>{t("v5.platform.builder.m1")}</small></span><span><b>96.8%</b><small>{t("v5.platform.builder.m2")}</small></span><span><b>8</b><small>{t("v5.platform.builder.m3")}</small></span></div><div class="preview-bars">{previewBars.map((x) => (<i style={`height:${x}%`}></i>))}</div></main></section>
+  </div>
+)}
+{id === "workflow" && (
+  <div
+    class="workflow-visual"
+    data-workflow-visual
+    style={`--workflow-mask: ${parallaxMask("workflow-core")}`}
+  >
+    <div class="workflow-art">
+      <picture>
+        <source
+          media="(max-width: 959px)"
+          srcset={parallaxSrcset("workflow-core")}
+          sizes="calc(100vw - 36px)"
+        />
+        <img
+          src="/parallax/optimized/workflow-core-1920.webp"
+          alt={`${t("v5.platform.f.workflow.title")} — Flow-Like visual workflow and FlowScript editor`}
+          width={workflowCore.width}
+          height={workflowCore.height}
+          loading="lazy"
+          decoding="async"
+        />
+      </picture>
+    </div>
+  </div>
+)}
+{id === "frontend" && (
+  <div
+    class="workflow-visual"
+    data-workflow-visual
+    style={`--workflow-mask: ${parallaxMask("ui-builder")}`}
+  >
+    <div class="workflow-art">
+      <picture>
+        <source
+          media="(max-width: 959px)"
+          srcset={parallaxSrcset("ui-builder")}
+          sizes="calc(100vw - 36px)"
+        />
+        <img
+          src="/parallax/optimized/ui-builder-1920.webp"
+          alt={`${t("v5.platform.f.frontend.title")} — Flow-Like visual page builder and interaction editor`}
+          width={uiBuilder.width}
+          height={uiBuilder.height}
+          loading="lazy"
+          decoding="async"
+        />
+      </picture>
+    </div>
+  </div>
+)}
+{id === "data" && (
+  <div
+    class="workflow-visual"
+    data-workflow-visual
+    style={`--workflow-mask: ${parallaxMask("data-studio")}`}
+  >
+    <div class="workflow-art">
+      <picture>
+        <source
+          media="(max-width: 959px)"
+          srcset={parallaxSrcset("data-studio")}
+          sizes="calc(100vw - 36px)"
+        />
+        <img
+          src="/parallax/optimized/data-studio-1920.webp"
+          alt={`${t("v5.platform.f.data.title")} — Flow-Like ontology and knowledge graph workspace`}
+          width={dataStudio.width}
+          height={dataStudio.height}
+          loading="lazy"
+          decoding="async"
+        />
+      </picture>
+    </div>
+  </div>
+)}
+{id === "store" && (
+  <div class="mock store light-screen">
+    <header><b>{t("v5.platform.store.title")}</b><div>{t("v5.platform.store.search")}</div><span>{t("v5.platform.store.myApps")}</span></header>
+    <main><section class="dark"><span><label>{t("v5.platform.store.featured")}</label><b>Quarterly Business Review</b><p>{t("v5.platform.store.featuredDesc")}</p><em>{t("v5.platform.store.openApp")} ↗</em></span><i>Q3</i></section><div class="store-grid">{storeApps.map((x, i) => (<article><i>{x[0]}</i><span><b>{x}</b><small>{12 + i * 7} {t("v5.platform.store.users")}</small></span><em>↗</em></article>))}</div></main>
+  </div>
+)}
+{id === "governance" && (
+  <div
+    class="workflow-visual"
+    data-workflow-visual
+    style={`--workflow-mask: ${parallaxMask("governance")}`}
+  >
+    <div class="workflow-art">
+      <picture>
+        <source
+          media="(max-width: 959px)"
+          srcset={parallaxSrcset("governance")}
+          sizes="calc(100vw - 36px)"
+        />
+        <img
+          src="/parallax/optimized/governance-1920.webp"
+          alt={`${t("v5.platform.f.governance.title")} — Flow-Like AI inventory, security, audit, and usage governance dashboards`}
+          width={governance.width}
+          height={governance.height}
+          loading="lazy"
+          decoding="async"
+        />
+      </picture>
+    </div>
+  </div>
+)}
+{id === "pilot" && (
+  <div class="mock pilot">
+    <div class="pilot-command"><FlowPilotBubbleOrb client:only="react" aria-label="FlowPilot" className="size-9 shrink-0" /><p>{t("v5.platform.pilot.prompt")}</p><span>{t("v5.platform.pilot.access")}</span></div>
+    <div class="execution">{execSteps.map((s) => (<div><i>{s[0]}</i><span><b>{s[1]}</b><small>{s[2]}</small></span><em>{t("v5.platform.pilot.done")} ✓</em></div>))}</div>
+    <div class="pilot-result light-screen"><label>{t("v5.platform.pilot.briefingReady")}</label><b>Acme Renewal · €1.2M ARR</b><p>{t("v5.platform.pilot.resultDesc")}</p><button>{t("v5.platform.pilot.openBriefing")} ↗</button></div>
+  </div>
+)}
+
+<!-- Mock styles stay colocated with their markup so Astro applies the scope hash. -->
+<style>
+  .mock { --mono: ui-monospace, SFMono-Regular, Menlo, monospace; position: relative; width: min(100%, 900px); height: min(68vh, 650px); overflow: hidden; border: 1px solid var(--border); border-radius: 16px; background: var(--card); box-shadow: 0 40px 120px rgba(0, 0, 0, .5); }
+  .mock label { font: 8px var(--mono); letter-spacing: .12em; }
+  /* Light product-screen islands on the dark stage: re-declare the light tokens
+     for these subtrees so the mocks read like real app screenshots. */
+  .light-screen {
+    --background: oklch(0.9841 0.0035 39.4848);
+    --foreground: oklch(0.184 0.0081 285.5768);
+    --card: oklch(1 0 0);
+    --muted: oklch(0.9401 0.0068 53.4438);
+    --muted-foreground: oklch(0.5137 0.0156 285.8367);
+    --border: oklch(0.8933 0.0111 54.4825);
+    color: var(--foreground);
+  }
+
+  .builder { display: grid; grid-template-columns: 30% 70%; }
+  .builder > aside { padding: 24px 18px; border-right: 1px solid var(--border); background: var(--background); }
+  .builder > aside > label { color: var(--muted-foreground); }
+  .builder > aside > p { margin-top: 20px; padding: 15px; border: 1px solid var(--border); border-radius: 12px 12px 12px 3px; background: var(--card); font-size: 13px; line-height: 1.45; }
+  .building { display: flex; gap: 10px; margin-top: 28px; }
+  .building > i { width: 16px; height: 16px; border: 2px solid var(--primary); border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; }
+  .building span { display: grid; }
+  .building b { font-size: 10px; }
+  .building small { margin-top: 3px; color: var(--muted-foreground); font-size: 8px; }
+  .builder ul { display: grid; gap: 10px; margin: 24px 0 0 26px; padding: 0; list-style: none; color: var(--muted-foreground); font-size: 9px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .app-preview { background: var(--muted); color: var(--foreground); }
+  .app-preview > header, .frontend > section > header { height: 48px; display: flex; align-items: center; padding: 0 18px; border-bottom: 1px solid var(--border); background: var(--card); }
+  .app-preview > header b, .frontend > section > header b { font-size: 11px; }
+  .app-preview > header span, .frontend > section > header span { margin: auto; color: var(--muted-foreground); font-size: 8px; }
+  .app-preview > header i, .frontend > section > header i { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 50%; background: var(--foreground); color: var(--background); font-size: 7px; font-style: normal; }
+  .app-preview > main { padding: 28px; }
+  .app-preview > main label { color: var(--muted-foreground); }
+  .app-preview > main h4 { margin: 10px 0 28px; font-size: 26px; letter-spacing: -.04em; }
+  .preview-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+  .preview-metrics > span { display: grid; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
+  .preview-metrics b { font-size: 20px; }
+  .preview-metrics small { color: var(--muted-foreground); font-size: 7px; }
+  .preview-bars { height: 190px; display: flex; align-items: end; gap: 8px; margin-top: 11px; padding: 22px; border-radius: 8px; background: var(--foreground); }
+  .preview-bars i { flex: 1; border-radius: 3px 3px 0 0; background: linear-gradient(var(--accent), var(--primary)); }
+
+  .workflow-visual {
+    --workflow-rx: 0deg;
+    --workflow-ry: 0deg;
+    --workflow-mx: 50%;
+    --workflow-my: 50%;
+    position: relative;
+    width: min(128%, 1150px);
+    aspect-ratio: 16 / 9;
+    margin: 0;
+    margin-inline-start: calc((100% - min(128%, 1150px)) / 2);
+    overflow: visible;
+    isolation: isolate;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .workflow-visual:before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: 18% 10% 2%;
+    border-radius: 50%;
+    background:
+      radial-gradient(ellipse at 55% 70%, color-mix(in oklab, var(--accent) 21%, transparent), transparent 62%),
+      radial-gradient(ellipse at 28% 55%, color-mix(in oklab, var(--primary) 12%, transparent), transparent 58%);
+    filter: blur(34px);
+    opacity: .5;
+    transform: translateY(10px) scale(.92);
+    transition: opacity .5s ease, transform .65s cubic-bezier(.2, .8, .2, 1);
+  }
+  .workflow-art {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    transform: none;
+    transition: transform .22s cubic-bezier(.2, .8, .2, 1);
+  }
+  .workflow-art:after {
+    content: "";
+    position: absolute;
+    z-index: 2;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(
+      420px circle at var(--workflow-mx) var(--workflow-my),
+      rgba(255, 241, 232, .15),
+      rgba(255, 103, 70, .045) 24%,
+      transparent 57%
+    );
+    -webkit-mask-image: var(--workflow-mask);
+    mask-image: var(--workflow-mask);
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+    mask-mode: alpha;
+    mix-blend-mode: screen;
+    opacity: 0;
+    transition: opacity .35s ease;
+  }
+  .workflow-art :global(img) {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    image-rendering: auto;
+  }
+  .workflow-art :global(picture) {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .workflow-visual:hover:before {
+    opacity: .8;
+    transform: translateY(15px) scale(1.02);
+  }
+  .workflow-visual:hover .workflow-art {
+    transform:
+      perspective(1200px)
+      rotateX(var(--workflow-rx))
+      rotateY(var(--workflow-ry))
+      translateY(-7px)
+      scale(1.01);
+    will-change: transform;
+  }
+  .workflow-visual:hover .workflow-art:after { opacity: 1; }
+
+  .store { padding-bottom: 15px; background: var(--muted); color: var(--foreground); }
+  .store > header { height: 52px; display: grid; grid-template-columns: 1fr 1.2fr 1fr; align-items: center; padding: 0 17px; border-bottom: 1px solid var(--border); background: var(--card); }
+  .store > header b { font-size: 10px; }
+  .store > header div { padding: 8px 12px; border-radius: 6px; background: color-mix(in oklab, var(--muted) 70%, var(--background)); color: var(--muted-foreground); font-size: 7px; }
+  .store > header span { justify-self: end; font-size: 8px; }
+  .store > main > section { position: relative; height: 175px; display: flex; align-items: center; overflow: hidden; margin: 14px; padding: 26px 32px; border-radius: 10px; background: var(--card); color: var(--foreground); }
+  .store > main > section:after { content: ""; position: absolute; top: -90px; right: -80px; width: 250px; height: 250px; border: 50px solid color-mix(in oklab, var(--primary) 50%, transparent); border-radius: 50%; }
+  .store > main > section span { position: relative; z-index: 2; display: grid; width: 55%; }
+  .store > main > section label { color: var(--accent); font-size: 7px; }
+  .store > main > section b { margin: 8px 0 4px; font-size: 20px; }
+  .store > main > section p { margin: 0 0 12px; color: var(--muted-foreground); font-size: 8px; line-height: 1.4; }
+  .store > main > section em { font-size: 8px; font-style: normal; }
+  .store > main > section > i { position: relative; z-index: 2; margin-left: auto; color: var(--accent); font-size: 72px; font-weight: 800; font-style: normal; letter-spacing: -.08em; }
+  .store-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 0 14px; }
+  .store-grid > article { display: flex; align-items: center; gap: 9px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
+  .store-grid article > i { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; background: color-mix(in oklab, var(--primary) 8%, var(--card)); color: var(--primary); font-size: 9px; font-weight: 700; font-style: normal; }
+  .store-grid article span { display: grid; }
+  .store-grid article b { font-size: 8px; }
+  .store-grid article small { color: var(--muted-foreground); font-size: 7px; }
+  .store-grid article em { margin-left: auto; font-size: 8px; font-style: normal; }
+
+  .pilot { padding: 20px; background: radial-gradient(circle at 13% 16%, color-mix(in oklab, var(--primary) 20%, transparent), transparent 25%), var(--background); }
+  .pilot-command { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 15px 17px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
+  .pilot-command p { margin: 2px 0; font-size: 12px; line-height: 1.4; }
+  .pilot-command > span { grid-column: 2; color: var(--muted-foreground); font: 7px var(--mono); }
+  .execution { display: grid; gap: 7px; margin: 18px 0; }
+  .execution > div { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 11px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .execution > div > i { color: var(--accent); font: 7px var(--mono); font-style: normal; }
+  .execution > div > span { display: grid; }
+  .execution b { font-size: 9px; }
+  .execution small { margin-top: 2px; color: var(--muted-foreground); font-size: 7px; }
+  .execution em { color: var(--accent); font: 7px var(--mono); font-style: normal; }
+  .pilot-result { position: relative; padding: 17px; border-radius: 11px; background: var(--muted); color: var(--foreground); }
+  .pilot-result label { color: var(--primary); font-size: 7px; }
+  .pilot-result > b { display: block; margin: 7px 0 3px; font-size: 17px; }
+  .pilot-result p { margin: 0; color: var(--muted-foreground); font-size: 8px; }
+  .pilot-result button { position: absolute; top: 50%; right: 14px; padding: 9px 12px; border: 0; border-radius: 7px; background: var(--foreground); color: var(--background); font-size: 8px; transform: translateY(-50%); }
+
+  @media (max-width: 1050px) {
+    .mock { height: 58vh; }
+  }
+
+  @media (max-width: 959px), (max-height: 679px) {
+    .workflow-visual { width: 100%; margin-inline-start: 0; }
+  }
+
+  @media (max-width: 800px) {
+    .mock { height: 500px; }
+    .builder { grid-template-columns: 1fr; }
+    .builder > aside { display: none; }
+    .store-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .building > i { animation: none; }
+    .workflow-art { transition: none; }
+  }
+</style>
+
+<script>
+  function initWorkflowVisuals() {
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const precisePointer = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+    const visuals = document.querySelectorAll<HTMLElement>(
+      "[data-workflow-visual]:not([data-workflow-ready])",
+    );
+
+    visuals.forEach((visual) => {
+      visual.dataset.workflowReady = "true";
+      if (reduced || !precisePointer) return;
+
+      let pointerFrame = 0;
+      visual.addEventListener("pointermove", (event) => {
+        window.cancelAnimationFrame(pointerFrame);
+        pointerFrame = window.requestAnimationFrame(() => {
+          const rect = visual.getBoundingClientRect();
+          const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+          const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+          visual.style.setProperty("--workflow-rx", `${(0.5 - y) * 5}deg`);
+          visual.style.setProperty("--workflow-ry", `${(x - 0.5) * 7}deg`);
+          visual.style.setProperty("--workflow-mx", `${x * 100}%`);
+          visual.style.setProperty("--workflow-my", `${y * 100}%`);
+        });
+      });
+      visual.addEventListener("pointerleave", () => {
+        window.cancelAnimationFrame(pointerFrame);
+        visual.style.setProperty("--workflow-rx", "0deg");
+        visual.style.setProperty("--workflow-ry", "0deg");
+        visual.style.setProperty("--workflow-mx", "50%");
+        visual.style.setProperty("--workflow-my", "50%");
+      });
+    });
+  }
+
+  initWorkflowVisuals();
+  document.addEventListener("astro:page-load", initWorkflowVisuals);
+</script>

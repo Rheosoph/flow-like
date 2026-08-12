@@ -29,6 +29,7 @@ model User {
   permission           BigInt  @default(0)
   acceptedTermsVersion String?
   tutorialCompleted    Boolean @default(false)
+  devMode              Boolean @default(false)
 
   memberships                 Membership[]
   profiles                    Profile[]
@@ -46,6 +47,7 @@ model User {
   transactions                Transaction[]
   notifications               Notification[]
   pushNotificationTargets     PushNotificationTarget[]
+  userBits                    UserBit[]
   wasmPackageAccess           WasmPackageUser[]
   wasmPackageReviews          WasmPackageReview[]
   wasmInvitesSent             WasmPackageInvitation[] @relation("WasmInviter")
@@ -67,6 +69,9 @@ model User {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // User search resolves a pasted address exactly before it falls back to a scan.
+  @@index([email])
 }
 
 model Profile {
@@ -99,6 +104,38 @@ model Profile {
   @@id([userId, id])
   @@index([userId])
   @@index([userId, deletedAt])
+}
+
+model UserBit {
+  id String @id
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  type BitType
+
+  repository   String?
+  downloadLink String?
+  fileName     String?
+  hash         String?
+  size         BigInt?
+
+  // LLMParameters/VLMParameters shape WITHOUT secret provider params
+  parameters Json?
+  // AES-256-GCM encrypted JSON map of secret provider params (api_key, ...)
+  secretsEncrypted String?
+
+  // {lang: Metadata} map, always contains "en"
+  meta Json?
+
+  version String?
+  license String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userId, type])
 }
 
 model PAT {

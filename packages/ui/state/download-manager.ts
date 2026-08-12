@@ -1,5 +1,5 @@
 import { type StoreApi, type UseBoundStore, create } from "zustand";
-import { Bit, Download, type IBit } from "../lib";
+import { Bit, Download, type IBit, isMlxModelBit } from "../lib";
 import type { IBackendState } from "./backend-state";
 
 declare global {
@@ -118,9 +118,16 @@ export class DownloadManager {
 	): Promise<IBit[]> {
 		const key = bit.hash;
 		const hasDependencies = (bit.dependencies?.length ?? 0) > 0;
+		// An MLX root has neither a download link nor dependencies, yet resolves
+		// real artifacts from its inline manifest — it must reach the backend.
+		const hasInlineArtifacts = isMlxModelBit(bit);
 
 		// Virtual / hosted bit with no dependency artifacts -> immediately resolve.
-		if ((!bit.download_link || bit.size === 0) && !hasDependencies) {
+		if (
+			(!bit.download_link || bit.size === 0) &&
+			!hasDependencies &&
+			!hasInlineArtifacts
+		) {
 			// Clear any leftover queued state just in case.
 			this.cleanupForKey(key);
 			if (cb) {

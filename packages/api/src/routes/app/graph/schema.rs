@@ -32,7 +32,7 @@ use flow_like_storage::databases::graph::{GraphStore, lancegraph};
 )]
 #[tracing::instrument(
     name = "GET /apps/{app_id}/graph/{overlay_id}/schema",
-    skip(state, user)
+    skip(state, user, scope)
 )]
 pub async fn graph_schema(
     State(state): State<AppState>,

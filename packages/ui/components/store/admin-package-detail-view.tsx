@@ -20,6 +20,11 @@ import type {
 	ReviewRequest,
 } from "../../lib/schema/wasm";
 import {
+	userAvatarUrl,
+	userDisplayName,
+	userInitials,
+} from "../../lib/user-display";
+import {
 	Badge,
 	Button,
 	Card,
@@ -70,9 +75,8 @@ function ReviewItem({ review }: { review: PackageReview }) {
 	};
 
 	const reviewer = review.reviewer;
-	const reviewerLabel =
-		reviewer?.name ?? reviewer?.username ?? review.reviewerId;
-	const reviewerInitial = reviewerLabel.charAt(0).toUpperCase();
+	const reviewerLabel = userDisplayName(reviewer, review.reviewerId);
+	const reviewerAvatar = userAvatarUrl(reviewer);
 
 	return (
 		<div className="flex gap-4 p-4 border rounded-lg">
@@ -80,14 +84,14 @@ function ReviewItem({ review }: { review: PackageReview }) {
 				<div>{actionIcon[review.action]}</div>
 				<div className="flex items-center gap-2 text-xs text-muted-foreground">
 					<div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border bg-muted text-foreground">
-						{reviewer?.avatar ? (
+						{reviewerAvatar ? (
 							<img
-								src={reviewer.avatar}
+								src={reviewerAvatar}
 								alt={reviewerLabel}
 								className="h-full w-full object-cover"
 							/>
 						) : (
-							reviewerInitial
+							userInitials(reviewer)
 						)}
 					</div>
 				</div>

@@ -238,6 +238,8 @@ export interface FlowPilotProcessEvent {
 export interface FlowScriptApplyResultLike {
 	commands?: unknown[];
 	board_commands?: BoardCommand[];
+	/** Non-blocking source repairs that require a canonical FlowScript readback. */
+	corrections?: string[];
 	diagnostics?: string[];
 	final_board_node_count?: number;
 }
@@ -327,6 +329,8 @@ export interface FlowPilotProps {
 	/** Atomically apply the exact retained compiled workflow batch and record undo/refetch state. */
 	onApplyFlowIrCommit?: (
 		token: FlowIrCommitToken,
+		deliveryId?: string,
+		historyMode?: "append" | "invalidate",
 	) => Promise<IApplyFlowIrCommitResponse>;
 
 	/** Callback to focus on a specific node (board mode) */

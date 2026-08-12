@@ -51,4 +51,13 @@ export class EmptyBitState implements IBitState {
 	repairTtsBitAssets(bit: IBit, force?: boolean): Promise<IBitPack> {
 		throw new Error("Method not implemented.");
 	}
+	listCustomBits(): Promise<IBit[]> {
+		throw new Error("Method not implemented.");
+	}
+	upsertCustomBit(bit: IBit, secrets?: Record<string, unknown>): Promise<IBit> {
+		throw new Error("Method not implemented.");
+	}
+	deleteCustomBit(bitId: string): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
 }

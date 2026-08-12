@@ -14,7 +14,10 @@ import {
 } from "../../ui/select";
 import { Textarea } from "../../ui/textarea";
 
-const kinds: ReadonlyArray<{ readonly value: LessonAppRefKind; readonly label: string }> = [
+const kinds: ReadonlyArray<{
+	readonly value: LessonAppRefKind;
+	readonly label: string;
+}> = [
 	{ value: "NAVIGATE", label: "Open subpage" },
 	{ value: "FOCUS_NODE", label: "Focus node on board" },
 	{ value: "ADD_NODE", label: "Add node to board" },

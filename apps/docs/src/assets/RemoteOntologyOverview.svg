@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-labelledby="title desc">
+  <title id="title">Flow-Like remote ontology contract</title>
+  <desc id="desc">A producer exposes a sanitized ontology contract to a connected consumer. The consumer receives bindings and semantics, while data access and governed actions continue to run in the producer.</desc>
+  <defs>
+    <linearGradient id="remote-bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#17191f"/></linearGradient>
+    <linearGradient id="remote-coral" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ff8a68"/><stop offset="1" stop-color="#ff5d3d"/></linearGradient>
+    <pattern id="remote-grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <marker id="remote-arrow-coral" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 10 5 0 10z" fill="#ff7656"/></marker>
+    <marker id="remote-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 10 5 0 10z" fill="#34d399"/></marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.remote-kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.4px}.remote-heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}.remote-sub{fill:#a7adb8;font-size:17px}.remote-section{fill:#f7f8fa;font-size:22px;font-weight:720}.remote-item{fill:#d8dbe1;font-size:16px;font-weight:650}.remote-note{fill:#929aa7;font-size:14px}.remote-tiny{fill:#89919e;font-size:13px;font-weight:700;letter-spacing:1.1px}
+    </style>
+  </defs>
+  <rect width="1440" height="720" rx="28" fill="url(#remote-bg)"/><rect width="1440" height="720" rx="28" fill="url(#remote-grid)"/>
+  <rect x="64" y="58" width="300" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/><circle cx="84" cy="75" r="5" fill="#ff7656"/><text x="99" y="81" class="remote-kicker">REMOTE ONTOLOGIES</text>
+  <text x="64" y="136" class="remote-heading">Share the contract, keep implementation private</text>
+  <text x="64" y="169" class="remote-sub">Consumers install object and action semantics; the producer keeps its data and boards.</text>
+
+  <path d="M414 353H498" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#remote-arrow-coral)"/>
+  <path d="M930 353H1014" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#remote-arrow-coral)"/>
+
+  <g>
+    <rect x="64" y="222" width="350" height="326" rx="28" fill="#1d1d22" stroke="#ff7656" stroke-width="2"/>
+    <rect x="94" y="252" width="62" height="62" rx="18" fill="url(#remote-coral)"/><path d="M112 273h26v20h-26zM118 267h14" fill="none" stroke="#16181c" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="180" y="276" class="remote-tiny">PRODUCER</text><text x="180" y="309" class="remote-section">Source of truth</text>
+    <rect x="94" y="346" width="290" height="46" rx="12" fill="#292327" stroke="#5d3c35"/><circle cx="118" cy="369" r="6" fill="#ff7656"/><text x="140" y="375" class="remote-item">Ontology metadata</text>
+    <rect x="94" y="404" width="290" height="46" rx="12" fill="#292327" stroke="#5d3c35"/><circle cx="118" cy="427" r="6" fill="#a78bfa"/><text x="140" y="433" class="remote-item">Underlying data</text><text x="354" y="433" text-anchor="end" class="remote-note">private</text>
+    <rect x="94" y="462" width="290" height="46" rx="12" fill="#292327" stroke="#5d3c35"/><circle cx="118" cy="485" r="6" fill="#34d399"/><text x="140" y="491" class="remote-item">Action boards</text><text x="354" y="491" text-anchor="end" class="remote-note">private</text>
+  </g>
+
+  <g>
+    <rect x="510" y="206" width="420" height="294" rx="28" fill="#1d1c24" stroke="#a78bfa" stroke-width="2"/>
+    <text x="540" y="248" class="remote-tiny">EXPOSED CONTRACT</text><text x="540" y="283" class="remote-section">Sanitized semantics</text>
+    <rect x="540" y="312" width="170" height="54" rx="13" fill="#282534" stroke="#574e71"/><text x="565" y="345" class="remote-item">Object types</text>
+    <rect x="730" y="312" width="170" height="54" rx="13" fill="#282534" stroke="#574e71"/><text x="755" y="345" class="remote-item">Link types</text>
+    <rect x="540" y="382" width="360" height="54" rx="13" fill="#282534" stroke="#574e71"/><text x="565" y="415" class="remote-item">Action names and parameter semantics</text>
+    <text x="720" y="472" text-anchor="middle" class="remote-note">Implementation identifiers are removed before sharing.</text>
+  </g>
+
+  <g>
+    <rect x="1026" y="222" width="350" height="326" rx="28" fill="#1b2422" stroke="#34d399" stroke-width="2"/>
+    <text x="1056" y="264" class="remote-tiny">CONSUMER</text><text x="1056" y="299" class="remote-section">Installed bindings</text>
+    <rect x="1056" y="328" width="290" height="48" rx="12" fill="#202b28" stroke="#3e6759"/><circle cx="1080" cy="352" r="6" fill="#34d399"/><text x="1102" y="358" class="remote-item">Discover and install</text>
+    <rect x="1056" y="390" width="290" height="48" rx="12" fill="#202b28" stroke="#3e6759"/><circle cx="1080" cy="414" r="6" fill="#a78bfa"/><text x="1102" y="420" class="remote-item">Query remote objects</text>
+    <rect x="1056" y="452" width="290" height="48" rx="12" fill="#202b28" stroke="#3e6759"/><circle cx="1080" cy="476" r="6" fill="#ff7656"/><text x="1102" y="482" class="remote-item">Invoke remote actions</text>
+  </g>
+
+  <path d="M1200 548V602H240V548" fill="none" stroke="#34d399" stroke-width="3" stroke-dasharray="10 9" marker-end="url(#remote-arrow-green)"/>
+  <rect x="466" y="570" width="508" height="66" rx="18" fill="#1d2026" stroke="#3a404a" stroke-width="2"/>
+  <text x="720" y="596" text-anchor="middle" class="remote-item">Remote queries and actions run against the producer</text>
+  <text x="720" y="619" text-anchor="middle" class="remote-note">Connection permission: Read Files or Read Databases</text>
+</svg>

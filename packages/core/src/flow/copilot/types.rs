@@ -462,6 +462,20 @@ pub enum BoardCommand {
         /// Parent layer ID. If None, creates at root or current layer.
         #[serde(default)]
         target_layer: Option<String>,
+        /// Optional result-cache configuration. FlowScript function declarations populate this
+        /// when creating a cached Function layer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache: Option<crate::flow::board::LayerCache>,
+        #[serde(default)]
+        summary: Option<String>,
+    },
+    /// Replace (or remove) the result-cache configuration on an existing layer. `None` removes
+    /// caching; an active [`LayerCache`](crate::flow::board::LayerCache) enables it.
+    UpdateLayerCache {
+        layer_id: String,
+        /// `null` removes cache metadata; kept in serialized commands so removal is explicit.
+        #[serde(default)]
+        cache: Option<crate::flow::board::LayerCache>,
         #[serde(default)]
         summary: Option<String>,
     },
@@ -470,4 +484,35 @@ pub enum BoardCommand {
         #[serde(default)]
         summary: Option<String>,
     },
+}
+
+#[cfg(test)]
+mod cache_command_tests {
+    use super::BoardCommand;
+
+    #[test]
+    fn update_layer_cache_removal_serializes_as_explicit_null_and_round_trips() {
+        let command = BoardCommand::UpdateLayerCache {
+            layer_id: "cached-function".to_string(),
+            cache: None,
+            summary: Some("Disable function cache".to_string()),
+        };
+
+        let value = serde_json::to_value(&command).expect("serialize cache removal command");
+        assert_eq!(value["command_type"], "UpdateLayerCache");
+        assert_eq!(value["layer_id"], "cached-function");
+        assert!(value.get("cache").is_some());
+        assert!(value["cache"].is_null());
+
+        let decoded: BoardCommand =
+            serde_json::from_value(value).expect("deserialize cache removal command");
+        assert!(matches!(
+            decoded,
+            BoardCommand::UpdateLayerCache {
+                layer_id,
+                cache: None,
+                ..
+            } if layer_id == "cached-function"
+        ));
+    }
 }

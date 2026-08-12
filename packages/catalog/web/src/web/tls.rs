@@ -18,7 +18,7 @@ pub struct TlsCertificate {
     pub private_key_pem: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, Default)]
 pub struct TlsConfig {
     #[serde(default)]
     pub secure: bool,
@@ -30,18 +30,6 @@ pub struct TlsConfig {
     pub server_name: Option<String>,
     #[serde(default)]
     pub accept_invalid_certificates: bool,
-}
-
-impl Default for TlsConfig {
-    fn default() -> Self {
-        Self {
-            secure: false,
-            certificate: None,
-            ca_certificate_pem: None,
-            server_name: None,
-            accept_invalid_certificates: false,
-        }
-    }
 }
 
 #[cfg(feature = "execute")]

@@ -1,10 +1,9 @@
 use flow_like::flow::{
-    execution::context::ExecutionContext,
+    execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_storage::databases::vector::VectorStore;
 use flow_like_types::{async_trait, json::json};
 
 use super::NodeDBConnection;
@@ -65,17 +64,13 @@ impl NodeLogic for FlushLocalDatabaseNode {
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let cached_db = database.load(context).await?;
 
-        if cached_db.db.read().await.is_dirty() {
-            match cached_db.db.write().await.flush().await {
-                Ok(()) => {}
-                Err(e) => {
-                    context
-                        .set_pin_value("error_message", json!(e.to_string()))
-                        .await?;
-                    context.activate_exec_pin("error").await?;
-                    return Ok(());
-                }
-            }
+        if let Err(e) = cached_db.ensure_flushed().await {
+            context.log_message(&format!("Database flush failed: {e:#}"), LogLevel::Error);
+            context
+                .set_pin_value("error_message", json!(e.to_string()))
+                .await?;
+            context.activate_exec_pin("error").await?;
+            return Ok(());
         }
 
         context.activate_exec_pin("exec_out").await?;

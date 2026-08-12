@@ -1,0 +1,76 @@
+diff --git a/node_modules/indexeddbshim/.bun-tag-b4a10f3c94fc4d60 b/.bun-tag-b4a10f3c94fc4d60
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/dist/indexeddbshim-noninvasive.js b/dist/indexeddbshim-noninvasive.js
+index 60b67b749d84b467ecdee3226649b6c1dca901fe..44656c724336a8bb7b4a3841aafa35803dcacc42 100644
+--- a/dist/indexeddbshim-noninvasive.js
++++ b/dist/indexeddbshim-noninvasive.js
+@@ -4936,11 +4936,48 @@
+         }
+         i++;
+         if (i >= me.__requests.length) {
+-          // All requests in the transaction are done
+-          me.__requests = [];
+-          if (me.__active) {
+-            requestsFinished();
+-          }
++          // PATCHED (flow-like): browsers keep transactions alive through
++          // microtask checkpoints, so requests placed in promise
++          // continuations (Dexie awaits, Dexie.waitFor) still join the
++          // transaction. Emulate that: instead of finishing synchronously,
++          // issue no-op keep-alive statements; each round trip lets pending
++          // microtasks enqueue further requests. Finish only after the
++          // queue stays empty for consecutive quiet pings.
++          let quietPings = 0;
++          const gracePing = function () {
++            if (me.__errored || me.__requestsFinished) {
++              return;
++            }
++            if (i < me.__requests.length) {
++              quietPings = 0;
++              i--;
++              executeNextRequest();
++              return;
++            }
++            if (quietPings >= 1) {
++              // All requests in the transaction are done
++              me.__requests = [];
++              if (me.__active) {
++                requestsFinished();
++              }
++              return;
++            }
++            quietPings++;
++            try {
++              tx.executeSql('SELECT 1', [], function () {
++                gracePing();
++              }, function () {
++                gracePing();
++                return false;
++              });
++            } catch (e) {
++              me.__requests = [];
++              if (me.__active) {
++                requestsFinished();
++              }
++            }
++          };
++          gracePing();
+         } else {
+           try {
+             q = me.__requests[i];
+@@ -7839,6 +7876,14 @@
+         setSQLForKeyRange(convertedRange, escapeIndexNameForSQL(index.name), sql, sqlValues, true, false);
+       }
+     }
++    // PATCHED (flow-like): the spec orders index results by index key, then
++    // primary key; without this, results come back in SQLite rowid order.
++    // (Encoded key columns are order-preserving, so ORDER BY is correct.)
++    if (index.multiEntry) {
++      sql.push('ORDER BY', '"key"');
++    } else {
++      sql.push('ORDER BY', escapeIndexNameForSQL(index.name) + ',', '"key"');
++    }
+     return [nullDisallowed, index, hasRange, range, opType, multiChecks, sql, sqlValues];
+   }
+

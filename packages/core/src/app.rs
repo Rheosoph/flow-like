@@ -56,6 +56,20 @@ pub enum AppCategory {
     Anime = 20,
 }
 
+/// What kind of thing the app is, structurally — an agent, a pipeline, a form.
+/// Orthogonal to [`AppCategory`], which says what the app is *about*. Left
+/// unset until the owner classifies it; the UI derives a suggestion from the
+/// app's contents in the meantime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum AppType {
+    Agent = 0,
+    CustomInterface = 1,
+    DataFocus = 2,
+    DataPipeline = 3,
+    Analytics = 4,
+    Form = 5,
+}
+
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub enum AppStatus {
     Active = 0,
@@ -124,6 +138,10 @@ pub struct App {
     pub primary_category: Option<AppCategory>,
     pub secondary_category: Option<AppCategory>,
 
+    /// Owner-declared app type. `None` means unclassified.
+    #[serde(default)]
+    pub app_type: Option<AppType>,
+
     pub rating_sum: u64,
     pub rating_count: u64,
     pub download_count: u64,
@@ -190,6 +208,7 @@ impl Clone for App {
             relevance_score: self.relevance_score,
             primary_category: self.primary_category.clone(),
             secondary_category: self.secondary_category.clone(),
+            app_type: self.app_type.clone(),
             updated_at: self.updated_at,
             created_at: self.created_at,
             version: self.version.clone(),
@@ -241,6 +260,7 @@ impl App {
 
             primary_category: None,
             secondary_category: None,
+            app_type: None,
 
             price: None,
 
@@ -361,23 +381,46 @@ impl App {
             .ok_or(flow_like_types::anyhow!("App state not found"))?;
         let mut board = Board::new(id, storage_root, state.clone());
         if let Some(template) = template {
+            // API templates are JSON-deserialized and therefore cannot load page payloads directly
+            // (`app_state`/`board_dir` are runtime-only). Keep their page IDs so a caller that
+            // uploads the page payloads separately retains the board-to-page association. Stateful
+            // templates still copy their pages below.
+            let detached_page_ids = template
+                .app_state
+                .is_none()
+                .then(|| template.page_ids.clone());
             board.variables = template.variables.clone();
-            let paste_command = {
+            let mut paste_command = {
                 let nodes = template.nodes.values().cloned().collect::<Vec<_>>();
                 let comments = template.comments.values().cloned().collect::<Vec<_>>();
                 let layers = template.layers.values().cloned().collect::<Vec<_>>();
                 CopyPasteCommand::new(nodes, comments, layers, (0.0, 0.0, 0.0))
             };
+            // Schemas and descriptions are compacted into `Board::refs`. They must be present
+            // while the paste command runs because `execute_command` performs node migrations and
+            // cleanup immediately afterwards. Adding them later makes cleanup hash the ref key as
+            // if it were the schema itself, leaving the instantiated board with an unresolved
+            // ref-to-ref chain.
+            paste_command.original_variables = template.variables.values().cloned().collect();
+            paste_command.original_refs = template
+                .refs
+                .iter()
+                .filter(|(key, _)| !crate::flow::board::is_internal_board_ref(key.as_str()))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
             let paste_command =
                 crate::flow::board::commands::GenericCommand::CopyPaste(paste_command);
             board.execute_command(paste_command, state.clone()).await?;
-            board.refs = template.refs.clone();
             for page_id in &template.page_ids {
                 if let Ok(page) = template.load_page(page_id, None).await {
                     let mut new_page = page.clone();
                     new_page.board_id = Some(board.id.clone());
                     board.save_page(&new_page, None).await?;
                 }
+            }
+            if let Some(page_ids) = detached_page_ids {
+                board.page_ids = page_ids;
+                board.mark_changed();
             }
         }
         board.save(None).await?;
@@ -831,6 +874,21 @@ impl App {
 
         compress_to_file_json(store, widget_path, widget).await?;
 
+        // Seed the metadata sidecar exactly like the remote widget upsert does.
+        // Local-only creation paths never wrote one, so every listing that reads
+        // names from metadata fell back to showing the raw widget id.
+        if !self.has_widget_meta(&widget.id).await {
+            let meta = Metadata {
+                name: widget.name.clone(),
+                description: widget.description.clone().unwrap_or_default(),
+                tags: widget.tags.clone(),
+                ..Default::default()
+            };
+            if let Err(e) = self.push_widget_meta(&widget.id, None, meta).await {
+                eprintln!("Failed to seed metadata for widget {}: {}", widget.id, e);
+            }
+        }
+
         // Add widget ID to the list if not already present
         if !self.widget_ids.contains(&widget.id) {
             self.widget_ids.push(widget.id.clone());
@@ -838,6 +896,25 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Quiet existence check for a widget's metadata sidecar.
+    async fn has_widget_meta(&self, widget_id: &str) -> bool {
+        let Some(state) = self.app_state.clone() else {
+            return false;
+        };
+        let Ok(store) = FlowLikeState::project_storage_store(&state).await else {
+            return false;
+        };
+
+        let meta_path = Path::from("apps")
+            .child(self.id.clone())
+            .child("metadata")
+            .child("widgets")
+            .child(widget_id)
+            .child("en.meta");
+
+        store.as_generic().head(&meta_path).await.is_ok()
     }
 
     /// Delete a widget
@@ -1107,8 +1184,13 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use crate::{state::FlowLikeConfig, utils::http::HTTPClient};
-    use flow_like_storage::files::store::FlowLikeStore;
+    use crate::{
+        bit::Metadata,
+        flow::{board::Board, node::Node, variable::VariableType},
+        state::FlowLikeConfig,
+        utils::http::HTTPClient,
+    };
+    use flow_like_storage::{Path, files::store::FlowLikeStore, object_store};
     use flow_like_types::{FromProto, ToProto};
     use flow_like_types::{Message, tokio};
     use std::sync::Arc;
@@ -1127,6 +1209,7 @@ mod tests {
     async fn serialize_app() {
         let app = crate::app::App {
             id: "id".to_string(),
+            app_type: None,
             authors: vec!["author1".to_string(), "author2".to_string()],
             boards: vec!["board1".to_string(), "board2".to_string()],
             bits: vec!["bit1".to_string(), "bit2".to_string()],
@@ -1163,5 +1246,101 @@ mod tests {
         let deser = super::App::from_proto(flow_like_types::proto::App::decode(&buf[..]).unwrap());
 
         assert_eq!(app.id, deser.id);
+    }
+
+    #[tokio::test]
+    async fn create_board_from_template_keeps_schema_refs_resolvable() {
+        let store = FlowLikeStore::Other(Arc::new(object_store::memory::InMemory::new()));
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            HTTPClient::new_without_refetch(),
+        ));
+        let mut app = super::App::new(
+            Some("template-ref-test-app".to_string()),
+            Metadata::default(),
+            Vec::new(),
+            state.clone(),
+        )
+        .await
+        .expect("test app should be created");
+
+        let schema = r#"{"type":"object","properties":{"value":{"type":"string"}}}"#;
+        let schema_ref = "template-schema-ref";
+        let mut template = Board::new(
+            Some("source-template".to_string()),
+            Path::from("apps/source"),
+            state.clone(),
+        );
+        template
+            .refs
+            .insert(schema_ref.to_string(), schema.to_string());
+        let mut node = Node::new("template_test_node", "Template Test", "", "Tests");
+        node.add_output_pin("value", "Value", "", VariableType::Struct)
+            .schema = Some(schema_ref.to_string());
+        template.nodes.insert(node.id.clone(), node);
+
+        let board_id = app
+            .create_board(Some("instantiated-board".to_string()), Some(template))
+            .await
+            .expect("template should instantiate");
+        let board = Board::load(
+            Path::from("apps").child(app.id.clone()),
+            &board_id,
+            state,
+            None,
+        )
+        .await
+        .expect("instantiated board should load");
+        let pin = board
+            .nodes
+            .values()
+            .next()
+            .and_then(|node| node.get_pin_by_name("value"))
+            .expect("template pin should exist");
+        let stored_ref = pin
+            .schema
+            .as_deref()
+            .expect("template pin should stay typed");
+
+        assert_eq!(
+            board.refs.get(stored_ref).map(String::as_str),
+            Some(schema),
+            "the instantiated pin must point directly to its copied schema"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_board_from_detached_template_keeps_page_ids() {
+        let store = FlowLikeStore::Other(Arc::new(object_store::memory::InMemory::new()));
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            HTTPClient::new_without_refetch(),
+        ));
+        let mut app = super::App::new(
+            Some("detached-template-page-test-app".to_string()),
+            Metadata::default(),
+            Vec::new(),
+            state.clone(),
+        )
+        .await
+        .expect("test app should be created");
+        let mut template =
+            Board::new_detached(Some("detached-template".to_string()), Path::from("unused"));
+        template.page_ids = vec!["page-one".to_string(), "page-two".to_string()];
+
+        let board_id = app
+            .create_board(Some("instantiated-board".to_string()), Some(template))
+            .await
+            .expect("detached template should instantiate");
+        let board = Board::load(
+            Path::from("apps").child(app.id.clone()),
+            &board_id,
+            state,
+            None,
+        )
+        .await
+        .expect("instantiated board should load");
+
+        assert_eq!(board.page_ids, vec!["page-one", "page-two"]);
     }
 }

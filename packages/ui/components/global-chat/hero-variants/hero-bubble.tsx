@@ -462,9 +462,10 @@ button.hero-bubble-icon {
 	align-items: center;
 	gap: 7px;
 	max-width: 100%;
-	padding: 8px 14px;
+	min-height: 44px;
+	padding: 10px 16px;
 	border-radius: 999px;
-	font-size: 12.5px;
+	font-size: 13px;
 	font-weight: 600;
 	color: var(--foreground);
 	background: color-mix(in oklab, var(--foreground) 5%, transparent);
@@ -487,55 +488,81 @@ button.hero-bubble-icon {
 		max-width: 100%;
 	}
 }
-/* phones: a big, near-square idle bubble that fills most of the screen */
+/* phones: keep the idle bubble prominent without letting it dominate the screen */
 @media (max-width: 560px) {
 	.hero-bubble-wrap {
-		height: min(92vw, 26rem);
-		transition: height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+		width: min(69vw, 19.5rem);
+		height: min(69vw, 19.5rem);
+		transition:
+			width 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+			height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 	}
 	/* the composer only needs a comfortable input height — collapse the big idle
 	   bubble when open so the field + controls sit together instead of spreading
 	   across the whole sphere */
-	.hero-bubble-wrap.hero-bubble-open { height: 15rem; }
-	/* small insets; the send orb moves to the bottom-right corner */
-	.hero-bubble-content {
-		inset: 14px 14px 12px 14px;
-		gap: 4px;
+	.hero-bubble-wrap.hero-bubble-open {
+		width: 100%;
+		height: 15rem;
 	}
-	/* reserve the bottom-right corner for attach+send so the pills can never run
-	   under them — the pills wrap to their own line first instead */
+	/* the rim now hugs the wrap edge (draw(): edgeX/edgeY), so inset the content
+	   well inside it — flush-to-rim content was the source of the text/orb-on-the
+	   -border bug */
+	.hero-bubble-content {
+		inset: 20px 18px 18px 20px;
+		gap: 6px;
+	}
+	/* file chips + textarea take the free space and scroll; the controls row
+	   stays pinned at the bottom, always inside the rim */
+	.hero-bubble-fields {
+		flex: 1 1 auto;
+		min-height: 0;
+		overflow-y: auto;
+	}
+	.hero-bubble-content textarea { max-height: 6rem; }
+	/* reserve the bottom-right cluster (attach + send) so the model pill can
+	   never run under it — it wraps to its own line first instead */
 	.hero-bubble-content .hero-bubble-row {
 		gap: 6px;
 		flex-wrap: wrap;
-		padding-right: 88px;
+		padding-right: 116px;
 	}
 	.hero-bubble-spark { display: none; }
 	.hero-bubble-pill {
-		height: 34px;
-		font-size: 12px;
+		min-height: 42px;
+		font-size: 12.5px;
 		padding: 0 12px;
 	}
+	/* the full model name gets the width; reasoning detail stays in the popover */
+	.hero-bubble-model { max-width: 11rem; }
+	.hero-bubble-model [data-slot="picker-reasoning"] { display: none; }
 	.hero-bubble-side {
 		top: auto;
-		bottom: 14px;
-		right: 14px;
+		bottom: 16px;
+		right: 16px;
 		translate: none;
 		gap: 8px;
 	}
 	.hero-bubble-wrap.hero-bubble-open .hero-bubble-side { translate: none; }
-	/* smaller send with a tight drop shadow — the wide pulsing rings overflowed
-	   the composer's rounded corner on phones */
+	/* 44px send with a tight drop shadow — the wide pulsing rings overflowed the
+	   composer's rounded corner on phones */
 	.hero-bubble-send {
-		width: 42px;
-		height: 42px;
+		width: 44px;
+		height: 44px;
 		box-shadow: 0 8px 22px -8px rgba(124, 92, 240, 0.75);
 		animation: none;
 	}
-	.hero-bubble-send svg { width: 18px; height: 18px; }
-	.hero-bubble-side .hero-bubble-icon { padding: 5px; }
+	.hero-bubble-send svg { width: 20px; height: 20px; }
+	/* attach is the only mobile file affordance — give it a full 44px hit area
+	   around the compact glyph */
+	.hero-bubble-side .hero-bubble-icon {
+		min-width: 44px;
+		min-height: 44px;
+		padding: 0;
+		display: grid;
+		place-items: center;
+	}
 	/* voice is not offered — drop it entirely on the tightest layouts */
 	.hero-bubble-icon-off { display: none; }
-	.hero-bubble-model { max-width: 8.5rem; }
 }
 `;
 
@@ -618,7 +645,7 @@ const LONGEST_ROTATING_WORD = ROTATING_WORDS.reduce((a, b) =>
 const HERO_HEADING_CLASS =
 	"text-[26px] sm:text-3xl md:text-4xl font-bold tracking-tight text-balance";
 
-const HINT_TEXT = "Click to ask FlowPilot";
+const HINT_TEXT = "Ask FlowPilot";
 
 type RotatingWordFx = "morph" | "wipe" | "pop";
 
@@ -871,7 +898,16 @@ export function HeroSearchBarBubble() {
 				draw(4200);
 			}
 		};
-		const onFocus = () => setOpen(true);
+		const onFocus = () => {
+			setOpen(true);
+			// on phones, lift the composer into the visible band so the send orb and
+			// model pill aren't stranded behind the soft keyboard
+			if (window.matchMedia("(max-width: 560px)").matches) {
+				requestAnimationFrame(() =>
+					wrap.scrollIntoView({ block: "center", behavior: "smooth" }),
+				);
+			}
+		};
 		const onBlur = () => {
 			focusTargetRef.current = 0;
 		};
@@ -935,14 +971,20 @@ export function HeroSearchBarBubble() {
 		const draw = (ms: number) => {
 			const halfH = canvas.clientHeight / 2;
 			if (!halfH) return;
-			// half-extents in shader uv units: a compact bubble at rest that
-			// spreads to the full composer rectangle as the morph progresses
-			const rectBx = (wrap.clientWidth / 2 - 14) / halfH;
-			const rectBy = (wrap.clientHeight / 2 - 16) / halfH;
 			const k = Math.min(Math.max(morph, 0), 1.15);
 			// phones use a near-square wrap: start the bubble round (bx≈by) rather than the
 			// wide desktop pill, else the tall box's corner radius pinches into a pointed lens
 			const narrow = wrap.clientWidth <= 560;
+			// half-extents in shader uv units: a compact bubble at rest that
+			// spreads to the full composer rectangle as the morph progresses.
+			// on phones push the rim almost to the wrap edge (edgeX/edgeY) so the
+			// inset content clears the rounded rim + its inner glow — a rim on the
+			// same line as the content was what painted text/buttons on the border.
+			// the canvas overflows the wrap (124%×190%), so a near-edge rim is safe.
+			const edgeX = narrow ? 4 : 14;
+			const edgeY = narrow ? 6 : 16;
+			const rectBx = (wrap.clientWidth / 2 - edgeX) / halfH;
+			const rectBy = (wrap.clientHeight / 2 - edgeY) / halfH;
 			const bx = rectBx * (narrow ? 0.92 + 0.08 * k : 0.4 + 0.6 * k);
 			const by = rectBy * (0.92 + 0.08 * k);
 			gl.uniform2f(uRes, canvas.width, canvas.height);
@@ -1161,7 +1203,7 @@ export function HeroSearchBarBubble() {
 					</button>
 				))}
 				<div className="hero-bubble-content">
-					<div className="flex flex-col">
+					<div className="hero-bubble-fields flex flex-col">
 						<HeroFileChips files={files} onRemove={removeFile} />
 						<Textarea
 							value={value}

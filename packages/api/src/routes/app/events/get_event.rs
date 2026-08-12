@@ -7,11 +7,12 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like::flow::event::Event;
-use flow_like_types::anyhow;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
-use super::db::{filter_event_list_execution, filter_event_secrets, get_event_from_db};
+use super::db::{
+    filter_event_list_execution, filter_event_secrets, get_event_from_db_opt, sync_event_to_db,
+};
 
 #[derive(Deserialize, Debug, ToSchema)]
 pub struct VersionQuery {
@@ -42,7 +43,10 @@ pub struct VersionQuery {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/events/{event_id}", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/events/{event_id}",
+    skip(state, user, query)
+)]
 pub async fn get_event(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -58,27 +62,42 @@ pub async fn get_event(
     let sub = permission.sub()?;
     let has_read = permission.has_permission(RolePermissions::ReadEvents);
 
-    let version_opt = if let Some(ver_str) = query.version {
-        let parts = ver_str
-            .split('_')
-            .map(str::parse::<u32>)
-            .collect::<Result<Vec<u32>, _>>()?;
-        match parts.as_slice() {
-            [maj, min, pat] => Some((*maj, *min, *pat)),
-            _ => {
-                return Err(ApiError::internal_error(anyhow!(
-                    "version must be in MAJOR_MINOR_PATCH format"
-                )));
-            }
-        }
-    } else {
-        None
-    };
+    let version_opt =
+        match query.version.as_deref() {
+            Some(ver_str) => Some(super::parse_version_tuple(ver_str).ok_or_else(|| {
+                ApiError::bad_request("version must be in MAJOR_MINOR_PATCH format")
+            })?),
+            None => None,
+        };
 
-    // For current version, use database lookup
-    // For historical versions, fall back to bucket
+    // Current events normally come from the database mirror. Older apps (or an
+    // interrupted sync) can still have a valid event artifact without that row,
+    // so repair the mirror from bucket storage on a miss.
     let event = if version_opt.is_none() {
-        get_event_from_db(&state.db, &event_id, &app_id).await?
+        if let Some(event) = get_event_from_db_opt(&state.db, &event_id, &app_id).await? {
+            event
+        } else {
+            let app = state.master_app(&sub, &app_id, &state).await?;
+            let event = app.get_event(&event_id, None).await?;
+            if event.id != event_id {
+                tracing::error!(
+                    expected_event_id = %event_id,
+                    artifact_event_id = %event.id,
+                    app_id = %app_id,
+                    "Event artifact ID does not match the requested event"
+                );
+                return Err(ApiError::internal("Event artifact ID mismatch"));
+            }
+            if let Err(error) = sync_event_to_db(&state.db, &app_id, &event).await {
+                tracing::warn!(
+                    event_id = %event_id,
+                    app_id = %app_id,
+                    %error,
+                    "Failed to repair event database mirror"
+                );
+            }
+            event
+        }
     } else {
         let app = state.master_app(&sub, &app_id, &state).await?;
         app.get_event(&event_id, version_opt).await?

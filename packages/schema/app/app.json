@@ -1,287 +1,255 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "App",
-  "type": "object",
-  "properties": {
-    "id": {
-      "type": "string"
-    },
-    "status": {
-      "$ref": "#/$defs/AppStatus"
-    },
-    "visibility": {
-      "$ref": "#/$defs/AppVisibility"
-    },
-    "authors": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "bits": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "boards": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "events": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "templates": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "changelog": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "primary_category": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/AppCategory"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "secondary_category": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/AppCategory"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "rating_sum": {
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
-    },
-    "rating_count": {
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
-    },
-    "download_count": {
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
-    },
-    "interactions_count": {
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
-    },
-    "avg_rating": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "double"
-    },
-    "relevance_score": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "double"
-    },
-    "execution_mode": {
-      "$ref": "#/$defs/AppExecutionMode"
-    },
-    "updated_at": {
-      "$ref": "#/$defs/SystemTime"
-    },
-    "created_at": {
-      "$ref": "#/$defs/SystemTime"
-    },
-    "version": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "frontend": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/FrontendConfiguration"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "price": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint32",
-      "minimum": 0
-    },
-    "widget_ids": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "default": []
-    },
-    "page_ids": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "default": []
-    },
-    "packages": {
-      "description": "WASM packages required by this app: package_id -> version",
-      "type": "object",
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {}
-    },
-    "allow_forking": {
-      "description": "Project-level opt-in for the Fork-an-app feature. Apps default to\n`false`; the owner must explicitly allow forking before any other\npermission check applies.",
-      "type": "boolean",
-      "default": false
-    },
-    "forked_from": {
-      "description": "For forked apps: the source app's id (for lineage / attribution).",
-      "type": [
-        "string",
-        "null"
-      ],
-      "default": null
-    },
-    "forked_at": {
-      "description": "For forked apps: when the fork was created.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/SystemTime"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    }
-  },
-  "required": [
-    "id",
-    "status",
-    "visibility",
-    "authors",
-    "bits",
-    "boards",
-    "events",
-    "templates",
-    "rating_sum",
-    "rating_count",
-    "download_count",
-    "interactions_count",
-    "execution_mode",
-    "updated_at",
-    "created_at"
-  ],
-  "$defs": {
-    "AppStatus": {
-      "type": "string",
-      "enum": [
-        "Active",
-        "Inactive",
-        "Archived"
-      ]
-    },
-    "AppVisibility": {
-      "type": "string",
-      "enum": [
-        "Public",
-        "PublicRequestAccess",
-        "Private",
-        "Prototype",
-        "Offline"
-      ]
-    },
-    "AppCategory": {
-      "type": "string",
-      "enum": [
-        "Other",
-        "Productivity",
-        "Social",
-        "Entertainment",
-        "Education",
-        "Health",
-        "Finance",
-        "Lifestyle",
-        "Travel",
-        "News",
-        "Sports",
-        "Shopping",
-        "FoodAndDrink",
-        "Music",
-        "Photography",
-        "Utilities",
-        "Weather",
-        "Games",
-        "Business",
-        "Communication",
-        "Anime"
-      ]
-    },
-    "AppExecutionMode": {
-      "type": "string",
-      "enum": [
-        "Any",
-        "Local",
-        "Remote"
-      ]
-    },
-    "SystemTime": {
-      "type": "object",
-      "properties": {
-        "secs_since_epoch": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "nanos_since_epoch": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "secs_since_epoch",
-        "nanos_since_epoch"
-      ]
-    },
-    "FrontendConfiguration": {
-      "type": "object",
-      "properties": {
-        "landing_page": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      }
-    }
-  }
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "App",
+	"type": "object",
+	"properties": {
+		"id": {
+			"type": "string"
+		},
+		"status": {
+			"$ref": "#/$defs/AppStatus"
+		},
+		"visibility": {
+			"$ref": "#/$defs/AppVisibility"
+		},
+		"authors": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			}
+		},
+		"bits": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			}
+		},
+		"boards": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			}
+		},
+		"events": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			}
+		},
+		"templates": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			}
+		},
+		"changelog": {
+			"type": ["string", "null"]
+		},
+		"primary_category": {
+			"anyOf": [
+				{
+					"$ref": "#/$defs/AppCategory"
+				},
+				{
+					"type": "null"
+				}
+			]
+		},
+		"secondary_category": {
+			"anyOf": [
+				{
+					"$ref": "#/$defs/AppCategory"
+				},
+				{
+					"type": "null"
+				}
+			]
+		},
+		"rating_sum": {
+			"type": "integer",
+			"format": "uint64",
+			"minimum": 0
+		},
+		"rating_count": {
+			"type": "integer",
+			"format": "uint64",
+			"minimum": 0
+		},
+		"download_count": {
+			"type": "integer",
+			"format": "uint64",
+			"minimum": 0
+		},
+		"interactions_count": {
+			"type": "integer",
+			"format": "uint64",
+			"minimum": 0
+		},
+		"avg_rating": {
+			"type": ["number", "null"],
+			"format": "double"
+		},
+		"relevance_score": {
+			"type": ["number", "null"],
+			"format": "double"
+		},
+		"execution_mode": {
+			"$ref": "#/$defs/AppExecutionMode"
+		},
+		"updated_at": {
+			"$ref": "#/$defs/SystemTime"
+		},
+		"created_at": {
+			"$ref": "#/$defs/SystemTime"
+		},
+		"version": {
+			"type": ["string", "null"]
+		},
+		"frontend": {
+			"anyOf": [
+				{
+					"$ref": "#/$defs/FrontendConfiguration"
+				},
+				{
+					"type": "null"
+				}
+			]
+		},
+		"price": {
+			"type": ["integer", "null"],
+			"format": "uint32",
+			"minimum": 0
+		},
+		"widget_ids": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"default": []
+		},
+		"page_ids": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"default": []
+		},
+		"packages": {
+			"description": "WASM packages required by this app: package_id -> version",
+			"type": "object",
+			"additionalProperties": {
+				"type": "string"
+			},
+			"default": {}
+		},
+		"allow_forking": {
+			"description": "Project-level opt-in for the Fork-an-app feature. Apps default to\n`false`; the owner must explicitly allow forking before any other\npermission check applies.",
+			"type": "boolean",
+			"default": false
+		},
+		"forked_from": {
+			"description": "For forked apps: the source app's id (for lineage / attribution).",
+			"type": ["string", "null"],
+			"default": null
+		},
+		"forked_at": {
+			"description": "For forked apps: when the fork was created.",
+			"anyOf": [
+				{
+					"$ref": "#/$defs/SystemTime"
+				},
+				{
+					"type": "null"
+				}
+			],
+			"default": null
+		}
+	},
+	"required": [
+		"id",
+		"status",
+		"visibility",
+		"authors",
+		"bits",
+		"boards",
+		"events",
+		"templates",
+		"rating_sum",
+		"rating_count",
+		"download_count",
+		"interactions_count",
+		"execution_mode",
+		"updated_at",
+		"created_at"
+	],
+	"$defs": {
+		"AppStatus": {
+			"type": "string",
+			"enum": ["Active", "Inactive", "Archived"]
+		},
+		"AppVisibility": {
+			"type": "string",
+			"enum": [
+				"Public",
+				"PublicRequestAccess",
+				"Private",
+				"Prototype",
+				"Offline"
+			]
+		},
+		"AppCategory": {
+			"type": "string",
+			"enum": [
+				"Other",
+				"Productivity",
+				"Social",
+				"Entertainment",
+				"Education",
+				"Health",
+				"Finance",
+				"Lifestyle",
+				"Travel",
+				"News",
+				"Sports",
+				"Shopping",
+				"FoodAndDrink",
+				"Music",
+				"Photography",
+				"Utilities",
+				"Weather",
+				"Games",
+				"Business",
+				"Communication",
+				"Anime"
+			]
+		},
+		"AppExecutionMode": {
+			"type": "string",
+			"enum": ["Any", "Local", "Remote"]
+		},
+		"SystemTime": {
+			"type": "object",
+			"properties": {
+				"secs_since_epoch": {
+					"type": "integer",
+					"format": "uint64",
+					"minimum": 0
+				},
+				"nanos_since_epoch": {
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0
+				}
+			},
+			"required": ["secs_since_epoch", "nanos_since_epoch"]
+		},
+		"FrontendConfiguration": {
+			"type": "object",
+			"properties": {
+				"landing_page": {
+					"type": ["string", "null"]
+				}
+			}
+		}
+	}
 }

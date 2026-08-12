@@ -5,8 +5,10 @@ use crate::{
     permission::fork_permission::{ForkTargetKind, check_can_fork},
     state::AppState,
     utils::fork::{
-        ForkReport, MetaBlob, compute_offline_fork_bundle, detect_meta_in_content_store,
-        preview::{RemoteTokenSite, compute_app_size_and_count, detect_remote_token_sites},
+        ForkPolicy, ForkReport, MetaBlob, compute_offline_fork_bundle,
+        db_schema::ForkTableSchema,
+        detect_meta_in_content_store,
+        preview::{RemoteTokenSite, detect_remote_token_sites, ensure_fork_within_limits},
     },
 };
 use axum::{
@@ -77,6 +79,18 @@ pub struct BeginOfflineForkResponse {
     /// so the operator can investigate.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub content_store_leaks: Vec<String>,
+    /// The source owner's fork policy — display only. The desktop does
+    /// not choose what a fork contains.
+    pub fork_policy: ForkPolicy,
+    /// Prefixes under `source_content_prefix` the desktop must not mirror.
+    /// Advisory: the caller already holds `ReadFiles` on the source, so
+    /// this keeps the fork honest rather than protecting the bytes.
+    #[serde(default)]
+    pub content_exclude_prefixes: Vec<String>,
+    /// Arrow schemas for a schema-only database fork. The desktop creates
+    /// each table empty in its local project database.
+    #[serde(default)]
+    pub db_table_schemas: Vec<ForkTableSchema>,
 }
 
 /// Begin a fork to an offline (desktop) destination.
@@ -122,23 +136,10 @@ pub async fn begin_offline_fork(
     Path(app_id): Path<String>,
     Json(body): Json<BeginOfflineForkBody>,
 ) -> Result<Json<BeginOfflineForkResponse>, ApiError> {
-    let _src_app = check_can_fork(&user, &app_id, &state, ForkTargetKind::Offline).await?;
+    let src_app = check_can_fork(&user, &app_id, &state, ForkTargetKind::Offline).await?;
 
-    let (total_size, total_count) = compute_app_size_and_count(&state, &app_id).await?;
-    let max_size = state.platform_config.forking.max_size_bytes;
-    let max_count = state.platform_config.forking.max_file_count;
-    if total_size > max_size {
-        return Err(ApiError::bad_request(format!(
-            "source app exceeds the deployment's fork size cap ({} bytes > {} bytes)",
-            total_size, max_size
-        )));
-    }
-    if total_count > max_count {
-        return Err(ApiError::bad_request(format!(
-            "source app exceeds the deployment's fork file-count cap ({} > {})",
-            total_count, max_count
-        )));
-    }
+    let policy = ForkPolicy::from_app_row(&src_app);
+    ensure_fork_within_limits(&state, &app_id, &policy).await?;
 
     // Detect token sites informationally — `compute_offline_fork_bundle`
     // *drops* Remote-mode events, so we don't need a replacement
@@ -180,6 +181,15 @@ pub async fn begin_offline_fork(
     // ship in `meta_blobs`. `ReadAppContent` deliberately omits the
     // meta bucket from the policy so a misbehaving client can't
     // bypass the API by GETting raw `*.board` / `*.event` files.
+    //
+    // The grant is NOT narrowed to match `content_exclude_prefixes`.
+    // Passing `check_can_fork` requires `RolePermissions::ReadFiles`,
+    // which alone guards `/data/list` + `/data/download` (24h presigned
+    // GETs) and satisfies `ensure_any_permission!(ReadFiles, ReadDatabase)`
+    // on every project-DB route, arbitrary SQL included. A forker can
+    // already read everything the policy excludes, so a narrower
+    // credential would cost four provider implementations and protect
+    // nothing. The exclusion list is honored by the desktop client.
     let scoped = RuntimeCredentials::scoped(
         &credential_subject,
         &app_id,
@@ -211,9 +221,13 @@ pub async fn begin_offline_fork(
         report: ForkReport {
             id_map: bundle.id_map,
             skipped: bundle.skipped,
+            warnings: bundle.warnings,
             ..Default::default()
         },
         content_store_leaks,
+        fork_policy: bundle.policy,
+        content_exclude_prefixes: bundle.content_exclude_prefixes,
+        db_table_schemas: bundle.db_table_schemas,
     }))
 }
 

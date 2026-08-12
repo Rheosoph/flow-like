@@ -16,7 +16,6 @@ import {
 	SheetContent,
 	SheetHeader,
 	SheetTitle,
-	Switch,
 	Tabs,
 	TabsContent,
 	TabsList,
@@ -49,19 +48,19 @@ const LAYOUT_TYPES: {
 	description: string;
 }[] = [
 	{
-		value: "Freeform",
+		value: "freeform",
 		label: "Freeform",
 		description: "Free positioning of elements",
 	},
-	{ value: "Stack", label: "Stack", description: "Vertical stacking layout" },
-	{ value: "Grid", label: "Grid", description: "Grid-based layout" },
+	{ value: "stack", label: "Stack", description: "Vertical stacking layout" },
+	{ value: "grid", label: "Grid", description: "Grid-based layout" },
 	{
-		value: "Sidebar",
+		value: "sidebar",
 		label: "Sidebar",
 		description: "Main content with sidebar",
 	},
 	{
-		value: "HolyGrail",
+		value: "holyGrail",
 		label: "Holy Grail",
 		description: "Classic web layout pattern",
 	},
@@ -186,7 +185,7 @@ export default function PageBuilderPage() {
 					id: pageId,
 					name: "New Page",
 					content: [],
-					layoutType: "Freeform",
+					layoutType: "freeform",
 					components: [],
 					createdAt: new Date().toISOString(),
 					updatedAt: new Date().toISOString(),
@@ -668,22 +667,6 @@ function PageSettingsPanel({
 						Executes when the page first loads
 					</p>
 				</div>
-
-				{page.onLoadEventId && (
-					<div className="flex items-center justify-between">
-						<div className="space-y-0.5">
-							<Label>Cache Page</Label>
-							<p className="text-xs text-muted-foreground">
-								Show the last rendered state instantly while load runs in the
-								background
-							</p>
-						</div>
-						<Switch
-							checked={page.cache ?? false}
-							onCheckedChange={(checked) => onUpdatePage("cache", checked)}
-						/>
-					</div>
-				)}
 
 				<div className="space-y-2">
 					<Label>On Page Unload</Label>

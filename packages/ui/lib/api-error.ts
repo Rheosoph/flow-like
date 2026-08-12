@@ -18,6 +18,8 @@ export class ApiResponseError extends Error {
 	readonly code?: string;
 	readonly errorId?: string;
 	readonly path?: string;
+	/** The server's message without the `[CODE]` prefix — safe to show to users. */
+	readonly serverMessage: string;
 
 	constructor(options: ApiResponseErrorOptions) {
 		const label = options.code || `HTTP_${options.status}`;
@@ -29,6 +31,7 @@ export class ApiResponseError extends Error {
 		this.code = options.code;
 		this.errorId = options.errorId;
 		this.path = options.path;
+		this.serverMessage = options.message;
 	}
 
 	toJSON() {
@@ -42,6 +45,30 @@ export class ApiResponseError extends Error {
 			path: this.path,
 		};
 	}
+}
+
+/**
+ * True when the backend rejected the request because the user's plan does not
+ * cover it (HTTP 402 / PAYMENT_REQUIRED). Callers route these into the upgrade
+ * dialog instead of a plain error toast.
+ */
+export function isUpgradeRequiredError(
+	error: unknown,
+): error is ApiResponseError {
+	if (typeof error !== "object" || error === null) return false;
+	const candidate = error as Partial<ApiResponseError>;
+	return candidate.status === 402 || candidate.code === "PAYMENT_REQUIRED";
+}
+
+/**
+ * The server's own explanation when it sent one, otherwise the caller's generic
+ * copy. Backends that distinguish failure cases (already a member vs. already
+ * invited) are only useful if the UI shows what they said.
+ */
+export function apiErrorMessage(error: unknown, fallback: string): string {
+	return error instanceof ApiResponseError && error.serverMessage.trim()
+		? error.serverMessage
+		: fallback;
 }
 
 function nonEmptyString(value: unknown): string | undefined {

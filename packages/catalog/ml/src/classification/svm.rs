@@ -6,8 +6,8 @@
 use crate::ml::NodeMLModel;
 #[cfg(feature = "execute")]
 use crate::ml::{
-    MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, values_to_array1_target,
-    values_to_array2_f64,
+    MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, POLYNOMIAL_KERNEL_CONSTANT,
+    validate_polynomial_degree, values_to_array1_target, values_to_array2_f64,
 };
 use flow_like::flow::{
     board::Board,
@@ -28,12 +28,53 @@ use linfa::DatasetBase;
 #[cfg(feature = "execute")]
 use linfa::{prelude::Pr, traits::Fit};
 #[cfg(feature = "execute")]
-use linfa_svm::Svm;
+use linfa_svm::{Svm, SvmError, SvmParams};
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
 
+/// Constant term of the polynomial kernel `(<x, x'> + c)^degree`. Fixed so a single kernel
+/// parameter pin can serve all three kernels.
 #[cfg(feature = "execute")]
-const GAUSSIAN_KERNEL_EPS: f64 = 30.0;
+/// The SMO solver materialises a dense `n x n` kernel matrix per class, so training cost grows
+/// quadratically with the number of rows.
+#[cfg(feature = "execute")]
+const DENSE_KERNEL_WARN_ROWS: usize = 5000;
+
+/// Upstream prints this prefix when the solver stopped on the iteration cap instead of the
+/// tolerance. The exit reason itself is a private field, so the rendered summary is the only signal.
+#[cfg(feature = "execute")]
+const NON_CONVERGED_PREFIX: &str = "Reached maximal iterations";
+
+#[cfg(feature = "execute")]
+fn is_positive(value: f64) -> bool {
+    value.is_finite() && value > 0.0
+}
+
+#[cfg(feature = "execute")]
+fn apply_kernel<T>(
+    params: SvmParams<f64, T>,
+    kernel: &str,
+    kernel_param: f64,
+) -> Result<SvmParams<f64, T>> {
+    match kernel {
+        "Gaussian" => {
+            if !is_positive(kernel_param) {
+                return Err(anyhow!(
+                    "Gaussian kernel parameter must be a finite value > 0, got {kernel_param}"
+                ));
+            }
+            Ok(params.gaussian_kernel(kernel_param))
+        }
+        "Linear" => Ok(params.linear_kernel()),
+        "Polynomial" => {
+            validate_polynomial_degree(kernel_param)?;
+            Ok(params.polynomial_kernel(POLYNOMIAL_KERNEL_CONSTANT, kernel_param))
+        }
+        other => Err(anyhow!(
+            "Unknown kernel `{other}`. Expected `Gaussian`, `Linear` or `Polynomial`"
+        )),
+    }
+}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -54,6 +95,7 @@ impl NodeLogic for FitSVMMultiClassNode {
             "Fit/Train Support Vector Machines (SVM) for Multi-Class Classification ",
             "AI/ML/Classification",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(
@@ -87,6 +129,41 @@ impl NodeLogic for FitSVMMultiClassNode {
         )
         .set_default_value(Some(json!("Database")));
 
+        node.add_input_pin(
+            "kernel",
+            "Kernel",
+            "Feature-space mapping. Gaussian separates non-linear classes, Linear is the plain SVM, Polynomial adds interaction terms.",
+            VariableType::String,
+        )
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec![
+                    "Gaussian".to_string(),
+                    "Linear".to_string(),
+                    "Polynomial".to_string(),
+                ])
+                .build(),
+        )
+        .set_default_value(Some(json!("Gaussian")));
+
+        node.add_input_pin(
+            "kernel_param",
+            "Kernel Parameter",
+            "Gaussian: the eps in exp(-||x - x'||^2 / eps), larger means smoother boundaries. Polynomial: the degree of (<x, x'> + 1)^degree. Ignored for Linear.",
+            VariableType::Float,
+        )
+        .set_options(PinOptions::new().set_range((0.0001, 1000.0)).build())
+        .set_default_value(Some(json!(30.0)));
+
+        node.add_input_pin(
+            "c",
+            "C",
+            "Penalty for misclassified training rows, applied to both the positive and the negative side. Higher values fit the training data harder and risk overfitting.",
+            VariableType::Float,
+        )
+        .set_options(PinOptions::new().set_range((0.0001, 100000.0)).build())
+        .set_default_value(Some(json!(1.0)));
+
         node.add_output_pin(
             "exec_out",
             "Done",
@@ -111,6 +188,15 @@ impl NodeLogic for FitSVMMultiClassNode {
         // fetch inputs
         context.deactivate_exec_pin("exec_out").await?;
         let source: String = context.evaluate_pin("source").await?;
+        let kernel: String = context.evaluate_pin("kernel").await?;
+        let kernel_param: f64 = context.evaluate_pin("kernel_param").await?;
+        let c: f64 = context.evaluate_pin("c").await?;
+
+        // linfa panics on an invalid parameter combination instead of returning an error, so the
+        // hyperparameters are validated before they reach the solver.
+        if !is_positive(c) {
+            return Err(anyhow!("C must be a finite value > 0, got {c}"));
+        }
 
         // load dataset
         let t0 = std::time::Instant::now();
@@ -166,14 +252,48 @@ impl NodeLogic for FitSVMMultiClassNode {
         let elapsed = t0.elapsed();
         context.log_message(&format!("Preprocess data: {elapsed:?}"), LogLevel::Debug);
 
+        let n_samples = ds.records().nrows();
+        if n_samples < 2 {
+            return Err(anyhow!(
+                "SVM classification needs at least 2 training rows, got {n_samples}"
+            ));
+        }
+        let n_classes = ds.targets.iter().copied().collect::<HashSet<usize>>().len();
+        if n_classes < 2 {
+            return Err(anyhow!(
+                "SVM classification needs at least 2 distinct classes in the target col, got {n_classes}"
+            ));
+        }
+        if n_samples > DENSE_KERNEL_WARN_ROWS {
+            context.log_message(
+                &format!(
+                    "Training {n_classes} one-vs-all models on {n_samples} rows: each builds a dense {n_samples}x{n_samples} kernel matrix, expect high memory usage"
+                ),
+                LogLevel::Warn,
+            );
+        }
+
         // train model
         let t0 = std::time::Instant::now();
-        let params = Svm::<_, Pr>::params().gaussian_kernel(GAUSSIAN_KERNEL_EPS);
-        let svm_models: Vec<(usize, Svm<f64, Pr>)> = ds
-            .one_vs_all()?
-            .into_iter()
-            .map(|(l, x)| (l, params.fit(&x).unwrap()))
-            .collect();
+        let params = apply_kernel(
+            Svm::<f64, Pr>::params().pos_neg_weights(c, c),
+            &kernel,
+            kernel_param,
+        )?;
+        let mut svm_models: Vec<(usize, Svm<f64, Pr>)> = Vec::with_capacity(n_classes);
+        for (class_id, subset) in ds.one_vs_all()? {
+            let fitted: std::result::Result<Svm<f64, Pr>, SvmError> = params.fit(&subset);
+            let fitted =
+                fitted.map_err(|err| anyhow!("SVM fit failed for class {class_id}: {err}"))?;
+            let summary = fitted.to_string();
+            if summary.starts_with(NON_CONVERGED_PREFIX) {
+                context.log_message(
+                    &format!("SVM for class {class_id} hit the iteration cap: {summary}"),
+                    LogLevel::Warn,
+                );
+            }
+            svm_models.push((class_id, fitted));
+        }
         let elapsed = t0.elapsed();
         context.log_message(&format!("Fit model: {elapsed:?}"), LogLevel::Debug);
 

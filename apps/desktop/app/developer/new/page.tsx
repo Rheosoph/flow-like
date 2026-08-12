@@ -1,13 +1,17 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
 import { Badge, Button, Input, Label, cn } from "@flow-like/flow-like-ui";
 import type {
 	DeveloperProject,
 	TemplateLanguage,
+	WidgetFramework,
 } from "@flow-like/flow-like-ui/lib/schema/developer";
-import { TEMPLATE_LANGUAGES } from "@flow-like/flow-like-ui/lib/schema/developer";
+import {
+	TEMPLATE_LANGUAGES,
+	WIDGET_FRAMEWORKS,
+} from "@flow-like/flow-like-ui/lib/schema/developer";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { AnimatePresence, motion } from "framer-motion";
 import {
 	ArrowLeft,
@@ -21,9 +25,9 @@ import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 
-type WizardStep = "language" | "details" | "creating";
+type WizardStep = "capabilities" | "details" | "creating";
 
-const STEPS: WizardStep[] = ["language", "details", "creating"];
+const STEPS: WizardStep[] = ["capabilities", "details", "creating"];
 
 function StepDots({ currentStep }: { currentStep: WizardStep }) {
 	const currentIdx = STEPS.indexOf(currentStep);
@@ -61,14 +65,39 @@ function StepDots({ currentStep }: { currentStep: WizardStep }) {
 	);
 }
 
-function LanguageTile({
-	language,
+function SelectedCheck() {
+	return (
+		<motion.div
+			className="absolute top-2.5 right-2.5"
+			initial={{ scale: 0, opacity: 0 }}
+			animate={{ scale: 1, opacity: 1 }}
+			exit={{ scale: 0, opacity: 0 }}
+			transition={{ type: "spring", stiffness: 500, damping: 30 }}
+		>
+			<Badge
+				variant="default"
+				className="h-5 w-5 p-0 flex items-center justify-center rounded-full"
+			>
+				<Check className="h-3 w-3" />
+			</Badge>
+		</motion.div>
+	);
+}
+
+function CapabilityTile({
+	label,
+	description,
 	selected,
 	onSelect,
+	img,
+	icon,
 }: {
-	language: (typeof TEMPLATE_LANGUAGES)[number];
+	label: string;
+	description: string;
 	selected: boolean;
 	onSelect: () => void;
+	img?: string;
+	icon?: string;
 }) {
 	return (
 		<button
@@ -81,42 +110,63 @@ function LanguageTile({
 					: "rounded-xl border border-border/20 bg-card/50 hover:bg-muted/10 hover:border-border/40",
 			)}
 		>
-			{selected && (
-				<motion.div
-					className="absolute top-2.5 right-2.5"
-					initial={{ scale: 0, opacity: 0 }}
-					animate={{ scale: 1, opacity: 1 }}
-					exit={{ scale: 0, opacity: 0 }}
-					transition={{ type: "spring", stiffness: 500, damping: 30 }}
-				>
-					<Badge
-						variant="default"
-						className="h-5 w-5 p-0 flex items-center justify-center rounded-full"
-					>
-						<Check className="h-3 w-3" />
-					</Badge>
-				</motion.div>
+			{selected && <SelectedCheck />}
+			{img ? (
+				<img
+					src={img}
+					alt={label}
+					className="w-8 h-8 rounded object-cover mb-2"
+				/>
+			) : (
+				<span className="w-8 h-8 rounded bg-muted/40 flex items-center justify-center text-lg mb-2">
+					{icon}
+				</span>
 			)}
-			<img
-				src={language.img}
-				alt={language.label}
-				className="w-8 h-8 rounded object-cover mb-2"
-			/>
-			<span className="text-sm font-medium block">{language.label}</span>
+			<span className="text-sm font-medium block">{label}</span>
 			<span className="text-xs text-muted-foreground/70 line-clamp-2 mt-0.5">
-				{language.description}
+				{description}
 			</span>
 		</button>
 	);
 }
 
+function SectionHeading({
+	title,
+	hint,
+}: {
+	title: string;
+	hint: string;
+}) {
+	return (
+		<div className="flex items-baseline justify-between gap-2">
+			<h3 className="text-sm font-medium">{title}</h3>
+			<span className="text-xs text-muted-foreground/60">{hint}</span>
+		</div>
+	);
+}
+
 export default function NewProjectWizard() {
 	const router = useRouter();
-	const [step, setStep] = useState<WizardStep>("language");
-	const [language, setLanguage] = useState<TemplateLanguage | null>(null);
+	const [step, setStep] = useState<WizardStep>("capabilities");
+	const [nodeLanguage, setNodeLanguage] = useState<TemplateLanguage | null>(
+		null,
+	);
+	const [widgetFrameworks, setWidgetFrameworks] = useState<WidgetFramework[]>(
+		[],
+	);
 	const [projectName, setProjectName] = useState("");
 	const [targetDir, setTargetDir] = useState("");
 	const [isCreating, setIsCreating] = useState(false);
+
+	const hasCapability = nodeLanguage !== null || widgetFrameworks.length > 0;
+
+	const toggleFramework = useCallback((framework: WidgetFramework) => {
+		setWidgetFrameworks((prev) =>
+			prev.includes(framework)
+				? prev.filter((f) => f !== framework)
+				: [...prev, framework],
+		);
+	}, []);
 
 	const selectDirectory = useCallback(async () => {
 		const selected = await open({ directory: true, multiple: false });
@@ -124,7 +174,7 @@ export default function NewProjectWizard() {
 	}, []);
 
 	const handleCreate = useCallback(async () => {
-		if (!language || !projectName || !targetDir) return;
+		if (!hasCapability || !projectName || !targetDir) return;
 		setStep("creating");
 		setIsCreating(true);
 		try {
@@ -133,8 +183,9 @@ export default function NewProjectWizard() {
 				{
 					input: {
 						targetDir: `${targetDir}/${projectName.toLowerCase().replace(/\s+/g, "-")}`,
-						language,
 						projectName,
+						nodeLanguage,
+						widgetFrameworks,
 					},
 				},
 			);
@@ -146,11 +197,21 @@ export default function NewProjectWizard() {
 		} finally {
 			setIsCreating(false);
 		}
-	}, [language, projectName, targetDir, router]);
+	}, [
+		hasCapability,
+		nodeLanguage,
+		widgetFrameworks,
+		projectName,
+		targetDir,
+		router,
+	]);
 
-	const selectedLanguageInfo = language
-		? TEMPLATE_LANGUAGES.find((l) => l.value === language)
+	const selectedLanguageInfo = nodeLanguage
+		? TEMPLATE_LANGUAGES.find((l) => l.value === nodeLanguage)
 		: null;
+	const selectedFrameworkInfos = WIDGET_FRAMEWORKS.filter((f) =>
+		widgetFrameworks.includes(f.value),
+	);
 
 	return (
 		<div className="flex flex-col h-full">
@@ -160,7 +221,7 @@ export default function NewProjectWizard() {
 						type="button"
 						onClick={() =>
 							step === "details"
-								? setStep("language")
+								? setStep("capabilities")
 								: router.push("/developer")
 						}
 						className="h-8 w-8 rounded-full flex items-center justify-center text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30 transition-colors"
@@ -169,10 +230,10 @@ export default function NewProjectWizard() {
 					</button>
 					<div>
 						<h1 className="text-2xl font-semibold tracking-tight">
-							New Node Project
+							New Package Project
 						</h1>
 						<p className="text-sm text-muted-foreground/70">
-							Scaffold a WASM node from a template
+							Scaffold a package with WASM nodes and/or widgets
 						</p>
 					</div>
 				</div>
@@ -182,9 +243,9 @@ export default function NewProjectWizard() {
 			<div className="flex-1 overflow-y-auto">
 				<div className="max-w-2xl mx-auto w-full pb-12">
 					<AnimatePresence mode="wait">
-						{step === "language" && (
+						{step === "capabilities" && (
 							<motion.div
-								key="language"
+								key="capabilities"
 								initial={{ opacity: 0, y: 8 }}
 								animate={{ opacity: 1, y: 0 }}
 								exit={{ opacity: 0, y: -8 }}
@@ -195,27 +256,60 @@ export default function NewProjectWizard() {
 									<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60 mb-1">
 										Step 1
 									</p>
-									<h2 className="text-lg font-medium">Choose a language</h2>
+									<h2 className="text-lg font-medium">Choose capabilities</h2>
 									<p className="text-sm text-muted-foreground/70 mt-1">
-										Select the programming language for your node project.
+										Pick a node language, widget frameworks, or both. At least
+										one is required.
 									</p>
 								</div>
 
-								<div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-									{TEMPLATE_LANGUAGES.map((lang) => (
-										<LanguageTile
-											key={lang.value}
-											language={lang}
-											selected={language === lang.value}
-											onSelect={() => setLanguage(lang.value)}
-										/>
-									))}
+								<div className="space-y-3">
+									<SectionHeading
+										title="Node runtime"
+										hint={
+											nodeLanguage
+												? "Click again to deselect"
+												: "No node — widgets only"
+										}
+									/>
+									<div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+										{TEMPLATE_LANGUAGES.map((lang) => (
+											<CapabilityTile
+												key={lang.value}
+												label={lang.label}
+												description={lang.description}
+												img={lang.img}
+												selected={nodeLanguage === lang.value}
+												onSelect={() =>
+													setNodeLanguage((prev) =>
+														prev === lang.value ? null : lang.value,
+													)
+												}
+											/>
+										))}
+									</div>
+								</div>
+
+								<div className="space-y-3">
+									<SectionHeading title="Widgets" hint="Select any number" />
+									<div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+										{WIDGET_FRAMEWORKS.map((framework) => (
+											<CapabilityTile
+												key={framework.value}
+												label={framework.label}
+												description={framework.description}
+												icon={framework.icon}
+												selected={widgetFrameworks.includes(framework.value)}
+												onSelect={() => toggleFramework(framework.value)}
+											/>
+										))}
+									</div>
 								</div>
 
 								<div className="flex justify-end pt-2">
 									<Button
 										onClick={() => setStep("details")}
-										disabled={!language}
+										disabled={!hasCapability}
 										className="gap-1.5"
 									>
 										Continue
@@ -240,28 +334,44 @@ export default function NewProjectWizard() {
 									</p>
 									<h2 className="text-lg font-medium">Project details</h2>
 									<p className="text-sm text-muted-foreground/70 mt-1">
-										Configure your new {selectedLanguageInfo?.label ?? ""}{" "}
-										project.
+										Name your project and pick where it lives.
 									</p>
 								</div>
 
-								{selectedLanguageInfo && (
-									<div className="flex items-center gap-3 rounded-xl border border-border/20 bg-muted/5 p-4">
-										<img
-											src={selectedLanguageInfo.img}
-											alt={selectedLanguageInfo.label}
-											className="w-8 h-8 rounded object-cover"
-										/>
-										<div>
-											<p className="text-sm font-medium">
-												{selectedLanguageInfo.label}
-											</p>
-											<p className="text-xs text-muted-foreground/70">
-												{selectedLanguageInfo.description}
-											</p>
-										</div>
+								<div className="rounded-xl border border-border/20 bg-muted/5 p-4 space-y-2">
+									<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
+										Will be scaffolded
+									</p>
+									<div className="flex flex-wrap gap-1.5">
+										{selectedLanguageInfo && (
+											<Badge variant="secondary" className="gap-1.5">
+												<img
+													src={selectedLanguageInfo.img}
+													alt={selectedLanguageInfo.label}
+													className="w-3.5 h-3.5 rounded-sm object-cover"
+												/>
+												{selectedLanguageInfo.label} node
+											</Badge>
+										)}
+										{selectedFrameworkInfos.map((framework) => (
+											<Badge
+												key={framework.value}
+												variant="secondary"
+												className="gap-1"
+											>
+												<span>{framework.icon}</span>
+												{framework.label} widgets
+											</Badge>
+										))}
 									</div>
-								)}
+									<p className="text-xs text-muted-foreground/70">
+										{selectedLanguageInfo && widgetFrameworks.length > 0
+											? "Monorepo layout: node/ + widgets/, orchestrated by a root mise.toml."
+											: selectedLanguageInfo
+												? "Single node project — the template's standard layout."
+												: "Widgets-only package: widgets/ per framework, packed into widgets.flwb."}
+									</p>
+								</div>
 
 								<div className="space-y-4">
 									<div className="space-y-2">
@@ -273,7 +383,7 @@ export default function NewProjectWizard() {
 										</Label>
 										<Input
 											id="name"
-											placeholder="my-custom-node"
+											placeholder="my-custom-package"
 											value={projectName}
 											onChange={(e) => setProjectName(e.target.value)}
 											className="h-10 rounded-lg bg-muted/5"
@@ -322,7 +432,7 @@ export default function NewProjectWizard() {
 								<div className="flex justify-between pt-4">
 									<Button
 										variant="ghost"
-										onClick={() => setStep("language")}
+										onClick={() => setStep("capabilities")}
 										className="gap-1.5 text-muted-foreground/60 hover:text-foreground/80"
 									>
 										<ArrowLeft className="h-4 w-4" />
@@ -352,8 +462,8 @@ export default function NewProjectWizard() {
 									Creating your project…
 								</h2>
 								<p className="text-sm text-muted-foreground/70 max-w-sm">
-									Downloading the template and scaffolding your project. This
-									may take a moment.
+									Downloading the selected templates and scaffolding your
+									project. This may take a moment.
 								</p>
 							</motion.div>
 						)}

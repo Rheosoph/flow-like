@@ -35,7 +35,10 @@ use flow_like_storage::{
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/db/{table}/schema", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/db/{table}/schema",
+    skip(state, user, scope)
+)]
 pub async fn get_db_schema(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

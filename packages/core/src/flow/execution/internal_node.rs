@@ -1,7 +1,7 @@
 use crate::flow::{
     node::{Node, NodeLogic, NodeState},
     pin::PinType,
-    utils::evaluate_pin_value,
+    utils::{InlineVisitedPins, evaluate_pin_value},
     variable::VariableType,
 };
 use ahash::{AHashMap, AHashSet};
@@ -27,6 +27,91 @@ impl InternalNodeError {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_types::{async_trait, tokio};
+
+    #[derive(Default)]
+    struct NoopLogic;
+
+    #[async_trait]
+    impl NodeLogic for NoopLogic {
+        fn get_node(&self) -> Node {
+            Node::new("noop", "Noop", "Noop", "Tests")
+        }
+
+        async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn internal_node(node: Node) -> Arc<InternalNode> {
+        let mut pins = AHashMap::new();
+        let mut name_cache: AHashMap<String, Vec<Arc<InternalPin>>> = AHashMap::new();
+
+        for pin in node.pins.values() {
+            let internal_pin = Arc::new(InternalPin::new(pin, false));
+            name_cache
+                .entry(pin.name.clone())
+                .or_default()
+                .push(internal_pin.clone());
+            pins.insert(pin.id.clone(), internal_pin);
+        }
+
+        let internal = Arc::new(InternalNode::new(
+            node,
+            pins,
+            Arc::new(NoopLogic),
+            name_cache,
+        ));
+        for pin in internal.pins.values() {
+            pin.init_node(Arc::downgrade(&internal));
+        }
+        internal
+    }
+
+    #[tokio::test]
+    async fn immutable_name_cache_handles_duplicate_names_and_misses() {
+        let mut node = Node::new("target", "Target", "Target", "Tests");
+        node.add_input_pin("exec_in", "First", "First", VariableType::Execution);
+        node.add_input_pin("exec_in", "Second", "Second", VariableType::Execution);
+        let internal = internal_node(node);
+
+        let pins = internal
+            .get_pins_by_name("exec_in")
+            .await
+            .expect("duplicate-name pins should be cached");
+        assert_eq!(pins.len(), 2);
+
+        let cache_len = internal.pin_name_cache.len();
+        assert!(internal.get_pin_by_name("missing").await.is_err());
+        assert!(internal.get_pin_by_name("missing").await.is_err());
+        assert_eq!(internal.pin_name_cache.len(), cache_len);
+    }
+
+    #[test]
+    fn single_exec_output_merges_multiple_pins_for_one_target() {
+        let mut target_node = Node::new("target", "Target", "Target", "Tests");
+        target_node.add_input_pin("exec_in", "First", "First", VariableType::Execution);
+        target_node.add_input_pin("exec_in", "Second", "Second", VariableType::Execution);
+        let target = internal_node(target_node);
+        let target_pins: Vec<_> = target.pins.values().cloned().collect();
+
+        let mut source_node = Node::new("source", "Source", "Source", "Tests");
+        let source_pin = source_node
+            .add_output_pin("exec_out", "Output", "Output", VariableType::Execution)
+            .clone();
+        let source_pin = Arc::new(InternalPin::new(&source_pin, false));
+        source_pin.init_connected_to(target_pins.iter().map(Arc::downgrade).collect());
+
+        let targets = targets_for_single_exec_output(&source_pin);
+        assert_eq!(targets.len(), 1);
+        assert!(Arc::ptr_eq(&targets[0].node, &target));
+        assert_eq!(targets[0].through_pins.len(), 2);
+    }
+}
+
 #[derive(Clone)]
 pub struct ExecutionTarget {
     pub node: Arc<InternalNode>,
@@ -45,6 +130,91 @@ impl ExecutionTarget {
     }
 }
 
+#[inline]
+fn logs_at(ctx: &ExecutionContext, level: LogLevel) -> bool {
+    level >= ctx.log_level
+}
+
+#[inline]
+fn log_debug(ctx: &mut ExecutionContext, message: impl FnOnce() -> String) {
+    if logs_at(ctx, LogLevel::Debug) {
+        ctx.log_message(&message(), LogLevel::Debug);
+    }
+}
+
+#[inline]
+fn start_debug_log(ctx: &ExecutionContext, message: impl FnOnce() -> String) -> Option<LogMessage> {
+    logs_at(ctx, LogLevel::Debug).then(|| LogMessage::new(&message(), LogLevel::Debug, None))
+}
+
+#[inline]
+fn finish_debug_log(ctx: &mut ExecutionContext, log: &mut Option<LogMessage>) {
+    if let Some(mut log) = log.take() {
+        log.end();
+        ctx.log(log);
+    }
+}
+
+fn push_execution_target(
+    targets: &mut Vec<ExecutionTarget>,
+    node: Arc<InternalNode>,
+    through_pin: Arc<InternalPin>,
+) {
+    if let Some(target) = targets
+        .iter_mut()
+        .find(|target| Arc::ptr_eq(&target.node, &node))
+    {
+        target.through_pins.push(through_pin);
+        return;
+    }
+
+    targets.push(ExecutionTarget {
+        node,
+        through_pins: vec![through_pin],
+    });
+}
+
+fn visit_execution_connection(
+    pin: Arc<InternalPin>,
+    targets: &mut Vec<ExecutionTarget>,
+    visited: &mut InlineVisitedPins<16>,
+    relay_stack: &mut Vec<Weak<InternalPin>>,
+) {
+    if !visited.insert(&pin) {
+        return;
+    }
+
+    if let Some(node) = pin.node().and_then(Weak::upgrade) {
+        push_execution_target(targets, node, pin);
+    } else {
+        relay_stack.extend(pin.connected_to().iter().cloned());
+    }
+}
+
+/// The common case has one active execution output and direct connections. It needs only
+/// the returned target vectors; relay traversal and cycle tracking stay allocation-free for
+/// short chains.
+fn targets_for_single_exec_output(pin: &Arc<InternalPin>) -> Vec<ExecutionTarget> {
+    let connections = pin.connected_to();
+    let mut targets = Vec::with_capacity(connections.len());
+    let mut visited = InlineVisitedPins::<16>::new();
+    let mut relay_stack = Vec::new();
+
+    for connection in connections {
+        if let Some(pin) = connection.upgrade() {
+            visit_execution_connection(pin, &mut targets, &mut visited, &mut relay_stack);
+        }
+    }
+
+    while let Some(connection) = relay_stack.pop() {
+        if let Some(pin) = connection.upgrade() {
+            visit_execution_connection(pin, &mut targets, &mut visited, &mut relay_stack);
+        }
+    }
+
+    targets
+}
+
 async fn exec_deps_from_map(
     ctx: &mut ExecutionContext,
     recursion_guard: &mut Option<AHashSet<String>>,
@@ -56,11 +226,8 @@ async fn exec_deps_from_map(
         Exit,
     }
 
-    let node = ctx.read_node().await;
-    let root_id = node.id.clone();
-
     let mut stack: Vec<(Arc<InternalNode>, Phase)> = Vec::new();
-    if let Some(roots) = dependencies.get(&root_id) {
+    if let Some(roots) = dependencies.get(ctx.node.node_id()) {
         stack.reserve(roots.len().saturating_mul(2));
         for dep in roots.iter() {
             stack.push((dep.clone(), Phase::Enter));
@@ -87,9 +254,7 @@ async fn exec_deps_from_map(
                 }
                 stack.push((n.clone(), Phase::Exit));
 
-                // Use cached node_id instead of locking
-                let dep_id = n.node_id().to_string();
-                if let Some(children) = dependencies.get(&dep_id) {
+                if let Some(children) = dependencies.get(n.node_id()) {
                     for c in children.iter() {
                         let c_ptr = ptr_key(c);
                         if scheduled.contains(&c_ptr) {
@@ -105,33 +270,28 @@ async fn exec_deps_from_map(
                     continue;
                 }
 
-                // Use cached metadata instead of locking
-                let dep_id = n.node_id().to_string();
-                let dep_name = n.node_name().to_string();
-
                 if let Some(guard) = recursion_guard
-                    && guard.contains(&dep_id)
+                    && guard.contains(n.node_id())
                 {
-                    ctx.log_message(
-                        &format!("Recursion detected for: {}, skipping execution", dep_id),
-                        LogLevel::Debug,
-                    );
+                    log_debug(ctx, || {
+                        format!(
+                            "Recursion detected for: {}, skipping execution",
+                            n.node_id()
+                        )
+                    });
                     scheduled.insert(n_ptr);
                     continue;
                 }
 
                 let mut sub = ctx.create_sub_context(&n).await;
-                let mut log_message = LogMessage::new(
-                    &format!("Triggering mapped dependency: {}", dep_name),
-                    LogLevel::Debug,
-                    None,
-                );
+                let mut log_message = start_debug_log(ctx, || {
+                    format!("Triggering mapped dependency: {}", n.node_name())
+                });
 
                 // Reuse your non-recursive single-node runner
                 let res = run_node_logic_only(&mut sub, recursion_guard).await;
 
-                log_message.end();
-                ctx.log(log_message);
+                finish_debug_log(ctx, &mut log_message);
                 sub.end_trace();
                 ctx.push_sub_context(&mut sub);
 
@@ -160,37 +320,38 @@ async fn run_node_logic_only(
     }
 
     ctx.set_state(NodeState::Running).await;
-    let node = ctx.read_node().await;
+    let node = ctx.node.clone();
 
     if recursion_guard.is_none() {
         *recursion_guard = Some(AHashSet::new());
     }
     if let Some(guard) = recursion_guard {
-        if guard.contains(&node.id) {
-            ctx.log_message(
-                &format!("Recursion detected for: {}", &node.id),
-                LogLevel::Debug,
-            );
+        if guard.contains(node.node_id()) {
+            log_debug(ctx, || {
+                format!("Recursion detected for: {}", node.node_id())
+            });
             ctx.end_trace();
             return Ok(());
         }
-        guard.insert(node.id.clone());
+        guard.insert(node.node_id().to_string());
     }
 
-    let logic = ctx.node.logic.clone();
-    let mut log_message = LogMessage::new(
-        &format!("Starting Node Execution: {} [{}]", &node.name, &node.id),
-        LogLevel::Debug,
-        None,
-    );
+    let logic = node.logic.clone();
+    let mut log_message = start_debug_log(ctx, || {
+        format!(
+            "Starting Node Execution: {} [{}]",
+            node.node_name(),
+            node.node_id()
+        )
+    });
 
+    ctx.increment_nodes_executed();
     let result = logic.run(ctx).await;
 
     // Check for cancellation after node execution
     if ctx.is_cancelled() {
         ctx.log_message("Execution cancelled after node completed", LogLevel::Warn);
-        log_message.end();
-        ctx.log(log_message);
+        finish_debug_log(ctx, &mut log_message);
         ctx.end_trace();
         ctx.set_state(NodeState::Error).await;
         return Err(InternalNodeError::ExecutionFailed("Cancelled".to_string()));
@@ -199,19 +360,17 @@ async fn run_node_logic_only(
     if let Err(e) = result {
         let err_string = format!("{:?}", e);
         ctx.log_message(
-            &format!("Failed to execute node: {}", &err_string),
+            &format!("Failed to execute node: {}", err_string),
             LogLevel::Error,
         );
-        log_message.end();
-        ctx.log(log_message);
+        finish_debug_log(ctx, &mut log_message);
         ctx.end_trace();
         ctx.set_state(NodeState::Error).await;
         return Err(InternalNodeError::ExecutionFailed(err_string));
     }
 
     ctx.set_state(NodeState::Success).await;
-    log_message.end();
-    ctx.log(log_message);
+    finish_debug_log(ctx, &mut log_message);
     ctx.end_trace();
     Ok(())
 }
@@ -284,7 +443,7 @@ async fn pure_parents_for_memo(
 /// Cached immutable metadata from Node to avoid locking
 #[derive(Clone)]
 pub struct NodeMeta {
-    pub id: String,
+    pub id: Arc<str>,
     pub name: String,
     pub is_pure: bool,
 }
@@ -292,7 +451,7 @@ pub struct NodeMeta {
 impl NodeMeta {
     pub fn from_node(node: &Node) -> Self {
         Self {
-            id: node.id.clone(),
+            id: Arc::from(node.id.as_str()),
             name: node.name.clone(),
             is_pure: node.is_pure(),
         }
@@ -306,7 +465,7 @@ pub struct InternalNode {
     pub pins: AHashMap<String, Arc<InternalPin>>,
     pub logic: Arc<dyn NodeLogic>,
     pub exec_calls: AtomicU64,
-    pin_name_cache: Mutex<AHashMap<String, Vec<Arc<InternalPin>>>>,
+    pin_name_cache: AHashMap<String, Vec<Arc<InternalPin>>>,
 }
 
 impl InternalNode {
@@ -314,15 +473,66 @@ impl InternalNode {
         node: Node,
         pins: AHashMap<String, Arc<InternalPin>>,
         logic: Arc<dyn NodeLogic>,
-        name_cache: AHashMap<String, Vec<Arc<InternalPin>>>,
+        mut name_cache: AHashMap<String, Vec<Arc<InternalPin>>>,
     ) -> Self {
         let meta = NodeMeta::from_node(&node);
+
+        // Preserve the caller's duplicate-name ordering, but make the eager index complete and
+        // self-consistent at the construction boundary.
+        let mut indexed_pins = AHashSet::with_capacity(pins.len());
+        name_cache.retain(|name, cached| {
+            cached.retain(|pin| {
+                pin.name() == name
+                    && pins
+                        .get(pin.id())
+                        .is_some_and(|entry| Arc::ptr_eq(entry, pin))
+                    && indexed_pins.insert(ptr_key(pin))
+            });
+            !cached.is_empty()
+        });
+        for pin in pins.values() {
+            let is_cached = name_cache
+                .get(pin.name())
+                .is_some_and(|cached| cached.iter().any(|entry| Arc::ptr_eq(entry, pin)));
+            if !is_cached {
+                name_cache
+                    .entry(pin.name().to_string())
+                    .or_default()
+                    .push(pin.clone());
+            }
+        }
+
+        debug_assert_eq!(
+            name_cache.values().map(Vec::len).sum::<usize>(),
+            pins.len(),
+            "pin name cache must contain every pin exactly once"
+        );
+        debug_assert!(
+            pins.values().all(|pin| {
+                name_cache
+                    .get(pin.name())
+                    .is_some_and(|cached| cached.iter().any(|entry| Arc::ptr_eq(entry, pin)))
+            }),
+            "pin name cache must cover every pin under its name"
+        );
+        debug_assert!(
+            name_cache.iter().all(|(name, cached)| {
+                cached.iter().all(|pin| {
+                    pin.name() == name
+                        && pins
+                            .get(pin.id())
+                            .is_some_and(|entry| Arc::ptr_eq(entry, pin))
+                })
+            }),
+            "pin name cache must not contain stale or misnamed pins"
+        );
+
         InternalNode {
             node: Arc::new(Mutex::new(node)),
             meta,
             pins,
             logic,
-            pin_name_cache: Mutex::new(name_cache),
+            pin_name_cache: name_cache,
             exec_calls: AtomicU64::new(0),
         }
     }
@@ -330,7 +540,13 @@ impl InternalNode {
     /// Get cached node ID without locking
     #[inline]
     pub fn node_id(&self) -> &str {
-        &self.meta.id
+        self.meta.id.as_ref()
+    }
+
+    /// Clone the cached node ID without allocating.
+    #[inline]
+    pub fn shared_node_id(&self) -> Arc<str> {
+        self.meta.id.clone()
     }
 
     /// Get cached node name without locking
@@ -345,56 +561,26 @@ impl InternalNode {
         self.meta.is_pure
     }
 
-    pub async fn ensure_cache(&self, name: &str) {
-        {
-            let cache = self.pin_name_cache.lock().await;
-            if cache.contains_key(name) {
-                return;
-            }
-        }
-
-        let mut pins_by_name = AHashMap::new();
-        for pin_ref in self.pins.values() {
-            // Use cached pin name - no lock needed
-            let pin_name = pin_ref.name().to_string();
-
-            pins_by_name
-                .entry(pin_name)
-                .or_insert_with(Vec::new)
-                .push(pin_ref.clone());
-        }
-
-        let mut cache = self.pin_name_cache.lock().await;
-        for (pin_name, pins) in pins_by_name {
-            cache.entry(pin_name).or_insert(pins);
-        }
-    }
+    /// Retained for source compatibility; the immutable cache is populated eagerly by `new`.
+    #[inline]
+    pub async fn ensure_cache(&self, _name: &str) {}
 
     pub async fn get_pin_by_name(&self, name: &str) -> flow_like_types::Result<Arc<InternalPin>> {
-        self.ensure_cache(name).await;
-
-        let pin = {
-            let cache = self.pin_name_cache.lock().await;
-            cache
-                .get(name)
-                .and_then(|pins_ref| pins_ref.first().cloned())
-        };
-
-        let pin = pin.ok_or(flow_like_types::anyhow!("Pin {} not found", name))?;
-        Ok(pin)
+        self.pin_name_cache
+            .get(name)
+            .and_then(|pins| pins.first())
+            .cloned()
+            .ok_or_else(|| flow_like_types::anyhow!("Pin {} not found", name))
     }
 
     pub async fn get_pins_by_name(
         &self,
         name: &str,
     ) -> flow_like_types::Result<Vec<Arc<InternalPin>>> {
-        self.ensure_cache(name).await;
-        let cache = self.pin_name_cache.lock().await;
-        if let Some(pins_ref) = cache.get(name) {
-            return Ok(pins_ref.clone());
-        }
-
-        Err(flow_like_types::anyhow!("Pin {} not found", name))
+        self.pin_name_cache
+            .get(name)
+            .cloned()
+            .ok_or_else(|| flow_like_types::anyhow!("Pin {} not found", name))
     }
 
     pub fn get_pin_by_id(&self, id: &str) -> flow_like_types::Result<Arc<InternalPin>> {
@@ -444,10 +630,10 @@ impl InternalNode {
             for depends_on_pin in deps {
                 let depends_on_pin = depends_on_pin
                     .upgrade()
-                    .ok_or(flow_like_types::anyhow!("Failed to lock Pin"))?;
+                    .ok_or_else(|| flow_like_types::anyhow!("Failed to lock Pin"))?;
 
                 // Only value access needs locking
-                let has_value = depends_on_pin.value.read().await.is_some();
+                let has_value = depends_on_pin.value.read().is_some();
 
                 // non execution pins need all inputs to be valid
                 if !has_value && !is_execution {
@@ -491,7 +677,7 @@ impl InternalNode {
             while let Some(next_weak) = stack.pop() {
                 let pin_arc = next_weak
                     .upgrade()
-                    .ok_or(flow_like_types::anyhow!("Failed to lock Pin"))?;
+                    .ok_or_else(|| flow_like_types::anyhow!("Failed to lock Pin"))?;
 
                 let pin_key = Arc::as_ptr(&pin_arc) as usize;
                 if !visited_pins.insert(pin_key) {
@@ -520,16 +706,15 @@ impl InternalNode {
         filter_valid: bool,
         context: &ExecutionContext,
     ) -> flow_like_types::Result<Vec<ExecutionTarget>> {
-        // node_ptr -> (node_arc, pins_vec, seen_pin_ptrs)
-        let mut groups: AHashMap<
-            usize,
-            (Arc<InternalNode>, Vec<Arc<InternalPin>>, AHashSet<usize>),
-        > = AHashMap::with_capacity(16);
-
-        let mut visited_pins: AHashSet<usize> = AHashSet::with_capacity(64);
-        let mut stack: Vec<Weak<InternalPin>> = Vec::with_capacity(64);
+        let mut first_active_output = None;
+        let mut additional_active_outputs = Vec::new();
 
         for pin in self.pins.values() {
+            // Direct access to immutable fields - no lock needed
+            if pin.pin_type != PinType::Output || pin.data_type != VariableType::Execution {
+                continue;
+            }
+
             if filter_valid {
                 match evaluate_pin_value(pin.clone(), &context.context_pin_overrides).await {
                     Ok(Value::Bool(true)) => {}
@@ -537,11 +722,36 @@ impl InternalNode {
                 }
             }
 
-            // Direct access to immutable fields - no lock needed
-            if pin.pin_type != PinType::Output || pin.data_type != VariableType::Execution {
-                continue;
+            if first_active_output.is_none() {
+                first_active_output = Some(pin.clone());
+            } else {
+                additional_active_outputs.push(pin.clone());
             }
+        }
 
+        let Some(first_active_output) = first_active_output else {
+            return Ok(Vec::new());
+        };
+
+        if additional_active_outputs.is_empty() {
+            return Ok(targets_for_single_exec_output(&first_active_output));
+        }
+
+        // node_ptr -> (node_arc, pins_vec, seen_pin_ptrs)
+        let mut groups: AHashMap<
+            usize,
+            (Arc<InternalNode>, Vec<Arc<InternalPin>>, AHashSet<usize>),
+        > = AHashMap::with_capacity(
+            first_active_output
+                .connected_to()
+                .len()
+                .saturating_add(additional_active_outputs.len()),
+        );
+
+        let mut visited_pins: AHashSet<usize> = AHashSet::with_capacity(64);
+        let mut stack: Vec<Weak<InternalPin>> = Vec::with_capacity(64);
+
+        for pin in std::iter::once(first_active_output).chain(additional_active_outputs) {
             visited_pins.clear();
             stack.clear();
             stack.extend(pin.connected_to().iter().cloned());
@@ -621,7 +831,7 @@ impl InternalNode {
         while let Some(next_weak) = stack.pop() {
             let pin_arc = next_weak
                 .upgrade()
-                .ok_or(flow_like_types::anyhow!("Failed to lock Pin"))?;
+                .ok_or_else(|| flow_like_types::anyhow!("Failed to lock Pin"))?;
 
             let pin_key = Arc::as_ptr(&pin_arc) as usize;
             if !visited_pins.insert(pin_key) {
@@ -669,7 +879,7 @@ impl InternalNode {
             while let Some(dep_weak) = stack.pop() {
                 let dep_arc = dep_weak
                     .upgrade()
-                    .ok_or(flow_like_types::anyhow!("Failed to lock Pin"))?;
+                    .ok_or_else(|| flow_like_types::anyhow!("Failed to lock Pin"))?;
 
                 let pin_key = Arc::as_ptr(&dep_arc) as usize;
                 if !visited_pins.insert(pin_key) {
@@ -779,37 +989,32 @@ impl InternalNode {
                         continue;
                     }
 
-                    // Use cached metadata instead of locking
-                    let node_id = node_arc.node_id().to_string();
-                    let node_name = node_arc.node_name().to_string();
-
                     if let Some(guard) = recursion_guard
-                        && guard.contains(&node_id)
+                        && guard.contains(node_arc.node_id())
                     {
-                        context.log_message(
-                            &format!("Recursion detected for: {}, skipping execution", &node_id),
-                            LogLevel::Debug,
-                        );
+                        log_debug(context, || {
+                            format!(
+                                "Recursion detected for: {}, skipping execution",
+                                node_arc.node_id()
+                            )
+                        });
                         scheduled.insert(node_ptr);
                         continue;
                     }
 
                     // Execute dependency (no successors)
                     let mut sub = context.create_sub_context(&node_arc).await;
-                    let mut log_message = LogMessage::new(
-                        &format!("Triggering missing dependency: {}", &node_name),
-                        LogLevel::Debug,
-                        None,
-                    );
+                    let mut log_message = start_debug_log(context, || {
+                        format!("Triggering missing dependency: {}", node_arc.node_name())
+                    });
                     let res = run_node_logic_only(&mut sub, recursion_guard).await;
-                    log_message.end();
-                    context.log(log_message);
+                    finish_debug_log(context, &mut log_message);
                     sub.end_trace();
                     context.push_sub_context(&mut sub);
 
                     if res.is_err() {
                         context.log_message(
-                            &format!("Failed to trigger dependency: {}", &node_name),
+                            &format!("Failed to trigger dependency: {}", node_arc.node_name()),
                             LogLevel::Error,
                         );
                         return false;
@@ -845,7 +1050,7 @@ impl InternalNode {
 
         if connected.is_empty() {
             context.log_message(
-                &format!("No error handling nodes found for: {}", &context.id),
+                &format!("No error handling nodes found for: {}", context.id),
                 LogLevel::Error,
             );
             return Err(InternalNodeError::ExecutionFailed(error.to_string()));
@@ -986,8 +1191,9 @@ impl InternalNode {
                 recursion_guard,
             )
             .await?;
-            let node = context.read_node().await;
-            return Err(InternalNodeError::DependencyFailed(node.id));
+            return Err(InternalNodeError::DependencyFailed(
+                context.node.node_id().to_string(),
+            ));
         }
 
         // this node
@@ -1083,37 +1289,41 @@ impl InternalNode {
     ) -> flow_like_types::Result<(), InternalNodeError> {
         context.set_state(NodeState::Running).await;
 
-        let node = context.read_node().await;
+        let node = context.node.clone();
 
         if recursion_guard.is_none() {
             *recursion_guard = Some(AHashSet::new());
         }
         if let Some(guard) = recursion_guard {
-            if guard.contains(&node.id) {
-                context.log_message(
-                    &format!("Recursion detected for: {}", &node.id),
-                    LogLevel::Debug,
-                );
+            if guard.contains(node.node_id()) {
+                log_debug(context, || {
+                    format!("Recursion detected for: {}", node.node_id())
+                });
                 context.end_trace();
                 return Ok(());
             }
-            guard.insert(node.id.clone());
+            guard.insert(node.node_id().to_string());
         }
 
         // 1) Execute precomputed dependencies iteratively (no recursion)
         if !exec_deps_from_map(context, recursion_guard, dependencies).await {
             let err = "Failed to trigger mapped dependencies".to_string();
             InternalNode::handle_error(context, &err, recursion_guard).await?;
-            return Err(InternalNodeError::DependencyFailed(node.id.clone()));
+            return Err(InternalNodeError::DependencyFailed(
+                node.node_id().to_string(),
+            ));
         }
 
         // 2) Run this node (no successors here)
-        let logic = context.node.logic.clone();
-        let mut log_message = LogMessage::new(
-            &format!("Starting Node Execution: {} [{}]", &node.name, &node.id),
-            LogLevel::Debug,
-            None,
-        );
+        let logic = node.logic.clone();
+        let mut log_message = start_debug_log(context, || {
+            format!(
+                "Starting Node Execution: {} [{}]",
+                node.node_name(),
+                node.node_id()
+            )
+        });
+        context.increment_nodes_executed();
         let result = logic.run(context).await;
 
         if let Err(e) = result {
@@ -1122,8 +1332,7 @@ impl InternalNode {
                 &format!("Failed to execute node: {}", err_string),
                 LogLevel::Error,
             );
-            log_message.end();
-            context.log(log_message);
+            finish_debug_log(context, &mut log_message);
             context.end_trace();
             context.set_state(NodeState::Error).await;
             InternalNode::handle_error(context, &err_string, recursion_guard).await?;
@@ -1131,8 +1340,7 @@ impl InternalNode {
         }
 
         context.set_state(NodeState::Success).await;
-        log_message.end();
-        context.log(log_message);
+        finish_debug_log(context, &mut log_message);
         context.end_trace();
 
         // 3) Walk successors iteratively (DFS), like your non-recursive `trigger`

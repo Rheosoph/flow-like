@@ -3,6 +3,7 @@
 import { SigmaContainer, useRegisterEvents, useSigma } from "@react-sigma/core";
 import "@react-sigma/core/lib/style.css";
 import {
+	DEFAULT_EDGE_CURVATURE,
 	EdgeCurvedArrowProgram,
 	indexParallelEdgesIndex,
 } from "@sigma/edge-curve";
@@ -29,12 +30,32 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { NodeCircleProgram, createNodeCompoundProgram } from "sigma/rendering";
+import {
+	EdgeArrowProgram,
+	NodeCircleProgram,
+	createNodeCompoundProgram,
+} from "sigma/rendering";
 import type {
 	LabelStyle,
 	SubgraphNode,
 	SubgraphResult,
 } from "../../../state/backend-state/graph-state";
+import { getParallelEdgeRenderAttributes } from "./edge-rendering";
+import type { ClusterModel } from "./graph-clusters";
+import {
+	type ConnectivityPartition,
+	type LayoutPosition as GraphPosition,
+	applyClusterLayout,
+	computeSeedSpread,
+	createAnchoredPosition,
+	createDeterministicPosition,
+	defaultRelaxIterations,
+	getLayoutBounds,
+	packNodesOnGrid,
+	partitionByConnectivity,
+	placeDetachedNodes,
+	relaxOverlaps,
+} from "./graph-layout";
 import { getIconDataUri } from "./icon-svg";
 import { drawNodeHover, drawNodeLabel } from "./label-renderer";
 import { getGraphTheme, invalidateGraphTheme } from "./theme-colors";
@@ -63,12 +84,8 @@ const EDGE_PROGRESS_WEIGHT = 0.3;
 const SIZE_PROGRESS_WEIGHT = 0.1;
 const LAYOUT_PROGRESS_WEIGHT = 0.3;
 const EXPANSION_OVERLAY_DELAY_MS = 400;
+const PRESERVE_RELAX_ITERATIONS = 8;
 const LOADING_BAR_DELAYS_MS = [0, 120, 240] as const;
-
-type GraphPosition = {
-	x: number;
-	y: number;
-};
 
 type ForceAtlas2WorkerInstance = {
 	start: () => void;
@@ -92,6 +109,8 @@ export interface GraphCanvasProps {
 	highlightedNodeIds?: Set<string>;
 	highlightedEdgeIds?: Set<string>;
 	hiddenLabels?: Set<string>;
+	/** Groups the nodes into constellations instead of one undifferentiated field. */
+	clusters?: ClusterModel | null;
 	onNodeClick?: (nodeId: string) => void;
 	onNodeShiftClick?: (nodeId: string, label: string) => void;
 	onEdgeClick?: (edgeKey: string) => void;
@@ -189,13 +208,25 @@ function styleToNodeSize(
 	return 10;
 }
 
-function getParallelCurvature(index: number, maxIndex: number): number {
-	if (maxIndex <= 0) return 0;
-	if (index < 0) return -getParallelCurvature(-index, maxIndex);
-	const amplitude = 3.5;
-	const maxCurvature =
-		(amplitude * (1 - Math.exp(-maxIndex / amplitude))) / maxIndex;
-	return (maxCurvature * index) / maxIndex;
+const HUB_SIZE_MIN = 14;
+const HUB_SIZE_MAX = 34;
+/**
+ * Hub captions exempted from label culling. A forced label bypasses
+ * `labelRenderedSizeThreshold` and the label grid entirely, so forcing all 400
+ * groups would undo exactly the budget the large tiers exist to enforce. Past
+ * this the size encoding and sigma's own culling decide.
+ */
+const MAX_FORCED_HUB_LABELS = 48;
+
+/**
+ * Size carries fan-out, log-scaled so a corpus spanning orders of magnitude
+ * still fits one screen. Sigma orders label candidates by size and culls below
+ * `labelRenderedSizeThreshold`, so this doubles as the label-priority rule:
+ * hub captions survive, member captions drop out.
+ */
+function hubNodeSize(represented: number): number {
+	const scaled = HUB_SIZE_MIN + 2.2 * Math.log2(1 + Math.max(0, represented));
+	return Math.min(HUB_SIZE_MAX, Math.max(HUB_SIZE_MIN, scaled));
 }
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -307,6 +338,7 @@ function getFA2Settings(
 	const isHuge = nodeCount >= HUGE_THRESHOLD;
 	const isLarge = nodeCount >= LARGE_THRESHOLD;
 	const isDense = density > 3;
+	const isSparse = density < 1.2;
 
 	if (isHuge) {
 		return {
@@ -336,21 +368,69 @@ function getFA2Settings(
 		};
 	}
 
+	// `strongGravityMode` pulls harder the further out a node sits, so on sparse
+	// graphs it wins against repulsion and collapses everything into one disc.
+	// Plain gravity is a constant inward force: it still keeps components from
+	// drifting off, but lets `scalingRatio` decide the spacing.
 	return {
-		gravity: isDense ? 0.5 : 3,
-		scalingRatio: isDense ? 8 : 2,
-		slowDown: isDense ? 5 : 10,
-		barnesHutOptimize: nodeCount > 50,
+		gravity: isDense ? 0.5 : isSparse ? 0.6 : 1,
+		scalingRatio: isDense ? 8 : isSparse ? 24 : 14,
+		slowDown: isDense ? 5 : 8,
+		barnesHutOptimize: nodeCount > 200,
 		barnesHutTheta: 0.5,
-		strongGravityMode: !isDense,
+		strongGravityMode: false,
 		linLogMode: true,
 		edgeWeightInfluence: isDense ? 0 : 1,
 		adjustSizes: true,
 	};
 }
 
+function getRelaxBatchIterations(nodeCount: number): number {
+	if (nodeCount >= HUGE_THRESHOLD) return 2;
+	if (nodeCount >= LARGE_THRESHOLD) return 4;
+	return 12;
+}
+
+/**
+ * Guarantees the spacing the simulation only approximates, then parks detached
+ * nodes beside the core. Shared by the inline and worker layout paths so both
+ * finish in the same readable state.
+ */
+async function finishLayoutAsync(
+	graph: Graph,
+	partition: ConnectivityPartition,
+	isCancelled: () => boolean,
+	updateProgress?: (progress: number, detail: string) => void,
+) {
+	const { connected, isolated } = partition;
+	const totalIterations = defaultRelaxIterations(connected.length);
+	const batchIterations = getRelaxBatchIterations(connected.length);
+	let completed = 0;
+
+	while (completed < totalIterations) {
+		if (isCancelled()) return;
+
+		const batch = Math.min(batchIterations, totalIterations - completed);
+		const performed = relaxOverlaps(graph, connected, { iterations: batch });
+		completed += batch;
+
+		updateProgress?.(
+			completed / totalIterations,
+			"Separating overlapping nodes.",
+		);
+
+		// A pass that resolved nothing means the set is already clean.
+		if (performed < batch) break;
+		if (completed < totalIterations) await waitForNextFrame();
+	}
+
+	if (isCancelled()) return;
+	placeDetachedNodes(graph, isolated, getLayoutBounds(graph, connected));
+}
+
 async function applyLayoutAsync(
 	graph: Graph,
+	partition: ConnectivityPartition,
 	updateProgress: (progress: number, detail: string) => void,
 	isCancelled: () => boolean,
 ) {
@@ -361,7 +441,9 @@ async function applyLayoutAsync(
 
 	const nodeCount = graph.order;
 	const edgeCount = graph.size;
-	const settings = getFA2Settings(nodeCount, edgeCount);
+	// Detached nodes carry no structure, so density is measured against the part
+	// of the graph the simulation is actually solving.
+	const settings = getFA2Settings(partition.connected.length, edgeCount);
 
 	let totalIterations: number;
 	if (nodeCount >= HUGE_THRESHOLD) totalIterations = 80;
@@ -382,7 +464,7 @@ async function applyLayoutAsync(
 		completedIterations += batch;
 
 		updateProgress(
-			completedIterations / totalIterations,
+			(completedIterations / totalIterations) * 0.85,
 			`${completedIterations.toLocaleString()} / ${totalIterations.toLocaleString()} layout passes complete.`,
 		);
 
@@ -390,6 +472,10 @@ async function applyLayoutAsync(
 			await waitForNextFrame();
 		}
 	}
+
+	await finishLayoutAsync(graph, partition, isCancelled, (progress, detail) => {
+		updateProgress(0.85 + progress * 0.15, detail);
+	});
 }
 
 interface GraphPreparationState {
@@ -413,6 +499,7 @@ interface GraphBuildOptions {
 	previousPositions: ReadonlyMap<string, GraphPosition>;
 	anchorNodeId?: string | null;
 	forceLayout?: boolean;
+	clusters?: ClusterModel | null;
 }
 
 interface GraphBuildResult {
@@ -428,38 +515,6 @@ const IDLE_PREPARATION_STATE: GraphPreparationState = {
 	nodeCount: 0,
 	edgeCount: 0,
 };
-
-function hashGraphSeed(seed: string): number {
-	let hash = 2166136261;
-	for (let index = 0; index < seed.length; index += 1) {
-		hash ^= seed.charCodeAt(index);
-		hash = Math.imul(hash, 16777619);
-	}
-	return hash >>> 0;
-}
-
-function createDeterministicPosition(seed: string): GraphPosition {
-	const hash = hashGraphSeed(seed);
-	const angle = (((hash >>> 8) % 360) * Math.PI) / 180;
-	const radius = 20 + (hash % 30);
-	return {
-		x: Math.cos(angle) * radius,
-		y: Math.sin(angle) * radius,
-	};
-}
-
-function createAnchoredPosition(
-	anchor: GraphPosition,
-	seed: string,
-): GraphPosition {
-	const hash = hashGraphSeed(seed);
-	const angle = (((hash >>> 8) % 360) * Math.PI) / 180;
-	const radius = 6 + (hash % 14);
-	return {
-		x: anchor.x + Math.cos(angle) * radius,
-		y: anchor.y + Math.sin(angle) * radius,
-	};
-}
 
 function buildNeighborLookup(data: SubgraphResult): Map<string, string[]> {
 	const neighborLookup = new Map<string, string[]>();
@@ -517,12 +572,16 @@ function resolveInitialNodePosition({
 	assignedPositions,
 	neighborLookup,
 	anchorNodeId,
+	seedSpread,
+	anchorSpread,
 }: {
 	nodeId: string;
 	previousPositions: ReadonlyMap<string, GraphPosition>;
 	assignedPositions: ReadonlyMap<string, GraphPosition>;
 	neighborLookup: ReadonlyMap<string, string[]>;
 	anchorNodeId?: string | null;
+	seedSpread: number;
+	anchorSpread: number;
 }): GraphPosition {
 	const existingPosition = previousPositions.get(nodeId);
 	if (existingPosition) return existingPosition;
@@ -536,25 +595,29 @@ function resolveInitialNodePosition({
 		const anchorPosition =
 			assignedPositions.get(candidateId) ?? previousPositions.get(candidateId);
 		if (anchorPosition) {
-			return createAnchoredPosition(anchorPosition, nodeId);
+			return createAnchoredPosition(anchorPosition, nodeId, anchorSpread);
 		}
 	}
 
-	return createDeterministicPosition(nodeId);
+	return createDeterministicPosition(nodeId, seedSpread);
 }
 
 async function buildGraphAsync(
 	data: SubgraphResult,
 	updateState: (state: GraphPreparationState) => void,
 	isCancelled: () => boolean,
-	{ previousPositions, anchorNodeId, forceLayout = false }: GraphBuildOptions,
+	{
+		previousPositions,
+		anchorNodeId,
+		forceLayout = false,
+		clusters,
+	}: GraphBuildOptions,
 ): Promise<GraphBuildResult | null> {
 	const graph = new Graph({ multi: true, type: "directed" });
 	const nodeCount = data.nodes.length;
 	const edgeCount = data.edges.length;
 	const isHuge = nodeCount >= HUGE_THRESHOLD;
 	const isLarge = nodeCount >= LARGE_THRESHOLD;
-	const useWorkerLayout = shouldUseWorkerLayout(nodeCount, edgeCount);
 	const preservedNodeCount = data.nodes.reduce(
 		(count, node) => count + Number(previousPositions.has(node.id)),
 		0,
@@ -568,6 +631,17 @@ async function buildGraphAsync(
 	const assignedPositions = new Map<string, GraphPosition>();
 	const neighborLookup = buildNeighborLookup(data);
 	const columnRanges = computeColumnRanges(data.nodes);
+	// Groups arrive ranked by population, so the biggest hubs keep their captions.
+	const forcedHubIds = new Set(
+		(clusters?.clusters ?? [])
+			.map((cluster) => cluster.hubId)
+			.filter((hubId): hubId is string => hubId !== undefined)
+			.slice(0, MAX_FORCED_HUB_LABELS),
+	);
+	const seedSpread = computeSeedSpread(nodeCount);
+	// Newly expanded nodes land in a small ring around the node they came from,
+	// close enough to read as related but clear of it.
+	const anchorSpread = computeSeedSpread(12);
 
 	const publish = (
 		progress: number,
@@ -604,6 +678,8 @@ async function buildGraphAsync(
 				assignedPositions,
 				neighborLookup,
 				anchorNodeId,
+				seedSpread,
+				anchorSpread,
 			});
 			const attrs: Record<string, unknown> = {
 				label: node.caption ?? node.id,
@@ -617,6 +693,18 @@ async function buildGraphAsync(
 				borderColor: nodeColor,
 				usesDefaultColor: !node.style?.color,
 			};
+
+			// Written at every graph size: above LARGE_THRESHOLD the reducers are
+			// skipped entirely, so raw attributes are all the renderer still sees.
+			const assignment = clusters?.byNode.get(node.id);
+			if (assignment) {
+				attrs.clusterId = assignment.clusterId;
+				if (assignment.isHub) {
+					attrs.isHub = true;
+					attrs.badge = assignment.badge;
+					attrs.forceLabel = forcedHubIds.has(node.id);
+				}
+			}
 
 			if (!isLarge) {
 				attrs.image = getIconDataUri(node.style?.icon ?? "database");
@@ -654,7 +742,7 @@ async function buildGraphAsync(
 				size: (isHuge ? 0.3 : isLarge ? 0.6 : 1) * edgeWidth,
 				color: hexToRgba(edgeHex, getBaseEdgeAlpha(nodeCount)),
 				originalColor: edgeHex,
-				type: "curvedArrow",
+				type: "arrow",
 				edgeId: edge.id,
 				forceLabel: false,
 				usesDefaultColor: !edge.style?.color,
@@ -691,12 +779,14 @@ async function buildGraphAsync(
 				| number
 				| null
 				| undefined;
-			const curvature =
-				typeof parallelIndex === "number" &&
-				typeof parallelMaxIndex === "number"
-					? getParallelCurvature(parallelIndex, parallelMaxIndex)
-					: 0;
-			graph.setEdgeAttribute(edge, "curvature", curvature);
+			graph.mergeEdgeAttributes(
+				edge,
+				getParallelEdgeRenderAttributes(
+					parallelIndex,
+					parallelMaxIndex,
+					DEFAULT_EDGE_CURVATURE,
+				),
+			);
 		});
 		if (isCancelled()) return null;
 		await waitForNextFrame();
@@ -708,6 +798,18 @@ async function buildGraphAsync(
 		getNodeChunkSize(nodeCount),
 		(node) => {
 			if (!graph.hasNode(node.id)) return;
+
+			const assignment = clusters?.byNode.get(node.id);
+			// Only the default fixed size is overridden — a user who chose
+			// by-degree or by-column sizing keeps the encoding they picked.
+			if (assignment?.isHub && node.style?.size?.mode === "fixed") {
+				graph.setNodeAttribute(
+					node.id,
+					"size",
+					hubNodeSize(assignment.represented),
+				);
+				return;
+			}
 
 			const baseSize = styleToNodeSize(
 				node.style,
@@ -734,7 +836,14 @@ async function buildGraphAsync(
 
 	if (!sized || isCancelled()) return null;
 
+	const partition = partitionByConnectivity(graph);
+
 	if (preserveLayout) {
+		// Expansions must not reshuffle the view, so only the stacking that the
+		// anchored seeding introduced gets nudged apart.
+		relaxOverlaps(graph, Array.from(nodeIds), {
+			iterations: PRESERVE_RELAX_ITERATIONS,
+		});
 		publish(
 			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT,
 			"Keeping layout stable",
@@ -747,7 +856,56 @@ async function buildGraphAsync(
 		};
 	}
 
-	if (useWorkerLayout) {
+	// Grouping wins over the force layout when we have one: a simulation spreads
+	// nodes by connectivity alone, which says nothing about a sample that is
+	// mostly one object type or mostly detached.
+	if (clusters && clusters.clusters.length > 1) {
+		const base =
+			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT;
+		publish(
+			base,
+			"Grouping nodes",
+			"Arranging each group around its hub.",
+			"layout",
+		);
+		await applyClusterLayout(graph, clusters.clusters, {
+			onProgress: (fraction) => {
+				publish(
+					base + LAYOUT_PROGRESS_WEIGHT * fraction,
+					"Grouping nodes",
+					`${Math.round(fraction * 100)}% of groups arranged.`,
+					"layout",
+				);
+			},
+			yieldToFrame: waitForNextFrame,
+			isCancelled,
+		});
+		if (isCancelled()) return null;
+		publish(1, "Graph ready", "Rendering interactive view.", "ready");
+		return {
+			graph,
+			shouldRunWorkerLayout: false,
+		};
+	}
+
+	// A force layout has nothing to solve without edges: every node would just
+	// fall into the same gravity well. A grid is exact, instant and readable.
+	if (partition.connected.length <= 1) {
+		publish(
+			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT,
+			"Arranging nodes",
+			"No connections to lay out — placing nodes on a grid.",
+			"layout",
+		);
+		packNodesOnGrid(graph, [...partition.connected, ...partition.isolated]);
+		publish(1, "Graph ready", "Rendering interactive view.", "ready");
+		return {
+			graph,
+			shouldRunWorkerLayout: false,
+		};
+	}
+
+	if (shouldUseWorkerLayout(partition.connected.length, edgeCount)) {
 		publish(
 			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT,
 			"Preparing worker layout",
@@ -762,6 +920,7 @@ async function buildGraphAsync(
 
 	await applyLayoutAsync(
 		graph,
+		partition,
 		(progress, detail) => {
 			publish(
 				NODE_PROGRESS_WEIGHT +
@@ -1079,11 +1238,24 @@ function SigmaWorkerLayout({
 				// Layout worker may already be disposed
 			}
 			onRunningChange?.(false);
-			try {
-				sigma.refresh({ skipIndexation: true });
-			} catch {
-				// WebGL context may be lost during final refresh
-			}
+			// The worker stops on a timer, not on convergence, so the graph it
+			// leaves behind still overlaps. Settle it in rAF-sized batches — a
+			// synchronous pass over a large graph would drop frames.
+			const refresh = () => {
+				try {
+					sigma.refresh({ skipIndexation: true });
+				} catch {
+					// WebGL context may be lost during layout updates
+				}
+			};
+			void finishLayoutAsync(
+				currentGraph,
+				partitionByConnectivity(currentGraph),
+				() => disposed,
+				refresh,
+			).then(() => {
+				if (!disposed) refresh();
+			});
 		}, duration);
 
 		return () => {
@@ -1194,6 +1366,7 @@ export function GraphCanvas({
 	highlightedNodeIds,
 	highlightedEdgeIds,
 	hiddenLabels,
+	clusters,
 	onNodeClick,
 	onNodeShiftClick,
 	onEdgeClick,
@@ -1214,6 +1387,7 @@ export function GraphCanvas({
 	const loadingRef = useRef(loading);
 	const selectedNodeIdRef = useRef<string | null>(selectedNodeId ?? null);
 	const forceLayoutRef = useRef(false);
+	const lastClusterEpochRef = useRef<string | null>(null);
 	const lastPaletteKeyRef = useRef<string>("");
 
 	graphRef.current = graph;
@@ -1248,7 +1422,13 @@ export function GraphCanvas({
 		void layoutRunKey;
 		const nextData = data;
 		const previousPositions = snapshotGraphPositions(graphRef.current);
-		const forceLayout = forceLayoutRef.current;
+		// A regrouping has to relayout. Raising the node limit keeps enough old
+		// positions to clear the preserve threshold, which would otherwise swallow
+		// the new grouping and leave a stale-but-plausible arrangement on screen.
+		const clusterEpoch = clusters?.epoch ?? null;
+		const regrouped = clusterEpoch !== lastClusterEpochRef.current;
+		lastClusterEpochRef.current = clusterEpoch;
+		const forceLayout = forceLayoutRef.current || regrouped;
 		forceLayoutRef.current = false;
 		let cancelled = false;
 
@@ -1293,6 +1473,7 @@ export function GraphCanvas({
 					previousPositions,
 					anchorNodeId: selectedNodeIdRef.current,
 					forceLayout,
+					clusters,
 				},
 			);
 
@@ -1318,7 +1499,7 @@ export function GraphCanvas({
 		return () => {
 			cancelled = true;
 		};
-	}, [data, layoutRunKey]);
+	}, [data, layoutRunKey, clusters]);
 
 	const theme = useMemo(() => {
 		void themeTick;
@@ -1673,8 +1854,11 @@ export function GraphCanvas({
 				"bordered-image": IconNodeProgram,
 				circle: NodeCircleProgram,
 			},
-			defaultEdgeType: "curvedArrow",
-			edgeProgramClasses: { curvedArrow: EdgeCurvedArrowProgram },
+			defaultEdgeType: "arrow",
+			edgeProgramClasses: {
+				arrow: EdgeArrowProgram,
+				curvedArrow: EdgeCurvedArrowProgram,
+			},
 			renderEdgeLabels: !isHuge,
 			enableEdgeEvents: !isHuge,
 			edgeLabelSize: 10,

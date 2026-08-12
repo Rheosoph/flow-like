@@ -60,7 +60,10 @@ use flow_like_types::tokio::{
     sync::{mpsc, oneshot},
     time::sleep,
 };
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, Set,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -79,6 +82,8 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", post(global_chat))
         .route("/{run_id}/tool-result", post(global_chat_tool_result))
+        .route("/{run_id}/cancel", post(global_chat_cancel))
+        .route("/{run_id}/steer", post(global_chat_steer))
         .route(
             "/memory",
             get(global_chat_memory_status).delete(global_chat_clear_memory),
@@ -194,6 +199,32 @@ fn next_run_id() -> String {
     format!("global-chat-{millis}-{counter}")
 }
 
+// Run control (stop / steer) rides the SAME coordination table, for the same reason tool results
+// do: the control POST may land on a different instance than the one running the turn, so process
+// memory is not a shared medium. Control rows are distinguished from tool calls by their id prefix
+// and are swept by `finish_run_rows` along with everything else the run owns.
+//
+// A cancel row is a tombstone (its presence is the signal). A steer row carries the user's text in
+// `response_value` and is deleted once the loop has folded it in.
+const CANCEL_ROW_PREFIX: &str = "cancel:";
+const STEER_ROW_PREFIX: &str = "steer:";
+/// Written once when a run starts, purely so control requests have something to authorize against.
+const OWNER_ROW_PREFIX: &str = "run:";
+/// Control rows outlive nothing: they are swept with the run. This only bounds abandoned rows if a
+/// run dies without cleanup.
+const CONTROL_ROW_TTL_SECS: i64 = 3600;
+/// Cap on unconsumed steering rows per run, matching the desktop registry. A user hammering the
+/// composer during a slow round must not grow the next prompt without bound.
+const MAX_PENDING_STEER_ROWS: u64 = 8;
+
+fn cancel_row_id(run_id: &str) -> String {
+    format!("{CANCEL_ROW_PREFIX}{run_id}")
+}
+
+fn owner_row_id(run_id: &str) -> String {
+    format!("{OWNER_ROW_PREFIX}{run_id}")
+}
+
 /// Insert a PENDING coordination row for one in-flight browser tool call.
 async fn insert_pending_tool_call(
     db: &DatabaseConnection,
@@ -242,7 +273,7 @@ async fn finish_run_rows(db: &DatabaseConnection, run_id: &str) {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or_default();
-    if sample % 20 == 0 {
+    if sample.is_multiple_of(20) {
         let now = chrono::Utc::now().timestamp();
         if let Err(error) = GlobalChatToolCall::delete_many()
             .filter(global_chat_tool_call::Column::ExpiresAt.lt(now))
@@ -362,6 +393,7 @@ fn profile_model_to_core(model: profile::Model) -> Profile {
             .and_then(|value| serde_json::from_value(value).ok()),
         theme: model.theme,
         bits: model.bit_ids.unwrap_or_default(),
+        custom_bits: vec![],
         settings: model
             .settings
             .and_then(|value| serde_json::from_value(value).ok())
@@ -393,7 +425,29 @@ pub(crate) async fn load_user_profile_opt(
         .await
         .map_err(|e| ApiError::internal(format!("Failed to load profile: {e}")))?;
 
-    Ok(model.map(|model| Arc::new(profile_model_to_core(model))))
+    let Some(model) = model else {
+        return Ok(None);
+    };
+
+    let mut profile = profile_model_to_core(model);
+
+    // Hydrate the user's WHOLE custom-bit library, with decrypted provider
+    // secrets — the profile only lives inside this request's copilot invocation.
+    // The model pickers offer the library independent of profile membership, so
+    // an explicitly selected model must resolve here; automatic "best model"
+    // selection stays scoped to the profile's `bits` inside `Profile`.
+    let custom_bits = crate::routes::user::bits::load_custom_bits_for_user(state, sub, true)
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(sub = %sub, "Failed to load custom bits for profile: {err:?}");
+            vec![]
+        });
+    profile.custom_bits = custom_bits
+        .into_iter()
+        .map(flow_like::profile::ProfileCustomBit)
+        .collect();
+
+    Ok(Some(Arc::new(profile)))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -421,6 +475,52 @@ struct ServerPlatformBridge {
 
 #[async_trait]
 impl PlatformToolBridge for ServerPlatformBridge {
+    /// One indexed read per tool round. Cheap next to the 500ms poll the tool path already runs,
+    /// and it is the only way a browser's steer POST reaches a turn on another instance.
+    async fn drain_steering(&self) -> Vec<String> {
+        let rows = match GlobalChatToolCall::find()
+            .filter(global_chat_tool_call::Column::RunId.eq(self.run_id.clone()))
+            .filter(global_chat_tool_call::Column::Id.starts_with(STEER_ROW_PREFIX))
+            .order_by_asc(global_chat_tool_call::Column::CreatedAt)
+            .all(&self.db)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(%error, run_id = %self.run_id, "[global_chat] steering read failed");
+                return Vec::new();
+            }
+        };
+        if rows.is_empty() {
+            return Vec::new();
+        }
+        let ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        let messages: Vec<String> = rows
+            .into_iter()
+            .filter_map(|row| row.response_value)
+            .filter(|text| !text.trim().is_empty())
+            .collect();
+        // Delete only what was read: a steer that arrives between the read and the delete keeps its
+        // row and is picked up next round rather than being dropped.
+        if let Err(error) = GlobalChatToolCall::delete_many()
+            .filter(global_chat_tool_call::Column::Id.is_in(ids))
+            .exec(&self.db)
+            .await
+        {
+            tracing::warn!(%error, run_id = %self.run_id, "[global_chat] steering cleanup failed");
+        }
+        messages
+    }
+
+    async fn is_cancelled(&self) -> bool {
+        matches!(
+            GlobalChatToolCall::find_by_id(cancel_row_id(&self.run_id))
+                .one(&self.db)
+                .await,
+            Ok(Some(_))
+        )
+    }
+
     async fn call(&self, tool_name: &str, arguments: Value) -> String {
         let spec = find_global_tool_spec(tool_name);
 
@@ -659,6 +759,25 @@ pub async fn global_chat(
     let run_id = next_run_id();
     let scope = payload.scope;
 
+    // Ownership marker, written before anything streams. Stop/steer arrive on a possibly different
+    // instance and have nothing else to authorize against — without this, controlling a turn that
+    // has not yet called a tool would be indistinguishable from controlling someone else's run.
+    if let Err(error) = (global_chat_tool_call::ActiveModel {
+        id: Set(owner_row_id(&run_id)),
+        run_id: Set(run_id.clone()),
+        sub: Set(sub.clone()),
+        status: Set(InteractionStatus::Responded),
+        expires_at: Set(chrono::Utc::now().timestamp() + CONTROL_ROW_TTL_SECS),
+        response_value: Set(None),
+        created_at: Set(chrono::Utc::now().naive_utc()),
+    })
+    .insert(&state.db)
+    .await
+    {
+        // Not fatal: the turn still runs, it just cannot be stopped or steered.
+        tracing::warn!(%error, run_id, "[global_chat] failed to record run ownership");
+    }
+
     let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<GlobalChatFrame>();
     let bridge: Arc<dyn PlatformToolBridge> = Arc::new(ServerPlatformBridge {
         db: state.db.clone(),
@@ -733,6 +852,18 @@ pub async fn global_chat(
                     }
                 }
                 result = &mut done_rx => {
+                    // Drain any buffered frames the task produced before completing so
+                    // trailing incremental tokens are not dropped by the select! race.
+                    while let Ok(frame) = frames_rx.try_recv() {
+                        match frame {
+                            GlobalChatFrame::Token(token) => {
+                                yield Ok::<Event, Infallible>(Event::default().event("token").data(token));
+                            }
+                            GlobalChatFrame::ToolRequest(request) => {
+                                yield Ok::<Event, Infallible>(Event::default().event("tool_request").data(request.to_string()));
+                            }
+                        }
+                    }
                     match result {
                         Ok(Ok(resp)) => {
                             let json = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
@@ -800,6 +931,136 @@ pub async fn global_chat_tool_result(
         .update(&state.db)
         .await
         .map_err(|e| ApiError::internal(format!("Failed to update tool call: {e}")))?;
+
+    Ok(Json(json!({ "status": "ok" })))
+}
+
+/// Body of `POST /{run_id}/steer`.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct SteerBody {
+    /// The instruction to fold into the turn that is already generating.
+    pub message: String,
+}
+
+/// Verify the caller owns the run before letting them control it. Ownership is established by any
+/// coordination row the run wrote; a run with no rows yet is indistinguishable from an unknown run,
+/// which is the safe answer for both.
+async fn assert_run_owner(
+    db: &DatabaseConnection,
+    run_id: &str,
+    sub: &str,
+) -> Result<(), ApiError> {
+    let owned = GlobalChatToolCall::find()
+        .filter(global_chat_tool_call::Column::RunId.eq(run_id.to_string()))
+        .filter(global_chat_tool_call::Column::Sub.eq(sub.to_string()))
+        .one(db)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to query run: {e}")))?;
+    if owned.is_none() {
+        return Err(ApiError::bad_request(
+            "Unknown or already-finished FlowPilot run.",
+        ));
+    }
+    Ok(())
+}
+
+/// Stop a running turn. The generation halts at its next round boundary; whatever it produced up to
+/// that point is what the user keeps. Idempotent — a second stop is a no-op.
+#[utoipa::path(
+    post,
+    path = "/{run_id}/cancel",
+    tag = "AI",
+    description = "Stop a running FlowPilot response. The turn halts at its next step and keeps what it already produced.",
+    params(("run_id" = String, Path, description = "Run to stop")),
+    responses((status = 200, description = "Cancellation recorded")),
+)]
+pub async fn global_chat_cancel(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(run_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let sub = user.sub()?;
+    assert_run_owner(&state.db, &run_id, &sub).await?;
+
+    let row = global_chat_tool_call::ActiveModel {
+        id: Set(cancel_row_id(&run_id)),
+        run_id: Set(run_id.clone()),
+        sub: Set(sub),
+        status: Set(InteractionStatus::Responded),
+        expires_at: Set(chrono::Utc::now().timestamp() + CONTROL_ROW_TTL_SECS),
+        response_value: Set(None),
+        created_at: Set(chrono::Utc::now().naive_utc()),
+    };
+    // A duplicate stop means the tombstone is already there, which is exactly the desired state.
+    if let Err(error) = row.insert(&state.db).await {
+        tracing::debug!(%error, run_id, "[global_chat] cancel row already present");
+    }
+    Ok(Json(json!({ "status": "ok" })))
+}
+
+/// Push a user instruction into a turn that is already generating. It is folded into the
+/// conversation at the run's next round boundary rather than restarting the turn.
+#[utoipa::path(
+    post,
+    path = "/{run_id}/steer",
+    tag = "AI",
+    description = "Send a message into a FlowPilot response that is still generating, without restarting it.",
+    params(("run_id" = String, Path, description = "Run to steer")),
+    responses((status = 200, description = "Message queued for the running turn")),
+)]
+pub async fn global_chat_steer(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(run_id): Path<String>,
+    Json(body): Json<SteerBody>,
+) -> Result<Json<Value>, ApiError> {
+    let sub = user.sub()?;
+    let message = body.message.trim();
+    if message.is_empty() {
+        return Err(ApiError::bad_request("A steering message cannot be empty."));
+    }
+    if message.len() > MAX_PROMPT_CHARS {
+        return Err(ApiError::bad_request(
+            "The steering message is too long for one turn.",
+        ));
+    }
+    assert_run_owner(&state.db, &run_id, &sub).await?;
+
+    // A stopped turn will never drain the queue; refusing lets the UI restore the text instead of
+    // pretending it landed.
+    if GlobalChatToolCall::find_by_id(cancel_row_id(&run_id))
+        .one(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to query run: {e}")))?
+        .is_some()
+    {
+        return Err(ApiError::bad_request("This response has been stopped."));
+    }
+
+    let pending = GlobalChatToolCall::find()
+        .filter(global_chat_tool_call::Column::RunId.eq(run_id.clone()))
+        .filter(global_chat_tool_call::Column::Id.starts_with(STEER_ROW_PREFIX))
+        .count(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to query run: {e}")))?;
+    if pending >= MAX_PENDING_STEER_ROWS {
+        return Err(ApiError::bad_request(
+            "Too many messages are already waiting for this response.",
+        ));
+    }
+
+    global_chat_tool_call::ActiveModel {
+        id: Set(format!("{STEER_ROW_PREFIX}{run_id}:{}", next_request_id())),
+        run_id: Set(run_id),
+        sub: Set(sub),
+        status: Set(InteractionStatus::Pending),
+        expires_at: Set(chrono::Utc::now().timestamp() + CONTROL_ROW_TTL_SECS),
+        response_value: Set(Some(message.to_string())),
+        created_at: Set(chrono::Utc::now().naive_utc()),
+    }
+    .insert(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(format!("Failed to queue steering message: {e}")))?;
 
     Ok(Json(json!({ "status": "ok" })))
 }

@@ -1,5 +1,4 @@
 "use client";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	Badge,
 	Button,
@@ -13,6 +12,7 @@ import {
 	useInvoke,
 } from "@flow-like/flow-like-ui";
 import type { ModuleWithLessons } from "@flow-like/flow-like-ui/lib/learn/types";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowLeft,
 	Award,

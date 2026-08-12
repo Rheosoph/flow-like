@@ -155,6 +155,10 @@ harness = false
 name = "allocator_bench"
 harness = false
 
+[[bench]]
+name = "exec_bench"
+harness = false
+
 [profile.bench]
 opt-level = 3
 lto = "thin"

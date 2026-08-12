@@ -56,17 +56,9 @@ async fn main() -> std::process::ExitCode {
 
     tracing::info!("Starting Flow-Like ECS Compiler Task");
 
-    // Dump all env var names (not values) for debugging the EventBridge Pipe handover
-    let env_names: Vec<String> = std::env::vars().map(|(k, _)| k).collect();
-    tracing::info!(env_vars = ?env_names, "Environment variables present");
-
     let job_json = match std::env::var("COMPILATION_JOB") {
         Ok(v) if !v.is_empty() => {
-            tracing::info!(
-                len = v.len(),
-                preview = %v.char_indices().nth(200).map(|(i, _)| &v[..i]).unwrap_or(&v),
-                "COMPILATION_JOB received"
-            );
+            tracing::info!(len = v.len(), "COMPILATION_JOB received");
             v
         }
         Ok(v) => {
@@ -93,7 +85,6 @@ async fn main() -> std::process::ExitCode {
             tracing::error!(
                 error = %e,
                 raw_len = job_json.len(),
-                raw_preview = %job_json.char_indices().nth(500).map(|(i, _)| &job_json[..i]).unwrap_or(&job_json),
                 "Failed to resolve COMPILATION_JOB"
             );
             tokio::time::sleep(Duration::from_secs(5)).await;
@@ -166,7 +157,7 @@ async fn resolve_compilation_jobs(json: &str) -> Result<Vec<CompilationJob>, Str
     if let Ok(job_ref) = serde_json::from_str::<CompilationJobRef>(json) {
         match job_ref {
             CompilationJobRef::Remote { remote_url } => {
-                tracing::info!(url = %remote_url, "Fetching remote compilation job");
+                tracing::info!("Fetching remote compilation job");
                 let response =
                     tokio::time::timeout(Duration::from_secs(30), reqwest::get(&remote_url))
                         .await

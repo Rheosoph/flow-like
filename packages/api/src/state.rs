@@ -22,7 +22,10 @@ use jsonwebtoken::{
     DecodingKey, Validation, decode,
     jwk::{AlgorithmParameters, JwkSet},
 };
-use sea_orm::{ConnectOptions, Database, DatabaseConnection};
+use sea_orm::{
+    ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection,
+    DatabaseTransaction, IsolationLevel, Statement, TransactionTrait,
+};
 use std::{
     collections::HashMap,
     sync::{Arc, Weak},
@@ -39,7 +42,7 @@ use crate::routes::registry::ServerRegistry;
 
 pub type AppState = Arc<State>;
 
-/// Stable ownership key for retained FlowPilot drafts and applied-review receipts.
+/// Stable ownership key for retained FlowPilot drafts and durable pending/applied review records.
 ///
 /// Board ids are normally globally unique, but the review token is an authority boundary. Include
 /// the authenticated principal and app explicitly so a same-id board in another app (or another
@@ -59,6 +62,121 @@ pub(crate) fn flow_ir_draft_store_key(sub: &str, app_id: &str, board_id: &str) -
 /// collaborators still mutate the same canonical app board and must take the same mutex.
 pub(crate) fn board_mutation_lock_key(app_id: &str, board_id: &str) -> String {
     format!("{}\u{1f}{}", app_id.trim(), board_id.trim())
+}
+
+const ENSURE_MUTATION_LOCK_SQL: &str =
+    r#"INSERT INTO "MutationLock" ("id") VALUES ($1) ON CONFLICT ("id") DO NOTHING"#;
+const ACQUIRE_MUTATION_LOCK_SQL: &str =
+    r#"UPDATE "MutationLock" SET "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = $1"#;
+
+fn scoped_mutation_lock_id(domain: &[u8], parts: &[&str]) -> i64 {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"flow-like.mutation-lock/v1\0");
+    hasher.update(&(domain.len() as u64).to_be_bytes());
+    hasher.update(domain);
+    for part in parts {
+        hasher.update(&(part.len() as u64).to_be_bytes());
+        hasher.update(part.as_bytes());
+    }
+    let digest = hasher.finalize();
+    i64::from_be_bytes(
+        digest.as_bytes()[..8]
+            .try_into()
+            .expect("BLAKE3 digests are at least eight bytes"),
+    )
+}
+
+/// Stable database-lock id for one canonical app board.
+pub(crate) fn board_mutation_lock_id(app_id: &str, board_id: &str) -> i64 {
+    scoped_mutation_lock_id(b"board", &[app_id.trim(), board_id.trim()])
+}
+
+/// Stable database-lock id for one learner's challenge scores.
+///
+/// The aggregate leaderboard total is per learner, so different challenges for the same learner
+/// must share a lane as well as duplicate submissions for one challenge.
+pub(crate) fn course_attempt_lock_id(user_id: &str) -> i64 {
+    scoped_mutation_lock_id(b"course-attempt-user", &[user_id])
+}
+
+async fn ensure_mutation_lock<C: ConnectionTrait>(
+    connection: &C,
+    lock_id: i64,
+) -> std::result::Result<(), sea_orm::DbErr> {
+    connection
+        .execute(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            ENSURE_MUTATION_LOCK_SQL,
+            [lock_id.into()],
+        ))
+        .await?;
+    Ok(())
+}
+
+async fn acquire_mutation_lock<C: ConnectionTrait>(
+    connection: &C,
+    lock_id: i64,
+) -> std::result::Result<(), sea_orm::DbErr> {
+    let result = connection
+        .execute(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            ACQUIRE_MUTATION_LOCK_SQL,
+            [lock_id.into()],
+        ))
+        .await?;
+    if result.rows_affected() != 1 {
+        return Err(sea_orm::DbErr::RecordNotFound(format!(
+            "mutation lock row {lock_id} disappeared before acquisition"
+        )));
+    }
+    Ok(())
+}
+
+/// Holds both serialization layers for a canonical board mutation.
+///
+/// Dropping the transaction releases the database write intent. Call [`Self::release`] when a
+/// normal path wants to commit work performed through [`Self::connection`]; error and early-return
+/// paths can safely rely on drop/rollback.
+pub(crate) struct BoardMutationGuard {
+    _locals: Vec<flow_like_types::tokio::sync::OwnedMutexGuard<()>>,
+    transaction: Option<DatabaseTransaction>,
+}
+
+impl BoardMutationGuard {
+    pub(crate) fn connection(&self) -> &DatabaseTransaction {
+        self.transaction
+            .as_ref()
+            .expect("mutation guard connection is unavailable after release")
+    }
+
+    /// Add another canonical board to this guard without opening a second transaction.
+    ///
+    /// Page mutations first lock the globally unique page id, then add its owning board. Keeping
+    /// both database lock rows on one transaction prevents concurrent cross-board page-id claims
+    /// without consuming two pooled database connections per request.
+    pub(crate) async fn acquire_additional_board(
+        &mut self,
+        state: &State,
+        app_id: &str,
+        board_id: &str,
+    ) -> std::result::Result<(), sea_orm::DbErr> {
+        let local = state
+            .board_mutation_lock(app_id, board_id)
+            .lock_owned()
+            .await;
+        let lock_id = board_mutation_lock_id(app_id, board_id);
+        ensure_mutation_lock(self.connection(), lock_id).await?;
+        acquire_mutation_lock(self.connection(), lock_id).await?;
+        self._locals.push(local);
+        Ok(())
+    }
+
+    pub(crate) async fn release(mut self) -> std::result::Result<(), sea_orm::DbErr> {
+        if let Some(transaction) = self.transaction.take() {
+            transaction.commit().await?;
+        }
+        Ok(())
+    }
 }
 
 const CONFIG: &str = include_str!("../../../flow-like.config.json");
@@ -124,9 +242,8 @@ pub struct State {
     /// Each store is internally bounded; the outer TTL/cap keeps abandoned board sessions finite.
     pub flow_ir_draft_stores:
         moka::sync::Cache<String, Arc<flow_like::flow::copilot::FlowIrDraftStore>>,
-    /// Serialize all canonical writers for one app+board within this API process. The registry is
-    /// process-local; multi-replica deployments still need a shared durable lock/CAS before a
-    /// retained review can be fully atomic across instances.
+    /// Process-local half of canonical app+board serialization. `board_mutation_guard` pairs each
+    /// mutex with a database lock row so API replicas enter the same mutation lane.
     board_mutation_locks:
         parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
     pub content_bucket: Arc<FlowLikeStore>,
@@ -142,12 +259,23 @@ pub struct State {
     pub wasm_registry: Option<Arc<ServerRegistry>>,
     /// Sink scheduler for cron events (AWS EventBridge, K8s CronJobs, or in-memory)
     pub sink_scheduler: Option<Arc<dyn flow_like_sinks::SchedulerBackend>>,
+    /// Key/value cache backend used by flows (`CACHE_BACKEND`).
+    ///
+    /// Built once at startup rather than per request: cache reads are far more frequent
+    /// than execution-state reads, and rebuilding a Redis connection on every call would
+    /// dominate the latency the cache exists to avoid.
+    pub cache_store: Option<Arc<dyn crate::cache::CacheStore>>,
     /// Secret store for accessing secrets from various providers (env, AWS Parameter Store, etc.)
     pub secrets: Arc<SecretStore>,
     /// Encryption key for token encryption (derived from SINK_TOKEN_ENCRYPTION_KEY)
     pub encryption_key: [u8; 32],
     /// HMAC secret for signing/verifying sink trigger JWTs
     pub sink_secret: Option<String>,
+    /// Dedicated bearer token accepted only by the internal maintenance API.
+    ///
+    /// This is intentionally separate from user auth, sink auth, and
+    /// `BACKEND_KEY`, so a maintenance runner cannot mint broader credentials.
+    pub maintenance_token: Option<String>,
     /// Idempotency cache for sink trigger requests. Keyed by the
     /// `Idempotency-Key` header; callers (Lambda, cron worker) use the
     /// invocation-unique key to collapse automatic retries into a single run.
@@ -164,7 +292,7 @@ pub struct State {
 }
 
 impl State {
-    pub(crate) fn board_mutation_lock(
+    fn board_mutation_lock(
         &self,
         app_id: &str,
         board_id: &str,
@@ -182,6 +310,50 @@ impl State {
         let lock = Arc::new(flow_like_types::tokio::sync::Mutex::new(()));
         locks.insert(key, Arc::downgrade(&lock));
         lock
+    }
+
+    /// Open a transaction and acquire one durable, database-backed mutation lock.
+    ///
+    /// The lock row is created outside the transaction so rollback-only board mutations do not
+    /// remove it. `READ COMMITTED` gives CockroachDB durable locking reads/write intents and avoids
+    /// its retry-prone default `SERIALIZABLE` behavior for this mutex-only transaction; it also
+    /// matches PostgreSQL's default isolation.
+    pub(crate) async fn mutation_transaction(
+        &self,
+        lock_id: i64,
+    ) -> std::result::Result<DatabaseTransaction, sea_orm::DbErr> {
+        ensure_mutation_lock(&self.db, lock_id).await?;
+        let transaction = self
+            .db
+            .begin_with_config(Some(IsolationLevel::ReadCommitted), None)
+            .await?;
+        acquire_mutation_lock(&transaction, lock_id).await?;
+        Ok(transaction)
+    }
+
+    /// Serialize one board writer both within this process and across API replicas.
+    ///
+    /// The local mutex is acquired first to avoid spending a database connection on same-process
+    /// waiters. The database transaction remains open solely to retain its lock-row write intent
+    /// for the guard's lifetime; canonical board bytes continue to be read and written through
+    /// storage.
+    pub(crate) async fn board_mutation_guard(
+        &self,
+        app_id: &str,
+        board_id: &str,
+    ) -> std::result::Result<BoardMutationGuard, sea_orm::DbErr> {
+        let local = self
+            .board_mutation_lock(app_id, board_id)
+            .lock_owned()
+            .await;
+        let transaction = self
+            .mutation_transaction(board_mutation_lock_id(app_id, board_id))
+            .await?;
+
+        Ok(BoardMutationGuard {
+            _locals: vec![local],
+            transaction: Some(transaction),
+        })
     }
 
     pub async fn new(
@@ -211,6 +383,29 @@ impl State {
         if sink_secret.is_none() {
             tracing::warn!(
                 "SINK_SECRET not configured — sink trigger endpoints will be unavailable"
+            );
+        }
+
+        let maintenance_token = secrets
+            .get_secret_string(&SecretRef::new("MAINTENANCE_TOKEN"))
+            .await
+            .ok()
+            .map(|secret| secret.expose_secret().trim().to_string())
+            .filter(|token| !token.is_empty())
+            .and_then(|token| {
+                if token.len() < 32 {
+                    tracing::error!(
+                        "MAINTENANCE_TOKEN must contain at least 32 bytes — maintenance endpoint disabled"
+                    );
+                    None
+                } else {
+                    Some(token)
+                }
+            });
+
+        if maintenance_token.is_none() {
+            tracing::warn!(
+                "MAINTENANCE_TOKEN not configured — scheduled maintenance endpoint will be unavailable"
             );
         }
 
@@ -446,6 +641,25 @@ impl State {
             }
         };
 
+        // A cache the flows cannot reach is better surfaced as an explicit 503 from the
+        // cache endpoints than as a failed boot for every other feature.
+        let cache_store = {
+            let config = crate::cache::CacheStoreConfig::default().with_db(Arc::new(db.clone()));
+            match crate::cache::create_cache_store(config).await {
+                Ok(store) => {
+                    tracing::info!(backend = store.backend_name(), "Initialized cache backend");
+                    Some(store)
+                }
+                Err(error) => {
+                    tracing::error!(
+                        error = %error,
+                        "Failed to initialize the cache backend; cache endpoints will return 503"
+                    );
+                    None
+                }
+            }
+        };
+
         Self {
             platform_config,
             db,
@@ -490,9 +704,11 @@ impl State {
                 .build(),
             wasm_registry,
             sink_scheduler,
+            cache_store,
             secrets,
             encryption_key,
             sink_secret,
+            maintenance_token,
             trigger_idempotency: moka::sync::Cache::builder()
                 .max_capacity(10_000)
                 .time_to_live(Duration::from_secs(15 * 60))
@@ -572,7 +788,7 @@ impl State {
 
     #[tracing::instrument(
         name = "master_app",
-        skip(self, state),
+        skip(self, state, _sub),
         fields(sub, app_id, board_id, version)
     )]
     pub async fn master_app(
@@ -623,7 +839,7 @@ impl State {
 
     #[tracing::instrument(
         name = "master_board",
-        skip(self, state),
+        skip(self, state, _sub),
         level = "debug",
         fields(sub, app_id, board_id, version)
     )]
@@ -650,6 +866,39 @@ impl State {
 
         let storage_root = Path::from("apps").child(app_id.to_string());
         let board = Board::load(storage_root, board_id, app_state, version).await?;
+
+        Ok(board)
+    }
+
+    /// Load a template on master credentials, for callers that were authorized
+    /// by something other than app membership — e.g. the public template
+    /// preview, which is gated on the owning app's visibility.
+    #[tracing::instrument(
+        name = "master_template",
+        skip(self, state),
+        level = "debug",
+        fields(app_id, template_id, version)
+    )]
+    pub async fn master_template(
+        &self,
+        app_id: &str,
+        template_id: &str,
+        state: &AppState,
+        version: Option<(u32, u32, u32)>,
+    ) -> flow_like_types::Result<Board> {
+        let credentials = self.master_credentials().await?;
+
+        let app_state = match self.state_cache.get("master") {
+            Some(state) => state,
+            None => {
+                let state = Arc::new(credentials.to_state(state.clone()).await?);
+                self.state_cache.insert("master".to_string(), state.clone());
+                state
+            }
+        };
+
+        let storage_root = Path::from("apps").child(app_id.to_string());
+        let board = Board::load_template(storage_root, template_id, app_state, version).await?;
 
         Ok(board)
     }
@@ -798,7 +1047,10 @@ fn decoding_key_for_algorithm(alg: &AlgorithmParameters) -> flow_like_types::Res
 
 #[cfg(test)]
 mod tests {
-    use super::{board_mutation_lock_key, flow_ir_draft_store_key};
+    use super::{
+        ACQUIRE_MUTATION_LOCK_SQL, ENSURE_MUTATION_LOCK_SQL, board_mutation_lock_id,
+        board_mutation_lock_key, course_attempt_lock_id, flow_ir_draft_store_key,
+    };
 
     #[test]
     fn retained_flow_ir_key_is_scoped_by_user_app_and_board() {
@@ -823,5 +1075,38 @@ mod tests {
             board_mutation_lock_key("app", "board"),
             board_mutation_lock_key("app", "other")
         );
+
+        assert_eq!(
+            board_mutation_lock_id("app", "board"),
+            board_mutation_lock_id(" app ", " board ")
+        );
+        assert_ne!(
+            board_mutation_lock_id("app", "board"),
+            board_mutation_lock_id("other", "board")
+        );
+        assert_ne!(
+            board_mutation_lock_id("app", "board"),
+            board_mutation_lock_id("app", "other")
+        );
+    }
+
+    #[test]
+    fn mutation_lock_namespaces_do_not_overlap() {
+        assert_ne!(
+            board_mutation_lock_id("user", "challenge"),
+            course_attempt_lock_id("user")
+        );
+        assert_ne!(
+            course_attempt_lock_id("user"),
+            course_attempt_lock_id("other")
+        );
+    }
+
+    #[test]
+    fn mutation_lock_sql_uses_portable_row_writes() {
+        assert!(ENSURE_MUTATION_LOCK_SQL.contains("ON CONFLICT"));
+        assert!(ACQUIRE_MUTATION_LOCK_SQL.starts_with("UPDATE"));
+        assert!(!ENSURE_MUTATION_LOCK_SQL.contains("pg_advisory"));
+        assert!(!ACQUIRE_MUTATION_LOCK_SQL.contains("pg_advisory"));
     }
 }

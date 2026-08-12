@@ -43,6 +43,14 @@ export interface ICreateTableResult {
 	if_not_exists: boolean;
 }
 
+export interface IDropTableResult {
+	table_name: string;
+	dropped: boolean;
+	ontologies: string[];
+	saved_queries: string[];
+	warnings: string[];
+}
+
 export interface IDatabaseState {
 	createTable(
 		appId: string,
@@ -141,4 +149,9 @@ export interface IDatabaseState {
 		nullable: boolean,
 		userScoped?: boolean,
 	): Promise<void>;
+	dropTable(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+	): Promise<IDropTableResult>;
 }

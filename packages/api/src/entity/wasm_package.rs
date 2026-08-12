@@ -58,6 +58,12 @@ pub struct Model {
     pub rating_count: i64,
     #[sea_orm(column_name = "ratingSum")]
     pub rating_sum: i64,
+    #[sea_orm(column_name = "widgetBundleHash", column_type = "Text", nullable)]
+    pub widget_bundle_hash: Option<String>,
+    #[sea_orm(column_name = "widgetBundleSize")]
+    pub widget_bundle_size: Option<i64>,
+    #[sea_orm(column_type = "JsonBinary")]
+    pub widgets: Json,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

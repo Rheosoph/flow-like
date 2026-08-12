@@ -4,9 +4,16 @@ import Layout from "../layouts/Layout.astro";
 ---
 
 <Layout>
-    <div class="flex flex-col items-center justify-center h-screen">
+    <div class="flex flex-col items-center justify-center h-screen gap-4 px-6 text-center">
         <h1>Redirecting...</h1>
-        <p class="mt-2 text-sm text-gray-500">If nothing happens, <a id="deeplink" class="underline" href="#">click here</a>.</p>
+        <p id="hint" class="text-sm text-gray-500">Returning you to Flow-Like.</p>
+        <a
+            id="deeplink"
+            class="inline-flex items-center justify-center rounded-md bg-primary px-6 py-3 font-medium text-primary-foreground transition-opacity hover:opacity-90"
+            href="#"
+        >
+            Open Flow-Like
+        </a>
     </div>
     <script>
         (function () {
@@ -24,34 +31,37 @@ import Layout from "../layouts/Layout.astro";
                 var qs = search.toString();
 
                 var universalLink = "https://app.flow-like.com/callback" + (qs ? "?" + qs : "");
-                var legacyDeepLink = "flow-like://auth" + (qs ? "?" + qs : "");
-                var primaryTarget = isIOS ? universalLink : legacyDeepLink;
-                var fallbackTarget = isIOS ? legacyDeepLink : null;
+                var schemeLink = "flow-like://auth" + (qs ? "?" + qs : "");
+
+                // iOS does not hand a script-initiated navigation to the Universal Link handler —
+                // Safari just loads app.flow-like.com, where the OIDC state does not exist. The
+                // custom scheme is the only target either OS honours without a user gesture.
+                var automaticTarget = schemeLink;
+                // A tap is honoured everywhere, and on iOS the Universal Link skips the
+                // "Open in Flow-Like?" confirmation that the custom scheme triggers.
+                var manualTarget = isIOS ? universalLink : schemeLink;
 
                 var link = document.getElementById("deeplink");
-                if (link) link.setAttribute("href", primaryTarget);
+                if (link) link.setAttribute("href", manualTarget);
 
                 var leftPage = false;
-                var markLeftPage = function () { leftPage = true; };
-                window.addEventListener("pagehide", markLeftPage, { once: true });
+                window.addEventListener("pagehide", function () { leftPage = true; }, { once: true });
                 document.addEventListener("visibilitychange", function () {
                     if (document.visibilityState === "hidden") {
                         leftPage = true;
                     }
                 });
 
-                window.location.replace(primaryTarget);
+                window.location.replace(automaticTarget);
 
-                // iOS native path first; keep legacy scheme fallback for older app versions.
-                if (fallbackTarget) {
-                    window.setTimeout(function () {
-                        var fallback = fallbackTarget;
-                        if (!fallback) return;
-                        if (leftPage || document.visibilityState === "hidden") return;
-                        if (link) link.setAttribute("href", fallback);
-                        window.location.replace(fallback);
-                    }, 1200);
-                }
+                // Chrome on Android blocks custom-scheme launches that no user gesture initiated,
+                // so the button is the real path there. Say so rather than leaving the user on a
+                // page that claims to be redirecting.
+                window.setTimeout(function () {
+                    if (leftPage || document.visibilityState === "hidden") return;
+                    var hint = document.getElementById("hint");
+                    if (hint) hint.textContent = "Tap the button below to finish signing in.";
+                }, 1200);
             } catch (_) { /* noop */ }
         })();
     </script>

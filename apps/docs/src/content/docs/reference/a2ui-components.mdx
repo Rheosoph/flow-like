@@ -1,620 +1,334 @@
 ---
 title: A2UI Component Reference
-description: Complete reference for all A2UI components available in Flow-Like
+description: Current component catalog and JSON contract for Flow-Like A2UI surfaces
 ---
 
-import { Tabs, TabItem, Card, CardGrid, Aside } from '@astrojs/starlight/components';
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
-# A2UI Component Reference
+Flow-Like A2UI surfaces are normalized component trees. Each component has a
+stable ID, a lower-camel-case `type`, typed properties, optional styles, and
+references to its children. This is the same contract used by the visual
+builders, FlowPilot, Pages, and Widgets.
 
-A2UI (Agent-to-UI) is Flow-Like's protocol for agent-driven interfaces. It enables AI agents to generate rich, interactive UIs that render natively across platforms.
+![A Page being edited with the current visual A2UI builder](../../../assets/PageBuilder.webp)
 
-## Overview
+<Aside type="caution" title="Use the current contract">
+  Component types are lower camel case (`textField`, not `TextField`), properties
+  live directly inside `component`, and children reference component IDs. The old
+  `{ "type": "Button", "props": { ... } }` shape is not the runtime contract.
+</Aside>
 
-A2UI components are organized into categories:
+## Surface shape
 
-- **Layout** - Structure and arrangement of content
-- **Display** - Visual content presentation
-- **Interactive** - User input and actions
-- **Container** - Grouping and organization
-- **Game/Visual** - Advanced graphics and game elements
-
----
-
-## Layout Components
-
-### Row
-
-Arranges children horizontally in a flex row.
+A generated or imported surface uses one root ID and a flat component array:
 
 ```json
 {
-  "type": "Row",
-  "props": {
-    "gap": "4",
-    "justify": "between",
-    "align": "center",
-    "wrap": true
+  "rootComponentId": "root",
+  "canvasSettings": {
+    "padding": "24px"
   },
-  "children": [...]
-}
-```
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `gap` | string | `"0"` | Space between children (Tailwind spacing) |
-| `justify` | string | `"start"` | Justify content: `start`, `end`, `center`, `between`, `around`, `evenly` |
-| `align` | string | `"stretch"` | Align items: `start`, `end`, `center`, `stretch`, `baseline` |
-| `wrap` | boolean | `false` | Whether children should wrap to next line |
-
-### Column
-
-Arranges children vertically in a flex column.
-
-```json
-{
-  "type": "Column",
-  "props": {
-    "gap": "4",
-    "align": "center"
-  },
-  "children": [...]
-}
-```
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `gap` | string | `"0"` | Space between children |
-| `justify` | string | `"start"` | Justify content |
-| `align` | string | `"stretch"` | Align items |
-
-### Grid
-
-CSS Grid layout with configurable columns.
-
-```json
-{
-  "type": "Grid",
-  "props": {
-    "cols": 3,
-    "gap": "4",
-    "responsive": {
-      "sm": { "cols": 1 },
-      "md": { "cols": 2 },
-      "lg": { "cols": 3 }
-    }
-  },
-  "children": [...]
-}
-```
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `cols` | number | `1` | Number of columns |
-| `rows` | number | - | Number of rows (auto if not set) |
-| `gap` | string | `"0"` | Gap between grid items |
-| `responsive` | object | - | Breakpoint-specific overrides |
-
-### Stack
-
-Overlays children on top of each other (z-axis stacking).
-
-```json
-{
-  "type": "Stack",
-  "props": {
-    "align": "center"
-  },
-  "children": [...]
-}
-```
-
-### List
-
-Renders a dynamic list from a data template.
-
-```json
-{
-  "type": "List",
-  "props": {
-    "data": { "path": "/items" },
-    "keyField": "id",
-    "direction": "vertical"
-  },
-  "template": {
-    "type": "Card",
-    "props": {
-      "title": { "path": "/items/$index/name" }
-    }
-  }
-}
-```
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `data` | BoundValue | Path to array data |
-| `keyField` | string | Unique key field for each item |
-| `template` | Component | Template to render for each item |
-| `direction` | string | `vertical` or `horizontal` |
-
----
-
-## Display Components
-
-### Text
-
-Displays text content with typography options.
-
-```json
-{
-  "type": "Text",
-  "props": {
-    "content": "Hello, World!",
-    "variant": "h1",
-    "color": "primary"
-  }
-}
-```
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `content` | BoundValue | - | Text content (required) |
-| `variant` | string | `"body"` | Typography variant: `h1`-`h6`, `body`, `caption`, `label` |
-| `color` | string | - | Text color |
-| `align` | string | `"left"` | Text alignment |
-| `truncate` | boolean | `false` | Truncate with ellipsis |
-| `maxLines` | number | - | Maximum lines before truncation |
-
-### Image
-
-Displays an image with optional loading states.
-
-```json
-{
-  "type": "Image",
-  "props": {
-    "src": { "path": "/user/avatar" },
-    "alt": "User avatar",
-    "fit": "cover",
-    "aspectRatio": "1/1"
-  }
-}
-```
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `src` | BoundValue | Image URL |
-| `alt` | string | Alt text for accessibility |
-| `fit` | string | Object fit: `cover`, `contain`, `fill`, `none` |
-| `aspectRatio` | string | Aspect ratio (e.g., `"16/9"`, `"1/1"`) |
-| `fallback` | string | Fallback image URL |
-
-### Icon
-
-Displays an icon from the icon library.
-
-```json
-{
-  "type": "Icon",
-  "props": {
-    "name": "check",
-    "size": "24",
-    "color": "green"
-  }
-}
-```
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `name` | string | - | Icon name (required) |
-| `size` | string | `"16"` | Icon size in pixels |
-| `color` | string | - | Icon color |
-
-### Markdown
-
-Renders Markdown content.
-
-```json
-{
-  "type": "Markdown",
-  "props": {
-    "content": "# Hello\n\nThis is **bold** text."
-  }
-}
-```
-
-### Divider
-
-A visual separator line.
-
-```json
-{
-  "type": "Divider",
-  "props": {
-    "orientation": "horizontal",
-    "variant": "solid"
-  }
-}
-```
-
----
-
-## Interactive Components
-
-### Button
-
-Clickable button with various styles.
-
-```json
-{
-  "type": "Button",
-  "props": {
-    "label": "Click me",
-    "variant": "primary",
-    "size": "md",
-    "disabled": false
-  },
-  "actions": {
-    "onClick": {
-      "type": "submit",
-      "payload": { "action": "save" }
-    }
-  }
-}
-```
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `label` | BoundValue | - | Button text |
-| `variant` | string | `"default"` | Style variant: `default`, `primary`, `secondary`, `outline`, `ghost`, `destructive` |
-| `size` | string | `"md"` | Size: `sm`, `md`, `lg` |
-| `disabled` | BoundValue | `false` | Disabled state |
-| `loading` | BoundValue | `false` | Loading state |
-| `icon` | string | - | Icon name |
-| `iconPosition` | string | `"left"` | Icon position: `left`, `right` |
-
-### TextField
-
-Text input field with validation.
-
-```json
-{
-  "type": "TextField",
-  "props": {
-    "value": { "path": "/form/email" },
-    "placeholder": "Enter email",
-    "type": "email",
-    "required": true
-  },
-  "actions": {
-    "onChange": {
-      "type": "updateData",
-      "path": "/form/email"
-    }
-  }
-}
-```
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `value` | BoundValue | Current value |
-| `placeholder` | string | Placeholder text |
-| `type` | string | Input type: `text`, `email`, `password`, `number`, `tel`, `url` |
-| `required` | boolean | Required validation |
-| `minLength` | number | Minimum character length |
-| `maxLength` | number | Maximum character length |
-| `pattern` | string | Regex pattern for validation |
-| `disabled` | BoundValue | Disabled state |
-
-### Checkbox
-
-Checkbox input with label.
-
-```json
-{
-  "type": "Checkbox",
-  "props": {
-    "checked": { "path": "/form/agree" },
-    "label": "I agree to the terms"
-  }
-}
-```
-
-### Switch
-
-Toggle switch control.
-
-```json
-{
-  "type": "Switch",
-  "props": {
-    "checked": { "path": "/settings/notifications" },
-    "label": "Enable notifications"
-  }
-}
-```
-
-### Slider
-
-Range slider input.
-
-```json
-{
-  "type": "Slider",
-  "props": {
-    "value": { "path": "/settings/volume" },
-    "min": 0,
-    "max": 100,
-    "step": 1
-  }
-}
-```
-
-### Select
-
-Dropdown selection.
-
-```json
-{
-  "type": "Select",
-  "props": {
-    "value": { "path": "/form/country" },
-    "options": [
-      { "value": "us", "label": "United States" },
-      { "value": "uk", "label": "United Kingdom" }
-    ],
-    "placeholder": "Select a country"
-  }
-}
-```
-
-### RadioGroup
-
-Radio button group.
-
-```json
-{
-  "type": "RadioGroup",
-  "props": {
-    "value": { "path": "/form/plan" },
-    "options": [
-      { "value": "free", "label": "Free", "description": "Basic features" },
-      { "value": "pro", "label": "Pro", "description": "All features" }
-    ]
-  }
-}
-```
-
-### DateTimeInput
-
-Date and time picker.
-
-```json
-{
-  "type": "DateTimeInput",
-  "props": {
-    "value": { "path": "/form/date" },
-    "mode": "datetime",
-    "minDate": "2024-01-01",
-    "maxDate": "2025-12-31"
-  }
-}
-```
-
----
-
-## Container Components
-
-### Card
-
-A bordered container with optional header and footer.
-
-```json
-{
-  "type": "Card",
-  "props": {
-    "title": "Card Title",
-    "description": "Card description",
-    "variant": "elevated"
-  },
-  "children": [...]
-}
-```
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `title` | BoundValue | Card title |
-| `description` | BoundValue | Card description |
-| `variant` | string | Style: `default`, `elevated`, `outlined` |
-| `clickable` | boolean | Whether card is clickable |
-
-### Modal
-
-Dialog overlay.
-
-```json
-{
-  "type": "Modal",
-  "props": {
-    "open": { "path": "/ui/modalOpen" },
-    "title": "Confirm Action",
-    "size": "md"
-  },
-  "children": [...]
-}
-```
-
-### Tabs
-
-Tabbed content container.
-
-```json
-{
-  "type": "Tabs",
-  "props": {
-    "activeTab": { "path": "/ui/activeTab" },
-    "tabs": [
-      { "id": "overview", "label": "Overview" },
-      { "id": "settings", "label": "Settings" }
-    ]
-  },
-  "children": {
-    "overview": [...],
-    "settings": [...]
-  }
-}
-```
-
-### Accordion
-
-Collapsible content sections.
-
-```json
-{
-  "type": "Accordion",
-  "props": {
-    "type": "single",
-    "collapsible": true
-  },
-  "items": [
+  "components": [
     {
-      "id": "faq1",
-      "title": "What is A2UI?",
-      "content": { "type": "Text", "props": { "content": "..." } }
+      "id": "root",
+      "style": {
+        "className": "min-h-full bg-background text-foreground"
+      },
+      "component": {
+        "type": "column",
+        "gap": { "literalString": "16px" },
+        "children": {
+          "explicitList": ["title", "open-dashboard"]
+        }
+      }
+    },
+    {
+      "id": "title",
+      "component": {
+        "type": "text",
+        "content": { "literalString": "Operations dashboard" },
+        "variant": { "literalString": "heading" },
+        "size": { "literalString": "2xl" },
+        "weight": { "literalString": "bold" }
+      }
+    },
+    {
+      "id": "open-dashboard",
+      "component": {
+        "type": "button",
+        "label": { "literalString": "Open dashboard" },
+        "variant": { "literalString": "default" },
+        "actions": [
+          {
+            "name": "navigate_page",
+            "context": { "route": "/dashboard" }
+          }
+        ]
+      }
+    }
+  ],
+  "dataModel": []
+}
+```
+
+The visual builders maintain this structure for you. Use the JSON contract
+directly when generating a complete surface with FlowPilot or another coding
+agent.
+
+## Shared value types
+
+Most visible component properties use `BoundValue`, even when their value is
+currently static.
+
+| Value | JSON shape |
+| --- | --- |
+| String | `{ "literalString": "Hello" }` |
+| Number | `{ "literalNumber": 42 }` |
+| Boolean | `{ "literalBool": true }` |
+| Select options | `{ "literalOptions": [{ "value": "open", "label": "Open" }] }` |
+| Arbitrary JSON | `{ "literalJson": "{\"key\":\"value\"}" }` |
+| Data binding | `{ "path": "$.data.customer.name", "defaultValue": "Customer" }` |
+
+Do not substitute raw strings or numbers where a component property expects a
+`BoundValue`.
+
+### Children
+
+Use an explicit list for a known component tree:
+
+```json
+{
+  "children": {
+    "explicitList": ["heading", "description", "actions"]
+  }
+}
+```
+
+Template children are available for data-driven repetition:
+
+```json
+{
+  "children": {
+    "template": {
+      "dataPath": "$.data.items",
+      "itemIdPath": "$.id",
+      "templateComponentId": "item-template"
+    }
+  }
+}
+```
+
+For a reusable card, row, or repeated interaction pattern, prefer a
+`widgetInstance`. A Widget owns its own component tree, exposed properties,
+and named actions.
+
+### Actions
+
+Actions are an array inside the interactive component:
+
+```json
+{
+  "type": "button",
+  "label": { "literalString": "Approve" },
+  "actions": [
+    {
+      "name": "workflow_event",
+      "context": {
+        "nodeId": "board-event-node-id"
+      }
     }
   ]
 }
 ```
 
-### ScrollArea
+Use one board Event for each distinct purpose. Page actions use the fixed
+`workflow_event` name and identify the selected Event with `context.nodeId`.
+The Event handler reads live input state with nodes such as **Get Element
+Value** or **Get File Input Files**; typed values should not be copied into the
+action context.
 
-Scrollable container with custom scrollbars.
+The current action contracts are:
 
-```json
-{
-  "type": "ScrollArea",
-  "props": {
-    "maxHeight": "400px",
-    "orientation": "vertical"
-  },
-  "children": [...]
-}
-```
+| Action | Context |
+| --- | --- |
+| `workflow_event` | `nodeId`; the builder also includes the owning `appId` and `boardId` |
+| `widget_event` | `actionId`; resolved through the Widget instance's action binding |
+| `navigate_page` | `route` plus optional `queryParams` |
+| `external_link` | `url` |
 
----
+For Widgets, declare the action ID in the Widget definition and bind that ID
+when the Widget is instantiated. There are no `onClick`, `onChange`,
+`updateData`, `openModal`, or `closeModal` action objects in the current
+component contract. A host may receive an otherwise unknown action name as a
+generic `userAction`, but that fallback does not execute a workflow by itself.
+
+## Component catalog
+
+The current runtime contains 71 component types.
+
+### Layout
+
+| Type | Purpose | Common properties |
+| --- | --- | --- |
+| `row` | Horizontal flex layout | `gap`, `align`, `justify`, `wrap`, `reverse`, `children` |
+| `column` | Vertical flex layout | `gap`, `align`, `justify`, `wrap`, `reverse`, `children` |
+| `stack` | Layer children on the z-axis | `align`, `width`, `height`, `children` |
+| `grid` | CSS grid layout | `columns`, `rows`, `gap`, `columnGap`, `rowGap`, `autoFlow`, `children` |
+| `scrollArea` | Scrollable content region | `direction`, `children` |
+| `aspectRatio` | Preserve a content ratio | `ratio`, `children` |
+| `overlay` | Anchor components over a base component | `baseComponentId`, `overlays` |
+| `absolute` | Free-positioned canvas | `width`, `height`, `children` |
+| `box` | Generic semantic container | `as`, `children` |
+| `center` | Center one or more children | `inline`, `children` |
+| `spacer` | Fixed or flexible space | `size`, `flex` |
+| `widgetInstance` | Instance of a reusable Widget definition | `widgetId`, `instanceId`, `inlineWidgetDef`, `exposedPropValues` |
+
+### Display and data
+
+| Type | Purpose | Common properties |
+| --- | --- | --- |
+| `text` | Plain typography | `content`, `variant`, `size`, `weight`, `color`, `align`, `truncate`, `maxLines` |
+| `image` | Image with loading and fallback behavior | `src`, `alt`, `fit`, `fallback`, `loading`, `aspectRatio` |
+| `icon` | Lucide icon | `name`, `size`, `color`, `strokeWidth` |
+| `video` | Video player | `src`, `poster`, `autoplay`, `loop`, `muted`, `controls` |
+| `lottie` | Lottie animation | `src`, `autoplay`, `loop`, `speed`, `width`, `height` |
+| `markdown` | Rendered Markdown content | `content`, `allowHtml` |
+| `divider` | Horizontal or vertical separator | `orientation`, `thickness`, `color` |
+| `badge` | Compact status or category label | `content`, `variant`, `color` |
+| `avatar` | Avatar image with fallback | `src`, `fallback`, `size` |
+| `userProfile` | User lookup and profile presentation | `value`, `variant`, `avatarSize`, visibility flags |
+| `progress` | Progress indicator | `value`, `max`, `showLabel`, `variant`, `color` |
+| `spinner` | Indeterminate loading state | `size`, `color` |
+| `skeleton` | Loading placeholder | `width`, `height`, `rounded` |
+| `table` | Data table | `columns`, `data`, sorting, search, pagination, and selection flags |
+| `tableRow` | Explicit table row | `cells`, `selected`, `disabled` |
+| `tableCell` | Explicit table cell | `content`, `isHeader`, spans, `align` |
+| `filePreview` | Preview a PDF, image, media, code, or text file | `src`, `filename`, `mimeType`, `fileType`, `showControls` |
+| `diffView` | Compare text, code, Markdown, JSON, or documents | `original`, `modified`, `mode`, `kind`, `language` |
+| `boundingBoxOverlay` | Display boxes over an image | image source, boxes, labels, and display options |
+
+### Interactive
+
+| Type | Purpose | Common properties |
+| --- | --- | --- |
+| `button` | Primary user action | `label`, `variant`, `size`, `disabled`, `loading`, `icon`, `actions` |
+| `feedback` | Positive/negative, rating, and comment feedback | `mode`, labels, ratings, comment settings, context flags |
+| `appLink` | Link to an app surface | `target`, `label`, `appId`, `eventId`, `variant`, `disabled` |
+| `textField` | Single- or multi-line text input | `value`, `placeholder`, `label`, `inputType`, `multiline`, `required` |
+| `select` | Single or multiple selection | `value`, `options`, `placeholder`, `multiple`, `searchable` |
+| `slider` | Numeric range input | `value`, `min`, `max`, `step`, `showValue`, `label` |
+| `checkbox` | Boolean or indeterminate input | `checked`, `label`, `disabled`, `indeterminate` |
+| `switch` | Boolean switch | `checked`, `label`, `disabled` |
+| `radioGroup` | Single selection from visible options | `value`, `options`, `orientation`, `label` |
+| `dateTimeInput` | Date, time, or combined input | `value`, `mode`, `min`, `max`, `label` |
+| `fileInput` | File upload | `value`, `accept`, `multiple`, `maxSize`, `maxFiles`, `error` |
+| `imageInput` | Image upload with preview | file-input properties plus `aspectRatio` and `showPreview` |
+| `voiceInput` | Record audio or speech-to-text input | `value`, `variant`, `size`, `mode`, `invoke`, `resultMode` |
+| `link` | Internal route or external link | `href`, `label`, `route`, `queryParams`, `target`, `variant` |
+| `imageLabeler` | Draw and edit labeled image regions | image, labels, boxes, and editing options |
+| `imageHotspot` | Interactive image hotspots | image, hotspots, selection, and action options |
+
+### Containers
+
+| Type | Purpose | Common properties |
+| --- | --- | --- |
+| `card` | Framed content group | `title`, `description`, `footer`, `variant`, `padding`, `children` |
+| `modal` | Modal dialog | `open`, `title`, `description`, close behavior, `size`, `children` |
+| `tabs` | Tabbed content | `value`, `tabs`, `orientation`, `variant`, tab styles |
+| `accordion` | Collapsible sections | `items`, selection and collapse behavior |
+| `drawer` | Edge-mounted panel | `open`, `side`, `title`, close behavior, `children` |
+| `tooltip` | Hover or focus explanation | content, side, delay, and trigger component |
+| `popover` | Anchored interactive panel | open state, placement, trigger, and content component |
+
+### Charts, maps, planning, and embeds
+
+| Type | Purpose |
+| --- | --- |
+| `plotlyChart` | Plotly series, axes, layout, and advanced raw configuration |
+| `nivoChart` | Nivo chart types including bar, line, pie, radar, heatmap, Sankey, and more |
+| `geoMap` | Geographic map with markers and view settings |
+| `graph` | Node and edge network graph with legend, search, and inspectors |
+| `ontologyGraph` | Live explorer for one of the project's ontologies |
+| `calendar` | Month, week, day, or agenda planning view |
+| `gantt` | Interactive task timeline with dependencies |
+| `iframe` | Sandboxed external URL or `srcdoc` embed |
+
+When workflow data drives a chart or table, use **Push Data to Chart**, **Push
+CSV to Table**, or **Update Table**. Literal `data` properties are best kept
+for static design-time content.
+
+### Games and interactive media
+
+| Type | Purpose |
+| --- | --- |
+| `canvas2d` | Root 2D canvas |
+| `sprite` | Positioned 2D image sprite |
+| `shape` | Rectangle, circle, polygon, line, or other 2D shape |
+| `scene3d` | Root 3D scene |
+| `model3d` | GLB or GLTF model |
+| `dialogue` | Visual-novel-style dialogue |
+| `characterPortrait` | Character image and expression |
+| `choiceMenu` | Player decision menu |
+| `inventoryGrid` | Inventory slots and items |
+| `healthBar` | Health or resource meter |
+| `miniMap` | Compact map with markers |
 
 ## Styling
 
-All components accept a `style` property for customization:
+`style` belongs beside `component` in each component record:
 
 ```json
 {
-  "type": "Card",
+  "id": "summary-card",
   "style": {
-    "className": "p-6 bg-blue-50 dark:bg-blue-950 rounded-xl shadow-lg hover:shadow-xl transition-shadow"
-  }
-}
-```
-
-<Aside type="tip">
-Use Tailwind CSS classes in `className` for most styling needs. The style system supports dark mode (`dark:`) and responsive breakpoints (`sm:`, `md:`, `lg:`, `xl:`).
-</Aside>
-
-### Responsive Overrides
-
-For complex responsive layouts:
-
-```json
-{
-  "style": {
-    "className": "p-4 md:p-6 lg:p-8",
-    "responsive": {
-      "sm": { "hidden": true },
-      "md": { "display": "flex", "flexDirection": "row" }
+    "className": "rounded-xl border border-border bg-card p-6 text-card-foreground",
+    "shadow": {
+      "x": "0",
+      "y": "8px",
+      "blur": "24px",
+      "color": "rgb(0 0 0 / 0.12)"
     }
+  },
+  "component": {
+    "type": "card",
+    "title": { "literalString": "Summary" }
   }
 }
 ```
 
----
+Prefer semantic theme classes such as `bg-background`, `bg-card`,
+`text-foreground`, `text-muted-foreground`, and `border-border`. They adapt to
+light and dark mode without duplicating color rules.
 
-## Data Binding
+Structured style fields cover background, border, shadow, spacing, sizing,
+position, transform, overflow, typography, visibility, and responsive
+overrides.
 
-A2UI uses `BoundValue` for dynamic data:
+## Choosing a component
 
-### Literal Values
+<CardGrid>
+  <Card title="Layout first" icon="seti:layout">
+    Start with `column`, `row`, or `grid`. Add `scrollArea`, `overlay`, or
+    `absolute` only when the content model requires them.
+  </Card>
+  <Card title="Bind live values" icon="link">
+    Use `BoundValue` paths for shared data, and element setter nodes when a
+    workflow owns the displayed value.
+  </Card>
+  <Card title="Reuse interactions" icon="puzzle">
+    Extract repeated interactive cards or rows into Widgets and declare their
+    actions at the Widget level.
+  </Card>
+  <Card title="Respect both themes" icon="moon">
+    Prefer semantic theme tokens and verify the surface in both light and dark
+    mode.
+  </Card>
+</CardGrid>
 
-```json
-{ "content": "Static text" }
-{ "count": 42 }
-{ "enabled": true }
-```
+## Related guides
 
-### Data Path Binding
-
-```json
-{ "content": { "path": "/user/name" } }
-{ "items": { "path": "/data/products" } }
-```
-
-### Template Variables
-
-In List templates, use `$index` and `$item`:
-
-```json
-{
-  "type": "List",
-  "props": { "data": { "path": "/items" } },
-  "template": {
-    "type": "Text",
-    "props": {
-      "content": { "path": "/items/$index/name" }
-    }
-  }
-}
-```
-
----
-
-## Actions
-
-Components can trigger actions:
-
-```json
-{
-  "actions": {
-    "onClick": {
-      "type": "navigate",
-      "payload": { "route": "/dashboard" }
-    },
-    "onChange": {
-      "type": "updateData",
-      "path": "/form/value"
-    },
-    "onSubmit": {
-      "type": "invoke",
-      "flowId": "process-form",
-      "payload": { "data": { "path": "/form" } }
-    }
-  }
-}
-```
-
-### Action Types
-
-| Type | Description |
-|------|-------------|
-| `updateData` | Update data model at path |
-| `navigate` | Navigate to a route |
-| `invoke` | Invoke a Flow |
-| `submit` | Submit form data |
-| `openModal` | Open a modal |
-| `closeModal` | Close a modal |
-| `custom` | Custom action handler |
-
----
-
-## Next Steps
-
-- [Widget Builder Guide](/reference/widget-builder) - Learn to build widgets visually
-- [FlowPilot UI Generation](/reference/flowpilot-ui) - Generate UIs with AI
+- [A2UI overview](/dev/a2ui/overview/)
+- [Page and Widget visual builders](/dev/a2ui/visual-builder/)
+- [Widget Builder guide](/reference/widget-builder/)
+- [FlowPilot UI generation](/reference/flowpilot-ui/)
+- [A2UI migration guide](/reference/a2ui-migration/)

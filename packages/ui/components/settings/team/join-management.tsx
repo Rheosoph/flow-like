@@ -1,6 +1,12 @@
 "use client";
 
-import { Check, Clock, UserCheck, X } from "lucide-react";
+import {
+	CheckIcon,
+	ClockIcon,
+	UserCheckIcon,
+	UsersIcon,
+	XIcon,
+} from "lucide-react";
 import { useCallback } from "react";
 import { toast } from "sonner";
 import {
@@ -8,17 +14,30 @@ import {
 	AvatarFallback,
 	AvatarImage,
 	Button,
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
+	EmptyState,
 	type IJoinRequest,
 	Skeleton,
 	useBackend,
 	useInfiniteInvoke,
 	useInvoke,
 } from "../../../";
+import {
+	userAvatarUrl,
+	userDisplayName,
+	userHandle,
+	userInitials,
+} from "../../../lib/user-display";
+import {
+	SectionHeading,
+	StatusChip,
+	TEAM_ROW_HANDLE,
+	TEAM_ROW_META,
+	TEAM_ROW_TITLE,
+	TeamRowActions,
+	TeamRowNote,
+	TeamSection,
+	teamRowClass,
+} from "./team-shared";
 
 export function TeamJoinManagement({ appId }: Readonly<{ appId: string }>) {
 	const backend = useBackend();
@@ -35,57 +54,51 @@ export function TeamJoinManagement({ appId }: Readonly<{ appId: string }>) {
 	const requests = requestsPages?.pages.flat() ?? [];
 
 	return (
-		<div className="h-full overflow-y-auto">
-			<Card>
-				<CardHeader>
-					<CardTitle className="flex items-center gap-2">
-						<Clock className="w-5 h-5" />
-						Join Requests
-					</CardTitle>
-					<CardDescription>
-						Review and manage requests to join your team
-					</CardDescription>
-				</CardHeader>
-				<CardContent>
-					{requests.length === 0 ? (
-						<div className="text-center py-8">
-							<UserCheck className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
-							<h3 className="text-lg font-semibold">No pending requests</h3>
-							<p className="text-muted-foreground">
-								All join requests have been processed
-							</p>
-						</div>
-					) : (
-						<div className="space-y-4">
-							{requests.map((request) => (
-								<RequestCard
-									key={request.id}
-									request={request}
-									appId={appId}
-									refresh={async () => {
-										await refetch();
-									}}
-								/>
-							))}
-							{hasNextPage && (
-								<Button
-									variant="outline"
-									className="w-full mt-4"
-									onClick={() => fetchNextPage()}
-									disabled={isLoading}
-								>
-									{isLoading ? "Loading..." : "Load More Requests"}
-								</Button>
-							)}
-						</div>
+		<TeamSection>
+			<SectionHeading
+				icon={ClockIcon}
+				title="Join requests"
+				count={requests.length}
+				countTone={requests.length > 0 ? "attention" : "neutral"}
+				description="People who asked to join. Approving adds them with the default role."
+			/>
+
+			{requests.length === 0 ? (
+				<EmptyState
+					className="max-w-full"
+					title="No pending requests"
+					description="All join requests have been processed"
+					icons={[UsersIcon, ClockIcon, UserCheckIcon]}
+				/>
+			) : (
+				<div className="flex flex-col gap-2">
+					{requests.map((request) => (
+						<RequestRow
+							key={request.id}
+							request={request}
+							appId={appId}
+							refresh={async () => {
+								await refetch();
+							}}
+						/>
+					))}
+					{hasNextPage && (
+						<Button
+							variant="outline"
+							className="w-full"
+							onClick={() => fetchNextPage()}
+							disabled={isLoading}
+						>
+							{isLoading ? "Loading..." : "Load More Requests"}
+						</Button>
 					)}
-				</CardContent>
-			</Card>
-		</div>
+				</div>
+			)}
+		</TeamSection>
 	);
 }
 
-function RequestCard({
+function RequestRow({
 	appId,
 	request,
 	refresh,
@@ -118,113 +131,69 @@ function RequestCard({
 
 	if (!userData) {
 		return (
-			<Card className="animate-pulse">
-				<CardContent className="p-6">
-					<div className="flex items-center space-x-4">
-						<Skeleton className="h-12 w-12 rounded-full" />
-						<div className="space-y-2 flex-1">
-							<Skeleton className="h-4 w-[200px]" />
-							<Skeleton className="h-3 w-[150px]" />
-						</div>
-						<div className="flex gap-2">
-							<Skeleton className="h-9 w-20" />
-							<Skeleton className="h-9 w-20" />
-						</div>
-					</div>
-				</CardContent>
-			</Card>
+			<div className={teamRowClass({ attention: true, align: "start" })}>
+				<Skeleton className="size-9 shrink-0 rounded-full" />
+				<div className="min-w-0 flex-1 space-y-2">
+					<Skeleton className="h-4 w-45" />
+					<Skeleton className="h-3 w-30" />
+				</div>
+				<TeamRowActions always>
+					<Skeleton className="h-8 w-24" />
+					<Skeleton className="h-8 w-24" />
+				</TeamRowActions>
+			</div>
 		);
 	}
 
-	const evaluatedName =
-		userData.username ?? userData.name ?? userData.email ?? "Unknown User";
+	const evaluatedName = userDisplayName(userData, "Unknown User");
+	const contact =
+		userData.email ?? userHandle(userData) ?? "No contact details";
 
 	return (
-		<Card className="group transition-all duration-200 hover:shadow-md border-l-4 border-l-secondary/20 hover:border-l-secondary rounded-lg animate-in fade-in-0 slide-in-from-top-1">
-			<CardContent className="p-6">
-				<div className="flex items-start justify-between gap-4">
-					<div className="flex items-center gap-4 flex-1 min-w-0">
-						<div className="relative">
-							<Avatar className="h-14 w-14 ring-2 ring-background shadow-sm transition-transform group-hover:scale-105">
-								<AvatarImage src={userData.avatar_url} alt={evaluatedName} />
-								<AvatarFallback className="bg-linear-to-br from-secondary to-tertiary text-white font-semibold">
-									{evaluatedName
-										.split(" ")
-										.map((n) => n[0])
-										.join("")
-										.toUpperCase()}
-								</AvatarFallback>
-							</Avatar>
-						</div>
+		<div className={teamRowClass({ attention: true, align: "start" })}>
+			<Avatar className="size-9 shrink-0">
+				<AvatarImage src={userAvatarUrl(userData)} alt={evaluatedName} />
+				<AvatarFallback className="text-[11px] font-semibold text-foreground">
+					{userInitials(userData)}
+				</AvatarFallback>
+			</Avatar>
 
-						<div className="flex-1 min-w-0">
-							<div className="flex items-center gap-2 mb-1">
-								<h3 className="font-semibold text-lg text-foreground truncate">
-									{evaluatedName}
-								</h3>
-								<div className="px-2 py-1 bg-amber-100 text-amber-800 text-xs font-medium rounded-full border border-amber-200">
-									Pending
-								</div>
-							</div>
-
-							<div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
-								<span className="truncate">
-									{userData.email ?? userData.username ?? "No contact details"}
-								</span>
-							</div>
-
-							<div className="flex items-center gap-1 text-xs text-muted-foreground">
-								<Clock className="h-3 w-3" />
-								<span>
-									Requested{" "}
-									{new Date(Date.parse(request.created_at)).toLocaleDateString(
-										"en-US",
-										{
-											month: "short",
-											day: "numeric",
-											year: "numeric",
-										},
-									)}
-								</span>
-							</div>
-						</div>
-					</div>
-
-					<div className="flex gap-2 shrink-0">
-						<Button
-							size="sm"
-							className="bg-green-600 hover:bg-green-700 text-white shadow-sm transition-all duration-200 hover:scale-105 active:scale-95"
-							onClick={acceptRequest}
-						>
-							<Check className="h-4 w-4 mr-1.5" />
-							Accept
-						</Button>
-						<Button
-							size="sm"
-							variant="destructive"
-							className="shadow-sm transition-all duration-200 hover:scale-105 active:scale-95"
-							onClick={declineRequest}
-						>
-							<X className="h-4 w-4 mr-1.5" />
-							Decline
-						</Button>
-					</div>
+			<div className="min-w-0 flex-1">
+				<div className={TEAM_ROW_TITLE}>
+					<span className="truncate">{evaluatedName}</span>
+					<span className={`${TEAM_ROW_HANDLE} truncate`}>{contact}</span>
+					<StatusChip tone="attention" pip>
+						Wants to join
+					</StatusChip>
 				</div>
 
-				{request.comment && (
-					<div className="mt-4 p-4 bg-muted/30 border border-muted rounded-lg transition-colors group-hover:bg-muted/50">
-						<div className="flex items-center gap-2 mb-2">
-							<div className="h-1.5 w-1.5 bg-secondary rounded-full" />
-							<span className="text-sm font-medium text-foreground">
-								Message
-							</span>
-						</div>
-						<p className="text-sm text-muted-foreground leading-relaxed pl-3.5">
-							&quot;{request.comment}&quot;
-						</p>
-					</div>
-				)}
-			</CardContent>
-		</Card>
+				<div className={TEAM_ROW_META}>
+					<span>
+						Asked{" "}
+						{new Date(Date.parse(request.created_at)).toLocaleDateString(
+							"en-US",
+							{
+								month: "short",
+								day: "numeric",
+								year: "numeric",
+							},
+						)}
+					</span>
+				</div>
+
+				{request.comment && <TeamRowNote>{request.comment}</TeamRowNote>}
+			</div>
+
+			<TeamRowActions always>
+				<Button size="sm" onClick={acceptRequest}>
+					<CheckIcon className="size-3.5" />
+					Approve
+				</Button>
+				<Button size="sm" variant="outline" onClick={declineRequest}>
+					<XIcon className="size-3.5" />
+					Decline
+				</Button>
+			</TeamRowActions>
+		</div>
 	);
 }

@@ -42,7 +42,7 @@ const MAX_ADMIN_CONNECTIONS: u64 = 5000;
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /admin/connections/graph", skip(state, user))]
+#[tracing::instrument(name = "GET /admin/connections/graph", skip_all)]
 pub async fn get_global_connection_graph(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

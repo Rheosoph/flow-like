@@ -1,0 +1,111 @@
+---
+title: "Schema-Driven Inputs: From JSON Blobs to User-Aware Apps"
+description: "Flow-Like now turns JSON Schema into practical variable and pin editors, adds a native User Profile surface, and gives flows safe access to project identity."
+date: 2026-07-15
+tags: ["a2ui", "json-schema", "variables", "user-profile", "permissions", "flow-like"]
+cover: "/images/schema-driven-inputs.jpg"
+draft: false
+---
+
+import { BlogInteractiveDemo } from "../../components/blog/BlogInteractiveDemo";
+
+A workflow stops feeling like software the moment configuring it feels like editing its serialization format.
+
+Structs are a perfect example. They are one of the most useful building blocks in Flow-Like: an order, a deployment target, a support ticket, or an entire form submission can travel through the graph as one typed value. But until now, setting a default often meant opening a JSON textarea and remembering the shape yourself.
+
+That changes in 0.1.6. Flow-Like can now turn a node's JSON Schema into a real editor, carry the same editing model into generic values and unconnected pins, and connect those typed values to a new user-aware UI layer.
+
+## The schema is finally doing visible work
+
+[PR #635](https://github.com/Rheosoph/flow-like/pull/635), which closes [issue #631](https://github.com/Rheosoph/flow-like/issues/631), rebuilds the Struct default editor around the schema already attached to a variable or pin.
+
+Given a contract like this:
+
+```json
+{
+  "$defs": {
+    "Owner": {
+      "type": "object",
+      "properties": {
+        "sub": { "type": "string", "description": "Project user ID" },
+        "displayName": { "type": "string" }
+      },
+      "required": ["sub"]
+    }
+  },
+  "type": "object",
+  "properties": {
+    "title": { "type": "string" },
+    "priority": {
+      "type": "string",
+      "enum": ["low", "normal", "high"]
+    },
+    "owner": { "$ref": "#/$defs/Owner" },
+    "notify": { "type": "boolean", "default": true }
+  },
+  "required": ["title", "priority", "owner"]
+}
+```
+
+Flow-Like produces text and number inputs, checkboxes, enum selectors, and nested object sections. It follows local JSON Pointer references, understands `$defs`, and resolves `anyOf`, `oneOf`, and `allOf` compositions. Schema defaults seed the form; required fields are marked; descriptions become useful inline guidance. Circular references are detected and fall back to a focused JSON field instead of recursing forever.
+
+There is still a **JSON** tab beside **Form**. That escape hatch matters: arrays, open-ended objects, and unusual schemas do not need to be squeezed into a lowest-common-denominator form builder. Both views edit the same value, and invalid JSON stays in the local draft rather than replacing the last valid default.
+
+<BlogInteractiveDemo client:only="react" preset="schema-inputs" />
+
+## Generic no longer means “good luck”
+
+Schema-backed Structs can be precise. A Generic value is deliberately open: it might become a string, number, boolean, object, array, or `null` at runtime. The new `GenericVariable` editor makes that flexibility explicit instead of treating it as an unlabelled byte payload.
+
+Choose **String**, **Integer**, **Float**, **Boolean**, **Object**, **Array**, or **Null** to start with valid JSON of that shape, choose **No default** to leave the value unset, or stay in **Custom JSON**. Valid UTF-8 is preserved as entered; objects and arrays are pretty-printed when loaded; malformed JSON is called out before it can be committed.
+
+The same editors now power board variables and the **Set Default Value** dialog on node and layer pins. For a pin, the default is used only when nothing is connected. Underneath, Flow-Like still stores the serialized value in the graph's byte representation. The improvement is that builders no longer have to think in bytes—or memorize a schema—to configure it.
+
+## A project user becomes a native UI value
+
+Typed data is most useful when the interface knows what it represents. [PR #636](https://github.com/Rheosoph/flow-like/pull/636) closes [issue #622](https://github.com/Rheosoph/flow-like/issues/622) with a new A2UI **User Profile** element.
+
+Instead of wiring a user ID into separate avatar and text elements, pass the subject ID as one bound value:
+
+```json
+{
+  "id": "assignee-profile",
+  "component": {
+    "type": "userProfile",
+    "value": { "path": "$.ticket.owner.sub" },
+    "variant": { "literalString": "row" },
+    "showHover": { "literalBool": true },
+    "showEmail": { "literalBool": false },
+    "fallbackLabel": { "literalString": "Unassigned" }
+  }
+}
+```
+
+At runtime, the element resolves the bound ID through Flow-Like's user lookup and picks the best available label, avatar, handle, description, and optional email. Five variants cover the useful densities: `avatar`, `chip`, `row`, `detailed`, and `card`. Hover details, profile links, email, description, user ID, muted styling, and avatar size are independently configurable.
+
+That makes an assignee returned by a workflow behave like an assignee in the interface—not an opaque identifier the app author has to decorate by hand.
+
+<BlogInteractiveDemo client:only="react" preset="user-profile" />
+
+## Read identity without becoming identity administration
+
+The other half is inside the graph. [PR #639](https://github.com/Rheosoph/flow-like/pull/639), resolving [issue #623](https://github.com/Rheosoph/flow-like/issues/623), adds 13 project-user nodes under `Utils/User`.
+
+Flows can get the current user or a project member, resolve a member by ID or an exposed email, list and search members, filter by role or attribute, inspect roles and attributes, expand effective permissions, and answer focused questions such as **Check User Has Role** or **Check User Permission**. List operations are paginated and capped at 100 results per request; every read returns explicit success, status, and error outputs.
+
+The boundary is intentional. These nodes do not create members, change roles, edit profiles, or grant permissions. They use the runtime's authenticated Hub context, default to the current execution app, and return project membership data through enforced schemas. Email can only be searched when the platform exposes it, and email resolution is constrained to project members. Owner and Admin roles are handled as effective access to all defined project permissions.
+
+Together, the pieces form a clean app pattern:
+
+1. Read the current project user.
+2. Check the permission the action actually requires.
+3. Branch the workflow on that answer.
+4. Bind the same user's subject ID into a User Profile element.
+
+The flow owns the policy. The interface owns the presentation. JSON Schema keeps the value between them understandable and editable.
+
+## Small editor change, much bigger contract
+
+This work is easy to summarize as “a better Struct dialog.” The more important shift is that Flow-Like now treats schemas as a shared product contract. They guide the builder, validate the graph, describe node outputs, and give A2UI a stable value to render.
+
+That is how node-based apps become easier to build without becoming less precise. Read the wider story in [Flow-Like Beta v0.1.6](/blog/beta-0-1-6/), or inspect the implementation in [PR #635](https://github.com/Rheosoph/flow-like/pull/635), [PR #636](https://github.com/Rheosoph/flow-like/pull/636), and [PR #639](https://github.com/Rheosoph/flow-like/pull/639).

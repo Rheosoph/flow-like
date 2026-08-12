@@ -11,11 +11,30 @@ export {
 	ActionProvider,
 	useActions,
 	useComponentActionTrigger,
+	useComponentEventTrigger,
 	useExecuteAction,
 	useIsComponentTriggering,
 	useMarkComponentTriggering,
 	useOnAction,
+	useSetElementValue,
 } from "./ActionHandler";
+export {
+	firstEventAction,
+	resolveEventActions,
+	WILDCARD_EVENT,
+} from "./event-handlers";
+export {
+	microWidgetHasInstance,
+	microWidgetQuery,
+	microWidgetValuesKey,
+} from "./micro-widget-host";
+export {
+	handleWidgetQueryMessage,
+	parseWidgetQueryMessage,
+	setWidgetQueryResponder,
+	type WidgetQueryResponder,
+	type WidgetQueryResponse,
+} from "./widget-query-handler";
 export {
 	WidgetActionProvider,
 	useWidgetActions,
@@ -23,6 +42,13 @@ export {
 } from "./WidgetActionHandler";
 export { getComponentRenderer, registerComponent } from "./ComponentRegistry";
 export { resolveStyle, resolveInlineStyle, mergeStyles } from "./StyleResolver";
+export {
+	normalizePageForPersistence,
+	normalizeStyleForPersistence,
+	normalizeSurfaceComponentForPersistence,
+	normalizeSurfaceComponentsForPersistence,
+	normalizeWidgetForPersistence,
+} from "./style-normalization";
 export { useElementGatherer, createElementPayload } from "./ElementGatherer";
 export {
 	RouteDialogProvider,
@@ -54,6 +80,7 @@ export type {
 	BoundValue,
 	Style,
 	Action,
+	EventHandlers,
 	Widget,
 	Page,
 	DataEntry,
@@ -66,6 +93,7 @@ export type {
 	WorkflowBinding,
 	CommandBinding,
 	WidgetRef,
+	MicroWidgetInstanceComponent,
 	// Component types
 	RowComponent,
 	ColumnComponent,
@@ -126,6 +154,11 @@ export type {
 	GeoMapMarkerDef,
 	GeoMapRouteDef,
 	GeoMapViewport,
+	GraphComponent,
+	GraphNodeDef,
+	GraphEdgeDef,
+	GraphLabelStyleDef,
+	OntologyGraphComponent,
 	GeoCoordinate,
 	GeoBoundingBox,
 	GeoRouteGeometry,
@@ -167,6 +200,8 @@ export { A2UISpinner } from "./display/Spinner";
 export { A2UISkeleton } from "./display/Skeleton";
 export { A2UILottie } from "./display/Lottie";
 export { A2UIGeoMap } from "./display/GeoMap";
+export { A2UIGraph } from "./display/Graph";
+export { A2UIOntologyGraph } from "./display/OntologyGraph";
 export { A2UICalendar } from "./display/Calendar";
 export { A2UIGantt } from "./display/GanttChart";
 

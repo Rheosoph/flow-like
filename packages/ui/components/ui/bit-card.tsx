@@ -31,13 +31,19 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import { Progress } from "../../components/ui/progress";
 import { useHub } from "../../hooks/use-hub";
 import { useInvoke } from "../../hooks/use-invoke";
+import { isMlxModelBit } from "../../lib/bit/mlx-model-pack";
 import { type IBit, IBitTypes } from "../../lib/schema/bit/bit";
 import { humanFileSize } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import { useDownloadManager } from "../../state/download-manager";
+import {
+	handleUpgradeRequiredError,
+	openUpgradeDialogIfEnabled,
+} from "../../state/upgrade-dialog-state";
 import type { ISettingsProfile } from "../../types";
 import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
 import { Badge } from "./badge";
@@ -167,12 +173,16 @@ export function BitCard({
 
 	// Dependency-backed bits, such as local TTS manifests, still need their
 	// dependent artifacts downloaded even when the parent bit has no artifact.
-	const isVirtualBit = useMemo(
-		() =>
+	// The backend-resolved pack size is authoritative here — it also covers
+	// artifacts the bit never names (inline MLX manifests, llama.cpp projectors).
+	const isVirtualBit = useMemo(() => {
+		if (bitSize.isSuccess) return (bitSize.data ?? 0) === 0;
+		return (
 			(bit.dependencies?.length ?? 0) === 0 &&
-			(!bit.download_link || (bitSize.data === 0 && bitSize.isSuccess)),
-		[bit.dependencies, bit.download_link, bitSize.data, bitSize.isSuccess],
-	);
+			!bit.download_link &&
+			!isMlxModelBit(bit)
+		);
+	}, [bit, bitSize.data, bitSize.isSuccess]);
 
 	const downloadBit = useCallback(
 		async (b: IBit) => {
@@ -197,15 +207,23 @@ export function BitCard({
 		[download, isInstalled, isVirtualBit],
 	);
 
+	const refetchIsInstalled = isInstalled.refetch;
 	const toggleDownload = useCallback(async () => {
 		if (isInstalled.data) {
 			await backend.bitState.deleteBit(bit);
-			await isInstalled.refetch();
+			await refetchIsInstalled();
 			return;
 		}
 		await downloadBit(bit);
-	}, [isInstalled.data, backend.bitState, bit, downloadBit]);
+	}, [
+		isInstalled.data,
+		backend.bitState,
+		bit,
+		downloadBit,
+		refetchIsInstalled,
+	]);
 
+	const refetchCurrentProfile = currentProfile.refetch;
 	const toggleProfile = useCallback(async () => {
 		const profile = currentProfile.data;
 		if (!profile) return;
@@ -214,14 +232,42 @@ export function BitCard({
 			(id) => id.split(":").pop() === bit.id,
 		);
 
-		if (bitIndex === -1) {
-			await downloadBit(bit);
-			await backend.bitState.addBit(bit, profile);
-		} else {
-			await backend.bitState.removeBit(bit, profile);
+		try {
+			if (bitIndex === -1) {
+				if (tierInfo.isRestricted) {
+					if (
+						!openUpgradeDialogIfEnabled({
+							reason: "model-tier",
+							requiredTier: tierInfo.requiredTier ?? undefined,
+						})
+					) {
+						toast.error(
+							`This model requires the ${tierInfo.requiredTier} plan.`,
+						);
+					}
+					return;
+				}
+				await downloadBit(bit);
+				await backend.bitState.addBit(bit, profile);
+			} else {
+				await backend.bitState.removeBit(bit, profile);
+			}
+			await refetchCurrentProfile();
+		} catch (error) {
+			console.error("Failed to update profile models:", error);
+			if (handleUpgradeRequiredError(error, "model-tier")) return;
+			toast.error(
+				error instanceof Error ? error.message : "Failed to update profile",
+			);
 		}
-		await currentProfile.refetch();
-	}, [currentProfile.data, bit, downloadBit, backend.bitState]);
+	}, [
+		currentProfile.data,
+		bit,
+		downloadBit,
+		backend.bitState,
+		tierInfo,
+		refetchCurrentProfile,
+	]);
 
 	const openRepository = useCallback(() => {
 		if (bit.repository) {

@@ -1,5 +1,5 @@
 use flow_like::flow::{
-    execution::context::ExecutionContext,
+    execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
@@ -123,6 +123,10 @@ impl NodeLogic for UpsertGraphEdgeNode {
         match merger.execute(reader).await {
             Ok(_) => {}
             Err(e) => {
+                context.log_message(
+                    &format!("Database graph-edge upsert failed: {e:#}"),
+                    LogLevel::Error,
+                );
                 context
                     .set_pin_value("error_message", json!(e.to_string()))
                     .await?;

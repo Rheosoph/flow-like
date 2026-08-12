@@ -50,8 +50,7 @@ pub async fn undo_board(
 ) -> Result<Json<()>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
-    let mutation_lock = state.board_mutation_lock(&app_id, &board_id);
-    let _mutation_guard = mutation_lock.lock().await;
+    let _mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
 
     let mut board = state
         .master_board(&sub, &app_id, &board_id, &state, None)
@@ -104,8 +103,7 @@ pub async fn redo_board(
 ) -> Result<Json<()>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
-    let mutation_lock = state.board_mutation_lock(&app_id, &board_id);
-    let _mutation_guard = mutation_lock.lock().await;
+    let _mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
 
     let mut board = state
         .master_board(&sub, &app_id, &board_id, &state, None)

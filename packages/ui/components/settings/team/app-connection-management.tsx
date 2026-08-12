@@ -2,22 +2,22 @@
 
 import { useDebounce } from "@uidotdev/usehooks";
 import {
-	ArrowDownLeft,
-	ArrowUpRight,
-	Blocks,
-	Check,
-	Clock,
-	List,
-	MoreVertical,
-	Plus,
-	RefreshCw,
-	Search,
-	Send,
-	Settings,
-	Shield,
-	Trash2,
-	Waypoints,
-	X,
+	ArrowDownLeftIcon,
+	ArrowUpRightIcon,
+	BlocksIcon,
+	CheckIcon,
+	ClockIcon,
+	ListIcon,
+	MoreVerticalIcon,
+	PlusIcon,
+	RefreshCwIcon,
+	SearchIcon,
+	SendIcon,
+	SettingsIcon,
+	ShieldIcon,
+	Trash2Icon,
+	WaypointsIcon,
+	XIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -35,13 +35,7 @@ import {
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
-	Badge,
 	Button,
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
 	Dialog,
 	DialogContent,
 	DialogDescription,
@@ -65,6 +59,7 @@ import {
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
+	useSearch,
 } from "../../..";
 import type { IApp } from "../../../lib/schema/app/app";
 import type { IMetadata } from "../../../lib/schema/bit/bit";
@@ -73,6 +68,18 @@ import {
 	deriveConnectionCapabilities,
 } from "../connections/capabilities";
 import { ProcessGraph } from "../connections/process-graph";
+import {
+	SectionHeading,
+	StatusChip,
+	TEAM_ACTION_GRADIENT,
+	TEAM_ROW_DESCRIPTION,
+	TEAM_ROW_META,
+	TEAM_ROW_TITLE,
+	TeamRowActions,
+	TeamRowNote,
+	TeamSection,
+	teamRowClass,
+} from "./team-shared";
 
 interface AppConnectionManagementProps {
 	appId: string;
@@ -322,14 +329,14 @@ export function AppConnectionManagement({
 	);
 
 	return (
-		<div className="space-y-6">
-			<div className="inline-flex items-center gap-1 rounded-lg border bg-muted/40 p-1">
+		<div className="space-y-8">
+			<div className="inline-flex items-center gap-1 rounded-lg border border-border/60 bg-muted/40 p-1">
 				<Button
 					variant={view === "list" ? "secondary" : "ghost"}
 					size="sm"
 					onClick={() => setView("list")}
 				>
-					<List className="w-4 h-4 mr-2" />
+					<ListIcon className="size-4" />
 					List
 				</Button>
 				<Button
@@ -337,7 +344,7 @@ export function AppConnectionManagement({
 					size="sm"
 					onClick={() => setView("graph")}
 				>
-					<Waypoints className="w-4 h-4 mr-2" />
+					<WaypointsIcon className="size-4" />
 					Process graph
 				</Button>
 			</div>
@@ -360,36 +367,35 @@ export function AppConnectionManagement({
 			)}
 
 			{view === "list" && (
-				<Card>
-					<CardHeader>
-						<div className="flex items-center justify-between">
-							<div>
-								<CardTitle className="flex items-center gap-2">
-									<ArrowDownLeft className="w-5 h-5" />
-									Apps With Access
-								</CardTitle>
-								<CardDescription>
-									Apps that can work with this app&apos;s databases, data and
-									events. Approve incoming requests or grant access directly.
-								</CardDescription>
-							</div>
-							<Button
-								onClick={() => setShowGrantDialog(true)}
-								className="bg-linear-to-r from-primary to-tertiary hover:from-primary/50 hover:to-tertiary/50"
-							>
-								<Plus className="w-4 h-4 mr-2" />
-								Grant App Access
-							</Button>
-						</div>
-					</CardHeader>
-					<CardContent className="space-y-6">
-						{pendingIncoming.length > 0 && (
-							<div className="space-y-3">
-								<h3 className="text-sm font-medium flex items-center gap-2">
-									<Clock className="w-4 h-4" />
-									Pending Requests
-									<Badge variant="secondary">{pendingIncoming.length}</Badge>
-								</h3>
+				<div className="space-y-8">
+					<TeamSection>
+						<SectionHeading
+							icon={ArrowDownLeftIcon}
+							title="Apps that can reach this one"
+							count={incoming.length}
+							countTone={pendingIncoming.length > 0 ? "attention" : "neutral"}
+							description="They can work with this app's tables, files and events under the role you grant."
+							actions={
+								<Button
+									size="sm"
+									onClick={() => setShowGrantDialog(true)}
+									className={TEAM_ACTION_GRADIENT}
+								>
+									<PlusIcon className="size-4" />
+									Grant access
+								</Button>
+							}
+						/>
+
+						{incoming.length === 0 ? (
+							<EmptyState
+								className="max-w-full"
+								icons={[BlocksIcon]}
+								title="No connected apps"
+								description="Grant another app access to let it work with this app's data."
+							/>
+						) : (
+							<div className="flex flex-col gap-2">
 								{pendingIncoming.map((connection) => (
 									<PendingRequestCard
 										key={connection.id}
@@ -398,21 +404,6 @@ export function AppConnectionManagement({
 										onReject={() => handleReject(connection)}
 									/>
 								))}
-							</div>
-						)}
-
-						{activeIncoming.length === 0 ? (
-							<EmptyState
-								icons={[Blocks]}
-								title="No connected apps"
-								description="Grant another app access to let it work with this app's data."
-							/>
-						) : (
-							<div className="space-y-3">
-								<h3 className="text-sm font-medium flex items-center gap-2">
-									<Blocks className="w-4 h-4" />
-									Connected Apps
-								</h3>
 								{activeIncoming.map((connection) => (
 									<ConnectionRow
 										key={connection.id}
@@ -426,42 +417,35 @@ export function AppConnectionManagement({
 								))}
 							</div>
 						)}
-					</CardContent>
-				</Card>
-			)}
+					</TeamSection>
 
-			{view === "list" && (
-				<Card>
-					<CardHeader>
-						<div className="flex items-center justify-between">
-							<div>
-								<CardTitle className="flex items-center gap-2">
-									<ArrowUpRight className="w-5 h-5" />
-									Outgoing Access
-								</CardTitle>
-								<CardDescription>
-									Apps this app can access and pending requests sent in the name
-									of this app.
-								</CardDescription>
-							</div>
-							<Button
-								variant="outline"
-								onClick={() => setShowRequestDialog(true)}
-							>
-								<Send className="w-4 h-4 mr-2" />
-								Request Access
-							</Button>
-						</div>
-					</CardHeader>
-					<CardContent>
+					<TeamSection>
+						<SectionHeading
+							icon={ArrowUpRightIcon}
+							title="Apps this one can reach"
+							count={outgoing.length}
+							description="Access this app has asked for elsewhere."
+							actions={
+								<Button
+									variant="outline"
+									size="sm"
+									onClick={() => setShowRequestDialog(true)}
+								>
+									<SendIcon className="size-4" />
+									Request access
+								</Button>
+							}
+						/>
+
 						{outgoing.length === 0 ? (
 							<EmptyState
-								icons={[Send]}
+								className="max-w-full"
+								icons={[SendIcon]}
 								title="No outgoing access"
 								description="Request access to another app to work with its data from this app."
 							/>
 						) : (
-							<div className="space-y-3">
+							<div className="flex flex-col gap-2">
 								{outgoing.map((connection) => (
 									<ConnectionRow
 										key={connection.id}
@@ -482,8 +466,8 @@ export function AppConnectionManagement({
 								))}
 							</div>
 						)}
-					</CardContent>
-				</Card>
+					</TeamSection>
+				</div>
 			)}
 
 			{/* Grant Access Dialog */}
@@ -491,7 +475,7 @@ export function AppConnectionManagement({
 				<DialogContent className="sm:max-w-md">
 					<DialogHeader>
 						<div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
-							<Blocks className="h-6 w-6 text-primary" />
+							<BlocksIcon className="h-6 w-6 text-primary" />
 						</div>
 						<DialogTitle className="text-center text-xl">
 							Grant App Access
@@ -552,7 +536,7 @@ export function AppConnectionManagement({
 				<DialogContent className="sm:max-w-md">
 					<DialogHeader>
 						<div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
-							<Send className="h-6 w-6 text-primary" />
+							<SendIcon className="h-6 w-6 text-primary" />
 						</div>
 						<DialogTitle className="text-center text-xl">
 							Request Access
@@ -581,7 +565,7 @@ export function AppConnectionManagement({
 								placeholder="Why does this app need access?"
 								value={requestComment}
 								onChange={(e) => setRequestComment(e.target.value)}
-								className="min-h-15 resize-none"
+								className="min-h-20 resize-none"
 							/>
 							<p className="text-xs text-muted-foreground">
 								Optional message shown to the other app&apos;s admins
@@ -674,19 +658,22 @@ function AppSearchPicker({
 		searchEnabled,
 	);
 
+	const ownCandidates = useMemo(
+		() => (ownApps.data ?? []).filter(([app]) => app.id !== currentAppId),
+		[ownApps.data, currentAppId],
+	);
+
+	// own apps are matched locally, the store search is served by the backend
+	const ownMatches = useSearch(ownCandidates, searchEnabled ? search : "", {
+		fields: ["0.id", "1.name", "1.description", "1.tags"],
+		boost: { "1.name": 3, "0.id": 2 },
+	});
+
 	const results = useMemo(() => {
 		if (!searchEnabled) return [];
-		const needle = search.toLowerCase();
 		const merged = new Map<string, [IApp, IMetadata | undefined]>();
 
-		for (const entry of ownApps.data ?? []) {
-			const [app, metadata] = entry;
-			if (app.id === currentAppId) continue;
-			const name = metadata?.name?.toLowerCase() ?? "";
-			if (app.id.toLowerCase().includes(needle) || name.includes(needle)) {
-				merged.set(app.id, entry);
-			}
-		}
+		for (const entry of ownMatches) merged.set(entry[0].id, entry);
 
 		for (const entry of storeSearch.data ?? []) {
 			const [app] = entry;
@@ -696,7 +683,7 @@ function AppSearchPicker({
 		}
 
 		return Array.from(merged.values());
-	}, [searchEnabled, search, ownApps.data, storeSearch.data, currentAppId]);
+	}, [searchEnabled, ownMatches, storeSearch.data, currentAppId]);
 
 	const isFetching = storeSearch.isFetching || ownApps.isFetching;
 
@@ -713,7 +700,7 @@ function AppSearchPicker({
 					}}
 					className="pl-10"
 				/>
-				<Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+				<SearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
 			</div>
 			<p className="text-xs text-muted-foreground">
 				Search your apps by name, or paste any app ID directly to connect an app
@@ -734,7 +721,7 @@ function AppSearchPicker({
 							{activeSelection[0].id}
 						</p>
 					</div>
-					<Check className="h-4 w-4 shrink-0 text-primary" />
+					<CheckIcon className="h-4 w-4 shrink-0 text-primary" />
 				</div>
 			)}
 
@@ -742,7 +729,7 @@ function AppSearchPicker({
 				<div className="space-y-2">
 					{isFetching && results.length === 0 && (
 						<div className="flex items-center justify-center gap-2 py-4 text-muted-foreground">
-							<RefreshCw className="h-4 w-4 animate-spin" />
+							<RefreshCwIcon className="h-4 w-4 animate-spin" />
 							<span className="text-sm">Searching apps...</span>
 						</div>
 					)}
@@ -814,79 +801,71 @@ function PendingRequestCard({
 	const appLabel = connectionAppLabel(connection, connection.source_app_id);
 
 	return (
-		<Card className="group transition-all duration-200 hover:shadow-md border-l-4 border-l-secondary/20 hover:border-l-secondary rounded-lg animate-in fade-in-0 slide-in-from-top-1">
-			<CardContent className="p-4">
-				<div className="flex items-start justify-between gap-4">
-					<div className="flex items-center gap-3 flex-1 min-w-0">
-						<div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
-							<Blocks className="h-5 w-5 text-primary" />
-						</div>
-						<div className="flex-1 min-w-0">
-							<div className="flex items-center gap-2">
-								<h3 className="font-medium text-sm truncate">{appLabel}</h3>
-								<span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
-									Pending
-								</span>
-							</div>
-							{connection.app_description && (
-								<p className="text-xs text-muted-foreground truncate">
-									{connection.app_description}
-								</p>
-							)}
-							<div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
-								<Clock className="h-3 w-3" />
-								<span>
-									Requested{" "}
-									{new Date(connection.created_at * 1000).toLocaleDateString()}
-								</span>
-							</div>
-						</div>
-					</div>
+		<div className={teamRowClass({ attention: true, align: "start" })}>
+			<Avatar className="size-9 shrink-0 rounded-lg">
+				<AvatarImage
+					src={connection.app_icon ?? undefined}
+					alt={`${appLabel} icon`}
+				/>
+				<AvatarFallback className="rounded-lg bg-primary/10 text-primary">
+					<BlocksIcon className="size-4" />
+				</AvatarFallback>
+			</Avatar>
 
-					<div className="flex gap-2 shrink-0">
-						<Button size="sm" onClick={onApprove}>
-							<Check className="h-4 w-4 mr-1.5" />
-							Approve
-						</Button>
-						<AlertDialog>
-							<AlertDialogTrigger asChild>
-								<Button size="sm" variant="destructive">
-									<X className="h-4 w-4 mr-1.5" />
-									Reject
-								</Button>
-							</AlertDialogTrigger>
-							<AlertDialogContent>
-								<AlertDialogHeader>
-									<AlertDialogTitle>Reject Request</AlertDialogTitle>
-									<AlertDialogDescription>
-										Are you sure you want to reject the access request from
-										&quot;{appLabel}&quot;? The request will be deleted and the
-										app will have to send a new one.
-									</AlertDialogDescription>
-								</AlertDialogHeader>
-								<AlertDialogFooter>
-									<AlertDialogCancel>Cancel</AlertDialogCancel>
-									<AlertDialogAction
-										onClick={onReject}
-										className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-									>
-										Reject
-									</AlertDialogAction>
-								</AlertDialogFooter>
-							</AlertDialogContent>
-						</AlertDialog>
-					</div>
+			<div className="min-w-0 flex-1">
+				<div className={TEAM_ROW_TITLE}>
+					<span className="truncate">{appLabel}</span>
+					<StatusChip tone="attention" pip>
+						Wants access
+					</StatusChip>
 				</div>
-
-				{connection.comment && (
-					<div className="mt-3 p-3 bg-muted/30 border border-muted rounded-lg transition-colors group-hover:bg-muted/50">
-						<p className="text-sm text-muted-foreground leading-relaxed">
-							&quot;{connection.comment}&quot;
-						</p>
-					</div>
+				{connection.app_description && (
+					<p className={TEAM_ROW_DESCRIPTION}>{connection.app_description}</p>
 				)}
-			</CardContent>
-		</Card>
+				<div className={TEAM_ROW_META}>
+					<span className="flex items-center gap-1">
+						<ClockIcon className="size-3.5" />
+						Requested{" "}
+						{new Date(connection.created_at * 1000).toLocaleDateString()}
+					</span>
+				</div>
+				{connection.comment && <TeamRowNote>{connection.comment}</TeamRowNote>}
+			</div>
+
+			<TeamRowActions always>
+				<Button size="sm" onClick={onApprove}>
+					<CheckIcon className="size-3.5" />
+					Approve
+				</Button>
+				<AlertDialog>
+					<AlertDialogTrigger asChild>
+						<Button size="sm" variant="outline">
+							<XIcon className="size-3.5" />
+							Reject
+						</Button>
+					</AlertDialogTrigger>
+					<AlertDialogContent>
+						<AlertDialogHeader>
+							<AlertDialogTitle>Reject Request</AlertDialogTitle>
+							<AlertDialogDescription>
+								Are you sure you want to reject the access request from &quot;
+								{appLabel}&quot;? The request will be deleted and the app will
+								have to send a new one.
+							</AlertDialogDescription>
+						</AlertDialogHeader>
+						<AlertDialogFooter>
+							<AlertDialogCancel>Cancel</AlertDialogCancel>
+							<AlertDialogAction
+								onClick={onReject}
+								className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+							>
+								Reject
+							</AlertDialogAction>
+						</AlertDialogFooter>
+					</AlertDialogContent>
+				</AlertDialog>
+			</TeamRowActions>
+		</div>
 	);
 }
 
@@ -915,91 +894,91 @@ function ConnectionRow({
 	);
 
 	return (
-		<div className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors">
-			<div className="flex items-center gap-3 min-w-0 flex-1">
-				<Avatar className="h-10 w-10 rounded-lg">
-					<AvatarImage
-						src={connection.app_icon ?? undefined}
-						alt={`${appLabel} icon`}
-					/>
-					<AvatarFallback className="rounded-lg bg-primary/10 text-primary">
-						<Blocks className="h-5 w-5" />
-					</AvatarFallback>
-				</Avatar>
-				<div className="min-w-0 flex-1">
-					<div className="flex items-center gap-2">
-						<h3 className="font-medium text-sm truncate">{appLabel}</h3>
-						{isPending && (
-							<span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
-								Pending
-							</span>
-						)}
-					</div>
-					<div className="flex items-center gap-3 text-xs text-muted-foreground">
-						{connection.role_name && (
-							<span className="flex items-center gap-1">
-								<Shield className="h-3 w-3" />
-								{connection.role_name}
-							</span>
-						)}
-						<span>
-							{isPending ? "Requested " : "Connected "}
-							{new Date(connection.created_at * 1000).toLocaleDateString()}
-						</span>
-					</div>
-					<CapabilityBadges capabilities={capabilities} className="mt-1.5" />
-					{connection.app_description && (
-						<p className="text-xs text-muted-foreground mt-1 truncate">
-							{connection.app_description}
-						</p>
+		<div className={teamRowClass({ align: "start" })}>
+			<Avatar className="size-9 shrink-0 rounded-lg">
+				<AvatarImage
+					src={connection.app_icon ?? undefined}
+					alt={`${appLabel} icon`}
+				/>
+				<AvatarFallback className="rounded-lg bg-primary/10 text-primary">
+					<BlocksIcon className="size-4" />
+				</AvatarFallback>
+			</Avatar>
+
+			<div className="min-w-0 flex-1">
+				<div className={TEAM_ROW_TITLE}>
+					<span className="truncate">{appLabel}</span>
+					{isPending ? (
+						<StatusChip tone="attention" pip>
+							Waiting for approval
+						</StatusChip>
+					) : (
+						<StatusChip tone="success" pip>
+							Active
+						</StatusChip>
+					)}
+					{connection.role_name && (
+						<StatusChip icon={ShieldIcon}>{connection.role_name}</StatusChip>
 					)}
 				</div>
+				{connection.app_description && (
+					<p className={TEAM_ROW_DESCRIPTION}>{connection.app_description}</p>
+				)}
+				<div className={TEAM_ROW_META}>
+					<span>
+						{isPending ? "Requested " : "Connected "}
+						{new Date(connection.created_at * 1000).toLocaleDateString()}
+					</span>
+				</div>
+				<CapabilityBadges capabilities={capabilities} className="mt-1.5" />
 			</div>
 
-			<DropdownMenu>
-				<DropdownMenuTrigger asChild>
-					<Button variant="ghost" size="icon">
-						<MoreVertical className="h-4 w-4" />
-					</Button>
-				</DropdownMenuTrigger>
-				<DropdownMenuContent align="end">
-					{onChangeRole && (
-						<DropdownMenuItem onClick={onChangeRole}>
-							<Settings className="h-4 w-4 mr-2" />
-							Change Role
-						</DropdownMenuItem>
-					)}
-					<AlertDialog>
-						<AlertDialogTrigger asChild>
-							<DropdownMenuItem
-								onSelect={(e) => e.preventDefault()}
-								className="text-destructive focus:text-destructive"
-							>
-								<Trash2 className="h-4 w-4 mr-2" />
-								{removeLabel}
+			<TeamRowActions>
+				<DropdownMenu>
+					<DropdownMenuTrigger asChild>
+						<Button variant="ghost" size="icon" className="size-8">
+							<MoreVerticalIcon className="size-4" />
+						</Button>
+					</DropdownMenuTrigger>
+					<DropdownMenuContent align="end">
+						{onChangeRole && (
+							<DropdownMenuItem onClick={onChangeRole}>
+								<SettingsIcon className="size-4" />
+								Change Role
 							</DropdownMenuItem>
-						</AlertDialogTrigger>
-						<AlertDialogContent>
-							<AlertDialogHeader>
-								<AlertDialogTitle>{removeLabel}</AlertDialogTitle>
-								<AlertDialogDescription>
-									Are you sure you want to remove the connection with &quot;
-									{appLabel}&quot;? {removeDescription}
-								</AlertDialogDescription>
-							</AlertDialogHeader>
-							<AlertDialogFooter>
-								<AlertDialogCancel>Cancel</AlertDialogCancel>
-								<AlertDialogAction
-									onClick={onRemove}
-									className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+						)}
+						<AlertDialog>
+							<AlertDialogTrigger asChild>
+								<DropdownMenuItem
+									variant="destructive"
+									onSelect={(e) => e.preventDefault()}
 								>
+									<Trash2Icon className="size-4" />
 									{removeLabel}
-								</AlertDialogAction>
-							</AlertDialogFooter>
-						</AlertDialogContent>
-					</AlertDialog>
-				</DropdownMenuContent>
-			</DropdownMenu>
+								</DropdownMenuItem>
+							</AlertDialogTrigger>
+							<AlertDialogContent>
+								<AlertDialogHeader>
+									<AlertDialogTitle>{removeLabel}</AlertDialogTitle>
+									<AlertDialogDescription>
+										Are you sure you want to remove the connection with &quot;
+										{appLabel}&quot;? {removeDescription}
+									</AlertDialogDescription>
+								</AlertDialogHeader>
+								<AlertDialogFooter>
+									<AlertDialogCancel>Cancel</AlertDialogCancel>
+									<AlertDialogAction
+										onClick={onRemove}
+										className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+									>
+										{removeLabel}
+									</AlertDialogAction>
+								</AlertDialogFooter>
+							</AlertDialogContent>
+						</AlertDialog>
+					</DropdownMenuContent>
+				</DropdownMenu>
+			</TeamRowActions>
 		</div>
 	);
 }
@@ -1051,7 +1030,7 @@ function RoleSelectDialog({
 			<DialogContent className="sm:max-w-md">
 				<DialogHeader>
 					<div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
-						<Shield className="h-6 w-6 text-primary" />
+						<ShieldIcon className="h-6 w-6 text-primary" />
 					</div>
 					<DialogTitle className="text-center text-xl">{title}</DialogTitle>
 					<DialogDescription className="text-center">

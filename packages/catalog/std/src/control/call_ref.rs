@@ -110,7 +110,7 @@ impl NodeLogic for CallReferenceNode {
         }
 
         // Also set on the referenced node's output pins (shared storage + overrides)
-        for (_id, pin) in reference_function.pins.iter() {
+        for pin in reference_function.pins.values() {
             if pin.pin_type == PinType::Input || pin.data_type == VariableType::Execution {
                 continue;
             }
@@ -193,7 +193,7 @@ impl NodeLogic for CallReferenceNode {
             })
             .collect::<Vec<_>>();
 
-        output_pins.sort_by(|a, b| a.index.cmp(&b.index));
+        output_pins.sort_by_key(|a| a.index);
         let mut relevant_pins = HashSet::with_capacity(output_pins.len());
         for pin in output_pins {
             relevant_pins.insert(pin.name.clone());

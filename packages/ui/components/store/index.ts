@@ -13,6 +13,13 @@ export {
 } from "./package-detail-view";
 
 export {
+	WidgetCard,
+	WidgetCardGrid,
+	type WidgetCardProps,
+	type WidgetCardGridProps,
+} from "./widget-card";
+
+export {
 	AdminPackageDetailView,
 	type AdminPackageDetailViewProps,
 } from "./admin-package-detail-view";

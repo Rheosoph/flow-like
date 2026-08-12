@@ -111,7 +111,8 @@ impl Modify for SecurityAddon {
         (name = "admin", description = "Admin operations"),
         (name = "tmp", description = "Temporary file operations"),
         (name = "courses", description = "Flow-Like University: courses, lessons, challenges, leaderboard"),
-        (name = "ai-act", description = "EU AI Act conformity assessment and model governance")
+        (name = "ai-act", description = "EU AI Act conformity assessment and model governance"),
+        (name = "telemetry", description = "Anonymous, opt-in product telemetry")
     ),
     paths(
         // Health routes
@@ -140,6 +141,9 @@ impl Modify for SecurityAddon {
         crate::routes::user::notifications::mark_notification_read,
         crate::routes::user::notifications::mark_all_read,
         crate::routes::user::notifications::delete_notification,
+        crate::routes::user::bits::list_user_bits,
+        crate::routes::user::bits::upsert_user_bit,
+        crate::routes::user::bits::delete_user_bit,
         crate::routes::user::push_targets::register_push_target,
         crate::routes::user::push_targets::get_push_target_status,
         crate::routes::user::push_targets::update_push_target_status,
@@ -166,6 +170,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::internal::delete_app::delete_app,
         crate::routes::app::internal::change_visibility::change_visibility,
         crate::routes::app::internal::change_forking::change_forking,
+        crate::routes::app::internal::change_forking::get_forking,
         crate::routes::app::fork::preview::get_fork_preview,
         crate::routes::app::fork::begin_offline::begin_offline_fork,
         crate::routes::app::fork::begin_online::begin_online_fork,
@@ -240,6 +245,8 @@ impl Modify for SecurityAddon {
         // Template routes
         crate::routes::app::template::get_templates::get_templates,
         crate::routes::app::template::get_template::get_template,
+        crate::routes::app::template::get_template_preview::get_template_preview,
+        crate::routes::app::internal::search_templates::search_templates,
         crate::routes::app::template::upsert_template::upsert_template,
         crate::routes::app::template::delete_template::delete_template,
         // Meta routes
@@ -264,6 +271,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::team::manage_join_request::accept_join_request,
         crate::routes::app::team::manage_join_request::reject_join_request,
         crate::routes::app::team::invite_user::invite_user,
+        crate::routes::app::team::invites::list_app_invites,
+        crate::routes::app::team::invites::revoke_invite,
         crate::routes::app::team::purchase::purchase,
         crate::routes::app::team::remove_user::remove_user,
         // App connection routes (app-to-app access)
@@ -350,6 +359,12 @@ impl Modify for SecurityAddon {
         crate::routes::app::comments::remove_comment::remove_comment,
         // Notifications routes
         crate::routes::app::notifications::create_notification,
+        // Cache routes
+        crate::routes::app::cache::read_cache_entry,
+        crate::routes::app::cache::cache_entry_exists,
+        crate::routes::app::cache::write_cache_entry,
+        crate::routes::app::cache::delete_cache_entry,
+        crate::routes::app::cache::delete_cache_namespace,
         // Data routes
         crate::routes::app::data::upload_files::upload_files,
         crate::routes::app::data::upload_files::upload_user_files,
@@ -388,6 +403,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::db::drop_columns::drop_columns,
         crate::routes::app::db::build_index::build_index,
         crate::routes::app::db::drop_index::drop_index,
+        crate::routes::app::db::drop_table::drop_table,
         crate::routes::app::db::optimize::optimize_table,
         crate::routes::app::db::presign_db_access::presign_db_access,
         crate::routes::app::db::presign_db_access::presign_project_db_access,
@@ -431,6 +447,7 @@ impl Modify for SecurityAddon {
         crate::routes::registry::publish::publish,
         crate::routes::registry::search::search,
         crate::routes::registry::download::download,
+        crate::routes::registry::widget_asset::get_widget_asset,
         // Bit routes
         crate::routes::bit::get_bit::get_bit,
         crate::routes::bit::get_with_dependencies::get_with_dependencies,
@@ -458,6 +475,48 @@ impl Modify for SecurityAddon {
         crate::routes::solution::track_solution,
         // Tmp routes
         crate::routes::tmp::get_temporary_upload,
+        // Telemetry routes
+        crate::routes::telemetry::ingest_events,
+        crate::routes::telemetry::errors::ingest_errors,
+        crate::routes::telemetry::sessions::ingest_sessions,
+        crate::routes::telemetry::spans::ingest_spans,
+        crate::routes::telemetry::performance::ingest_performance,
+        crate::routes::telemetry::config::telemetry_config,
+        crate::routes::admin::telemetry::telemetry_overview,
+        crate::routes::admin::telemetry::telemetry_timeseries,
+        crate::routes::admin::telemetry::list_telemetry_events,
+        crate::routes::admin::telemetry::telemetry_engagement,
+        crate::routes::admin::telemetry::telemetry_flowpilot,
+        crate::routes::admin::telemetry::issues::list_telemetry_issues,
+        crate::routes::admin::telemetry::issues::get_telemetry_issue,
+        crate::routes::admin::telemetry::issues::update_telemetry_issue,
+        crate::routes::admin::telemetry::release_health::list_telemetry_releases,
+        crate::routes::admin::telemetry::release_health::telemetry_release_health,
+        crate::routes::admin::telemetry::sourcemaps::upload_telemetry_sourcemap,
+        crate::routes::admin::telemetry::traces::list_telemetry_traces,
+        crate::routes::admin::telemetry::traces::get_telemetry_trace,
+        crate::routes::admin::telemetry::performance::telemetry_performance,
+        crate::routes::admin::telemetry::span_stats::telemetry_span_stats,
+        crate::routes::admin::telemetry::sweep::sweep_telemetry,
+        crate::routes::admin::telemetry::rollup::rollup_telemetry,
+        crate::routes::telemetry::llm::ingest_llm_calls,
+        crate::routes::admin::telemetry::llm::telemetry_llm,
+        crate::routes::admin::telemetry::alerts::list_telemetry_alert_rules,
+        crate::routes::admin::telemetry::alerts::create_telemetry_alert_rule,
+        crate::routes::admin::telemetry::alerts::update_telemetry_alert_rule,
+        crate::routes::admin::telemetry::alerts::delete_telemetry_alert_rule,
+        crate::routes::admin::telemetry::alerts::list_telemetry_alert_events,
+        crate::routes::admin::telemetry::alerts::acknowledge_telemetry_alert_event,
+        crate::routes::admin::telemetry::alerts::evaluate_telemetry_alerts,
+        crate::routes::admin::telemetry::query::run_telemetry_query,
+        crate::routes::admin::telemetry::saved_queries::list_telemetry_saved_queries,
+        crate::routes::admin::telemetry::saved_queries::create_telemetry_saved_query,
+        crate::routes::admin::telemetry::saved_queries::update_telemetry_saved_query,
+        crate::routes::admin::telemetry::saved_queries::delete_telemetry_saved_query,
+        crate::routes::admin::telemetry::dashboards::list_telemetry_dashboards,
+        crate::routes::admin::telemetry::dashboards::create_telemetry_dashboard,
+        crate::routes::admin::telemetry::dashboards::update_telemetry_dashboard,
+        crate::routes::admin::telemetry::dashboards::delete_telemetry_dashboard,
         // Admin routes
         crate::routes::admin::solutions::list_solutions::list_solutions,
         crate::routes::admin::packages::get_stats::get_stats,
@@ -472,6 +531,7 @@ impl Modify for SecurityAddon {
         crate::routes::admin::sinks::list_tokens::list_tokens,
         crate::routes::admin::profiles::delete_profile_template::delete_profile_template,
         crate::routes::admin::runs::sweep_runs,
+        crate::routes::admin::cache::sweep_cache,
         // Course routes (University)
         crate::routes::course::courses::list_courses,
         crate::routes::course::courses::get_course,
@@ -522,6 +582,14 @@ impl Modify for SecurityAddon {
         // Health schemas
         crate::routes::health::HealthResponse,
         crate::routes::health::DbHealthResponse,
+        // Cache schemas
+        crate::routes::app::cache::ReadCacheResponse,
+        crate::routes::app::cache::ExistsCacheResponse,
+        crate::routes::app::cache::WriteCacheRequest,
+        crate::routes::app::cache::WriteCacheResponse,
+        crate::routes::app::cache::DeleteCacheResponse,
+        crate::routes::app::cache::DeleteNamespaceResponse,
+        crate::routes::admin::cache::SweepCacheResponse,
         // OAuth schemas
         crate::routes::oauth::TokenExchangeRequest,
         crate::routes::oauth::TokenRefreshRequest,
@@ -637,6 +705,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::widget::upsert_widget::WidgetUpsert,
         // Templates
         crate::routes::app::template::get_template::VersionQuery,
+        crate::routes::app::template::get_template_preview::TemplatePreview,
+        crate::routes::app::internal::search_templates::TemplateSearchHit,
         crate::routes::app::template::upsert_template::TemplateUpsert,
         // Meta
         crate::routes::app::meta::MetaQuery,
@@ -782,7 +852,209 @@ impl Modify for SecurityAddon {
         crate::routes::course::shared_app::OpenSharedAppQuery,
         crate::routes::course::translate::TranslateQuery,
         crate::routes::course::translate::TranslateResponse,
+        // Telemetry
+        crate::routes::telemetry::TelemetryIngestPayload,
+        crate::routes::telemetry::TelemetryEventPayload,
+        crate::routes::telemetry::TelemetryIngestResponse,
+        crate::routes::telemetry::errors::TelemetryErrorIngestPayload,
+        crate::routes::telemetry::errors::TelemetryErrorPayload,
+        crate::routes::telemetry::errors::TelemetryStackFramePayload,
+        crate::routes::telemetry::errors::TelemetryBreadcrumbPayload,
+        crate::routes::telemetry::errors::TelemetryErrorIngestResponse,
+        crate::routes::telemetry::sessions::TelemetrySessionIngestPayload,
+        crate::routes::telemetry::sessions::TelemetrySessionPayload,
+        crate::routes::telemetry::sessions::TelemetrySessionIngestResponse,
+        crate::routes::telemetry::spans::TelemetrySpanIngestPayload,
+        crate::routes::telemetry::spans::TelemetrySpanPayload,
+        crate::routes::telemetry::spans::TelemetrySpanIngestResponse,
+        crate::routes::telemetry::performance::TelemetryPerfIngestPayload,
+        crate::routes::telemetry::performance::TelemetryPerfMetricPayload,
+        crate::routes::telemetry::performance::TelemetryPerfIngestResponse,
+        crate::routes::telemetry::config::TelemetryConfigResponse,
+        crate::routes::telemetry::config::TelemetrySamplingConfig,
+        crate::routes::admin::telemetry::TelemetryOverviewResponse,
+        crate::routes::admin::telemetry::TopEventBucket,
+        crate::routes::admin::telemetry::SourceBucket,
+        crate::routes::admin::telemetry::PlatformBucket,
+        crate::routes::admin::telemetry::VersionBucket,
+        crate::routes::admin::telemetry::TelemetryTimeseriesResponse,
+        crate::routes::admin::telemetry::TelemetryTimeseriesPoint,
+        crate::routes::admin::telemetry::CountryBucket,
+        crate::routes::admin::telemetry::TelemetryEventRecord,
+        crate::routes::admin::telemetry::ListTelemetryEventsResponse,
+        crate::routes::admin::telemetry::TelemetryEngagementResponse,
+        crate::routes::admin::telemetry::DauPoint,
+        crate::routes::admin::telemetry::RetentionCohort,
+        crate::routes::admin::telemetry::DropOffPath,
+        crate::routes::admin::telemetry::TelemetryFlowPilotResponse,
+        crate::routes::admin::telemetry::FlowPilotTotals,
+        crate::routes::admin::telemetry::FlowPilotTrendPoint,
+        crate::routes::admin::telemetry::issues::TelemetryIssueRecord,
+        crate::routes::admin::telemetry::issues::ListTelemetryIssuesResponse,
+        crate::routes::admin::telemetry::issues::TelemetryIssueEvent,
+        crate::routes::admin::telemetry::issues::TelemetryIssueDetailResponse,
+        crate::routes::admin::telemetry::issues::IssueTimeseriesPoint,
+        crate::routes::admin::telemetry::issues::IssueReleaseBucket,
+        crate::routes::admin::telemetry::issues::UpdateTelemetryIssuePayload,
+        crate::routes::admin::telemetry::symbolicate::StackFrame,
+        crate::routes::admin::telemetry::release_health::TelemetryReleaseRow,
+        crate::routes::admin::telemetry::release_health::ListTelemetryReleasesResponse,
+        crate::routes::admin::telemetry::release_health::ReleaseHealthTrendPoint,
+        crate::routes::admin::telemetry::release_health::TelemetryReleaseHealthResponse,
+        crate::routes::admin::telemetry::sourcemaps::UploadSourceMapPayload,
+        crate::routes::admin::telemetry::sourcemaps::UploadSourceMapResponse,
+        crate::routes::admin::telemetry::traces::TelemetryTraceRow,
+        crate::routes::admin::telemetry::traces::ListTelemetryTracesResponse,
+        crate::routes::admin::telemetry::traces::TelemetryTraceSpan,
+        crate::routes::admin::telemetry::traces::TelemetryTraceDetailResponse,
+        crate::routes::admin::telemetry::performance::PerfMetricSummary,
+        crate::routes::admin::telemetry::performance::PerfTrendPoint,
+        crate::routes::admin::telemetry::performance::PerfPathRow,
+        crate::routes::admin::telemetry::performance::TelemetryPerformanceResponse,
+        crate::routes::admin::telemetry::span_stats::SpanOperationStats,
+        crate::routes::admin::telemetry::span_stats::TelemetrySpanStatsResponse,
+        crate::routes::admin::telemetry::sweep::TelemetrySweepResponse,
+        crate::routes::admin::telemetry::rollup::TelemetryRollupResponse,
+        crate::routes::telemetry::llm::TelemetryLlmIngestPayload,
+        crate::routes::telemetry::llm::TelemetryLlmCallPayload,
+        crate::routes::telemetry::llm::TelemetryLlmIngestResponse,
+        crate::routes::admin::telemetry::llm::LlmTotals,
+        crate::routes::admin::telemetry::llm::LlmModelStats,
+        crate::routes::admin::telemetry::llm::LlmProviderStats,
+        crate::routes::admin::telemetry::llm::LlmOperationStats,
+        crate::routes::admin::telemetry::llm::LlmErrorKindStats,
+        crate::routes::admin::telemetry::llm::LlmTrendPoint,
+        crate::routes::admin::telemetry::llm::TelemetryLlmResponse,
+        crate::routes::admin::telemetry::alerts::TelemetryAlertRuleRecord,
+        crate::routes::admin::telemetry::alerts::ListTelemetryAlertRulesResponse,
+        crate::routes::admin::telemetry::alerts::TelemetryAlertEventRecord,
+        crate::routes::admin::telemetry::alerts::ListTelemetryAlertEventsResponse,
+        crate::routes::admin::telemetry::alerts::DeleteTelemetryAlertRuleResponse,
+        crate::routes::admin::telemetry::alerts::EvaluateTelemetryAlertsResponse,
+        crate::routes::admin::telemetry::alerts::CreateTelemetryAlertRulePayload,
+        crate::routes::admin::telemetry::alerts::UpdateTelemetryAlertRulePayload,
+        crate::routes::admin::telemetry::query::TelemetryQueryDefinition,
+        crate::routes::admin::telemetry::query::TelemetryQueryMetric,
+        crate::routes::admin::telemetry::query::TelemetryQueryFilter,
+        crate::routes::admin::telemetry::query::TelemetryQueryResponse,
+        crate::routes::admin::telemetry::saved_queries::TelemetrySavedQueryRecord,
+        crate::routes::admin::telemetry::saved_queries::ListTelemetrySavedQueriesResponse,
+        crate::routes::admin::telemetry::saved_queries::CreateTelemetrySavedQueryPayload,
+        crate::routes::admin::telemetry::saved_queries::UpdateTelemetrySavedQueryPayload,
+        crate::routes::admin::telemetry::dashboards::TelemetryDashboardRecord,
+        crate::routes::admin::telemetry::dashboards::ListTelemetryDashboardsResponse,
+        crate::routes::admin::telemetry::dashboards::CreateTelemetryDashboardPayload,
+        crate::routes::admin::telemetry::dashboards::UpdateTelemetryDashboardPayload,
         crate::utils::fork::ForkIdMap,
+        crate::utils::fork::ForkPolicy,
+        crate::utils::fork::ForkDatabaseMode,
+        crate::utils::fork::db_schema::ForkTableSchema,
+        crate::utils::fork::preview::ForkCategorySize,
+        crate::utils::fork::preview::ForkSizeBreakdown,
+        crate::routes::app::internal::change_forking::ForkSettingsResponse,
+        crate::routes::app::fork::preview::ForkPreviewTarget,
     ))
 )]
 pub struct ApiDoc;
+
+#[cfg(test)]
+mod tests {
+    use super::ApiDoc;
+    use flow_like_types::Value;
+    use utoipa::OpenApi;
+
+    fn collect_refs(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                for (key, entry) in map {
+                    if key == "$ref"
+                        && let Some(reference) = entry.as_str()
+                    {
+                        out.push(reference.to_string());
+                    }
+                    collect_refs(entry, out);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    collect_refs(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A response body or request body referencing a type that was never added to
+    /// `components(schemas(...))` produces a dangling `$ref`, which breaks every
+    /// generated SDK. This catches the omission at test time instead of at codegen.
+    #[test]
+    fn every_schema_reference_is_registered() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        let schemas = spec
+            .get("components")
+            .and_then(|c| c.get("schemas"))
+            .and_then(|s| s.as_object())
+            .expect("spec exposes component schemas");
+
+        let mut refs = Vec::new();
+        collect_refs(&spec, &mut refs);
+
+        let dangling: Vec<&String> = refs
+            .iter()
+            .filter(|reference| {
+                reference
+                    .strip_prefix("#/components/schemas/")
+                    .is_some_and(|name| !schemas.contains_key(name))
+            })
+            .collect();
+
+        assert!(
+            dangling.is_empty(),
+            "unregistered schema references: {:?}",
+            dangling
+        );
+    }
+
+    #[test]
+    fn telemetry_paths_are_documented() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        let paths = spec
+            .get("paths")
+            .and_then(|p| p.as_object())
+            .expect("spec exposes paths");
+
+        for path in [
+            "/telemetry/events",
+            "/telemetry/errors",
+            "/telemetry/sessions",
+            "/telemetry/spans",
+            "/telemetry/performance",
+            "/telemetry/config",
+            "/admin/telemetry/issues",
+            "/admin/telemetry/issues/{issue_id}",
+            "/admin/telemetry/releases",
+            "/admin/telemetry/release-health",
+            "/admin/telemetry/sourcemaps",
+            "/admin/telemetry/traces",
+            "/admin/telemetry/traces/{trace_id}",
+            "/admin/telemetry/performance",
+            "/admin/telemetry/span-stats",
+            "/admin/telemetry/sweep",
+            "/admin/telemetry/rollup",
+            "/telemetry/llm",
+            "/admin/telemetry/llm",
+            "/admin/telemetry/alerts",
+            "/admin/telemetry/alerts/events",
+            "/admin/telemetry/alerts/evaluate",
+            "/admin/telemetry/alerts/{rule_id}",
+            "/admin/telemetry/alerts/{event_id}/ack",
+            "/admin/telemetry/query",
+            "/admin/telemetry/saved-queries",
+            "/admin/telemetry/saved-queries/{query_id}",
+            "/admin/telemetry/dashboards",
+            "/admin/telemetry/dashboards/{dashboard_id}",
+        ] {
+            assert!(paths.contains_key(path), "missing OpenAPI path '{}'", path);
+        }
+    }
+}

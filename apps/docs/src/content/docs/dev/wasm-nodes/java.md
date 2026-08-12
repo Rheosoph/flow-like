@@ -23,20 +23,15 @@ mise install        # Java 21 + Maven
 mise run setup      # Resolve dependencies (including SDK)
 ```
 
-## Project Setup
+## Important Files
 
-```
-wasm-node-java/
-├── src/
-│   └── main/
-│       └── java/
-│           └── com/example/node/
-│               └── Node.java         # Node implementation
-├── pom.xml                           # Maven build with TeaVM plugin
-├── flow-like.toml                    # Flow-Like package manifest
-├── mise.toml                         # Task runner config
-└── README.md
-```
+| Path | Purpose |
+|------|---------|
+| `src/main/java/com/example/node/Node.java` | Defines the node, run handler, and exported Core Module functions |
+| `pom.xml` | Configures the Java SDK dependency and TeaVM WASI build |
+| `flow-like.toml` | Declares the Flow-Like package |
+| `mise.toml` | Provides dependency, build, test, and clean tasks |
+| `README.md` | Template-specific setup and usage notes |
 
 ### Maven Configuration
 
@@ -222,7 +217,7 @@ cp target/wasm/*.wasm /path/to/flow-like/wasm-nodes/
 
 ### Notes on TeaVM
 
-- TeaVM compiles Java **bytecode** → WASM — no JVM is needed at runtime.
+- TeaVM compiles Java **bytecode** to WASM, so no JVM is needed at runtime.
 - Standard JSON libraries (Gson, Jackson) do not work under TeaVM due to limited reflection support. The SDK includes hand-rolled JSON serialization.
 - Use `org.teavm.interop.Export` to mark WASM exports.
 - Use `org.teavm.interop.Import` for host function imports (`env` module).
@@ -230,8 +225,8 @@ cp target/wasm/*.wasm /path/to/flow-like/wasm-nodes/
 
 ## Related
 
-→ [WASM Nodes Overview](/dev/wasm-nodes/overview/)
-→ [Component Model vs Core Modules](/dev/wasm-nodes/runtime-models/)
-→ [Rust Template](/dev/wasm-nodes/rust/)
-→ [Go Template](/dev/wasm-nodes/go/)
-→ [TypeScript Template](/dev/wasm-nodes/typescript/)
+- [WASM Nodes Overview](/dev/wasm-nodes/overview/)
+- [Component Model vs Core Modules](/dev/wasm-nodes/runtime-models/)
+- [Rust Template](/dev/wasm-nodes/rust/)
+- [Go Template](/dev/wasm-nodes/go/)
+- [TypeScript Template](/dev/wasm-nodes/typescript/)

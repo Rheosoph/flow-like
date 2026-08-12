@@ -6,21 +6,176 @@ use rig::{
     OneOrMany,
     client::{ClientBuilderError, CompletionClient},
     completion::{self, CompletionError, CompletionRequest, GetTokenUsage, Usage},
-    message::{self, MimeType},
+    message::{self, MimeType, Reasoning},
     streaming,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, convert::TryFrom};
+use std::{collections::HashMap, convert::TryFrom, sync::Arc};
 
 #[derive(Clone, Debug, Default)]
 struct ToolArgumentSpec {
     ordered_parameter_names: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+const THINK_OPEN_TAG: &str = "<think>";
+const THINK_CLOSE_TAG: &str = "</think>";
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ThinkTagState {
+    #[default]
+    SeekingOpening,
+    Reasoning,
+    Content,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum ParsedThinkContent {
+    Content(String),
+    Reasoning(String),
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct ParsedThinkText {
+    visible: String,
+    reasoning: String,
+}
+
+/// Splits a leading `<think>...</think>` envelope from visible model content
+/// while allowing either tag to be divided across arbitrary streaming chunks.
+#[derive(Debug, Default)]
+struct ThinkTagParser {
+    state: ThinkTagState,
+    pending: String,
+}
+
+impl ThinkTagParser {
+    fn push(&mut self, content: &str) -> Vec<ParsedThinkContent> {
+        self.pending.push_str(content);
+        self.drain_available()
+    }
+
+    fn finish(&mut self) -> Vec<ParsedThinkContent> {
+        if self.pending.is_empty() {
+            return Vec::new();
+        }
+
+        let pending = std::mem::take(&mut self.pending);
+        vec![self.segment(pending)]
+    }
+
+    fn parse(content: &str) -> Vec<ParsedThinkContent> {
+        let mut parser = Self::default();
+        let mut parsed = parser.push(content);
+        parsed.extend(parser.finish());
+        parsed
+    }
+
+    fn parse_text(content: &str) -> ParsedThinkText {
+        let mut text = ParsedThinkText::default();
+        for parsed in Self::parse(content) {
+            match parsed {
+                ParsedThinkContent::Content(content) => text.visible.push_str(&content),
+                ParsedThinkContent::Reasoning(reasoning) => text.reasoning.push_str(&reasoning),
+            }
+        }
+        text
+    }
+
+    fn drain_available(&mut self) -> Vec<ParsedThinkContent> {
+        let mut parsed = Vec::new();
+
+        loop {
+            match self.state {
+                ThinkTagState::SeekingOpening => {
+                    let leading_whitespace = self
+                        .pending
+                        .find(|character: char| !character.is_whitespace())
+                        .unwrap_or(self.pending.len());
+                    let candidate = &self.pending[leading_whitespace..];
+
+                    if candidate.starts_with(THINK_OPEN_TAG) {
+                        self.pending
+                            .drain(..leading_whitespace + THINK_OPEN_TAG.len());
+                        self.state = ThinkTagState::Reasoning;
+                        continue;
+                    }
+
+                    if THINK_OPEN_TAG.starts_with(candidate) {
+                        break;
+                    }
+
+                    self.state = ThinkTagState::Content;
+                }
+                ThinkTagState::Reasoning => {
+                    if let Some(tag_start) = self.pending.find(THINK_CLOSE_TAG) {
+                        if tag_start > 0 {
+                            let before_tag = self.pending.drain(..tag_start).collect();
+                            parsed.push(ParsedThinkContent::Reasoning(before_tag));
+                        }
+
+                        self.pending.drain(..THINK_CLOSE_TAG.len());
+                        self.state = ThinkTagState::Content;
+                        continue;
+                    }
+
+                    let retained = Self::partial_tag_suffix_len(&self.pending, THINK_CLOSE_TAG);
+                    let emit_len = self.pending.len() - retained;
+                    if emit_len > 0 {
+                        let available = self.pending.drain(..emit_len).collect();
+                        parsed.push(ParsedThinkContent::Reasoning(available));
+                    }
+                    break;
+                }
+                ThinkTagState::Content => {
+                    if !self.pending.is_empty() {
+                        parsed.push(ParsedThinkContent::Content(std::mem::take(
+                            &mut self.pending,
+                        )));
+                    }
+                    break;
+                }
+            }
+        }
+
+        parsed
+    }
+
+    fn partial_tag_suffix_len(content: &str, tag: &str) -> usize {
+        (1..tag.len())
+            .rev()
+            .find(|&length| content.ends_with(&tag[..length]))
+            .unwrap_or(0)
+    }
+
+    fn segment(&self, content: String) -> ParsedThinkContent {
+        match self.state {
+            ThinkTagState::Reasoning => ParsedThinkContent::Reasoning(content),
+            ThinkTagState::SeekingOpening | ThinkTagState::Content => {
+                ParsedThinkContent::Content(content)
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct LlamaCppClient {
     base_url: String,
     http_client: reqwest::Client,
+    bearer_token: Option<String>,
+    // Some in-process transports (notably iOS MLX) own the loopback server
+    // behind this client. Keep that runtime alive for every cloned completion
+    // client/model until the request using it has actually finished.
+    _keepalive: Option<Arc<dyn Send + Sync>>,
+}
+
+impl std::fmt::Debug for LlamaCppClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LlamaCppClient")
+            .field("base_url", &self.base_url)
+            .field("has_bearer_token", &self.bearer_token.is_some())
+            .finish()
+    }
 }
 
 impl LlamaCppClient {
@@ -28,12 +183,32 @@ impl LlamaCppClient {
         Self {
             base_url: base_url.to_string(),
             http_client: reqwest::Client::new(),
+            bearer_token: None,
+            _keepalive: None,
         }
+    }
+
+    pub fn new_with_bearer_token(base_url: &str, bearer_token: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.to_string(),
+            http_client: reqwest::Client::new(),
+            bearer_token: Some(bearer_token.into()),
+            _keepalive: None,
+        }
+    }
+
+    pub fn with_keepalive(mut self, keepalive: Arc<dyn Send + Sync>) -> Self {
+        self._keepalive = Some(keepalive);
+        self
     }
 
     fn post(&self, path: &str) -> Result<reqwest::RequestBuilder, ClientBuilderError> {
         let url = format!("{}/{}", self.base_url, path);
-        Ok(self.http_client.post(url))
+        let request = self.http_client.post(url);
+        Ok(match self.bearer_token.as_deref() {
+            Some(bearer_token) => request.bearer_auth(bearer_token),
+            None => request,
+        })
     }
 
     pub fn completion_model(&self, model: &str) -> CompletionModel {
@@ -66,6 +241,13 @@ pub struct Choice {
 pub struct ResponseMessage {
     pub role: String,
     pub content: Option<String>,
+    #[serde(
+        default,
+        rename = "reasoning_content",
+        alias = "reasoning",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub reasoning_content: Option<String>,
     #[serde(default)]
     pub tool_calls: Vec<ToolCall>,
 }
@@ -100,11 +282,28 @@ impl TryFrom<CompletionResponse> for completion::CompletionResponse<CompletionRe
             .ok_or_else(|| CompletionError::ResponseError("No choices in response".to_string()))?;
 
         let mut assistant_contents = Vec::new();
+        let mut reasoning_content = first_choice
+            .message
+            .reasoning_content
+            .clone()
+            .unwrap_or_default();
 
-        if let Some(content) = &first_choice.message.content
-            && !content.is_empty()
-        {
-            assistant_contents.push(completion::AssistantContent::text(content));
+        let parsed_content = first_choice
+            .message
+            .content
+            .as_deref()
+            .map(ThinkTagParser::parse_text)
+            .unwrap_or_default();
+        reasoning_content.push_str(&parsed_content.reasoning);
+
+        if !reasoning_content.is_empty() {
+            assistant_contents.push(completion::AssistantContent::Reasoning(Reasoning::new(
+                &reasoning_content,
+            )));
+        }
+
+        if !parsed_content.visible.is_empty() {
+            assistant_contents.push(completion::AssistantContent::text(parsed_content.visible));
         }
 
         for tc in &first_choice.message.tool_calls {
@@ -163,6 +362,8 @@ struct AccumulatedToolCall {
 pub struct StreamingDelta {
     #[serde(default)]
     pub content: Option<String>,
+    #[serde(default, rename = "reasoning_content", alias = "reasoning")]
+    pub reasoning_content: Option<String>,
     #[serde(default)]
     pub tool_calls: Vec<StreamingToolCall>,
 }
@@ -225,6 +426,17 @@ impl CompletionModel {
                 );
             }
         }
+    }
+
+    fn openai_error_message(payload: &str) -> Option<String> {
+        let value = serde_json::from_str::<Value>(payload).ok()?;
+        let error = value.get("error")?;
+        error
+            .get("message")
+            .and_then(Value::as_str)
+            .or_else(|| error.as_str())
+            .map(str::to_owned)
+            .or_else(|| (!error.is_null()).then(|| error.to_string()))
     }
 
     fn fallback_tool_calls_from_text(
@@ -904,10 +1116,6 @@ impl CompletionModel {
         }
 
         output
-    }
-
-    fn normalize_reasoning_preview(content: &str) -> String {
-        content.to_string()
     }
 
     fn should_preserve_canonical_messages(messages: &[Value]) -> bool {
@@ -1671,11 +1879,20 @@ impl completion::CompletionModel for CompletionModel {
             && choice.message.tool_calls.is_empty()
             && let Some(content) = choice.message.content.as_deref()
         {
+            let parsed_content = ThinkTagParser::parse_text(content);
+
             let fallback_tool_calls =
-                Self::fallback_tool_calls_from_text(content, &tool_argument_specs);
+                Self::fallback_tool_calls_from_text(&parsed_content.visible, &tool_argument_specs);
             if !fallback_tool_calls.is_empty() {
                 choice.message.tool_calls = fallback_tool_calls;
                 choice.message.content = None;
+                if !parsed_content.reasoning.is_empty() {
+                    choice
+                        .message
+                        .reasoning_content
+                        .get_or_insert_default()
+                        .push_str(&parsed_content.reasoning);
+                }
             }
         }
 
@@ -1717,8 +1934,8 @@ impl completion::CompletionModel for CompletionModel {
             let mut tool_calls: BTreeMap<usize, AccumulatedToolCall> = BTreeMap::new();
             let mut final_usage: Option<ApiUsage> = None;
             let mut streamed_text = String::new();
-            let mut streamed_reasoning_preview = String::new();
             let mut buffered_text_chunks = Vec::new();
+            let mut think_tag_parser = ThinkTagParser::default();
             let should_buffer_text = !tool_argument_specs.is_empty();
 
             while let Some(event_result) = event_source.next().await {
@@ -1730,6 +1947,11 @@ impl completion::CompletionModel for CompletionModel {
                         if message.data.trim().is_empty() || message.data == "[DONE]" {
                             continue;
                         }
+                        if let Some(error) = Self::openai_error_message(&message.data) {
+                            event_source.close();
+                            yield Err(CompletionError::ProviderError(error));
+                            return;
+                        }
 
                         let chunk: Result<StreamingChunk, _> = serde_json::from_str(&message.data);
                         let Ok(chunk) = chunk else {
@@ -1739,33 +1961,33 @@ impl completion::CompletionModel for CompletionModel {
                         if let Some(choice) = chunk.choices.first() {
                             let delta = &choice.delta;
 
+                            if let Some(reasoning) = &delta.reasoning_content
+                                && !reasoning.is_empty() {
+                                    yield Ok(streaming::RawStreamingChoice::ReasoningDelta {
+                                        id: None,
+                                        reasoning: reasoning.clone(),
+                                    });
+                                }
+
                             if let Some(content) = &delta.content
                                 && !content.is_empty() {
-                                    streamed_text.push_str(content);
-                                    if should_buffer_text {
-                                        buffered_text_chunks.push(content.clone());
-                                        let normalized_preview =
-                                            Self::normalize_reasoning_preview(&streamed_text);
-
-                                        if normalized_preview
-                                            .starts_with(&streamed_reasoning_preview)
-                                        {
-                                            let reasoning_delta = normalized_preview
-                                                [streamed_reasoning_preview.len()..]
-                                                .to_string();
-                                            streamed_reasoning_preview = normalized_preview;
-
-                                            if !reasoning_delta.is_empty() {
+                                    for parsed in think_tag_parser.push(content) {
+                                        match parsed {
+                                            ParsedThinkContent::Reasoning(reasoning) => {
                                                 yield Ok(streaming::RawStreamingChoice::ReasoningDelta {
                                                     id: None,
-                                                    reasoning: reasoning_delta,
+                                                    reasoning,
                                                 });
                                             }
-                                        } else {
-                                            streamed_reasoning_preview = normalized_preview;
+                                            ParsedThinkContent::Content(content) => {
+                                                streamed_text.push_str(&content);
+                                                if should_buffer_text {
+                                                    buffered_text_chunks.push(content);
+                                                } else {
+                                                    yield Ok(streaming::RawStreamingChoice::Message(content));
+                                                }
+                                            }
                                         }
-                                    } else {
-                                        yield Ok(streaming::RawStreamingChoice::Message(content.clone()));
                                     }
                                 }
 
@@ -1804,6 +2026,25 @@ impl completion::CompletionModel for CompletionModel {
 
                         yield Err(CompletionError::ProviderError(format!("Stream error: {}", e)));
                         break;
+                    }
+                }
+            }
+
+            for parsed in think_tag_parser.finish() {
+                match parsed {
+                    ParsedThinkContent::Reasoning(reasoning) => {
+                        yield Ok(streaming::RawStreamingChoice::ReasoningDelta {
+                            id: None,
+                            reasoning,
+                        });
+                    }
+                    ParsedThinkContent::Content(content) => {
+                        streamed_text.push_str(&content);
+                        if should_buffer_text {
+                            buffered_text_chunks.push(content);
+                        } else {
+                            yield Ok(streaming::RawStreamingChoice::Message(content));
+                        }
                     }
                 }
             }
@@ -1931,6 +2172,36 @@ mod tests {
                     "include_usage": true,
                 }
             })
+        );
+    }
+
+    #[test]
+    fn bearer_token_is_attached_without_debug_exposure() {
+        let client = LlamaCppClient::new_with_bearer_token(DEFAULT_BASE_URL, "runtime-secret");
+        let request = client.post("v1/chat/completions").unwrap().build().unwrap();
+
+        assert_eq!(
+            request
+                .headers()
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer runtime-secret")
+        );
+        assert!(!format!("{client:?}").contains("runtime-secret"));
+    }
+
+    #[test]
+    fn test_openai_stream_error_payload_is_detected() {
+        assert_eq!(
+            CompletionModel::openai_error_message(
+                r#"{"error":{"message":"native generation failed","type":"server_error"}}"#
+            )
+            .as_deref(),
+            Some("native generation failed")
+        );
+        assert_eq!(
+            CompletionModel::openai_error_message(r#"{"choices":[{"delta":{"content":"hello"}}]}"#),
+            None
         );
     }
 
@@ -2274,23 +2545,164 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_reasoning_preview_preserves_streamed_newlines() {
+    fn test_think_tag_parser_splits_reasoning_from_visible_content() {
         assert_eq!(
-            CompletionModel::normalize_reasoning_preview(
-                "Okay\n\ni\ncan\nhelp\nyou\nwith\nthat.\nHere\n's\na\nsearch",
-            ),
-            "Okay\n\ni\ncan\nhelp\nyou\nwith\nthat.\nHere\n's\na\nsearch"
+            ThinkTagParser::parse("<think>\nA structured plan.\n</think>\nThe final answer."),
+            vec![
+                ParsedThinkContent::Reasoning("\nA structured plan.\n".to_string()),
+                ParsedThinkContent::Content("\nThe final answer.".to_string()),
+            ]
         );
     }
 
     #[test]
-    fn test_normalize_reasoning_preview_preserves_structured_markdown() {
+    fn test_think_tag_parser_handles_tags_split_across_stream_chunks() {
+        let mut parser = ThinkTagParser::default();
+        let mut parsed = Vec::new();
+
+        for character in "<think>plan</think>answer".chars() {
+            parsed.extend(parser.push(&character.to_string()));
+        }
+        parsed.extend(parser.finish());
+
+        let mut reasoning = String::new();
+        let mut content = String::new();
+        for part in parsed {
+            match part {
+                ParsedThinkContent::Reasoning(part) => reasoning.push_str(&part),
+                ParsedThinkContent::Content(part) => content.push_str(&part),
+            }
+        }
+
+        assert_eq!(reasoning, "plan");
+        assert_eq!(content, "answer");
+    }
+
+    #[test]
+    fn test_think_tag_parser_preserves_plain_text_and_incomplete_literal_tag() {
+        let mut parser = ThinkTagParser::default();
+        let mut parsed = parser.push("Use the literal <thi");
+        parsed.extend(parser.finish());
+
         assert_eq!(
-            CompletionModel::normalize_reasoning_preview(
-                "** Summary**\n- First item\n- Second item\n\n```md\n# Heading\n```"
-            ),
-            "** Summary**\n- First item\n- Second item\n\n```md\n# Heading\n```"
+            parsed,
+            vec![ParsedThinkContent::Content(
+                "Use the literal <thi".to_string()
+            )]
         );
+    }
+
+    #[test]
+    fn test_think_tag_parser_only_recognizes_a_leading_envelope() {
+        let content = "Show `<think>example</think>` literally.";
+        assert_eq!(
+            ThinkTagParser::parse(content),
+            vec![ParsedThinkContent::Content(content.to_string())]
+        );
+    }
+
+    #[test]
+    fn test_think_tag_parser_treats_unclosed_block_as_reasoning() {
+        assert_eq!(
+            ThinkTagParser::parse("<think>still working"),
+            vec![ParsedThinkContent::Reasoning("still working".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_think_tag_fallback_tool_detection_only_uses_visible_content() {
+        let tool_argument_specs =
+            CompletionModel::tool_argument_specs(&[completion::ToolDefinition {
+                name: "internet_search".to_string(),
+                description: "Search the internet".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"]
+                }),
+            }]);
+
+        let reasoning_call = ThinkTagParser::parse_text(
+            "<think>internet_search(query=\"private thought\")</think>answer",
+        );
+        assert!(
+            CompletionModel::fallback_tool_calls_from_text(
+                &reasoning_call.visible,
+                &tool_argument_specs
+            )
+            .is_empty()
+        );
+
+        let answer_call = ThinkTagParser::parse_text(
+            "<think>plan</think>internet_search(query=\"public request\")",
+        );
+        assert_eq!(
+            CompletionModel::fallback_tool_calls_from_text(
+                &answer_call.visible,
+                &tool_argument_specs
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_think_tag_completion_response_promotes_block_to_reasoning() {
+        let response = CompletionResponse {
+            id: "completion-1".to_string(),
+            object: "chat.completion".to_string(),
+            created: 0,
+            model: "test".to_string(),
+            choices: vec![Choice {
+                index: 0,
+                message: ResponseMessage {
+                    role: "assistant".to_string(),
+                    content: Some(" \n<think>plan</think>answer".to_string()),
+                    reasoning_content: None,
+                    tool_calls: Vec::new(),
+                },
+                finish_reason: Some("stop".to_string()),
+            }],
+            usage: ApiUsage {
+                prompt_tokens: 1,
+                completion_tokens: 2,
+                total_tokens: 3,
+            },
+        };
+
+        let converted: completion::CompletionResponse<CompletionResponse> =
+            response.try_into().unwrap();
+        let content = converted.choice.iter().collect::<Vec<_>>();
+
+        assert_eq!(content.len(), 2);
+        match content[0] {
+            completion::AssistantContent::Reasoning(reasoning) => {
+                assert_eq!(reasoning.display_text(), "plan");
+            }
+            other => panic!("expected reasoning, got {other:?}"),
+        }
+        match content[1] {
+            completion::AssistantContent::Text(text) => assert_eq!(text.text, "answer"),
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_think_tag_streaming_delta_accepts_native_reasoning_content() {
+        let delta: StreamingDelta = serde_json::from_value(json!({
+            "reasoning_content": "native plan"
+        }))
+        .unwrap();
+
+        assert_eq!(delta.reasoning_content.as_deref(), Some("native plan"));
+
+        let alias: StreamingDelta = serde_json::from_value(json!({
+            "reasoning": "aliased plan"
+        }))
+        .unwrap();
+        assert_eq!(alias.reasoning_content.as_deref(), Some("aliased plan"));
     }
 
     #[test]

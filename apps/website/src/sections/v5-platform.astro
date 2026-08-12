@@ -1,0 +1,306 @@
+---
+import PlatformMock from "../components/v5/platform-mock.astro";
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const localized = translations[lang] as Record<string, string>;
+  const english = translations.en as Record<string, string>;
+  return localized?.[key] ?? english[key] ?? key;
+};
+const tList = (key: TranslationKey): string[] => t(key).split("|");
+
+const featureDefs = [
+  { id: "builder", no: "01" },
+  { id: "workflow", no: "02" },
+  { id: "frontend", no: "03" },
+  { id: "data", no: "04" },
+  { id: "store", no: "05" },
+  { id: "governance", no: "06" },
+  { id: "pilot", no: "07" },
+] as const;
+
+const features = featureDefs.map((f) => ({
+  id: f.id,
+  no: f.no,
+  title: t(`v5.platform.f.${f.id}.title`),
+  kicker: t(`v5.platform.f.${f.id}.kicker`),
+  text: t(`v5.platform.f.${f.id}.text`),
+  tags: tList(`v5.platform.f.${f.id}.tags`),
+}));
+
+const MAX_TAGS = 5;
+const first = features[0];
+const featuresJson = JSON.stringify(
+  features.map((f) => ({ kicker: f.kicker, title: f.title, text: f.text, tags: f.tags })),
+);
+---
+
+<section id="platform" class="dark v5-platform" style="color-scheme:dark">
+  <div class="story" data-v5-story data-features={featuresJson}>
+    <div class="story-sticky">
+      <header class="story-top">
+        <span class="eyebrow">02 / {t("v5.platform.eyebrow")}</span>
+        <i><b data-progress style="width:0%"></b></i>
+        <span data-counter>01 — 07</span>
+      </header>
+      <h2><span>{t("v5.platform.title.w1")}</span><span>{t("v5.platform.title.w2")}</span><span>{t("v5.platform.title.w3")}</span></h2>
+      <nav>
+        {features.map((f, i) => (
+          <button class={i === 0 ? "active" : ""} data-nav={i} type="button"><i>{f.no}</i><span>{f.title}</span></button>
+        ))}
+      </nav>
+      <div class="stage">
+        {features.map((f, i) => (
+          <div class:list={["stage-item", i === 0 && "is-active"]} data-mock={i}>
+            <PlatformMock id={f.id} lang={lang} />
+          </div>
+        ))}
+      </div>
+      <aside class="story-copy">
+        <label data-copy-label>{first.kicker}</label>
+        <h3 data-copy-title>{first.title}</h3>
+        <p data-copy-text>{first.text}</p>
+        <div data-copy-tags>
+          {Array.from({ length: MAX_TAGS }).map((_, i) => (
+            <em data-tag={i} style={i >= first.tags.length ? "display:none" : ""}>{first.tags[i] ?? ""}</em>
+          ))}
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <div class="mobile-story">
+    <header><span class="eyebrow">02 / {t("v5.platform.eyebrow")}</span><h2>{t("v5.platform.title.full")}</h2></header>
+    {features.map((f) => (
+      <article>
+        <div><label>{f.no} / {f.kicker}</label><h3>{f.title}</h3><p>{f.text}</p></div>
+        <PlatformMock id={f.id} lang={lang} />
+      </article>
+    ))}
+  </div>
+</section>
+
+<style>
+  .v5-platform { --mono: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--background); color: var(--foreground); }
+  .eyebrow { font: 9px/1 var(--mono); letter-spacing: .16em; color: var(--muted-foreground); }
+
+  .story { position: relative; height: 700vh; background: var(--background); }
+  .story-sticky {
+    --story-gutter: clamp(24px, 3vw, 60px);
+    --story-left: 19%;
+    --story-right: 24%;
+    position: sticky;
+    top: 0;
+    width: min(100%, var(--website-content-max));
+    height: 100vh;
+    display: grid;
+    grid-template-columns: var(--story-left) minmax(0, 1fr) var(--story-right);
+    grid-template-rows: 55px 1fr;
+    overflow: hidden;
+    box-sizing: border-box;
+    margin-inline: auto;
+    padding: 24px var(--story-gutter);
+    background: radial-gradient(circle at 52% 50%, color-mix(in oklab, var(--primary) 8%, transparent), transparent 34%), var(--background);
+  }
+  .story-top { grid-column: 1/-1; display: grid; grid-template-columns: var(--story-left) minmax(0, 1fr) var(--story-right); align-items: center; padding-bottom: 14px; border-bottom: 1px solid var(--border); color: var(--muted-foreground); font: 9px var(--mono); letter-spacing: .12em; }
+  .story-top > i { height: 1px; margin-right: 26px; background: var(--border); }
+  .story-top > i b { display: block; height: 1px; background: var(--accent); transition: width .1s linear; }
+  .story-sticky > h2 { position: absolute; top: 100px; left: var(--story-gutter); display: grid; margin: 0; font-size: clamp(45px, 4.4vw, 72px); line-height: .88; letter-spacing: -.065em; }
+  .story-sticky > h2 span:nth-child(2) { color: var(--muted-foreground); }
+  .story-sticky > nav { grid-column: 1; grid-row: 2; align-self: end; display: grid; margin-bottom: 18px; border-top: 1px solid var(--border); }
+  .story-sticky > nav button { height: 43px; display: grid; grid-template-columns: 27px 1fr; gap: 8px; align-items: center; padding: 0 6px; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--muted-foreground); text-align: left; cursor: pointer; transition: color .2s, padding .2s, background .2s; }
+  .story-sticky > nav button i { font: 8px var(--mono); font-style: normal; }
+  .story-sticky > nav button span { font-size: 11px; }
+  .story-sticky > nav button.active { padding-left: 13px; background: linear-gradient(90deg, color-mix(in oklab, var(--accent) 9%, transparent), transparent); color: var(--foreground); }
+  .story-sticky > nav button.active i { color: var(--accent); }
+  .stage { grid-column: 2; grid-row: 2; display: flex; align-items: center; justify-content: center; padding: 6vh 2vw 2vh; }
+  .stage-item { display: none; width: min(100%, 900px); }
+  .stage-item.is-active { display: block; animation: stageIn .55s cubic-bezier(.2, .8, .2, 1); }
+  @keyframes stageIn { from { opacity: 0; transform: translateY(18px) scale(.985); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
+  .story-copy { grid-column: 3; grid-row: 2; align-self: end; padding: 0 0 18px 2vw; }
+  .story-copy > label { color: var(--accent); font: 8px var(--mono); letter-spacing: .12em; }
+  .story-copy h3 { margin: 16px 0 18px; font-size: clamp(30px, 3.2vw, 52px); letter-spacing: -.05em; }
+  .story-copy p { margin: 0 0 24px; color: var(--muted-foreground); font-size: 14px; line-height: 1.6; }
+  .story-copy > div { display: flex; flex-wrap: wrap; gap: 7px; }
+  .story-copy em { padding: 7px 9px; border: 1px solid var(--border); border-radius: 20px; color: var(--muted-foreground); font: 8px var(--mono); font-style: normal; }
+
+  /* Mock-screen styles live in platform-mock.astro (colocated with their markup so
+     Astro's scope hash lands on them). Only the JS-drawn connector bars stay global
+     below, since createElement() output never carries a scope hash. */
+  .mobile-story { display: none; }
+
+  @media (max-width: 1050px) {
+    .story-sticky {
+      --story-gutter: 2vw;
+      --story-left: 18%;
+      --story-right: 23%;
+    }
+  }
+
+  /* The sticky story is only useful when its complete stage can remain visible.
+     Narrow and short viewports get the linear version instead. */
+  @media (max-width: 959px), (max-height: 679px) {
+    .story { display: none; }
+    .mobile-story { display: block; padding: 100px 18px; background: var(--background); }
+    .mobile-story > header { padding: 0 4px 55px; }
+    .mobile-story > header h2 { margin: 22px 0; font-size: 56px; line-height: .94; letter-spacing: -.06em; }
+    .mobile-story > article { margin-bottom: 95px; }
+    .mobile-story > article > div:first-child { margin-bottom: 25px; padding: 0 4px; }
+    .mobile-story article label { color: var(--accent); font: 8px var(--mono); letter-spacing: .1em; }
+    .mobile-story article h3 { margin: 12px 0; font-size: 42px; letter-spacing: -.05em; }
+    .mobile-story article p { color: var(--muted-foreground); font-size: 14px; line-height: 1.55; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .stage-item.is-active { animation: none; }
+  }
+</style>
+
+<!--
+  Connector bars (.wires/.rels children) are created in the script below, so they
+  never receive Astro's scope hash. These rules are global but anchored to the
+  unique .v5-platform root class, so they style only this section and never leak.
+-->
+<style is:global>
+  .v5-platform .wires > i { position: absolute; height: 1px; background: color-mix(in oklab, var(--accent) 35%, transparent); transform-origin: left center; }
+  .v5-platform .rels > i { position: absolute; height: 1px; background: color-mix(in oklab, var(--accent) 30%, transparent); transform-origin: left center; }
+</style>
+
+<script>
+  function initV5Platform() {
+    const story = document.querySelector<HTMLElement>("[data-v5-story]");
+    if (!story || story.dataset.ready === "true") return;
+
+    // The sticky/parallax composition needs enough room for its heading,
+    // navigation, mockup and copy to stay visible together. Smaller viewports
+    // use the linear story rendered alongside this scene instead.
+    const linearStoryQuery = window.matchMedia(
+      "(max-width: 959px), (max-height: 679px)",
+    );
+    if (linearStoryQuery.matches) {
+      linearStoryQuery.addEventListener(
+        "change",
+        (event) => {
+          if (!event.matches) initV5Platform();
+        },
+        { once: true },
+      );
+      return;
+    }
+
+    story.dataset.ready = "true";
+
+    const raw = story.getAttribute("data-features");
+    const features: { kicker: string; title: string; text: string; tags: string[] }[] = raw ? JSON.parse(raw) : [];
+    const n = features.length || 7;
+
+    const bar = story.querySelector<HTMLElement>("[data-progress]");
+    const counter = story.querySelector<HTMLElement>("[data-counter]");
+    const navButtons = [...story.querySelectorAll<HTMLButtonElement>("[data-nav]")];
+    const items = [...story.querySelectorAll<HTMLElement>("[data-mock]")];
+    const copyLabel = story.querySelector<HTMLElement>("[data-copy-label]");
+    const copyTitle = story.querySelector<HTMLElement>("[data-copy-title]");
+    const copyText = story.querySelector<HTMLElement>("[data-copy-text]");
+    const tagEls = [...story.querySelectorAll<HTMLElement>("[data-tag]")];
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const section = story.closest("section") ?? document;
+
+    const drawConnectors = (scope: ParentNode) => {
+      scope.querySelectorAll<HTMLElement>("[data-connect]").forEach((container) => {
+        const canvas = container.parentElement;
+        if (!canvas) return;
+        if (!canvas.clientWidth || !canvas.clientHeight) return;
+        const cls = container.classList.contains("rels") ? "rel" : "wire";
+        const links = (container.getAttribute("data-links") ?? "").split(",").filter(Boolean);
+        const center = (name: string) => {
+          const el = canvas.querySelector<HTMLElement>(`.${name}`);
+          if (!el) return null;
+          return [el.offsetLeft + el.offsetWidth / 2, el.offsetTop + el.offsetHeight / 2] as [number, number];
+        };
+        container.textContent = "";
+        links.forEach((link) => {
+          const [a, b] = link.split("-");
+          const p1 = center(a);
+          const p2 = center(b);
+          if (!p1 || !p2) return;
+          let [x1, y1] = p1;
+          let [x2, y2] = p2;
+          if (x2 < x1) [x1, y1, x2, y2] = [x2, y2, x1, y1];
+          const bar = document.createElement("i");
+          bar.className = cls;
+          bar.style.left = `${x1}px`;
+          bar.style.top = `${y1}px`;
+          bar.style.width = `${Math.hypot(x2 - x1, y2 - y1)}px`;
+          bar.style.transform = `rotate(${(Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI}deg)`;
+          container.appendChild(bar);
+        });
+      });
+    };
+
+    let current = -1;
+    let ticking = false;
+    const pad = (i: number) => String(i + 1).padStart(2, "0");
+
+    const render = (active: number, p: number) => {
+      if (bar) bar.style.width = `${p * 100}%`;
+      if (counter) counter.textContent = `${pad(active)} — 07`;
+      navButtons.forEach((b, i) => b.classList.toggle("active", i === active));
+      if (active === current) return;
+      current = active;
+      items.forEach((el, i) => el.classList.toggle("is-active", i === active));
+      drawConnectors(section);
+      const f = features[active];
+      if (!f) return;
+      if (copyLabel) copyLabel.textContent = f.kicker;
+      if (copyTitle) copyTitle.textContent = f.title;
+      if (copyText) copyText.textContent = f.text;
+      tagEls.forEach((el, i) => {
+        const tag = f.tags[i];
+        if (tag) {
+          el.textContent = tag;
+          el.style.display = "";
+        } else {
+          el.style.display = "none";
+        }
+      });
+    };
+
+    const update = () => {
+      const rect = story.getBoundingClientRect();
+      const len = Math.max(1, rect.height - window.innerHeight);
+      const p = Math.max(0, Math.min(1, -rect.top / len));
+      const active = Math.min(n - 1, Math.floor(p * n));
+      render(active, p);
+      ticking = false;
+    };
+
+    const onScroll = () => {
+      if (!ticking) {
+        requestAnimationFrame(update);
+        ticking = true;
+      }
+    };
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    window.addEventListener("resize", () => drawConnectors(section));
+    document.fonts?.ready.then(() => drawConnectors(section));
+
+    navButtons.forEach((button, i) => {
+      button.addEventListener("click", () => {
+        const rect = story.getBoundingClientRect();
+        const top = rect.top + window.scrollY;
+        const distance = story.offsetHeight - window.innerHeight;
+        window.scrollTo({ top: top + distance * (i / n + 0.01), behavior: reduced ? "auto" : "smooth" });
+      });
+    });
+
+    update();
+    drawConnectors(section);
+  }
+  initV5Platform();
+</script>

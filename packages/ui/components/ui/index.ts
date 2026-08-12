@@ -43,6 +43,7 @@ export * from "./mobile-header";
 export * from "./model-card";
 export * from "./model-benchmarks";
 export * from "./model-detail-sheet";
+export * from "./model-kit";
 export * from "./monaco-file-editor";
 export * from "./package-status-badge";
 export * from "./sql-editor";

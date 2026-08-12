@@ -1,17 +1,18 @@
 "use client";
 
 import {
-	AlertTriangle,
-	Calendar,
-	Check,
-	Copy,
-	Key,
-	MoreVertical,
-	Plus,
-	Shield,
-	Trash2,
+	AlertTriangleIcon,
+	CalendarIcon,
+	CheckIcon,
+	ClockIcon,
+	CopyIcon,
+	KeyIcon,
+	MoreVerticalIcon,
+	PlusIcon,
+	ShieldIcon,
+	Trash2Icon,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import type { IBackendRole, ITechnicalUser } from "../../..";
 import {
@@ -24,11 +25,6 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 	Button,
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
 	Dialog,
 	DialogContent,
 	DialogDescription,
@@ -43,7 +39,6 @@ import {
 	Input,
 	Label,
 	RolePermissions,
-	ScrollArea,
 	Select,
 	SelectContent,
 	SelectItem,
@@ -55,6 +50,20 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 } from "../../../";
+import {
+	SectionHeading,
+	StatusChip,
+	TEAM_ACTION_GRADIENT,
+	TEAM_ROW_DESCRIPTION,
+	TEAM_ROW_META,
+	TEAM_ROW_TITLE,
+	TeamCallout,
+	TeamHint,
+	TeamRowActions,
+	TeamRowIcon,
+	TeamSection,
+	teamRowClass,
+} from "./team-shared";
 
 interface TechnicalUserManagementProps {
 	appId: string;
@@ -91,6 +100,13 @@ export function TechnicalUserManagement({
 			const perm = new RolePermissions(BigInt(role.permissions));
 			return !perm.contains(RolePermissions.Owner);
 		}) ?? [];
+
+	const expiredCount = useMemo(() => {
+		const now = Date.now();
+		return (apiKeys.data ?? []).filter(
+			(key) => key.valid_until && key.valid_until * 1000 < now,
+		).length;
+	}, [apiKeys.data]);
 
 	const handleCreate = useCallback(async () => {
 		if (!name.trim()) {
@@ -158,59 +174,69 @@ export function TechnicalUserManagement({
 	}, [newApiKey]);
 
 	return (
-		<div className="space-y-6">
-			<Card>
-				<CardHeader>
-					<div className="flex items-center justify-between">
-						<div>
-							<CardTitle className="flex items-center gap-2">
-								<Key className="w-5 h-5" />
-								Technical Users (API Keys)
-							</CardTitle>
-							<CardDescription>
-								Create API keys for programmatic access to this project. These
-								keys can be assigned roles with specific permissions.
-							</CardDescription>
-						</div>
+		<div className="space-y-8">
+			<TeamSection>
+				<SectionHeading
+					icon={KeyIcon}
+					title="API keys"
+					count={apiKeys.data?.length ?? 0}
+					description="For scripts and services. A key acts with the role you give it — nothing more."
+					actions={
 						<Button
+							size="sm"
+							className={TEAM_ACTION_GRADIENT}
 							onClick={() => setShowCreateDialog(true)}
-							className="bg-linear-to-r from-primary to-tertiary hover:from-primary/50 hover:to-tertiary/50"
 						>
-							<Plus className="w-4 h-4 mr-2" />
-							Create API Key
+							<PlusIcon className="size-4" />
+							New key
 						</Button>
+					}
+				/>
+
+				{expiredCount > 0 && (
+					<TeamCallout icon={ClockIcon} tone="attention">
+						{expiredCount === 1
+							? "1 key has expired. Anything still calling with it is being rejected."
+							: `${expiredCount} keys have expired. Anything still calling with them is being rejected.`}
+					</TeamCallout>
+				)}
+
+				{!apiKeys.data || apiKeys.data.length === 0 ? (
+					<EmptyState
+						className="max-w-full"
+						icons={[KeyIcon]}
+						title="No API Keys"
+						description="Create an API key to enable programmatic access to this project."
+					/>
+				) : (
+					<div className="flex flex-col gap-2">
+						{apiKeys.data.map((key) => (
+							<ApiKeyCard
+								key={key.id}
+								apiKey={key}
+								roles={roles.data?.[1] ?? []}
+								onDelete={handleDelete}
+							/>
+						))}
 					</div>
-				</CardHeader>
-				<CardContent>
-					{!apiKeys.data || apiKeys.data.length === 0 ? (
-						<EmptyState
-							icons={[Key]}
-							title="No API Keys"
-							description="Create an API key to enable programmatic access to this project."
-						/>
-					) : (
-						<ScrollArea className="h-[400px]">
-							<div className="space-y-3 pr-4">
-								{apiKeys.data.map((key) => (
-									<ApiKeyCard
-										key={key.id}
-										apiKey={key}
-										roles={roles.data?.[1] ?? []}
-										onDelete={handleDelete}
-									/>
-								))}
-							</div>
-						</ScrollArea>
-					)}
-				</CardContent>
-			</Card>
+				)}
+
+				<TeamHint>
+					Keys authenticate with the{" "}
+					<code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+						x-api-key
+					</code>{" "}
+					header. The secret is shown once when the key is created — it cannot
+					be read again afterwards.
+				</TeamHint>
+			</TeamSection>
 
 			{/* Create Dialog */}
 			<Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
 				<DialogContent className="sm:max-w-md">
 					<DialogHeader>
 						<div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
-							<Key className="h-6 w-6 text-primary" />
+							<KeyIcon className="h-6 w-6 text-primary" />
 						</div>
 						<DialogTitle className="text-center text-xl">
 							Create API Key
@@ -238,7 +264,7 @@ export function TechnicalUserManagement({
 								placeholder="What is this API key used for?"
 								value={description}
 								onChange={(e) => setDescription(e.target.value)}
-								className="min-h-[60px] resize-none"
+								className="min-h-20 resize-none"
 							/>
 						</div>
 
@@ -297,7 +323,7 @@ export function TechnicalUserManagement({
 				<DialogContent className="sm:max-w-lg">
 					<DialogHeader>
 						<div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/20">
-							<Check className="h-6 w-6 text-green-600 dark:text-green-400" />
+							<CheckIcon className="h-6 w-6 text-green-600 dark:text-green-400" />
 						</div>
 						<DialogTitle className="text-center text-xl">
 							API Key Created
@@ -314,13 +340,13 @@ export function TechnicalUserManagement({
 									{newApiKey}
 								</code>
 								<Button variant="ghost" size="icon" onClick={copyApiKey}>
-									<Copy className="h-4 w-4" />
+									<CopyIcon className="h-4 w-4" />
 								</Button>
 							</div>
 						</div>
 
 						<div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/50 dark:bg-amber-900/20">
-							<AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+							<AlertTriangleIcon className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
 							<div className="text-sm text-amber-800 dark:text-amber-200">
 								<p className="font-medium">Important</p>
 								<p>
@@ -367,83 +393,62 @@ function ApiKeyCard({ apiKey, roles, onDelete }: Readonly<ApiKeyCardProps>) {
 		: false;
 	return (
 		<>
-			<div
-				className={`flex items-center justify-between p-4 border rounded-lg ${
-					isExpired
-						? "border-red-200 bg-red-50/50 dark:border-red-900/50 dark:bg-red-900/10"
-						: "hover:bg-muted/50"
-				} transition-colors`}
-			>
-				<div className="flex items-center gap-3 min-w-0 flex-1">
-					<div
-						className={`flex h-10 w-10 items-center justify-center rounded-full ${
-							isExpired ? "bg-red-100 dark:bg-red-900/30" : "bg-primary/10"
-						}`}
-					>
-						<Key
-							className={`h-5 w-5 ${isExpired ? "text-red-600 dark:text-red-400" : "text-primary"}`}
-						/>
-					</div>
-					<div className="min-w-0 flex-1">
-						<div className="flex items-center gap-2">
-							<h3 className="font-medium text-sm truncate">{apiKey.name}</h3>
-							{isExpired && (
-								<span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400">
-									Expired
-								</span>
-							)}
-						</div>
-						<div className="flex items-center gap-3 text-xs text-muted-foreground">
-							{role && (
-								<span className="flex items-center gap-1">
-									<Shield className="h-3 w-3" />
-									{role.name}
-								</span>
-							)}
-							<UserProfileLink
-								userId={apiKey.creator_user_id}
-								name={apiKey.creator_display_name}
-								email={apiKey.creator_email}
-								fallbackLabel="Unknown owner"
-								className="max-w-48"
-								muted
-							/>
-							{apiKey.valid_until && (
-								<span className="flex items-center gap-1">
-									<Calendar className="h-3 w-3" />
-									{isExpired ? "Expired " : "Expires "}
-									{new Date(apiKey.valid_until * 1000).toLocaleDateString()}
-								</span>
-							)}
-							<span>
-								Created{" "}
-								{new Date(apiKey.created_at * 1000).toLocaleDateString()}
-							</span>
-						</div>
-						{apiKey.description && (
-							<p className="text-xs text-muted-foreground mt-1 truncate">
-								{apiKey.description}
-							</p>
+			<div className={teamRowClass({ muted: isExpired })}>
+				<TeamRowIcon icon={KeyIcon} />
+				<div className="min-w-0 flex-1">
+					<div className={TEAM_ROW_TITLE}>
+						<span className="truncate">{apiKey.name}</span>
+						{isExpired && (
+							<StatusChip tone="danger" pip>
+								Expired
+							</StatusChip>
 						)}
 					</div>
+					<div className={TEAM_ROW_META}>
+						{role && <StatusChip icon={ShieldIcon}>{role.name}</StatusChip>}
+						<span className="flex items-center gap-1">
+							<CalendarIcon className="size-3.5" />
+							{apiKey.valid_until
+								? `${isExpired ? "Expired" : "Expires"} ${new Date(
+										apiKey.valid_until * 1000,
+									).toLocaleDateString()}`
+								: "No expiry"}
+						</span>
+						<span>
+							Created {new Date(apiKey.created_at * 1000).toLocaleDateString()}
+						</span>
+						<UserProfileLink
+							userId={apiKey.creator_user_id}
+							name={apiKey.creator_display_name}
+							email={apiKey.creator_email}
+							fallbackLabel="Unknown owner"
+							className="max-w-48"
+							muted
+						/>
+					</div>
+					{apiKey.description && (
+						<p className={TEAM_ROW_DESCRIPTION}>{apiKey.description}</p>
+					)}
 				</div>
 
-				<DropdownMenu>
-					<DropdownMenuTrigger asChild>
-						<Button variant="ghost" size="icon">
-							<MoreVertical className="h-4 w-4" />
-						</Button>
-					</DropdownMenuTrigger>
-					<DropdownMenuContent align="end">
-						<DropdownMenuItem
-							className="text-destructive focus:text-destructive"
-							onClick={() => setShowDeleteDialog(true)}
-						>
-							<Trash2 className="h-4 w-4 mr-2" />
-							Delete
-						</DropdownMenuItem>
-					</DropdownMenuContent>
-				</DropdownMenu>
+				<TeamRowActions>
+					<DropdownMenu>
+						<DropdownMenuTrigger asChild>
+							<Button variant="ghost" size="icon" className="size-8">
+								<MoreVerticalIcon className="size-4" />
+							</Button>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent align="end">
+							<DropdownMenuItem
+								variant="destructive"
+								onClick={() => setShowDeleteDialog(true)}
+							>
+								<Trash2Icon className="size-4" />
+								Delete
+							</DropdownMenuItem>
+						</DropdownMenuContent>
+					</DropdownMenu>
+				</TeamRowActions>
 			</div>
 
 			<AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>

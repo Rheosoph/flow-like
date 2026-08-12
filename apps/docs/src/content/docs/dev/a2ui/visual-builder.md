@@ -1,287 +1,173 @@
 ---
 title: Visual Builder
-description: Drag-and-drop interface for creating A2UI pages and widgets
+description: Use the current editor for A2UI Pages and Widgets
 sidebar:
   order: 3
 ---
 
-## Overview
+The Visual Builder is the shared editor for Flow-Like Pages and Widgets. It edits the same declarative component graph that the renderer and FlowPilot use.
 
-The Flow-Like Visual Builder is a drag-and-drop interface for creating A2UI pages and widgets. It produces the same A2UI JSON format that AI agents generate—making human and AI work **fully interchangeable**.
+The builder follows the active Flow-Like theme. The captures below show its dark-mode appearance.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    Human + AI Collaboration                          │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│   ┌─────────────────┐              ┌─────────────────┐              │
-│   │  Visual Builder │              │    AI Agent     │              │
-│   │   (Human)       │              │   (Automated)   │              │
-│   └────────┬────────┘              └────────┬────────┘              │
-│            │                                │                        │
-│            └────────────┬───────────────────┘                        │
-│                         ▼                                            │
-│                  ┌─────────────┐                                     │
-│                  │    A2UI     │                                     │
-│                  │   Format    │                                     │
-│                  └──────┬──────┘                                     │
-│                         │                                            │
-│           ┌─────────────┼─────────────┐                              │
-│           ▼             ▼             ▼                              │
-│     ┌─────────┐   ┌─────────┐   ┌─────────┐                         │
-│     │  Edit   │   │  Share  │   │ Render  │                         │
-│     │ in Both │   │ Export  │   │  Live   │                         │
-│     └─────────┘   └─────────┘   └─────────┘                         │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
+## Page Builder
 
-## Builder Interface
+![The Page Builder in dark mode](../../../../assets/PageBuilder.webp)
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Flow-Like Builder                                         [Page ▾] [Save] │
-├───────────┬─────────────────────────────────────────────┬───────────────────┤
-│           │                                              │                   │
-│  PALETTE  │              CANVAS                          │   INSPECTOR       │
-│           │                                              │                   │
-│  ─────────│  ┌────────────────────────────────────┐     │   PROPERTIES      │
-│  Layout   │  │  ┌──────┐ ┌──────┐ ┌──────┐       │     │   ───────────     │
-│  ┌──────┐ │  │  │ KPI  │ │ KPI  │ │ KPI  │       │     │   Label: Revenue  │
-│  │ Row  │ │  │  └──────┘ └──────┘ └──────┘       │     │   Size:  [M ▾]    │
-│  └──────┘ │  │                                    │     │                   │
-│  ┌──────┐ │  │  ┌────────────────────────────┐   │     │   BINDINGS        │
-│  │Column│ │  │  │                            │   │     │   ───────────     │
-│  └──────┘ │  │  │       Line Chart           │   │     │   Value:          │
-│           │  │  │                            │   │     │   [/revenue   ▾]  │
-│  Display  │  │  └────────────────────────────┘   │     │                   │
-│  ┌──────┐ │  │                                    │     │   ACTIONS         │
-│  │ Text │ │  │  ┌────────────────────────────┐   │     │   ───────────     │
-│  └──────┘ │  │  │      Orders Table          │   │     │   On Click:       │
-│  ┌──────┐ │  │  │  Name | Date | Amount      │   │     │   [view-details]  │
-│  │Image │ │  │  │  ───────────────────       │   │     │                   │
-│  └──────┘ │  │  │  John | Dec 1 | $500       │   │     │   STYLE           │
-│           │  │  └────────────────────────────┘   │     │   ───────────     │
-│  Input    │  │                                    │     │   Padding: 16px   │
-│  ┌──────┐ │  └────────────────────────────────────┘     │   Background: ○   │
-│  │Button│ │                                              │                   │
-│  └──────┘ │                                              │                   │
-│  ┌──────┐ │                                              │                   │
-│  │ Form │ │                                              │                   │
-│  └──────┘ │                                              │                   │
-│           │                                              │                   │
-├───────────┴─────────────────────────────────────────────┴───────────────────┤
-│  LAYERS: [Page] > [Header Row] > [KPI Card]              📱  💻  🖥️  [Undo] │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+The Page host adds app and Flow context around the shared editor: Page switching, **Open Flow**, Page settings, lifecycle events, canvas settings, and autosave status.
 
-### Key Areas
+## Widget Builder
 
-| Area | Purpose |
-|------|---------|
-| **Palette** | Components you can drag onto the canvas |
-| **Canvas** | Visual representation of your page/widget |
-| **Inspector** | Configure selected component's properties |
-| **Layers** | Navigate the component hierarchy |
+![The Widget Builder in dark mode](../../../../assets/WidgetBuilder.webp)
 
-## Drag & Drop
+The Widget host adds Widget metadata, named events, version snapshots, autosave status, and a manual **Save Now** action.
 
-### Adding Components
+## Workspace Anatomy
 
-1. **Click** a component in the palette
-2. **Drag** to the canvas
-3. **Drop** where you want it
-4. **Configure** in the inspector
+| Area | Current controls |
+| --- | --- |
+| **Toolbar** | Page switcher when provided, Copy, Cut, Paste, Delete, Dev Mode, Save, and Preview |
+| **Left panel** | Searchable **Components** palette and **Hierarchy** tree |
+| **Canvas** | Live A2UI rendering, drag-and-drop targets, selection, zoom, pan, and resize handles |
+| **Inspector** | **Props**, **Style**, **Canvas**, and **Actions** for the selected component |
+| **Preview** | Responsive device presets, orientation, dimensions, and breakpoint status |
 
-### Arranging Components
+Panels are resizable. The palette groups built-in components by Layout, Display, Interactive, Container, and Game, and can also show reusable Widgets grouped by project.
 
-- **Drag** components to reorder within containers
-- **Hover** on edges to see insertion points
-- **Drop** between siblings to insert
+## Add and Arrange Components
 
-### Container Behavior
+You can add a built-in component in two ways:
 
-Containers (Row, Column, Card) accept children:
+1. Drag it from the palette to a compatible container.
+2. Double-click it to add it directly to the surface.
 
-```
-┌─────────────────────────────────────────┐
-│  Row Container                          │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐   │
-│  │ Drop    │ │ Child 1 │ │ Child 2 │   │
-│  │ Here    │ │         │ │         │   │
-│  └─────────┘ └─────────┘ └─────────┘   │
-└─────────────────────────────────────────┘
-```
+The root component is always `root`. Containers such as Row, Column, Stack, Grid, Card, Scroll Area, Tabs, Accordion, and Box can own child IDs. The builder updates the flat graph when components are reordered or nested.
 
-## Inspector Panel
+Use **Hierarchy** when the visual layout makes a deeply nested component difficult to select. Multi-select is supported for selection, but the current Inspector only edits one component at a time.
 
-### Properties Tab
+## Inspector
 
-Configure the selected component:
+### Props
 
-```
-┌─────────────────────────────────┐
-│ PROPERTIES                      │
-├─────────────────────────────────┤
-│ Label                           │
-│ [Total Revenue        ]         │
-│                                 │
-│ Size                            │
-│ ○ Small  ● Medium  ○ Large     │
-│                                 │
-│ Show Trend                      │
-│ [✓]                             │
-│                                 │
-│ Icon                            │
-│ [chart-line           ▾]        │
-└─────────────────────────────────┘
-```
+Props are generated from the selected component's schema. A supported value can be entered literally or bound to a data-model path.
 
-### Bindings Tab
+Examples include:
 
-Connect to flow data:
+- Text content and visual variant;
+- image source and alternative text;
+- table or chart data;
+- form values and placeholders;
+- container children and layout options.
 
-```
-┌─────────────────────────────────┐
-│ BINDINGS                        │
-├─────────────────────────────────┤
-│ Value                           │
-│ [/flows/metrics/revenue    ▾]   │
-│                                 │
-│ Trend                           │
-│ [/flows/metrics/trend      ▾]   │
-│                                 │
-│ Available Data:                 │
-│ ├─ /flows/metrics/revenue       │
-│ ├─ /flows/metrics/orders        │
-│ └─ /context/user                │
-└─────────────────────────────────┘
-```
+### Style
 
-### Actions Tab
+Style controls include dimensions, spacing, positioning, background, border, shadow, transforms, typography, overflow, and responsive overrides. Prefer semantic theme classes when the interface should work in both light and dark mode.
 
-Define user interactions:
+### Canvas
 
-```
-┌─────────────────────────────────┐
-│ ACTIONS                         │
-├─────────────────────────────────┤
-│ On Click                        │
-│ [Trigger Flow       ▾]          │
-│ Flow: [get-details  ▾]          │
-│                                 │
-│ On Hover                        │
-│ [Show Tooltip       ▾]          │
-│ Content: "View details"         │
-│                                 │
-│ [+ Add Action]                  │
-└─────────────────────────────────┘
-```
+Canvas settings apply to the whole surface:
 
-## Preview Mode
-
-Test your creation before saving:
-
-| Mode | Description |
-|------|-------------|
-| **📱 Mobile** | Phone-sized viewport |
-| **💻 Tablet** | Tablet-sized viewport |
-| **🖥️ Desktop** | Full-width preview |
-| **Live Data** | Connect to real flows |
-
-```
-┌─────────────────────────────────────────┐
-│  Preview: Mobile                    [×] │
-├─────────────────────────────────────────┤
-│  ┌─────────────────────────────────┐    │
-│  │       📱 Mobile View            │    │
-│  │  ┌───────────────────────┐     │    │
-│  │  │ Revenue    $124,500   │     │    │
-│  │  │ ▲ 12.5%               │     │    │
-│  │  └───────────────────────┘     │    │
-│  │  ┌───────────────────────┐     │    │
-│  │  │ Orders     1,234      │     │    │
-│  │  │ ▲ 8.2%                │     │    │
-│  │  └───────────────────────┘     │    │
-│  │  ┌───────────────────────┐     │    │
-│  │  │      Chart            │     │    │
-│  │  └───────────────────────┘     │    │
-│  └─────────────────────────────────┘    │
-└─────────────────────────────────────────┘
-```
-
-## Keyboard Shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl/Cmd + S` | Save |
-| `Ctrl/Cmd + Z` | Undo |
-| `Ctrl/Cmd + Shift + Z` | Redo |
-| `Ctrl/Cmd + C` | Copy component |
-| `Ctrl/Cmd + V` | Paste component |
-| `Ctrl/Cmd + D` | Duplicate |
-| `Delete` | Remove component |
-| `Escape` | Deselect |
-
-## AI Assistance
-
-The builder includes AI features:
-
-### Ask AI
-
-Describe what you want to add:
-
-```
-┌─────────────────────────────────────────┐
-│  🤖 Ask AI                              │
-├─────────────────────────────────────────┤
-│  "Add a chart showing revenue by month  │
-│   below the KPI cards"                  │
-│                                         │
-│  [Generate]                             │
-└─────────────────────────────────────────┘
-```
-
-### AI Suggestions
-
-Get recommendations based on your design:
-
-```
-┌─────────────────────────────────────────┐
-│  💡 Suggestions                         │
-├─────────────────────────────────────────┤
-│  • Add responsive breakpoints           │
-│  • Consider a loading state for chart   │
-│  • Table might benefit from pagination  │
-│                                         │
-│  [Apply] [Dismiss]                      │
-└─────────────────────────────────────────┘
-```
-
-## Output Format
-
-The builder saves your work as A2UI JSON:
-
-```json
-{
-  "surfaceUpdate": {
-    "components": [
-      {"id": "root", "component": {"Column": {"children": {"explicitList": ["header", "content"]}}}},
-      {"id": "header", "component": {"Row": {"children": {"explicitList": ["kpi-1", "kpi-2", "kpi-3"]}}}},
-      {"id": "kpi-1", "component": {"Card": {"child": "kpi-1-content"}}},
-      ...
-    ]
-  }
+```typescript
+interface CanvasSettings {
+  backgroundColor?: string;
+  backgroundImage?: string;
+  padding?: string;
+  customCss?: string;
 }
 ```
 
-This is the **same format** AI agents produce—meaning you can:
+On a Page, these values are also available from **Page Settings → Layout**.
 
-- Open AI-generated UIs in the builder
-- Have AI modify what you built manually
-- Export for use anywhere A2UI is supported
+### Actions
 
-:::tip[Get Early Access]
-Want to try the visual builder early?
-📧 **info@great-co.de**
-:::
+Interactive components can declare structured actions. Available targets depend on the context passed by the host:
+
+- Pages offer `navigate_page`, `external_link`, and `workflow_event`; the last
+  stores the selected Event in `context.nodeId`.
+- Widgets offer their named events through the fixed `widget_event` action
+  name and store the selected event ID in `context.actionId`.
+- The instance schema and dedicated inspector include workflow and command
+  bindings, but the current action handler executes only workflow bindings.
+  The Page Builder also does not mount that instance editor. See
+  [Widgets](/dev/a2ui/widgets/#insert-a-widget-into-a-page).
+
+The action editor stores data in the surface; it does not embed executable JavaScript.
+
+## Toolbar
+
+### Clipboard and Delete
+
+Copy, Cut, Paste, and Delete operate on the current selection. Pasted components receive new IDs, and the builder updates child references.
+
+### Save
+
+**Save** passes the current component list and Widget references to the host. The Page and Widget hosts also save after a short debounce, so the header's status is the best indicator of pending changes.
+
+### Dev Mode
+
+**Dev Mode** opens the JSON editor for the current surface. It is useful for:
+
+- inspecting exact component IDs and properties;
+- pasting a generated component graph;
+- debugging a binding or action;
+- making a precise bulk edit.
+
+Return to the visual canvas after editing JSON and verify both the hierarchy and Preview. Invalid component types cannot be rendered because the runtime only accepts registered types.
+
+### Preview
+
+Preview hides the editing panels and renders the current surface in a responsive frame.
+
+| Preset | Dimensions |
+| --- | --- |
+| Desktop | 1440 × 900 |
+| Laptop | 1280 × 800 |
+| Tablet | 768 × 1024 |
+| Mobile | 375 × 812 |
+| Mobile Small | 320 × 568 |
+
+You can rotate a preset and see which `sm`, `md`, `lg`, `xl`, or `2xl` breakpoint is active.
+
+## Canvas Navigation
+
+Use the mouse wheel to zoom around the pointer. Pan the canvas when the surface is larger than the workspace.
+
+The implemented zoom shortcuts are:
+
+| Shortcut | Result |
+| --- | --- |
+| `Ctrl/Cmd + =` | Zoom in |
+| `Ctrl/Cmd + -` | Zoom out |
+| `Ctrl/Cmd + 0` | Reset zoom and pan |
+
+On a Page with a connected board, `Ctrl/Cmd + Shift + F` opens the Flow.
+
+## FlowPilot
+
+In Desktop, the host provides the global FlowPilot assistant. While the builder is mounted, it publishes:
+
+- the active surface ID and app context;
+- the current components;
+- selected component IDs;
+- a canvas screenshot callback;
+- callbacks for generated and applied components.
+
+FlowPilot changes first appear as pending components. Review the canvas and the pending-components bar, then choose **Apply Changes** or **Dismiss**.
+
+When the builder is embedded in a host without the global assistant, it can mount its own FlowPilot panel instead.
+
+## Host-Specific Lifecycle
+
+| Behavior | Page host | Widget host |
+| --- | --- | --- |
+| Component autosave | Yes | Yes |
+| Manual save | Toolbar Save | Toolbar Save and header Save Now |
+| Metadata | Page Settings | Widget Settings |
+| Page switching | Yes | No |
+| Flow shortcut | When `boardId` is present | No |
+| Version creation | Display current Page version | Patch, Minor, and Major Widget snapshots |
+
+## Related Guides
+
+- [Pages](/dev/a2ui/pages/) — Page settings and lifecycle
+- [Widgets](/dev/a2ui/widgets/) — Widget metadata, events, and versions
+- [A2UI overview](/dev/a2ui/overview/) — surface and message model

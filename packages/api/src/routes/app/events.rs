@@ -21,6 +21,21 @@ use axum::{
 
 use crate::{error::ApiError, middleware::jwt::AppUser, state::AppState};
 
+/// Parse a version string in `MAJOR_MINOR_PATCH` (or dotted `MAJOR.MINOR.PATCH`)
+/// form into a numeric tuple. Returns `None` for malformed input (wrong arity or
+/// non-numeric components) so callers can surface a 400 instead of a 500.
+pub(crate) fn parse_version_tuple(raw: &str) -> Option<(u32, u32, u32)> {
+    let parts: Vec<&str> = raw.split(['_', '.']).collect();
+    match parts.as_slice() {
+        [major, minor, patch] => Some((
+            major.parse().ok()?,
+            minor.parse().ok()?,
+            patch.parse().ok()?,
+        )),
+        _ => None,
+    }
+}
+
 fn connected_app_direct_event_allowed(event_type: &str, active: bool) -> bool {
     active && event_type == "simple_chat"
 }

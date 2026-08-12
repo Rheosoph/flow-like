@@ -8,8 +8,6 @@ use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::arrow_utils::record_batch_to_value;
 #[cfg(feature = "execute")]
-use flow_like_storage::databases::vector::VectorStore;
-#[cfg(feature = "execute")]
 use flow_like_storage::lancedb::query::ExecutableQuery;
 #[cfg(feature = "execute")]
 use flow_like_types::rand::{self, seq::SliceRandom};
@@ -115,7 +113,7 @@ impl NodeLogic for ShuffleDatasetNode {
 
         // Insert shuffled items
         if !all_items.is_empty() {
-            target.db.write().await.insert(all_items).await?;
+            target.insert_from(context, all_items).await?;
         }
 
         context.activate_exec_pin("exec_out").await?;

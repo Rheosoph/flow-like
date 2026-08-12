@@ -80,13 +80,7 @@ pub async fn get_app_content(
 
     let pages: Vec<PageInfo> = all_pages
         .iter()
-        .map(|p| PageInfo {
-            app_id: app_id.clone(),
-            page_id: p.id.clone(),
-            board_id: p.board_id.clone(),
-            name: p.name.clone(),
-            description: p.description.clone(),
-        })
+        .map(|p| PageInfo::from_row(&app_id, p))
         .collect();
 
     let mut pages_by_board: HashMap<String, Vec<PageInfo>> = HashMap::new();
@@ -95,13 +89,7 @@ pub async fn get_app_content(
             pages_by_board
                 .entry(board_id.clone())
                 .or_default()
-                .push(PageInfo {
-                    app_id: app_id.clone(),
-                    page_id: p.id.clone(),
-                    board_id: p.board_id.clone(),
-                    name: p.name.clone(),
-                    description: p.description.clone(),
-                });
+                .push(PageInfo::from_row(&app_id, p));
         }
     }
 

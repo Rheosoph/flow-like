@@ -5,475 +5,160 @@ sidebar:
   order: 1
 ---
 
-Flow-Like's **A2UI (Agent-to-UI)** system lets you build rich internal tools—dashboards, admin panels, forms, and data viewers—without writing frontend code. Design visually, connect to your workflows, and deploy instantly.
+Flow-Like's **A2UI (Agent-to-UI)** system combines visual pages with workflow-backed data and actions. Use it for dashboards, admin panels, forms, reports, and other task-focused interfaces inside a Flow-Like app.
 
-## What You Can Build
+![The relationship between A2UI pages, components, element data, and actions](../../../../assets/InternalToolsOverview.svg)
 
-| Tool Type | Use Cases |
-|-----------|-----------|
-| **Dashboards** | KPI displays, real-time metrics, system status |
-| **Admin Panels** | User management, content moderation, settings |
-| **Data Viewers** | Search interfaces, record browsers, log viewers |
-| **Forms** | Data entry, surveys, approval workflows |
-| **Reports** | Scheduled reports, export tools, analytics |
-| **Control Centers** | Trigger workflows, manage processes, monitor jobs |
+## What you can build
 
-## Core Concepts
+| Tool type | Common use cases |
+|-----------|------------------|
+| Dashboards | KPI displays, operational metrics, system status |
+| Admin panels | User management, moderation, configuration |
+| Data viewers | Search, record browsers, logs, review queues |
+| Forms | Data entry, approvals, surveys, intake |
+| Reports | Filtered views, summaries, export controls |
+| Control centers | Start workflows, monitor work, review outcomes |
 
-### Pages & Routing
+## Core concepts
 
-Every app can have multiple **Pages**, each with a unique route:
+### Pages and routes
 
-```
-App: Customer Portal
-├── /dashboard      → Overview Page
-├── /customers      → Customer List
-├── /customers/:id  → Customer Detail
-├── /reports        → Reports Page
-└── /settings       → Settings Page
-```
+An app can contain multiple pages. Each page has a route such as `/dashboard`, `/customers`, or a parameterized route such as `/customers/:id`.
 
-Navigate between pages programmatically or via Link components.
+Use a **Link** component for visible navigation or a `navigate_page` action when an interaction should change the route. Navigation actions may include query parameters for filters or view state. See [Pages](/apps/pages/) and [Routes](/apps/routes/) for the current builder workflow.
 
 ### Components
 
-A2UI provides 50+ components for building interfaces:
+A2UI components cover layout, display, input, feedback, data visualization, and more:
 
-#### Layout Components
-| Component | Purpose |
-|-----------|---------|
-| **Row** | Horizontal flex container |
-| **Column** | Vertical flex container |
-| **Grid** | CSS Grid layout |
-| **Card** | Content container with borders |
-| **Tabs** | Tabbed navigation |
-| **Accordion** | Collapsible sections |
-| **Modal** | Popup dialogs |
-| **Drawer** | Side panels |
+| Group | Examples |
+|-------|----------|
+| Layout | Row, Column, Grid, Card, Tabs, Accordion, Drawer |
+| Display | Text, Markdown, Badge, Avatar, Progress, Table |
+| Input | TextField, Select, Checkbox, Switch, Slider, DateTimeInput, FileInput |
+| Interaction | Button, Link, Modal, Tooltip, Popover |
+| Visualization | NivoChart, PlotlyChart, GeoMap |
 
-#### Data Display
-| Component | Purpose |
-|-----------|---------|
-| **Table** | Full-featured data tables with sorting, filtering, pagination |
-| **NivoChart** | 25+ chart types (bar, line, pie, heatmap, etc.) |
-| **PlotlyChart** | Advanced scientific charts |
-| **Text** | Typography (headings, body, labels) |
-| **Badge** | Status indicators |
-| **Progress** | Progress bars |
-| **Avatar** | User images |
-| **Markdown** | Rich text display |
+The **Table** component supports columns, sorting, search, pagination, row selection, and row-click behavior. **NivoChart** exposes a broad set of chart types; choose the chart from the data relationship rather than from decoration.
 
-#### Form Inputs
-| Component | Purpose |
-|-----------|---------|
-| **TextField** | Text input (text, email, password, number) |
-| **Select** | Dropdown selection |
-| **Checkbox** | Boolean toggle |
-| **Switch** | Toggle switch |
-| **RadioGroup** | Single selection from options |
-| **Slider** | Range selection |
-| **DateTimeInput** | Date/time picker |
-| **FileInput** | File upload |
+### Element data
 
-#### Interactive
-| Component | Purpose |
-|-----------|---------|
-| **Button** | Clickable actions |
-| **Link** | Navigation links |
-| **Tooltip** | Hover information |
-| **Popover** | Click-triggered info |
+Component properties define the initial surface. Workflows can then read current element state and push updates back into the page.
 
-### Data Binding
+| Task | Relevant nodes |
+|------|----------------|
+| Read an input value | [Get Element Value](/nodes/ui/elements/a2ui-get-element-value/) |
+| Read uploaded files | [Get File Input Files](/nodes/ui/elements/files/a2ui-get-file-input-files/) |
+| Update a value | [Set Element Value](/nodes/ui/elements/a2ui-set-element-value/) |
+| Update text or Markdown | [Set Element Text](/nodes/ui/elements/a2ui-set-element-text/), [Set Markdown Content](/nodes/ui/elements/display/a2ui-set-markdown-content/) |
+| Replace table data | [Push CSV to Table](/nodes/ui/elements/table/a2ui-write-csv-to-table/), [Update Table](/nodes/ui/elements/table/a2ui-update-table/) |
+| Replace chart data | [Push Data to Chart](/nodes/ui/elements/charts/a2ui-push-csv-to-chart/) |
+| Show progress | [Set Element Loading](/nodes/ui/elements/a2ui-set-element-loading/), [Set Progress](/nodes/ui/elements/display/a2ui-set-progress/) |
 
-Components connect to data through **bindings**:
-
-```
-Table Component
-├── data ◀── Variable: customers
-├── columns ◀── [name, email, status, actions]
-└── onRowClick ──▶ Navigate to /customers/{id}
-```
-
-**Binding Types:**
-- **Literal** – Static values: `"Hello World"`
-- **Variable** – Dynamic: `$customers`
-- **Path** – Nested access: `$customer.orders[0].total`
-- **Template** – Interpolation: `"Welcome, {$user.name}!"`
+This read-operate-update cycle keeps the event boundary explicit. A workflow event reads the element values it needs, performs the operation, and updates the affected surface elements.
 
 ### Actions
 
-Components trigger workflows through **Actions**:
+The page builder exposes three built-in action outcomes:
 
-| Action Type | Purpose |
-|-------------|---------|
-| `invoke` | Run a workflow (Quick Action) |
-| `navigate` | Go to another page |
-| `updateData` | Update a variable |
-| `openModal` | Show a dialog |
-| `closeModal` | Hide a dialog |
+| Builder label | Action name | Required context |
+|---------------|-------------|------------------|
+| Trigger Workflow | `workflow_event` | `nodeId` |
+| Navigate to Page | `navigate_page` | `route`; optional `queryParams` |
+| External Link | `external_link` | `url` |
 
-```
-Button: "Submit Order"
-├── onClick: invoke → ProcessOrder workflow
-│   └── payload: { customer_id, items, total }
-└── Loading state while workflow runs
-```
+A button that triggers a workflow uses this action shape:
 
-## Building a Dashboard
-
-### Step 1: Create the Page
-
-1. Open your App in the Studio
-2. Navigate to **Pages**
-3. Click **Add Page**
-4. Set route: `/dashboard`
-5. Choose layout: **Grid** (2 columns)
-
-### Step 2: Add KPI Cards
-
-Drag **Card** components for each metric:
-
-```
-┌─────────────────┐  ┌─────────────────┐
-│  Total Revenue  │  │  Active Users   │
-│     $45,230     │  │      1,234      │
-│   ↑ 12% MTD     │  │   ↑ 5% today    │
-└─────────────────┘  └─────────────────┘
+```json
+{
+  "name": "workflow_event",
+  "context": {
+    "nodeId": "evt-submit-form"
+  }
+}
 ```
 
-**Card Configuration:**
-```
-Card: Revenue
-├── Text (h2): "Total Revenue"
-├── Text (h1): {$metrics.revenue}
-├── Text (caption): "↑ {$metrics.revenue_change}% MTD"
-└── Style: bg-green-50
-```
+Do not encode form values into this action context. The event reads the current values with **Get Element Value** or **Get File Input Files**. This avoids stale payloads and keeps the action contract focused on routing the interaction.
 
-### Step 3: Add Charts
+## Build a dashboard
 
-Add a **NivoChart** for trends:
+1. Add a page and choose a stable route such as `/dashboard`.
+2. Compose the page from Grid, Card, Text, chart, and Table components.
+3. Add an initialization workflow that queries the required data.
+4. Push each result into the corresponding text, chart, or table element.
+5. Add loading, empty, and error states.
+6. Add explicit drill-down navigation for details.
 
-```
-NivoChart
-├── type: "line"
-├── data: {$salesTrend}
-├── colors: ["#3b82f6", "#10b981"]
-├── enableGridX: false
-└── legends: bottom
-```
+For a data table, define only the columns users need to scan or act on. Enable search, sorting, pagination, or selection when the underlying task requires them; avoid turning every available option on by default.
 
-### Step 4: Add Data Table
+## Build a form
 
-Add a **Table** for recent activity:
+1. Lay out labels and inputs in a predictable reading order.
+2. Give every input a stable element ID.
+3. Bind the submit button to a `workflow_event`.
+4. In the event workflow, read each input's current value.
+5. Validate on the workflow side before writing data or calling an API.
+6. Update field errors, loading state, and success feedback.
+7. Navigate only after the operation has succeeded.
 
-```
-Table: Recent Orders
-├── data: {$recentOrders}
-├── columns:
-│   ├── id (sortable)
-│   ├── customer
-│   ├── amount (format: currency)
-│   ├── status (badge)
-│   └── actions (buttons)
-├── pagination: true
-├── pageSize: 10
-└── onRowClick: navigate → /orders/{id}
-```
+Use the appropriate input type for the value. For example, use Select for constrained choices and FileInput for uploads rather than parsing an unconstrained text field later.
 
-### Step 5: Connect Data
+## Tables and charts
 
-Create a workflow to fetch dashboard data:
+### Tables
 
-```
-Board: DashboardData
-└── Init Event (runs on page load)
-        │
-        ├──▶ SQL Query: Get Metrics
-        │       │
-        │       ▼
-        │   Set Variable: metrics
-        │
-        ├──▶ SQL Query: Get Sales Trend
-        │       │
-        │       ▼
-        │   Set Variable: salesTrend
-        │
-        └──▶ SQL Query: Get Recent Orders
-                │
-                ▼
-            Set Variable: recentOrders
-```
+Tables work best when the workflow returns a stable row shape. Define:
 
-## Building a Form
+- column keys and labels;
+- whether each column is sortable or searchable;
+- pagination and page size;
+- selection behavior;
+- the result of a row click, if any.
 
-### Step 1: Create Form Layout
+Keep destructive actions separate from row navigation and ask for confirmation before the workflow performs the destructive operation.
 
-```
-Column (gap: 16px)
-├── Text (h2): "Create Customer"
-├── TextField: name (required)
-├── TextField: email (type: email, required)
-├── Select: tier (options: Free, Pro, Enterprise)
-├── Checkbox: newsletter
-├── Row
-│   ├── Button: "Cancel" (variant: outline)
-│   └── Button: "Create" (variant: default)
-└── Text: {$error} (color: red, hidden if empty)
-```
+### Charts
 
-### Step 2: Handle Submission
+Use NivoChart for common analytical charts and PlotlyChart for more specialized scientific or exploratory views. A useful chart has:
 
-**Button: Create**
-```
-onClick: invoke → CreateCustomer
-├── payload:
-│   ├── name: {$form.name}
-│   ├── email: {$form.email}
-│   ├── tier: {$form.tier}
-│   └── newsletter: {$form.newsletter}
-└── onSuccess: navigate → /customers/{result.id}
-```
+- a clear question or comparison;
+- labeled dimensions and measures;
+- consistent units and number formatting;
+- an empty state;
+- enough contrast in both light and dark themes.
 
-**Workflow: CreateCustomer**
-```
-Quick Action Event (name, email, tier, newsletter)
-    │
-    ▼
-Validate Email Format
-    │
-    ├── Invalid ──▶ Set error variable ──▶ Return
-    │
-    ▼
-SQL Insert: customers table
-    │
-    ▼
-Return: { id, success: true }
-```
+The chart update nodes let a workflow replace data or configuration without rebuilding the rest of the page.
 
-### Step 3: Add Validation
+## Reusable widgets
 
-Client-side validation via component properties:
+Use [Widgets](/apps/widgets/) when a piece of interface and behavior should be reused across pages. Keep widget inputs small and intentional. Page-level workflows should still own business operations, validation, and data access.
 
-```
-TextField: email
-├── type: "email"
-├── required: true
-├── placeholder: "user@example.com"
-├── error: {$emailError}
-└── onChange: validate email format
-```
+## Responsive and accessible layouts
 
-Server-side validation in the workflow before database insert.
+- Start with a single-column reading order, then add columns where space permits.
+- Keep primary actions reachable without horizontal scrolling.
+- Use visible labels, not placeholders alone, for inputs.
+- Preserve keyboard focus and logical tab order.
+- Pair color with text or icons for status.
+- Check charts, borders, disabled states, and validation messages in light and dark mode.
 
-## Table Features
+## Design checklist
 
-The Table component is powerful for data-heavy tools:
+- [ ] Every page has a stable route
+- [ ] Interactive elements have stable IDs
+- [ ] Workflow events read current element state
+- [ ] Loading, empty, error, and success states are present
+- [ ] Destructive actions require confirmation
+- [ ] Tables expose only task-relevant controls
+- [ ] Navigation and external links use the correct action type
+- [ ] Layout and contrast work in light and dark mode
 
-### Sorting
-```
-Table
-├── columns:
-│   ├── name (sortable: true)
-│   ├── created (sortable: true, default: desc)
-│   └── status
-└── onSort: refetch with new order
-```
+## Next steps
 
-### Filtering
-```
-Row (above table)
-├── TextField: search (onDebounce: filter)
-├── Select: status filter
-└── DateTimeInput: date range
-
-Table
-├── data: {$filteredData}
-└── columns: ...
-```
-
-### Actions Column
-```
-Column: Actions
-└── Row
-    ├── Button (icon: edit) → openModal: EditDialog
-    ├── Button (icon: trash) → invoke: DeleteRecord
-    └── Button (icon: eye) → navigate: /records/{id}
-```
-
-### Export
-```
-Button: "Export CSV"
-├── onClick: invoke → ExportData
-└── Downloads CSV file
-```
-
-## Chart Types
-
-A2UI includes 25+ chart types via Nivo:
-
-| Chart | Best For |
-|-------|----------|
-| `bar` | Categorical comparisons |
-| `line` | Trends over time |
-| `pie` | Part-to-whole |
-| `radar` | Multi-variable comparison |
-| `heatmap` | 2D data density |
-| `scatter` | Correlation |
-| `funnel` | Conversion flows |
-| `treemap` | Hierarchical data |
-| `sankey` | Flow diagrams |
-| `calendar` | Date-based heatmaps |
-| `bullet` | Progress vs targets |
-| `radialBar` | Circular progress |
-
-### Example: Sales by Region
-
-```
-NivoChart
-├── type: "bar"
-├── data: [
-│   { region: "North", sales: 45000 },
-│   { region: "South", sales: 32000 },
-│   { region: "East", sales: 28000 },
-│   { region: "West", sales: 51000 }
-│ ]
-├── keys: ["sales"]
-├── indexBy: "region"
-├── colors: { scheme: "blues" }
-└── legends: [{ position: "bottom" }]
-```
-
-## State Management
-
-### Page State
-Local to the current page, resets on navigation:
-```
-Set Page State (key: "filterValue", value: "active")
-Get Page State (key: "filterValue") ──▶ "active"
-```
-
-### Global State
-Persists across pages (stored in IndexedDB):
-```
-Set Global State (key: "user", value: { id, name, role })
-Get Global State (key: "user") ──▶ { id, name, role }
-```
-
-### Variables
-Board-level state for workflow data:
-```
-Variables:
-├── customers: Array<Customer>
-├── selectedCustomer: Customer | null
-├── isLoading: Boolean
-└── error: String | null
-```
-
-## Responsive Design
-
-A2UI uses Tailwind CSS classes for responsive layouts:
-
-```
-Grid
-├── columns: 1 (mobile)
-├── md:columns: 2 (tablet)
-├── lg:columns: 3 (desktop)
-└── gap: 16px
-```
-
-**Breakpoints:**
-- `sm`: 640px
-- `md`: 768px
-- `lg`: 1024px
-- `xl`: 1280px
-- `2xl`: 1536px
-
-## Reusable Widgets
-
-Create reusable UI components as **Widgets**:
-
-```
-Widget: CustomerCard
-├── Props:
-│   ├── customer: Customer
-│   └── onEdit: Action
-├── Content:
-│   └── Card with customer info
-└── Actions:
-    └── Edit button triggers onEdit
-```
-
-Use in pages:
-```
-WidgetInstance
-├── widgetId: "CustomerCard"
-├── props: { customer: {$selectedCustomer} }
-└── onEdit: openModal → EditCustomerModal
-```
-
-## Example: Admin Panel
-
-Complete admin panel structure:
-
-```
-App: Admin Panel
-├── /
-│   └── Dashboard (metrics, charts, recent activity)
-├── /users
-│   ├── Table of users
-│   ├── Search/filter bar
-│   └── Actions: Edit, Suspend, Delete
-├── /users/:id
-│   ├── User details
-│   ├── Activity log
-│   └── Edit form
-├── /content
-│   ├── Content list
-│   └── Moderation queue
-├── /settings
-│   ├── App settings form
-│   └── API keys management
-└── Layout:
-    ├── Sidebar (navigation)
-    ├── Header (user menu, notifications)
-    └── Main content area
-```
-
-## Best Practices
-
-### 1. Loading States
-Always show loading indicators:
-```
-{$isLoading ? Spinner : Table}
-```
-
-### 2. Error Handling
-Display errors clearly:
-```
-{$error && Alert (variant: destructive): $error}
-```
-
-### 3. Empty States
-Handle empty data gracefully:
-```
-{$data.length === 0 ? EmptyState : Table}
-```
-
-### 4. Confirmation Dialogs
-Confirm destructive actions:
-```
-Button: Delete
-├── onClick: openModal → ConfirmDelete
-└── Modal confirms then invokes DeleteRecord
-```
-
-### 5. Keyboard Navigation
-Use proper tab order and focus management for accessibility.
-
-## Next Steps
-
-- **[Data Visualization](/topics/datascience/visualization/)** – Deep dive into charts
-- **[Events](/apps/events/)** – Trigger workflows from UI
-- **[DataFusion](/topics/datascience/datafusion/)** – Query data for dashboards
-- **[API Integrations](/topics/api-integrations/overview/)** – Connect external data
+- [Pages](/apps/pages/)
+- [Routes](/apps/routes/)
+- [Widgets](/apps/widgets/)
+- [Events](/apps/events/)
+- [API integrations](/topics/api-integrations/overview/)
+- [Data visualization](/topics/datascience/visualization/)

@@ -65,7 +65,9 @@ export function ChallengeRunner({
 					<CardTitle className="flex items-center gap-2 text-base">
 						{challenge.prompt}
 						<Badge variant="outline" className="ml-auto">
-							{challenge.kind === "BOARD_RIDDLE" ? "Board riddle" : "Execute node"}
+							{challenge.kind === "BOARD_RIDDLE"
+								? "Board riddle"
+								: "Execute node"}
 						</Badge>
 					</CardTitle>
 				</CardHeader>
@@ -78,47 +80,47 @@ export function ChallengeRunner({
 						disabled={disabled || submitting || !buildBoardSubmission}
 						onClick={async () => {
 							if (!buildBoardSubmission) return;
-								setSubmitting(true);
-								try {
-									const submission = await buildBoardSubmission();
-									const submissionRecord = asRecord(submission) ?? {};
-									const embeddedRunId =
-										typeof submissionRecord.runId === "string"
-											? submissionRecord.runId
-											: typeof submissionRecord.run_id === "string"
-												? submissionRecord.run_id
-												: "";
-									const proofRunId = runId.trim() || embeddedRunId.trim();
-									const attemptSubmission =
-										challenge.kind === "EXECUTE_NODE"
-											? {
-													...submissionRecord,
-													...(proofRunId ? { runId: proofRunId } : {}),
-												}
-											: submission;
-									const r = await onSubmit(attemptSubmission);
-									setResult(r);
-								} finally {
-									setSubmitting(false);
-								}
-							}}
-						>
+							setSubmitting(true);
+							try {
+								const submission = await buildBoardSubmission();
+								const submissionRecord = asRecord(submission) ?? {};
+								const embeddedRunId =
+									typeof submissionRecord.runId === "string"
+										? submissionRecord.runId
+										: typeof submissionRecord.run_id === "string"
+											? submissionRecord.run_id
+											: "";
+								const proofRunId = runId.trim() || embeddedRunId.trim();
+								const attemptSubmission =
+									challenge.kind === "EXECUTE_NODE"
+										? {
+												...submissionRecord,
+												...(proofRunId ? { runId: proofRunId } : {}),
+											}
+										: submission;
+								const r = await onSubmit(attemptSubmission);
+								setResult(r);
+							} finally {
+								setSubmitting(false);
+							}
+						}}
+					>
 						{submitting ? (
 							<Loader2 className="h-4 w-4 mr-2 animate-spin" />
 						) : null}
-							Check my board
-						</Button>
-						{challenge.kind === "EXECUTE_NODE" ? (
-							<Input
-								value={runId}
-								onChange={(event) => setRunId(event.target.value)}
-								placeholder="Completed run ID"
-								aria-label="Completed run ID"
-							/>
-						) : null}
-						<ResultBanner result={result} />
-					</CardContent>
-				</Card>
+						Check my board
+					</Button>
+					{challenge.kind === "EXECUTE_NODE" ? (
+						<Input
+							value={runId}
+							onChange={(event) => setRunId(event.target.value)}
+							placeholder="Completed run ID"
+							aria-label="Completed run ID"
+						/>
+					) : null}
+					<ResultBanner result={result} />
+				</CardContent>
+			</Card>
 		);
 	}
 
@@ -154,7 +156,9 @@ function ChoiceChallenge({
 
 	const toggle = (id: string) => {
 		if (isMulti) {
-			setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+			setSelected((s) =>
+				s.includes(id) ? s.filter((x) => x !== id) : [...s, id],
+			);
 		} else {
 			setSelected([id]);
 		}
@@ -212,7 +216,9 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function readSelectedSubmission(submission: unknown): string[] {
 	const data = asRecord(submission);
 	return Array.isArray(data?.selected)
-		? data.selected.filter((value): value is string => typeof value === "string")
+		? data.selected.filter(
+				(value): value is string => typeof value === "string",
+			)
 		: [];
 }
 
@@ -223,7 +229,8 @@ function RiddleHints({ challenge }: { readonly challenge: Challenge }) {
 			<ul className="text-xs text-muted-foreground space-y-0.5 list-disc pl-4">
 				{(payload.predicates ?? []).map((p, i) => (
 					<li key={i}>
-						<code className="text-[11px]">{p.op}</code>: {JSON.stringify(p.args)}
+						<code className="text-[11px]">{p.op}</code>:{" "}
+						{JSON.stringify(p.args)}
 					</li>
 				))}
 			</ul>
@@ -232,11 +239,15 @@ function RiddleHints({ challenge }: { readonly challenge: Challenge }) {
 	if (challenge.kind === "EXECUTE_NODE") {
 		const payload = challenge.payload as ExecuteNodeChallengePayload;
 		const packages =
-			payload.requiredPackages ?? payload.required_packages ?? payload.packages ?? [];
+			payload.requiredPackages ??
+			payload.required_packages ??
+			payload.packages ??
+			[];
 		return (
 			<p className="text-xs text-muted-foreground">
-				Run node <code>{payload.nodeId}</code> on board <code>{payload.boardId}</code>.
-				Required package proof: {packages.length ? packages.join(", ") : "not configured"}.
+				Run node <code>{payload.nodeId}</code> on board{" "}
+				<code>{payload.boardId}</code>. Required package proof:{" "}
+				{packages.length ? packages.join(", ") : "not configured"}.
 			</p>
 		);
 	}
@@ -261,9 +272,7 @@ function ResultBanner({ result }: { readonly result: AttemptResult | null }) {
 	return (
 		<div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive flex items-center gap-2">
 			<X className="h-4 w-4" />
-			<span>
-				Not quite. {result.explanation ?? "Try again."}
-			</span>
+			<span>Not quite. {result.explanation ?? "Try again."}</span>
 		</div>
 	);
 }

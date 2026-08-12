@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
-import { useExecuteAction } from "../ActionHandler";
+import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -31,7 +31,7 @@ export function A2UIBoundingBoxOverlay({
 	style,
 	componentId,
 }: ComponentProps<BoundingBoxOverlayComponent>) {
-	const { executeAction } = useExecuteAction();
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const imageRef = useRef<HTMLImageElement>(null);
 
@@ -135,12 +135,9 @@ export function A2UIBoundingBoxOverlay({
 	const handleBoxClick = useCallback(
 		(box: NormalizedBox) => {
 			if (!interactive) return;
-			const action = component.actions?.[0];
-			if (action) {
-				void executeAction(action, componentId, { box });
-			}
+			void triggerEvent("boxClick", component, { box });
 		},
-		[component.actions, componentId, executeAction, interactive],
+		[component, interactive, triggerEvent],
 	);
 
 	const fitClass =

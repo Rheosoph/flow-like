@@ -9,12 +9,10 @@ object_store = {version="0.12.4", features = ["gcp", "aws", "azure", "serde", "s
 chrono.workspace = true
 smb2 = "0.11.3"
 # fp16kernels are not supported on Windows (lance skips compiling the C kernels for MSVC)
-lancedb = { version = "=0.27.2", features = ["polars", "remote", "aws", "azure", "gcs"] }
+lancedb = { version = "=0.27.2", features = ["remote", "aws", "azure", "gcs"] }
 lance-io = { version = "=4.0.0" }
 lance = { version = "=4.0.0", default-features = false }
 lance-file = { version = "=4.0.0" }
-polars = "0.39.2"
-polars-arrow = "0.39.2"
 arrow-array = "=57.2.0"
 arrow-schema = { version = "=57.2.0", features = ["serde"] }
 arrow = "=57.2.0"

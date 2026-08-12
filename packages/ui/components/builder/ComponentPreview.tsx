@@ -33,6 +33,7 @@ const COMPONENT_ICONS: Record<string, string> = {
 	skeleton: "▯",
 	button: "◯",
 	textField: "▢",
+	richText: "¶",
 	select: "▾",
 	slider: "━",
 	checkbox: "☑",
@@ -58,6 +59,8 @@ const COMPONENT_ICONS: Record<string, string> = {
 	healthBar: "❤️",
 	miniMap: "🗺",
 	geoMap: "🌍",
+	graph: "🕸",
+	ontologyGraph: "🕸",
 };
 
 const COMPONENT_COLORS: Record<
@@ -168,6 +171,11 @@ const COMPONENT_COLORS: Record<
 		text: "text-purple-600",
 	},
 	textField: {
+		bg: "bg-purple-50",
+		border: "border-purple-200",
+		text: "text-purple-600",
+	},
+	richText: {
 		bg: "bg-purple-50",
 		border: "border-purple-200",
 		text: "text-purple-600",
@@ -296,6 +304,16 @@ const COMPONENT_COLORS: Record<
 		bg: "bg-green-50",
 		border: "border-green-200",
 		text: "text-green-600",
+	},
+	graph: {
+		bg: "bg-indigo-50",
+		border: "border-indigo-200",
+		text: "text-indigo-600",
+	},
+	ontologyGraph: {
+		bg: "bg-indigo-50",
+		border: "border-indigo-200",
+		text: "text-indigo-600",
 	},
 };
 

@@ -562,6 +562,12 @@ export function parseBoard(
 				? stripCallFunctionRef(node)
 				: { node, functionLayerId: undefined };
 
+			// Surfaced on the call node so a cached function is recognizable without
+			// opening the function it points at.
+			const functionCache = functionLayerId
+				? (board.layers[functionLayerId]?.cache ?? undefined)
+				: undefined;
+
 			nodes.push({
 				id: node.id,
 				type: isCallFunction ? "callFunctionNode" : "node",
@@ -584,6 +590,7 @@ export function parseBoard(
 					version: version,
 					isUnavailable,
 					functionLayerId,
+					functionCache: functionCache?.enabled ? functionCache : undefined,
 					currentLayerId: currentLayer,
 					onExecute: async (node: INode, payload?: object) => {
 						await executeBoard(node, payload);
@@ -758,6 +765,7 @@ export function parseBoard(
 					selectorDataRef,
 					selectorDataVersion,
 					hash: layer.hash ?? -1,
+					version: version,
 					pinLookup: lookup,
 					pushLayer: async (layer: ILayer) => {
 						pushLayer(layer);

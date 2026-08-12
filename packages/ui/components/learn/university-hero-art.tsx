@@ -30,11 +30,7 @@ export function UniversityHeroArt({ className = "" }: UniversityHeroArtProps) {
 			className={`pointer-events-none select-none text-amber-300 ${className}`}
 			aria-hidden
 		>
-			<svg
-				viewBox="0 0 250 200"
-				className="h-full w-full"
-				role="presentation"
-			>
+			<svg viewBox="0 0 250 200" className="h-full w-full" role="presentation">
 				<defs>
 					<radialGradient id="hero-node-glow" cx="50%" cy="50%" r="50%">
 						<stop offset="0%" stopColor="currentColor" stopOpacity="0.7" />

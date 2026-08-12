@@ -9,6 +9,8 @@ draft: false
 
 {/* Cover image prompt: A clean, modern tech illustration of an audio-AI pipeline — on the left a glowing waveform flowing into a stylized microphone, transforming through a node-graph of connected blocks into flowing lines of transcript text on the right; mirrored below, text turning back into a waveform. Subtle floating labels "Whisper", "OLMoASR", "Kokoro", "candle". A small glowing "on-device" laptop chip icon signaling local/private inference. Cool blue-to-violet gradient palette with teal accents on a dark background, crisp vector style, soft depth-of-field, high-tech and trustworthy mood. */}
 
+import { BlogInteractiveDemo } from "../../components/blog/BlogInteractiveDemo";
+
 Flow-Like can now hear and speak — and, if you want, it can do both without a single byte leaving your machine.
 
 This release rounds out the audio-AI story with a family of **speech-to-text (STT)** and **text-to-speech (TTS)** nodes, in two flavors: **hosted**, backed by the usual providers, and **local**, running entirely on-device. The headline of the latest push is the local *Speech to Text* node — the last piece needed to run a full voice loop offline.
@@ -21,6 +23,8 @@ The catalog now carries four audio nodes under **AI / Generative / Audio**:
 - **Local Text to Speech** and **Local Speech to Text** — on-device, no API key, no network.
 
 The hosted nodes give you reach and the latest cloud models; the local nodes give you privacy, offline capability, and zero per-minute cost. Same graph, same pins — you choose per node.
+
+<BlogInteractiveDemo client:only="react" preset="voice-studio" />
 
 ## Local means local: it runs on candle
 

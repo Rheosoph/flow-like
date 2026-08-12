@@ -236,7 +236,7 @@ impl NodeLogic for UploadNotionFileNode {
         let filename = upload_file_name(&file, filename);
         let content_type = upload_content_type(&filename, content_type);
         let size = bytes.len() as i64;
-        let part_count = (bytes.len() + SINGLE_PART_LIMIT - 1) / SINGLE_PART_LIMIT;
+        let part_count = bytes.len().div_ceil(SINGLE_PART_LIMIT);
         if part_count > MAX_MULTIPART_PARTS {
             log_and_error(
                 context,

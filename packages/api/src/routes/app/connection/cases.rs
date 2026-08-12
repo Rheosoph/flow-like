@@ -129,7 +129,10 @@ struct RawCase {
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/connections/cases", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/connections/cases",
+    skip(state, user, query)
+)]
 pub async fn list_process_cases(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

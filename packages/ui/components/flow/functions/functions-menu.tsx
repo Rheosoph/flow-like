@@ -2,14 +2,29 @@
 import { useDraggable } from "@dnd-kit/core";
 import { createId } from "@paralleldrive/cuid2";
 import {
+	FolderInputIcon,
 	GripIcon,
 	PencilIcon,
 	SettingsIcon,
 	SquareFunctionIcon,
 	Trash2Icon,
 } from "lucide-react";
-import { type RefObject, useCallback, useMemo, useState } from "react";
+import {
+	type RefObject,
+	useCallback,
+	useEffect,
+	useMemo,
+	useState,
+} from "react";
 import { Button } from "../../../components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
 import {
 	type IGenericCommand,
@@ -21,7 +36,17 @@ import {
 	type ILayer,
 	ILayerType,
 } from "../../../lib/schema/flow/board";
+import {
+	CategoryTree,
+	FOLDER_DROP_EVENT,
+	type IFolderDropDetail,
+	buildCategoryTree,
+	collectFolderPaths,
+	normalizeCategory,
+} from "../category-tree";
 import { LayerEditMenu } from "../layer-editing-menu";
+
+const FUNCTION_FOLDER_KIND = "functions";
 
 export function useCreateFunction(
 	executeCommand: (command: IGenericCommand, append: boolean) => Promise<any>,
@@ -59,11 +84,23 @@ export function FunctionsList({
 	boardRef?: RefObject<IBoard | undefined>;
 }>) {
 	const [editingLayer, setEditingLayer] = useState<ILayer | null>(null);
+	const [movingLayer, setMovingLayer] = useState<ILayer | null>(null);
 
 	const functions = useMemo(
 		() =>
 			Object.values(board.layers).filter((l) => l.type === ILayerType.Function),
 		[board.layers],
+	);
+
+	const tree = useMemo(() => buildCategoryTree(functions), [functions]);
+	const folders = useMemo(() => collectFolderPaths(tree), [tree]);
+
+	const upsertFunction = useCallback(
+		async (layer: ILayer) => {
+			const command = upsertLayerCommand({ layer, node_ids: [] });
+			await executeCommand(command, false);
+		},
+		[executeCommand],
 	);
 
 	const removeFunction = useCallback(
@@ -83,14 +120,38 @@ export function FunctionsList({
 
 	const renameFunction = useCallback(
 		async (layer: ILayer, name: string) => {
-			const command = upsertLayerCommand({
-				layer: { ...layer, name },
-				node_ids: [],
-			});
-			await executeCommand(command, false);
+			await upsertFunction({ ...layer, name });
 		},
-		[executeCommand],
+		[upsertFunction],
 	);
+
+	const moveFunction = useCallback(
+		async (layer: ILayer, category?: string) => {
+			if (normalizeCategory(layer.category) === category) return;
+			await upsertFunction({ ...layer, category: category ?? null });
+		},
+		[upsertFunction],
+	);
+
+	// Folder drops are dispatched by FlowWrapper, which owns the DndContext.
+	useEffect(() => {
+		const handler = (event: Event) => {
+			const detail = (
+				event as CustomEvent<IFolderDropDetail<{ layerId?: string }>>
+			).detail;
+			if (!detail || detail.consumed) return;
+			if (detail.kind !== FUNCTION_FOLDER_KIND) return;
+
+			const layerId = detail.item?.layerId;
+			const layer = layerId ? board.layers[layerId] : undefined;
+			if (layer?.type !== ILayerType.Function) return;
+
+			detail.consumed = true;
+			void moveFunction(layer, normalizeCategory(detail.path));
+		};
+		document.addEventListener(FOLDER_DROP_EVENT, handler);
+		return () => document.removeEventListener(FOLDER_DROP_EVENT, handler);
+	}, [board.layers, moveFunction]);
 
 	if (functions.length === 0) {
 		return (
@@ -100,18 +161,35 @@ export function FunctionsList({
 
 	return (
 		<>
-			<div className="flex flex-col gap-1">
-				{functions.map((fn) => (
+			<CategoryTree
+				root={tree}
+				kind={FUNCTION_FOLDER_KIND}
+				renderItem={(fn) => (
 					<FunctionItem
-						key={fn.id}
 						layer={fn}
 						onNavigate={() => pushLayer(fn)}
 						onRename={(name) => renameFunction(fn, name)}
 						onEdit={() => setEditingLayer(fn)}
+						onMove={() => setMovingLayer(fn)}
 						onDelete={() => removeFunction(fn)}
 					/>
-				))}
-			</div>
+				)}
+			/>
+
+			{movingLayer && (
+				<MoveToFolderDialog
+					open={!!movingLayer}
+					onOpenChange={(open) => {
+						if (!open) setMovingLayer(null);
+					}}
+					layer={movingLayer}
+					folders={folders}
+					onMove={async (category) => {
+						await moveFunction(movingLayer, category);
+						setMovingLayer(null);
+					}}
+				/>
+			)}
 
 			{editingLayer && (
 				<LayerEditMenu
@@ -122,7 +200,11 @@ export function FunctionsList({
 					}}
 					boardRef={boardRef}
 					onApply={async (updated) => {
-						const newLayer = { ...editingLayer, pins: updated.pins };
+						const newLayer = {
+							...editingLayer,
+							pins: updated.pins,
+							cache: (updated as ILayer).cache,
+						};
 						const command = upsertLayerCommand({
 							layer: newLayer,
 							node_ids: [],
@@ -141,12 +223,14 @@ function FunctionItem({
 	onNavigate,
 	onRename,
 	onEdit,
+	onMove,
 	onDelete,
 }: Readonly<{
 	layer: ILayer;
 	onNavigate: () => void;
 	onRename: (name: string) => void;
 	onEdit: () => void;
+	onMove: () => void;
 	onDelete: () => void;
 }>) {
 	const [isRenaming, setIsRenaming] = useState(false);
@@ -242,6 +326,15 @@ function FunctionItem({
 					variant="ghost"
 					size="icon"
 					className="h-6 w-6"
+					title="Move to folder"
+					onClick={onMove}
+				>
+					<FolderInputIcon className="w-3 h-3" />
+				</Button>
+				<Button
+					variant="ghost"
+					size="icon"
+					className="h-6 w-6"
 					onClick={onEdit}
 				>
 					<SettingsIcon className="w-3 h-3" />
@@ -256,5 +349,82 @@ function FunctionItem({
 				</Button>
 			</div>
 		</div>
+	);
+}
+
+function MoveToFolderDialog({
+	open,
+	onOpenChange,
+	layer,
+	folders,
+	onMove,
+}: Readonly<{
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	layer: ILayer;
+	folders: string[];
+	onMove: (category?: string) => Promise<void>;
+}>) {
+	const [draft, setDraft] = useState(layer.category ?? "");
+
+	const commit = useCallback(() => {
+		void onMove(normalizeCategory(draft));
+	}, [draft, onMove]);
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="sm:max-w-md">
+				<DialogHeader>
+					<DialogTitle className="flex items-center gap-2">
+						<FolderInputIcon className="h-4 w-4 text-primary" />
+						Move “{layer.name}”
+					</DialogTitle>
+					<DialogDescription>
+						Use “/” to create nested folders. Leave empty for top-level.
+					</DialogDescription>
+				</DialogHeader>
+
+				<Input
+					autoFocus
+					value={draft}
+					onChange={(e) => setDraft(e.target.value)}
+					onKeyDown={(e) => {
+						if (e.key === "Enter") commit();
+					}}
+					placeholder="e.g. Utils/Math"
+				/>
+
+				{folders.length > 0 && (
+					<div className="flex flex-wrap gap-1">
+						<Button
+							variant="outline"
+							size="sm"
+							className="h-6 text-xs"
+							onClick={() => setDraft("")}
+						>
+							Top level
+						</Button>
+						{folders.map((folder) => (
+							<Button
+								key={folder}
+								variant="outline"
+								size="sm"
+								className="h-6 text-xs"
+								onClick={() => setDraft(folder)}
+							>
+								{folder}
+							</Button>
+						))}
+					</div>
+				)}
+
+				<DialogFooter className="gap-2">
+					<Button variant="secondary" onClick={() => onOpenChange(false)}>
+						Cancel
+					</Button>
+					<Button onClick={commit}>Move</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	);
 }

@@ -137,7 +137,7 @@ pub fn routes() -> Router<AppState> {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/packages", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/packages", skip(state, user, query))]
 pub async fn list_packages(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -213,7 +213,10 @@ pub async fn list_packages(
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/packages", skip(state, user, request))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/packages",
+    skip(state, user, query, request)
+)]
 pub async fn add_package(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -348,7 +351,7 @@ pub async fn remove_package(
 )]
 #[tracing::instrument(
     name = "PATCH /apps/{app_id}/packages/{package_id}",
-    skip(state, user, request)
+    skip(state, user, query, request)
 )]
 pub async fn update_package(
     State(state): State<AppState>,
@@ -574,7 +577,7 @@ pub async fn check_updates(
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/packages/{package_id}/reactivate",
-    skip(state, user)
+    skip(state, user, query)
 )]
 pub async fn reactivate_package(
     State(state): State<AppState>,

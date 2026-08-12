@@ -37,6 +37,18 @@ enum LayerType {
   COLLAPSED = 2;
 }
 
+enum LayerCacheScope {
+  LAYER_CACHE_SCOPE_APP = 0;
+  LAYER_CACHE_SCOPE_USER = 1;
+}
+
+message LayerCache {
+  bool enabled = 1;
+  string prefix = 2;
+  optional uint64 ttl_seconds = 3;
+  LayerCacheScope scope = 4;
+}
+
 message Layer {
   string id = 1;
   optional string parent_id = 2;
@@ -59,6 +71,8 @@ message Layer {
   optional float coord_x_out = 19;
   optional float coord_y_out = 20;
   optional float coord_z_out = 21;
+  optional LayerCache cache = 22;
+  optional string category = 23;
 }
 
 
@@ -84,4 +98,8 @@ message Board {
   repeated string page_ids = 19;
   ExecutionMode execution_mode = 20;
   optional uint64 hash = 21;
+  // Host-owned durable bookkeeping. This is persisted with the board so a
+  // mutation and its receipt share one object-store commit, but it is not part
+  // of the workflow schema and must never be exposed through Board JSON.
+  map<string, string> internal_refs = 22;
 }

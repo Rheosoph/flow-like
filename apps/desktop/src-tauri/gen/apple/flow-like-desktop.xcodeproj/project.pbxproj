@@ -10,6 +10,7 @@
 		0397521AECC609F3FB0D060D /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 7D685BD1CD447858983F1221 /* libapp.a */; };
 		0C0F0E1D2C3B4A5968776655 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4C0F0E1D2C3B4A5968776655 /* CoreFoundation.framework */; };
 		C0DE00000000000000000002 /* CoreML.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000001 /* CoreML.framework */; };
+		F10A00000000000000000001 /* FlowLikeMLX in Frameworks */ = {isa = PBXBuildFile; productRef = F10A00000000000000000003 /* FlowLikeMLX */; };
 		050A989B75BD371962346B70 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = FE841B414893A9D8539A5AD4 /* main.mm */; };
 		1C0F0E1D2C3B4A5968776655 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5C0F0E1D2C3B4A5968776655 /* CoreMedia.framework */; };
 		255CFA4E3B311D277951C11C /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 589BB68C31884596100EACBD /* QuartzCore.framework */; };
@@ -95,6 +96,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F10A00000000000000000001 /* FlowLikeMLX in Frameworks */,
 				0397521AECC609F3FB0D060D /* libapp.a in Frameworks */,
 				5E3B45C78E5B4FCEB6240D47 /* Accelerate.framework in Frameworks */,
 				C0DE00000000000000000002 /* CoreML.framework in Frameworks */,
@@ -309,6 +311,7 @@
 			);
 			name = "flow-like-desktop_iOS";
 			packageProductDependencies = (
+				F10A00000000000000000003 /* FlowLikeMLX */,
 				DC66728C2F6BE41C00160C5D /* FirebaseMessaging */,
 				DC6672912F6BF9CF00160C5D /* FirebaseInAppMessaging-Beta */,
 			);
@@ -341,6 +344,7 @@
 			mainGroup = 95311537C7BD5DE850EE9940;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				F10A00000000000000000002 /* XCLocalSwiftPackageReference "../../apple/FlowLikeMLX" */,
 				DC66728B2F6BE41C00160C5D /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 			);
 			projectDirPath = "";
@@ -444,6 +448,7 @@
 				OTHER_LDFLAGS = "-lz";
 				PRODUCT_BUNDLE_IDENTIFIER = com.flow-like.app;
 				PRODUCT_NAME = "Flow Like";
+				RUSTUP_TOOLCHAIN = 1.97.1;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/flow-like-desktop/flow-like-desktop_iOS-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -494,6 +499,7 @@
 				OTHER_LDFLAGS = "-lz";
 				PRODUCT_BUNDLE_IDENTIFIER = com.flow-like.app;
 				PRODUCT_NAME = "Flow Like";
+				RUSTUP_TOOLCHAIN = 1.97.1;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/flow-like-desktop/flow-like-desktop_iOS-Bridging-Header.h";
 				SWIFT_VERSION = 6.0;
@@ -553,7 +559,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -610,7 +616,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -644,6 +650,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		F10A00000000000000000002 /* XCLocalSwiftPackageReference "../../apple/FlowLikeMLX" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../apple/FlowLikeMLX;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		DC66728B2F6BE41C00160C5D /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -656,6 +669,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		F10A00000000000000000003 /* FlowLikeMLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F10A00000000000000000002 /* XCLocalSwiftPackageReference "../../apple/FlowLikeMLX" */;
+			productName = FlowLikeMLX;
+		};
 		DC66728C2F6BE41C00160C5D /* FirebaseMessaging */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = DC66728B2F6BE41C00160C5D /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;

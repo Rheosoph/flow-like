@@ -148,7 +148,7 @@ impl NodeLogic for CopyWorksheetNode {
             let (source_idx, source_name) = resolve_sheet_identifier(&book, &source_sheet_in)?;
 
             let base_name = if new_name_in.trim().is_empty() {
-                format!("{} (copy)", &source_name)
+                format!("{} (copy)", source_name)
             } else {
                 new_name_in.trim().to_string()
             };

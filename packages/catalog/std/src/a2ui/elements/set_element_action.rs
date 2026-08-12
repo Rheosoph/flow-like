@@ -17,13 +17,29 @@ impl SetElementAction {
     }
 }
 
+fn build_action_update(event_name: &str, action: Option<Value>) -> Value {
+    let event_name = event_name.trim();
+    if event_name.is_empty() {
+        return json!({
+            "type": "setAction",
+            "action": action
+        });
+    }
+
+    json!({
+        "type": "setEventActions",
+        "eventName": event_name,
+        "actions": action.into_iter().collect::<Vec<_>>()
+    })
+}
+
 #[async_trait]
 impl NodeLogic for SetElementAction {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "a2ui_set_element_action",
             "Set Element Action",
-            "Dynamically sets the action of an interactive element (button, link, etc.)",
+            "Dynamically sets the legacy default action or a named event action of an interactive element",
             "UI/Elements",
         );
         node.add_icon("/flow/icons/a2ui.svg");
@@ -37,6 +53,14 @@ impl NodeLogic for SetElementAction {
             VariableType::Struct,
         )
         .set_options(PinOptions::new().set_enforce_schema(false).build());
+
+        node.add_input_pin(
+            "event_name",
+            "Event",
+            "Optional named component event (for example click, change, open, or delete). Leave empty to update the legacy default action.",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
 
         node.add_input_pin(
             "action_type",
@@ -87,6 +111,7 @@ impl NodeLogic for SetElementAction {
         node.add_output_pin("exec_out", "▶", "Execution output", VariableType::Execution);
 
         node.set_long_running(true);
+        node.set_version(1);
 
         node
     }
@@ -112,6 +137,7 @@ impl NodeLogic for SetElementAction {
             .evaluate_pin("action_type")
             .await
             .unwrap_or_default();
+        let event_name: String = context.evaluate_pin("event_name").await.unwrap_or_default();
 
         let action = if action_type == "clear" {
             None
@@ -154,14 +180,78 @@ impl NodeLogic for SetElementAction {
             }))
         };
 
-        let update_value = json!({
-            "type": "setAction",
-            "action": action
-        });
+        // Empty event_name retains the exact legacy payload and behavior. A
+        // named clear writes an explicit empty list so the event does not fall
+        // back to the legacy default action.
+        let update_value = build_action_update(&event_name, action);
 
         context.upsert_element(&element_id, update_value).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_event_name_preserves_legacy_set_action_payload_bytes() {
+        let action = Some(json!({
+            "name": "navigate_page",
+            "context": {
+                "route": "/orders",
+                "queryParams": "{\"status\":\"open\"}"
+            }
+        }));
+
+        let actual = flow_like_types::json::to_vec(&build_action_update("", action.clone()))
+            .expect("serialize emitted update");
+        let legacy = flow_like_types::json::to_vec(&json!({
+            "type": "setAction",
+            "action": action
+        }))
+        .expect("serialize legacy update");
+
+        assert_eq!(actual, legacy);
+    }
+
+    #[test]
+    fn named_event_emits_one_item_ordered_action_list() {
+        let action = json!({
+            "name": "workflow_event",
+            "context": { "nodeId": "handle-open" }
+        });
+
+        let update = build_action_update(" open ", Some(action.clone()));
+
+        assert_eq!(
+            update,
+            json!({
+                "type": "setEventActions",
+                "eventName": "open",
+                "actions": [action]
+            })
+        );
+        assert_eq!(
+            update
+                .get("actions")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn named_clear_emits_explicit_empty_action_list() {
+        assert_eq!(
+            build_action_update("delete", None),
+            json!({
+                "type": "setEventActions",
+                "eventName": "delete",
+                "actions": []
+            })
+        );
     }
 }

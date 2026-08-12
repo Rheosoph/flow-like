@@ -12,11 +12,31 @@ pub enum TraversalDirection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeLabelCount {
+    pub label: String,
+    pub count: usize,
+}
+
+/// Population fan-out of one object, as seen through the sampling window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubgraphNodeStats {
+    pub out_by_label: Vec<EdgeLabelCount>,
+    /// False when the window did not cover the whole relationship table, which
+    /// makes every count a lower bound.
+    pub exact: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubgraphNode {
     pub id: String,
     pub label: String,
     pub caption: Option<String>,
     pub props: Value,
+    /// Only the seedless sampler knows population counts; every other path
+    /// leaves this unset. `flow-like-catalog-core` mirrors this struct without
+    /// the field, so a subgraph routed through that type loses the stats.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<SubgraphNodeStats>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

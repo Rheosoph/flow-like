@@ -172,7 +172,6 @@ export const zh = {
 	"design.feature3.title": "Compare 和 Debug",
 	"design.feature3.desc": "Input/output snapshots 让找差异变得轻而易举。",
 
-
 	// Portability
 	"portability.tagline": "Full Lifecycle",
 	"portability.headline.start": "从",

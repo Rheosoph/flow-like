@@ -54,8 +54,8 @@ import {
 	HoverCardContent,
 	HoverCardTrigger,
 } from "../ui";
-import { fileToAttachment } from "./chat-default/attachment";
 import { ChatAppearance } from "./chat-default/appearance";
+import { fileToAttachment } from "./chat-default/attachment";
 import { Chat, type IChatRef } from "./chat-default/chat";
 import {
 	type IAttachment,
@@ -547,7 +547,12 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	const executionEngine = useExecutionEngine();
 	const searchParams = useSearchParams();
 	const pathname = usePathname();
-	const sessionIdParameter = searchParams.get("sessionId") ?? "";
+	// A chat cannot read its history without a session, and the router only
+	// commits one a tick later. Deriving it on the first render keeps every live
+	// query on a single key instead of tearing them all down once it lands.
+	const [fallbackSessionId] = useState(() => createId());
+	const urlSessionId = searchParams.get("sessionId") ?? "";
+	const sessionIdParameter = urlSessionId || fallbackSessionId;
 	const prefilledMessage = searchParams.get("message");
 	const setQueryParams = useSetQueryParams();
 	const chatRef = useRef<IChatRef>(null);
@@ -720,11 +725,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	} | null>(null);
 
 	useEffect(() => {
-		if (!sessionIdParameter || sessionIdParameter === "") {
-			const newSessionId = createId();
-			setQueryParams("sessionId", newSessionId);
-		}
-	}, [sessionIdParameter, setQueryParams]);
+		if (urlSessionId) return;
+		setQueryParams("sessionId", fallbackSessionId, { replace: true });
+	}, [urlSessionId, fallbackSessionId, setQueryParams]);
 
 	useEffect(() => {
 		if (!sessionIdParameter) {
@@ -1781,6 +1784,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 						event={event}
 						config={config}
 						isSending={isSendingFromWelcome}
+						appId={appId}
 					/>
 				) : (
 					<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>

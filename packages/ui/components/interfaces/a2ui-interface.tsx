@@ -2,12 +2,9 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { normalizeBoardVersion } from "../../lib/schema/flow/board-version";
-import {
-	type A2UIClientMessage,
-	A2UIRenderer,
-	type A2UIServerMessage,
-	useSurfaceManager,
-} from "../a2ui";
+import { A2UIRenderer } from "../a2ui/A2UIRenderer";
+import { useSurfaceManager } from "../a2ui/SurfaceManager";
+import type { A2UIClientMessage, A2UIServerMessage } from "../a2ui/types";
 import type { IUseInterfaceProps } from "./interfaces";
 
 export function A2UIInterface({

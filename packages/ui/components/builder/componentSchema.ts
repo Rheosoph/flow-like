@@ -210,7 +210,8 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		value: {
 			type: "boundValue",
 			required: true,
-			description: "User subject/sub ID",
+			description:
+				'User subject/sub ID. The "local" sub of an unauthenticated execution renders the current user',
 		},
 		variant: {
 			type: "boundValue",
@@ -488,6 +489,35 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		rows: { type: "boundValue" },
 		maxLength: { type: "boundValue" },
 		required: { type: "boundValue" },
+		debounceMs: {
+			type: "boundValue",
+			description:
+				"Pause in ms before the 'input' event fires (default 400, min 100)",
+		},
+		actions: { type: "actions" },
+	},
+	richText: {
+		type: { type: "string", required: true },
+		value: { type: "boundValue", required: true },
+		label: { type: "boundValue" },
+		helperText: { type: "boundValue" },
+		placeholder: { type: "boundValue" },
+		error: { type: "boundValue" },
+		disabled: { type: "boundValue" },
+		readOnly: { type: "boundValue" },
+		uploadPrefix: {
+			type: "boundValue",
+			description:
+				"Storage folder for pasted or dropped images (default a2ui/<surface>/<component>)",
+		},
+		uploadScope: { type: "boundValue", enum: ["app", "user"] },
+		minHeight: { type: "boundValue" },
+		maxHeight: { type: "boundValue" },
+		debounceMs: {
+			type: "boundValue",
+			description:
+				"Pause in ms before the 'change' event fires (default 600, min 100)",
+		},
 		actions: { type: "actions" },
 	},
 	select: {
@@ -510,6 +540,11 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		disabled: { type: "boundValue" },
 		showValue: { type: "boundValue" },
 		label: { type: "boundValue" },
+		debounceMs: {
+			type: "boundValue",
+			description:
+				"Pause in ms before the 'input' event fires (default 400, min 100)",
+		},
 		actions: { type: "actions" },
 	},
 	checkbox: {
@@ -884,6 +919,35 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		clusterMarkers: { type: "boundValue" },
 		clusterRadius: { type: "boundValue" },
 		clusterMaxZoom: { type: "boundValue" },
+		actions: { type: "actions" },
+	},
+	graph: {
+		type: { type: "string", required: true },
+		nodes: { type: "boundValue", required: true },
+		edges: { type: "boundValue" },
+		labelStyles: { type: "boundValue" },
+		showToolbar: { type: "boundValue" },
+		showSearch: { type: "boundValue" },
+		showLegend: { type: "boundValue" },
+		showInspector: { type: "boundValue" },
+		height: { type: "boundValue" },
+		actions: { type: "actions" },
+	},
+	ontologyGraph: {
+		type: { type: "string", required: true },
+		ontologyId: { type: "boundValue", required: true },
+		appId: { type: "boundValue" },
+		limit: { type: "boundValue" },
+		allowExpand: { type: "boundValue" },
+		allowSearch: { type: "boundValue" },
+		allowPaths: { type: "boundValue" },
+		allowActions: { type: "boundValue" },
+		allowCypher: { type: "boundValue" },
+		allowStyleEdit: { type: "boundValue" },
+		allowLimitChange: { type: "boundValue" },
+		showToolbar: { type: "boundValue" },
+		showLegend: { type: "boundValue" },
+		height: { type: "boundValue" },
 		actions: { type: "actions" },
 	},
 	calendar: {

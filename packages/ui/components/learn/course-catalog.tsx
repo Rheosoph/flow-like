@@ -14,6 +14,7 @@ import {
 	X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useSearch } from "../../hooks/use-search-index";
 import type {
 	CourseCategory,
 	CourseDifficulty,
@@ -87,18 +88,20 @@ export function CourseCatalog({
 	const [difficulty, setDifficulty] =
 		useState<(typeof difficulties)[number]>("ALL");
 
-	const filtered = useMemo(() => {
-		const q = query.trim().toLowerCase();
-		return courses.filter((c) => {
-			if (category !== "ALL" && c.category !== category) return false;
-			if (difficulty !== "ALL" && c.difficulty !== difficulty) return false;
-			if (!q) return true;
-			const haystack = [c.name ?? "", c.description ?? "", ...(c.tags ?? [])]
-				.join(" ")
-				.toLowerCase();
-			return haystack.includes(q);
-		});
-	}, [courses, query, category, difficulty]);
+	const matched = useSearch(courses, query, {
+		fields: ["name", "description", "tags"],
+		boost: { name: 3, tags: 1.5 },
+	});
+
+	const filtered = useMemo(
+		() =>
+			matched.filter((c) => {
+				if (category !== "ALL" && c.category !== category) return false;
+				if (difficulty !== "ALL" && c.difficulty !== difficulty) return false;
+				return true;
+			}),
+		[matched, category, difficulty],
+	);
 
 	const inProgress = useMemo(() => {
 		const map = progressByCourseId ?? {};
@@ -256,8 +259,8 @@ export function CourseCatalog({
 								)}
 							</h1>
 							<p className="max-w-xl text-sm leading-6 text-muted-foreground">
-								Short, practical lessons paired with real apps. Build
-								something useful and keep your momentum visible.
+								Short, practical lessons paired with real apps. Build something
+								useful and keep your momentum visible.
 							</p>
 						</div>
 					</div>

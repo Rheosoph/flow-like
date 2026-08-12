@@ -1,17 +1,11 @@
-import {
-	useDraggable,
-	/* DndContext, type DragEndEvent, PointerSensor, useSensor, useSensors, closestCenter, */ useDroppable,
-} from "@dnd-kit/core";
+import { useDraggable } from "@dnd-kit/core";
 import {
 	BracesIcon,
-	ChevronDown,
-	ChevronRight,
 	CircleDotIcon,
 	CirclePlusIcon,
 	EllipsisVerticalIcon,
 	EyeIcon,
 	EyeOffIcon,
-	FolderIcon,
 	GripIcon,
 	ListIcon,
 	Trash2Icon,
@@ -64,10 +58,20 @@ import { IVariableType } from "../../../lib/schema/flow/node";
 import { IValueType } from "../../../lib/schema/flow/pin";
 import { convertJsonToUint8Array } from "../../../lib/uint8";
 import { cn } from "../../../lib/utils";
+import {
+	CategoryTree,
+	FOLDER_DROP_EVENT,
+	type IFolderDropDetail,
+	buildCategoryTree,
+	normalizeCategory,
+} from "../category-tree";
 import { FunctionsList, useCreateFunction } from "../functions/functions-menu";
 import { typeToColor } from "../utils";
 import { NewVariableDialog } from "./new-variable-dialog";
 import { VariablesMenuEdit } from "./variables-menu-edit";
+
+const VARIABLE_FOLDER_KIND = "variables";
+const LOCAL_VARIABLE_FOLDER_KIND = "local-variables";
 
 export function VariablesMenu({
 	board,
@@ -151,28 +155,59 @@ export function VariablesMenu({
 		return buildCategoryTree(Object.values(currentFunctionLayer.variables));
 	}, [currentFunctionLayer]);
 
-	// Listen for cross-folder drops dispatched by FlowWrapper
+	// Folder drops are dispatched by FlowWrapper, which owns the DndContext.
 	useEffect(() => {
-		const handler = (e: Event) => {
-			const { variable, targetPath } = (e as CustomEvent).detail as {
-				variable: IVariable;
-				targetPath: string;
-			};
+		const handler = (event: Event) => {
+			const detail = (event as CustomEvent<IFolderDropDetail<IVariable>>)
+				.detail;
+			if (!detail || detail.consumed) return;
+
+			const isLocal = detail.kind === LOCAL_VARIABLE_FOLDER_KIND;
+			if (!isLocal && detail.kind !== VARIABLE_FOLDER_KIND) return;
+
+			const variable = detail.item;
 			if (!variable?.editable) return;
-			const nextCategory = targetPath === "__root" ? undefined : targetPath;
-			if (variable.category === nextCategory) return;
-			void upsertVariable({ ...variable, category: nextCategory });
+
+			// A variable can only move within the scope it lives in.
+			const scope = isLocal ? currentFunctionLayer?.variables : board.variables;
+			if (!scope?.[variable.id]) return;
+
+			const nextCategory = normalizeCategory(detail.path);
+			if (normalizeCategory(variable.category) === nextCategory) return;
+
+			detail.consumed = true;
+			const moved = { ...variable, category: nextCategory };
+			void (isLocal ? upsertLocalVariable(moved) : upsertVariable(moved));
 		};
-		document.addEventListener(
-			"variables-folder-drop",
-			handler as EventListener,
-		);
-		return () =>
-			document.removeEventListener(
-				"variables-folder-drop",
-				handler as EventListener,
-			);
-	}, [upsertVariable]);
+		document.addEventListener(FOLDER_DROP_EVENT, handler);
+		return () => document.removeEventListener(FOLDER_DROP_EVENT, handler);
+	}, [
+		upsertVariable,
+		upsertLocalVariable,
+		board.variables,
+		currentFunctionLayer,
+	]);
+
+	const globalVariables = (
+		<CategoryTree
+			root={tree}
+			kind={VARIABLE_FOLDER_KIND}
+			renderItem={(variable) => (
+				<Variable
+					variable={variable}
+					refs={board.refs}
+					onVariableChange={(updated) => {
+						if (!updated.editable) return;
+						upsertVariable(updated);
+					}}
+					onVariableDeleted={(updated) => {
+						if (!updated.editable) return;
+						removeVariable(updated);
+					}}
+				/>
+			)}
+		/>
+	);
 
 	return (
 		<div className="flex flex-col h-full overflow-hidden">
@@ -226,33 +261,26 @@ export function VariablesMenu({
 						</div>
 						<CategoryTree
 							root={localTree}
-							refs={board.refs}
-							onVariableChange={(variable) => {
-								if (!variable.editable) return;
-								upsertLocalVariable(variable);
-							}}
-							onVariableDeleted={(variable) => {
-								if (!variable.editable) return;
-								removeLocalVariable(variable);
-							}}
+							kind={LOCAL_VARIABLE_FOLDER_KIND}
+							renderItem={(variable) => (
+								<Variable
+									variable={variable}
+									refs={board.refs}
+									onVariableChange={(updated) => {
+										if (!updated.editable) return;
+										upsertLocalVariable(updated);
+									}}
+									onVariableDeleted={(updated) => {
+										if (!updated.editable) return;
+										removeLocalVariable(updated);
+									}}
+								/>
+							)}
 						/>
 						<Separator className="my-3" />
 					</>
 				)}
-				{!currentFunctionLayer && (
-					<CategoryTree
-						root={tree}
-						refs={board.refs}
-						onVariableChange={(variable) => {
-							if (!variable.editable) return;
-							upsertVariable(variable);
-						}}
-						onVariableDeleted={(variable) => {
-							if (!variable.editable) return;
-							removeVariable(variable);
-						}}
-					/>
-				)}
+				{!currentFunctionLayer && globalVariables}
 				{currentFunctionLayer && (
 					<>
 						<div className="flex flex-row items-center gap-4 pb-2 shrink-0">
@@ -260,18 +288,7 @@ export function VariablesMenu({
 								Global
 							</h3>
 						</div>
-						<CategoryTree
-							root={tree}
-							refs={board.refs}
-							onVariableChange={(variable) => {
-								if (!variable.editable) return;
-								upsertVariable(variable);
-							}}
-							onVariableDeleted={(variable) => {
-								if (!variable.editable) return;
-								removeVariable(variable);
-							}}
-						/>
+						{globalVariables}
 					</>
 				)}
 
@@ -833,187 +850,6 @@ export function ValueTypeIcon({
 	);
 }
 
-// Category grouping
-
-type CategoryNode = {
-	name: string;
-	path: string;
-	vars: IVariable[];
-	children: Record<string, CategoryNode>;
-};
-
-const buildCategoryTree = (vars: IVariable[]): CategoryNode => {
-	const root: CategoryNode = { name: "", path: "", vars: [], children: {} };
-	for (const v of vars) {
-		const raw = (v as any)?.category as string | null | undefined;
-		const cat = (raw ?? "").trim();
-		if (!cat) {
-			root.vars.push(v);
-			continue;
-		}
-		const segments = cat
-			.split("/")
-			.map((s) => s.trim())
-			.filter(Boolean);
-		let node = root;
-		let path = "";
-		for (const seg of segments) {
-			path = path ? `${path}/${seg}` : seg;
-			if (!node.children[seg])
-				node.children[seg] = { name: seg, path, vars: [], children: {} };
-			node = node.children[seg];
-		}
-		node.vars.push(v);
-	}
-	return root;
-};
-
-const countRecursive = (node: CategoryNode): number =>
-	node.vars.length +
-	Object.values(node.children).reduce((sum, c) => sum + countRecursive(c), 0);
-
-const CategoryTree: React.FC<{
-	root: CategoryNode;
-	refs?: Record<string, string>;
-	onVariableChange: (v: IVariable) => void;
-	onVariableDeleted: (v: IVariable) => void;
-}> = ({ root, refs, onVariableChange, onVariableDeleted }) => {
-	const [open, setOpen] = useState<Record<string, boolean>>({});
-	const isOpen = useCallback((path: string) => open[path] ?? true, [open]);
-	const toggle = useCallback((path: string) => {
-		setOpen((prev) => ({ ...prev, [path]: !(prev[path] ?? true) }));
-	}, []);
-
-	// Root droppable to move items to top-level (category undefined)
-	const { setNodeRef: setRootRef, isOver: rootOver } = useDroppable({
-		id: "__root",
-	});
-
-	const childKeys = useMemo(
-		() => Object.keys(root.children).sort((a, b) => a.localeCompare(b)),
-		[root.children],
-	);
-	const varsSorted = useMemo(
-		() => [...root.vars].sort((a, b) => a.name.localeCompare(b.name)),
-		[root.vars],
-	);
-
-	return (
-		<div
-			ref={setRootRef}
-			className={`space-y-2 rounded-md ${rootOver ? "ring-1 ring-primary/40" : ""}`}
-		>
-			{varsSorted.length > 0 && (
-				<div className="flex flex-col gap-2">
-					{varsSorted.map((variable) => (
-						<Variable
-							key={variable.id}
-							variable={variable}
-							refs={refs}
-							onVariableChange={onVariableChange}
-							onVariableDeleted={onVariableDeleted}
-						/>
-					))}
-				</div>
-			)}
-			{childKeys.length > 0 && (
-				<div className="space-y-2">
-					{childKeys.map((k) => (
-						<FolderNode
-							key={root.children[k].path}
-							node={root.children[k]}
-							depth={1}
-							isOpen={isOpen}
-							toggle={toggle}
-							refs={refs}
-							onVariableChange={onVariableChange}
-							onVariableDeleted={onVariableDeleted}
-						/>
-					))}
-				</div>
-			)}
-		</div>
-	);
-};
-
-const FolderNode: React.FC<{
-	node: CategoryNode;
-	depth: number;
-	isOpen: (path: string) => boolean;
-	toggle: (path: string) => void;
-	refs?: Record<string, string>;
-	onVariableChange: (v: IVariable) => void;
-	onVariableDeleted: (v: IVariable) => void;
-}> = ({
-	node,
-	depth,
-	isOpen,
-	toggle,
-	refs,
-	onVariableChange,
-	onVariableDeleted,
-}) => {
-	const { setNodeRef, isOver } = useDroppable({ id: node.path });
-	const childKeys = useMemo(
-		() => Object.keys(node.children).sort((a, b) => a.localeCompare(b)),
-		[node.children],
-	);
-	const varsSorted = useMemo(
-		() => [...node.vars].sort((a, b) => a.name.localeCompare(b.name)),
-		[node.vars],
-	);
-	const total = countRecursive(node);
-
-	return (
-		<div className="rounded-md border">
-			<button
-				ref={setNodeRef}
-				type="button"
-				className={`w-full flex items-center gap-2 px-2 py-2 hover:bg-accent/50 ${isOver ? "bg-primary/5" : ""}`}
-				onClick={() => toggle(node.path)}
-			>
-				{isOpen(node.path) ? (
-					<ChevronDown className="h-4 w-4 text-muted-foreground" />
-				) : (
-					<ChevronRight className="h-4 w-4 text-muted-foreground" />
-				)}
-				<FolderIcon className="h-4 w-4 text-muted-foreground" />
-				<span className="text-sm font-medium">{node.name}</span>
-				<span className="ml-auto text-xs text-muted-foreground">{total}</span>
-			</button>
-
-			{isOpen(node.path) && (
-				<div className="p-2 pt-1 space-y-2">
-					{varsSorted.map((variable) => (
-						<Variable
-							key={variable.id}
-							variable={variable}
-							refs={refs}
-							onVariableChange={onVariableChange}
-							onVariableDeleted={onVariableDeleted}
-						/>
-					))}
-					{childKeys.length > 0 && (
-						<div className="mt-2 space-y-2">
-							{childKeys.map((k) => (
-								<FolderNode
-									key={node.children[k].path}
-									node={node.children[k]}
-									depth={depth + 1}
-									isOpen={isOpen}
-									toggle={toggle}
-									refs={refs}
-									onVariableChange={onVariableChange}
-									onVariableDeleted={onVariableDeleted}
-								/>
-							))}
-						</div>
-					)}
-				</div>
-			)}
-		</div>
-	);
-};
 const EMPTY_STRING_HASH = "16248035215404677707";
 
 const resolveRef = (

@@ -49,7 +49,7 @@ pub struct CommentResponse {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PUT /apps/{app_id}/comments", skip(state, user))]
+#[tracing::instrument(name = "PUT /apps/{app_id}/comments", skip(state, user, body))]
 pub async fn upsert_comment(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

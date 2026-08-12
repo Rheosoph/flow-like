@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 import { AlertTriangleIcon } from "lucide-react";
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useAssistantSurface } from "../../index";
 import type { AssistantWidgetSurface } from "../../state/assistant-surface";
@@ -52,7 +52,9 @@ export function PendingComponentsCard() {
 		(s) => s.setPendingComponents,
 	);
 	const widgetSurface = useAssistantSurface((s) => s.widgetSurface);
+	const autoMode = useGlobalChatStore((s) => s.autoMode);
 	const applyingRef = useRef(false);
+	const autoAppliedRef = useRef<unknown>(null);
 
 	const handleApply = useCallback(async () => {
 		if (applyingRef.current) return;
@@ -83,7 +85,7 @@ export function PendingComponentsCard() {
 				return;
 			}
 			restaged.applyComponents(current.components, current.canvasSettings);
-			setPendingComponents(null);
+			setPendingComponents(null, null);
 			toast.success(
 				`Applied ${current.components.length} component${current.components.length === 1 ? "" : "s"} to the builder.`,
 			);
@@ -93,9 +95,23 @@ export function PendingComponentsCard() {
 	}, [setPendingComponents]);
 
 	const handleDismiss = useCallback(
-		() => setPendingComponents(null),
+		() => setPendingComponents(null, null),
 		[setPendingComponents],
 	);
+
+	// Auto mode applies the staged set without waiting for a click. The store publishes one
+	// fresh object per run, so its identity is the once-per-review stamp: a failed apply keeps
+	// the same object and is never retried. Skipped while the builder is closed or showing a
+	// different surface — handleApply would only raise a toast the user did not trigger.
+	useEffect(() => {
+		if (!autoMode || !pending || pending.components.length === 0) return;
+		if (!widgetSurface) return;
+		if (pending.surfaceId && widgetSurface.surfaceId !== pending.surfaceId)
+			return;
+		if (autoAppliedRef.current === pending) return;
+		autoAppliedRef.current = pending;
+		void handleApply();
+	}, [autoMode, pending, widgetSurface, handleApply]);
 
 	if (!pending || pending.components.length === 0) return null;
 

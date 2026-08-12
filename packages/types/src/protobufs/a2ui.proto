@@ -20,7 +20,19 @@ message BoundValue {
     double literal_number = 2;
     bool literal_bool = 3;
     string path = 4;                    // Data path like "/user/name"
+    SelectOptions literal_options = 6;
+    string literal_json = 7;
   }
+  optional bytes default_value = 5;     // JSON-serialized fallback for path bindings
+}
+
+message SelectOption {
+  string value = 1;
+  string label = 2;
+}
+
+message SelectOptions {
+  repeated SelectOption options = 1;
 }
 
 // BoundValueArray - Array of bound values
@@ -123,6 +135,40 @@ message Style {
   // Grid item properties
   optional string grid_column = 22;     // "span 2", "1 / 3"
   optional string grid_row = 23;
+
+  // Extended layout and flex/grid item properties
+  optional string gap = 24;
+  optional float flex_grow = 25;
+  optional float flex_shrink = 26;
+  optional string flex_basis = 27;
+  optional string grid_area = 28;
+  optional string justify_self = 29;
+
+  // Typography
+  optional string color = 30;
+  optional string font_size = 31;
+  optional string font_weight = 32;
+  optional string font_family = 33;
+  optional string line_height = 34;
+  optional string letter_spacing = 35;
+  optional string text_align = 36;
+  optional string text_decoration = 37;
+  optional string text_transform = 38;
+  optional string white_space = 39;
+  optional string word_break = 40;
+
+  // Visibility, interaction, and effects
+  optional string visibility = 41;
+  optional string user_select = 42;
+  optional string pointer_events = 43;
+  optional string transition = 44;
+  optional string animation = 45;
+  optional string display = 46;
+  optional string outline = 47;
+  optional string outline_offset = 48;
+  optional string filter = 49;
+  optional string backdrop_filter = 50;
+  optional string aspect_ratio = 51;
 }
 
 // Background types
@@ -146,11 +192,14 @@ message Gradient {
   string gradient_type = 1;             // "linear" | "radial" | "conic"
   optional string direction = 2;        // "to right", "45deg", "circle at center"
   repeated GradientStop stops = 3;
+  optional float angle = 4;             // Frontend angle in degrees
+  // New writers set this to true. Absence identifies legacy 0.0..=1.0 stops.
+  optional bool stop_positions_are_percent = 5;
 }
 
 message GradientStop {
   string color = 1;
-  float position = 2;                   // 0.0 - 1.0
+  optional float position = 2;          // Frontend percentage; omitted lets CSS distribute stops
 }
 
 message Border {
@@ -161,12 +210,24 @@ message Border {
 }
 
 message Shadow {
+  // Legacy aggregate representation retained for protobuf compatibility.
   repeated string box_shadows = 1;      // "0 4px 6px rgba(0,0,0,0.1)"
   optional string text_shadow = 2;
+  optional string x = 3;
+  optional string y = 4;
+  optional string blur = 5;
+  optional string spread = 6;
+  optional string color = 7;
+  optional bool inset = 8;
 }
 
 message Spacing {
-  string value = 1;                     // "16px", "8px 16px", "8px 16px 8px 16px"
+  // Legacy shorthand retained on tag 1; edge fields match the frontend JSON contract.
+  optional string value = 1;            // "16px", "8px 16px", "8px 16px 8px 16px"
+  optional string top = 2;
+  optional string right = 3;
+  optional string bottom = 4;
+  optional string left = 5;
 }
 
 message Size {

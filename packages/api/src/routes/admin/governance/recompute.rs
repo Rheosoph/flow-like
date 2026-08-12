@@ -35,7 +35,7 @@ pub struct RecomputeScoresResponse {
         (status = 403, description = "Forbidden")
     )
 )]
-#[tracing::instrument(name = "POST /admin/governance/scores/recompute", skip(state, user))]
+#[tracing::instrument(name = "POST /admin/governance/scores/recompute", skip_all)]
 pub async fn recompute_scores(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

@@ -56,6 +56,8 @@ pub struct Model {
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_name = "devMode")]
+    pub dev_mode: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -98,6 +100,8 @@ pub enum Relation {
     TechnicalUser,
     #[sea_orm(has_many = "super::transaction::Entity")]
     Transaction,
+    #[sea_orm(has_many = "super::user_bit::Entity")]
+    UserBit,
     #[sea_orm(has_many = "super::wasm_package_author::Entity")]
     WasmPackageAuthor,
     #[sea_orm(has_many = "super::wasm_package_join_queue::Entity")]
@@ -221,6 +225,12 @@ impl Related<super::technical_user::Entity> for Entity {
 impl Related<super::transaction::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Transaction.def()
+    }
+}
+
+impl Related<super::user_bit::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::UserBit.def()
     }
 }
 

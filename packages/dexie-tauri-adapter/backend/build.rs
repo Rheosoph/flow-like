@@ -7,6 +7,9 @@ const COMMANDS: &[&str] = &[
     "blob_configure",
     "blob_inc_refs",
     "blob_dec_refs",
+    "sql_open",
+    "sql_exec",
+    "sql_close",
 ];
 
 fn main() {

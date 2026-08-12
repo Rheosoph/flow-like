@@ -10,7 +10,12 @@ use std::time::Duration;
 
 use super::{Attachment, ComplexAttachment};
 
-fn mime_from_extension(extension: &str) -> &'static str {
+/// Default signed-URL lifetime. Attachments are frozen into a run's payload and
+/// re-read for the run's lifetime, so the URL must outlive the 24h run/executor
+/// TTL rather than the object store's short 1h default.
+const DEFAULT_SIGNED_URL_EXPIRATION_SECS: i64 = 24 * 60 * 60;
+
+pub(crate) fn mime_from_extension(extension: &str) -> &'static str {
     match extension {
         "pdf" => "application/pdf",
         "png" => "image/png",
@@ -130,7 +135,7 @@ impl NodeLogic for AttachmentFromPathNode {
             "Expiration time for the signed URL",
             VariableType::Integer,
         )
-        .set_default_value(Some(json!(3600)));
+        .set_default_value(Some(json!(DEFAULT_SIGNED_URL_EXPIRATION_SECS)));
 
         node.add_output_pin(
             "exec_out",

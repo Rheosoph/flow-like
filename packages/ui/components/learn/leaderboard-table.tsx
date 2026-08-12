@@ -62,7 +62,9 @@ export function LeaderboardTable({
 			<div className="flex justify-center py-6">
 				<EmptyState
 					title="The leaderboard is empty"
-					description={"Opt in above to be the first.\nPoints come from completing\nchallenges and lessons."}
+					description={
+						"Opt in above to be the first.\nPoints come from completing\nchallenges and lessons."
+					}
 					icons={[Trophy, Medal, Sparkles]}
 				/>
 			</div>
@@ -128,13 +130,13 @@ export function LeaderboardTable({
 							<div className="absolute top-3 right-3">
 								<Icon className={cn("size-5", tone.iconColor)} />
 							</div>
-								<div className="absolute top-3 left-3 text-xs font-mono text-foreground/60">
-									#{place}
-								</div>
-								<div className="space-y-0.5">
-									<LeaderboardAvatar entry={entry} className="mb-2 size-9" />
-									<div className="text-sm font-semibold truncate">
-										{entry.display_name}
+							<div className="absolute top-3 left-3 text-xs font-mono text-foreground/60">
+								#{place}
+							</div>
+							<div className="space-y-0.5">
+								<LeaderboardAvatar entry={entry} className="mb-2 size-9" />
+								<div className="text-sm font-semibold truncate">
+									{entry.display_name}
 								</div>
 								<div className="text-2xl font-bold tabular-nums">
 									{entry.total_points.toLocaleString()}
@@ -170,12 +172,12 @@ export function LeaderboardTable({
 									isMe && "bg-primary/5",
 								)}
 							>
-									<span className="w-10 text-sm font-mono text-muted-foreground tabular-nums">
-										#{place}
-									</span>
-									<LeaderboardAvatar entry={entry} className="size-8" />
-									<span className="flex-1 font-medium truncate">
-										{entry.display_name}
+								<span className="w-10 text-sm font-mono text-muted-foreground tabular-nums">
+									#{place}
+								</span>
+								<LeaderboardAvatar entry={entry} className="size-8" />
+								<span className="flex-1 font-medium truncate">
+									{entry.display_name}
 								</span>
 								{isMe && (
 									<span className="text-[10px] font-medium uppercase tracking-wide text-primary">
@@ -202,10 +204,10 @@ function MyRankRow({
 	readonly rank: number;
 }) {
 	return (
-			<div className="rounded-2xl border border-primary/30 bg-primary/5 backdrop-blur-sm px-4 py-3 flex items-center gap-4">
-				<div className="size-9 rounded-xl bg-primary/15 grid place-items-center">
-					<LeaderboardAvatar entry={entry} className="size-9" />
-				</div>
+		<div className="rounded-2xl border border-primary/30 bg-primary/5 backdrop-blur-sm px-4 py-3 flex items-center gap-4">
+			<div className="size-9 rounded-xl bg-primary/15 grid place-items-center">
+				<LeaderboardAvatar entry={entry} className="size-9" />
+			</div>
 			<div className="flex-1 min-w-0">
 				<div className="text-xs uppercase tracking-wide text-muted-foreground">
 					You're at

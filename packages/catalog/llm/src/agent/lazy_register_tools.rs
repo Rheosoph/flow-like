@@ -9,7 +9,7 @@ use crate::generative::{
     embedding::CachedEmbeddingModel,
 };
 use flow_like::flow::{
-    execution::context::ExecutionContext,
+    execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -219,12 +219,11 @@ impl NodeLogic for LazyRegisterFunctionToolsNode {
             std::collections::HashSet::new();
 
         for referenced_node in &referenced_functions {
-            let mut node_guard = referenced_node.node.lock().await;
+            let node_guard = referenced_node.node.lock().await;
             let node_id = node_guard.id.clone();
 
-            // Compute a stable hash over name, description, and pin shapes.
-            node_guard.hash();
-            let node_hash = node_guard.hash.unwrap_or(0).to_string();
+            // Canvas placement and graph wiring do not affect the indexed text.
+            let node_hash = node_guard.semantic_hash().to_string();
             current_node_ids.insert(node_id.clone());
 
             // Build the searchable text blob (used for both FTS and embedding).
@@ -276,7 +275,12 @@ impl NodeLogic for LazyRegisterFunctionToolsNode {
                 }
                 // Hash changed: remove the stale record before inserting the new one.
                 let db = db_arc.read().await;
-                let _ = db.delete(&format!("node_id = '{}'", node_id)).await;
+                if let Err(error) = db.delete(&format!("node_id = '{}'", node_id)).await {
+                    context.log_message(
+                        &format!("Lazy tool database delete failed: {error:#}"),
+                        LogLevel::Error,
+                    );
+                }
             }
 
             // Embed the content string (document mode for indexing).
@@ -322,23 +326,40 @@ impl NodeLogic for LazyRegisterFunctionToolsNode {
             if !stale.is_empty() {
                 let db = db_arc.read().await;
                 for node_id in stale {
-                    let _ = db.delete(&format!("node_id = '{}'", node_id)).await;
+                    if let Err(error) = db.delete(&format!("node_id = '{}'", node_id)).await {
+                        context.log_message(
+                            &format!("Lazy tool database delete failed: {error:#}"),
+                            LogLevel::Error,
+                        );
+                    }
                 }
             }
         }
 
         // ── Build / refresh indexes ───────────────────────────────────────────
-        // FTS is always useful; ignore errors (e.g. table still empty on first run).
-        let _ = db_arc
+        // FTS is always useful. Index failures are non-fatal, but must remain
+        // visible because they are database mutation failures.
+        if let Err(error) = db_arc
             .read()
             .await
             .index("content", Some("FULL TEXT"))
-            .await;
+            .await
+        {
+            context.log_message(
+                &format!("Lazy tool database full-text index failed: {error:#}"),
+                LogLevel::Error,
+            );
+        }
 
         // Only build the vector index once we have enough rows for it to help.
         let row_count = db_arc.read().await.count(None).await.unwrap_or(0);
         if row_count >= VECTOR_INDEX_THRESHOLD {
-            let _ = db_arc.read().await.index("vector", None).await;
+            if let Err(error) = db_arc.read().await.index("vector", None).await {
+                context.log_message(
+                    &format!("Lazy tool database vector index failed: {error:#}"),
+                    LogLevel::Error,
+                );
+            }
         }
 
         // ── Register the lazy ref and shared embedding model on the agent ─────

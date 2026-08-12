@@ -23,6 +23,7 @@ pub enum FlowScriptDiagnosticCode {
     FsTypeMismatch,
     FsTypeAmbiguous,
     FsUnknownInputPin,
+    FsStructFieldUnknown,
     FsUnresolvedArgument,
     FsOutputPinUnresolved,
     FsExecutionPolicyAmbiguous,
@@ -31,6 +32,7 @@ pub enum FlowScriptDiagnosticCode {
     FsBranchLoweringUnsupported,
     FsBranchArmPinUnknown,
     FsNodeLimitExceeded,
+    FsProhibitedNode,
     FsEventEmpty,
     FsHelperEmpty,
     FsHelperNoObservableEffect,
@@ -56,6 +58,7 @@ impl FlowScriptDiagnosticCode {
             Self::FsTypeMismatch => "FS_TYPE_MISMATCH",
             Self::FsTypeAmbiguous => "FS_TYPE_AMBIGUOUS",
             Self::FsUnknownInputPin => "FS_UNKNOWN_INPUT_PIN",
+            Self::FsStructFieldUnknown => "FS_STRUCT_FIELD_UNKNOWN",
             Self::FsUnresolvedArgument => "FS_UNRESOLVED_ARGUMENT",
             Self::FsOutputPinUnresolved => "FS_OUTPUT_PIN_UNRESOLVED",
             Self::FsExecutionPolicyAmbiguous => "FS_EXECUTION_POLICY_AMBIGUOUS",
@@ -64,6 +67,7 @@ impl FlowScriptDiagnosticCode {
             Self::FsBranchLoweringUnsupported => "FS_BRANCH_LOWERING_UNSUPPORTED",
             Self::FsBranchArmPinUnknown => "FS_BRANCH_ARM_PIN_UNKNOWN",
             Self::FsNodeLimitExceeded => "FS_NODE_LIMIT_EXCEEDED",
+            Self::FsProhibitedNode => "FS_PROHIBITED_NODE",
             Self::FsEventEmpty => "FS_EVENT_EMPTY",
             Self::FsHelperEmpty => "FS_HELPER_EMPTY",
             Self::FsHelperNoObservableEffect => "FS_HELPER_NO_OBSERVABLE_EFFECT",
@@ -141,6 +145,18 @@ pub struct FlowScriptDiagnostic {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_span: Option<FlowScriptSourceSpan>,
+    /// Every source site of this group's subject, in source order, capped at [`MAX_SUBJECT_SPANS`].
+    /// `source_span` is `spans[0]`.
+    ///
+    /// These are *all occurrences of the named subject*, not per-message attributions: the
+    /// reconcile diagnostic channel is `Vec<String>` and carries no position, so which of
+    /// `occurrences` messages belongs to which site is unknown. When `spans.len() == occurrences`
+    /// the correspondence is 1:1 in source order; otherwise these are the candidate set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spans: Vec<FlowScriptSourceSpan>,
+    /// Located sites beyond those carried in `spans`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub additional_sites: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ast_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -203,7 +219,10 @@ pub fn structure_reconcile_diagnostics(
         if let Some(source) = source
             && diagnostic.source_span.is_none()
         {
-            diagnostic.source_span = locate_subject(source, &diagnostic);
+            let (spans, additional) = locate_subject_sites(source, &diagnostic);
+            diagnostic.source_span = spans.first().cloned();
+            diagnostic.spans = spans;
+            diagnostic.additional_sites = additional;
         }
 
         let key = semantic_group_key(&diagnostic);
@@ -235,6 +254,8 @@ fn classify(message: &str) -> FlowScriptDiagnostic {
         phase: FlowScriptDiagnosticPhase::Lowering,
         message: message.to_string(),
         source_span: None,
+        spans: Vec::new(),
+        additional_sites: 0,
         ast_path: None,
         scope: None,
         expected: None,
@@ -294,6 +315,26 @@ fn classify(message: &str) -> FlowScriptDiagnostic {
         diagnostic.actual = Some("catalog metadata was not supplied".into());
         diagnostic.fix = fix(
             "Reconcile through the catalog-aware FlowScript entry point.",
+            None,
+        );
+    } else if message.contains("which has no field") || message.contains("which has no such field")
+    {
+        // A platform struct whose field list is authoritative — the repair is always an accessor
+        // call, and the message already carries the list of them.
+        diagnostic.code = FlowScriptDiagnosticCode::FsStructFieldUnknown;
+        diagnostic.phase = FlowScriptDiagnosticPhase::Validation;
+        let (struct_title, field) = if message.contains("which has no such field") {
+            (ticks.get(2).cloned(), ticks.get(1).cloned())
+        } else {
+            (ticks.get(1).cloned(), ticks.get(2).cloned())
+        };
+        diagnostic.expected = struct_title.map(|title| format!("a declared field of `{title}`"));
+        diagnostic.actual = field;
+        diagnostic.fix = fix(
+            message
+                .split_once("; ")
+                .map(|(_, hint)| hint)
+                .unwrap_or("Use the catalog accessor call for this attribute."),
             None,
         );
     } else if message.contains("argument") && message.contains("has incompatible pin types") {
@@ -690,6 +731,7 @@ fn link_execution_cascades(diagnostics: &mut [FlowScriptDiagnostic]) {
                 | FlowScriptDiagnosticCode::FsTypeMismatch
                 | FlowScriptDiagnosticCode::FsTypeAmbiguous
                 | FlowScriptDiagnosticCode::FsUnknownInputPin
+                | FlowScriptDiagnosticCode::FsStructFieldUnknown
                 | FlowScriptDiagnosticCode::FsUnresolvedArgument
                 | FlowScriptDiagnosticCode::FsOutputPinUnresolved
                 | FlowScriptDiagnosticCode::FsHelperEmpty
@@ -714,27 +756,55 @@ fn link_execution_cascades(diagnostics: &mut [FlowScriptDiagnostic]) {
     }
 }
 
-fn locate_subject(source: &str, diagnostic: &FlowScriptDiagnostic) -> Option<FlowScriptSourceSpan> {
-    let (needle, token_len) = if let Some(scope) = diagnostic.scope.as_deref() {
+/// Every offset at which `needle` occurs as a standalone token start. `str::find` returned only the
+/// first, which on a generated document is the wrong one: a helper called 40 times reported all 40
+/// diagnostics at one coordinate, and for a declared helper the first textual `name(` is its own
+/// `function name(` header rather than any call site.
+fn subject_offsets(source: &str, needle: &str, skip_function_headers: bool) -> Vec<usize> {
+    source
+        .match_indices(needle)
+        .map(|(offset, _)| offset)
+        .filter(|offset| {
+            // `catalog(` must not match the needle `log(`.
+            let before = source[..*offset].chars().next_back();
+            !before.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                && !(skip_function_headers && source[..*offset].ends_with("function "))
+        })
+        .collect()
+}
+
+fn locate_subject_sites(
+    source: &str,
+    diagnostic: &FlowScriptDiagnostic,
+) -> (Vec<FlowScriptSourceSpan>, usize) {
+    let (needle, token_len, skip_headers) = if let Some(scope) = diagnostic.scope.as_deref() {
         if let Some(name) = scope.strip_prefix("function:") {
-            (format!("function {name}"), name.len() + "function ".len())
+            (
+                format!("function {name}"),
+                name.len() + "function ".len(),
+                false,
+            )
         } else if let Some(name) = scope.strip_prefix("event:") {
-            (format!("{name}("), name.len())
+            (format!("{name}("), name.len(), false)
         } else {
-            return None;
+            return (Vec::new(), 0);
         }
     } else if let Some(declaration) = diagnostic.declaration.as_deref() {
-        (format!("{declaration}("), declaration.len())
+        (format!("{declaration}("), declaration.len(), true)
     } else {
-        return None;
+        return (Vec::new(), 0);
     };
-    let offset = source.find(&needle)?;
-    let position = source_position(source, offset);
-    let end = source_position(source, offset + token_len);
-    Some(FlowScriptSourceSpan {
-        start: position,
-        end,
-    })
+    let offsets = subject_offsets(source, &needle, skip_headers);
+    let additional = offsets.len().saturating_sub(MAX_SUBJECT_SPANS);
+    let spans = offsets
+        .iter()
+        .take(MAX_SUBJECT_SPANS)
+        .map(|offset| FlowScriptSourceSpan {
+            start: source_position(source, *offset),
+            end: source_position(source, offset + token_len),
+        })
+        .collect();
+    (spans, additional)
 }
 
 fn parse_error_span(message: &str) -> Option<FlowScriptSourceSpan> {
@@ -754,6 +824,14 @@ fn parse_error_span(message: &str) -> Option<FlowScriptSourceSpan> {
         start: position.clone(),
         end: position,
     })
+}
+
+/// Upper bound on how many call sites a single grouped diagnostic carries. A generated document can
+/// call one helper dozens of times; the model needs enough sites to locate the work, not all of them.
+const MAX_SUBJECT_SPANS: usize = 12;
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 fn source_position(source: &str, offset: usize) -> FlowScriptSourcePosition {
@@ -787,7 +865,8 @@ fn backtick_values(message: &str) -> Vec<String> {
     message
         .split('`')
         .enumerate()
-        .filter_map(|(index, value)| (index % 2 == 1).then(|| value.to_string()))
+        .filter(|&(index, value)| (index % 2 == 1))
+        .map(|(index, value)| value.to_string())
         .collect()
 }
 
@@ -972,6 +1051,101 @@ mod tests {
         assert_eq!(span.end.offset, Some("function saveTicket".len()));
     }
 
+    /// `str::find` returned only the first textual match, so a helper called many times reported
+    /// every diagnostic at one coordinate. The model then patched the wrong line, produced an
+    /// identical diagnostic set, and looked to the loop like it was making no progress.
+    #[test]
+    fn locates_every_call_site_not_only_the_first() {
+        let result = result(&[
+            "argument `value` on `stringFormat` is not a literal or resolvable node output",
+        ]);
+        let source = concat!(
+            "eventsSimple() {\n",
+            "    const a = stringFormat({ formatString: \"x\" })\n",
+            "    const b = stringFormat({ formatString: \"y\" })\n",
+            "    const c = stringFormat({ formatString: \"z\" })\n",
+            "}\n",
+        );
+        let structured = result.structured_diagnostics_for_source(source);
+
+        let diagnostic = &structured[0];
+        assert_eq!(diagnostic.spans.len(), 3, "every call site must be located");
+        assert_eq!(diagnostic.additional_sites, 0);
+        let lines: Vec<usize> = diagnostic.spans.iter().map(|s| s.start.line).collect();
+        assert_eq!(lines, vec![2, 3, 4], "spans must be in source order");
+        assert_eq!(
+            diagnostic.source_span.as_ref().map(|s| s.start.line),
+            Some(2),
+            "source_span stays spans[0] for existing consumers"
+        );
+    }
+
+    /// For a helper declared in the same document the FIRST textual `name(` is its own
+    /// `function name(` header, not a call. Sending the model to the declaration when the defect is
+    /// in the calls is worse than sending it nowhere.
+    #[test]
+    fn a_call_site_is_never_reported_at_its_declaration_header() {
+        let result = result(&[
+            "argument `subject` on `saveTicket` is not a literal or resolvable node output",
+        ]);
+        let source = concat!(
+            "function saveTicket(subject: string) {\n",
+            "    logInfo({ message: subject })\n",
+            "}\n",
+            "\n",
+            "eventsSimple() {\n",
+            "    saveTicket({ subject: \"hi\" })\n",
+            "}\n",
+        );
+        let structured = result.structured_diagnostics_for_source(source);
+
+        let diagnostic = &structured[0];
+        assert_eq!(
+            diagnostic.spans.len(),
+            1,
+            "only the call site counts: {:?}",
+            diagnostic.spans
+        );
+        assert_eq!(
+            diagnostic.spans[0].start.line, 6,
+            "the declaration header on line 1 must be skipped"
+        );
+    }
+
+    /// A generated document can call one helper dozens of times. Carry enough sites to locate the
+    /// work and report the remainder as a count rather than inflating every diagnostic.
+    #[test]
+    fn caps_carried_spans_and_reports_the_remainder() {
+        let result = result(&[
+            "argument `value` on `stringFormat` is not a literal or resolvable node output",
+        ]);
+        let mut source = String::from("eventsSimple() {\n");
+        for index in 0..(MAX_SUBJECT_SPANS + 5) {
+            source.push_str(&format!(
+                "    const v{index} = stringFormat({{ formatString: \"x\" }})\n"
+            ));
+        }
+        source.push_str("}\n");
+        let structured = result.structured_diagnostics_for_source(&source);
+
+        let diagnostic = &structured[0];
+        assert_eq!(diagnostic.spans.len(), MAX_SUBJECT_SPANS);
+        assert_eq!(diagnostic.additional_sites, 5);
+    }
+
+    /// A shorter declaration name must not match inside a longer one.
+    #[test]
+    fn subject_search_does_not_match_a_longer_identifier() {
+        assert_eq!(
+            subject_offsets(
+                "catalogLookup({ x: 1 })\nlookup({ y: 2 })\n",
+                "lookup(",
+                false
+            ),
+            vec!["catalogLookup({ x: 1 })\n".len()],
+        );
+    }
+
     #[test]
     fn links_same_function_execution_cascade_to_empty_helper_root() {
         let structured = result(&[
@@ -1069,6 +1243,34 @@ mod tests {
             assert_eq!(diagnostic.code, expected_code, "{message}");
             assert_eq!(diagnostic.phase, expected_phase, "{message}");
             assert!(diagnostic.fix.is_some(), "missing fix for {message}");
+        }
+    }
+
+    /// The accessor list is the whole point of this diagnostic — a classification that drops it
+    /// leaves the model with "no such field" and no way to repair.
+    #[test]
+    fn closed_struct_field_rejection_carries_the_accessor_repair() {
+        for message in [
+            "catalog output `path_from_upload_dir.file` is a `FlowPath`, which has no field `filename`; a FlowPath is a store handle, not a file object; read file attributes with the `Data/Files/Path` accessors instead: `filename({ path })`, `extension({ path })`",
+            "`structGet` reads field `extension` from a `FlowPath`, which has no such field; a FlowPath is a store handle, not a file object; read file attributes with the `Data/Files/Path` accessors instead: `filename({ path })`, `extension({ path })`",
+        ] {
+            let diagnostic = result(&[message])
+                .structured_diagnostics()
+                .pop()
+                .expect("structured diagnostic");
+            assert_eq!(
+                diagnostic.code,
+                FlowScriptDiagnosticCode::FsStructFieldUnknown,
+                "{message}"
+            );
+            assert_eq!(
+                diagnostic.phase,
+                FlowScriptDiagnosticPhase::Validation,
+                "{message}"
+            );
+            let fix = diagnostic.fix.expect("fix").summary;
+            assert!(fix.contains("filename({ path })"), "{fix}");
+            assert!(fix.contains("extension({ path })"), "{fix}");
         }
     }
 }

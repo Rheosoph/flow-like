@@ -7,6 +7,7 @@ import {
 	useCallback,
 	useEffect,
 	useImperativeHandle,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -17,6 +18,7 @@ import type { IInteractionRequest } from "../../../lib/schema/interaction";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
 import type { IMessage } from "./chat-db";
+import { ChatRunControls } from "./chat-run-controls";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 import { Interaction, InteractionGroup } from "./interaction";
 import { MessageComponent } from "./message";
@@ -55,9 +57,45 @@ function sameStringArray(
 	);
 }
 
+/** One turn currently generating, as the composer needs to see it. Structurally satisfied by the
+ * global chat's `GlobalChatRun` — kept local so this generic surface stays decoupled from it. */
+export interface IChatActiveRun {
+	runId: string;
+	label: string;
+	status: "streaming" | "cancelling";
+	steers: readonly {
+		id: string;
+		content: string;
+		status: "pending" | "delivered" | "failed";
+		error?: string;
+	}[];
+}
+
+export interface IChatQueuedMessage {
+	id: string;
+	content: string;
+}
+
+/**
+ * Concurrency controls. When supplied, the composer NEVER blocks: a send starts another turn, is
+ * queued at capacity, or is steered into a running turn. Omitted (app chats, event chats) keeps
+ * the classic one-reply-at-a-time behaviour driven by `isStreamActive`.
+ */
+export interface IChatConcurrency {
+	runs: readonly IChatActiveRun[];
+	queued: readonly IChatQueuedMessage[];
+	/** At the cap, a send is queued instead of starting a turn — the composer says so. */
+	atCapacity: boolean;
+	onStop: (runId: string) => void;
+	/** Push the composer's text into the running turn. Resolves false when it was not accepted. */
+	onSteer: (content: string) => Promise<boolean>;
+	onRemoveQueued: (id: string) => void;
+}
+
 export interface IChatProps {
 	messages: IMessage[];
 	onSendMessage: ISendMessageFunction;
+	concurrency?: IChatConcurrency;
 	onMessageUpdate?: (
 		messageId: string,
 		updates: Partial<IMessage>,
@@ -77,10 +115,16 @@ export interface IChatProps {
 	eventId?: string;
 	/** The event Chat UI keeps its AI transparency disclosure below the composer. */
 	showAiDisclosure?: boolean;
+	/**
+	 * Called on every composer edit with the current draft. Fires on each keystroke, so pass a
+	 * stable reference and keep the handler free of React state updates.
+	 */
+	onDraftChange?: (content: string) => void;
 }
 
 export interface IChatRef {
-	pushCurrentMessageUpdate: (message: IMessage) => void;
+	/** Replace the set of live (still generating) bubbles. Several may stream at once. */
+	pushCurrentMessageUpdate: (messages: IMessage | IMessage[]) => void;
 	clearCurrentMessageUpdate: () => void;
 	pushMessage: (message: IMessage) => void;
 	sendMessage: ISendMessageFunction;
@@ -94,6 +138,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		{
 			messages,
 			onSendMessage,
+			concurrency,
 			onMessageUpdate,
 			config = {},
 			sessionId,
@@ -105,14 +150,15 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			boardId,
 			eventId,
 			showAiDisclosure = false,
+			onDraftChange,
 		},
 		ref,
 	) => {
 		const { resolvedTheme } = useTheme();
-		const messagesEndRef = useRef<HTMLDivElement>(null);
 		const scrollContainerRef = useRef<HTMLDivElement>(null);
 		const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
-		const [currentMessage, setCurrentMessage] = useState<IMessage | null>(null);
+		// Several turns can generate at once (global chat); app chats keep exactly one.
+		const [currentMessages, setCurrentMessages] = useState<IMessage[]>([]);
 		const [localMessages, setLocalMessages] = useState<IMessage[]>(messages);
 		const [hasInitiallyScrolled, setHasInitiallyScrolled] = useState(false);
 		const chatBox = useRef<ChatBoxRef>(null);
@@ -121,7 +167,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const [isSending, setIsSending] = useState(false);
 		const isSendingRef = useRef(false);
 		const [sendingContent, setSendingContent] = useState("");
-		const pendingMessageRef = useRef<IMessage | null>(null);
+		const pendingMessagesRef = useRef<IMessage[] | null>(null);
 		const rafIdRef = useRef<number | null>(null);
 		const [voiceModeOpen, setVoiceModeOpen] = useState(false);
 
@@ -135,8 +181,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 
 		const latestAudioUrl = useMemo(() => {
 			let assistant: IMessage | null = null;
-			if (currentMessage?.inner.role === "assistant") {
-				assistant = currentMessage;
+			const liveAssistant = [...currentMessages]
+				.reverse()
+				.find((message) => message.inner.role === "assistant");
+			if (liveAssistant) {
+				assistant = liveAssistant;
 			} else {
 				for (let i = localMessages.length - 1; i >= 0; i--) {
 					if (localMessages[i]?.inner.role === "assistant") {
@@ -157,24 +206,34 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				}
 			}
 			return null;
-		}, [currentMessage, localMessages]);
+		}, [currentMessages, localMessages]);
 
 		const playback = useAnswerPlayback(
 			voiceConfig.playback === "audio" || voiceConfig.playback === "both",
 			latestAudioUrl,
 		);
 
-		// Cleanup RAF on unmount
+		// Cleanup RAF on unmount. The id MUST be cleared, not just cancelled:
+		// `pushCurrentMessageUpdate` only schedules a frame while it is null, and refs
+		// survive React's mount → cleanup → remount cycle. Leaving a stale id latches
+		// the gate shut, so every later push lands in `pendingMessagesRef` and is never
+		// flushed — the global chat pushes on mount, right inside that window, which
+		// killed its live bubbles while app chats (first push long after mount) were fine.
 		useEffect(() => {
 			return () => {
-				if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
+				if (rafIdRef.current !== null) {
+					cancelAnimationFrame(rafIdRef.current);
+					rafIdRef.current = null;
+				}
 			};
 		}, []);
 
 		const chatItems = useMemo(() => {
-			const filtered = currentMessage
-				? localMessages.filter((msg) => msg.id !== currentMessage.id)
-				: localMessages;
+			const liveIds = new Set(currentMessages.map((message) => message.id));
+			const filtered =
+				liveIds.size > 0
+					? localMessages.filter((msg) => !liveIds.has(msg.id))
+					: localMessages;
 			return filtered
 				.map((msg) => ({
 					type: "message" as const,
@@ -182,9 +241,9 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					timestamp: msg.timestamp,
 				}))
 				.sort((a, b) => a.timestamp - b.timestamp);
-		}, [localMessages, currentMessage]);
+		}, [localMessages, currentMessages]);
 
-		// Interactions are rendered separately after currentMessage to avoid ordering issues
+		// Interactions are rendered separately after the live bubbles to avoid ordering issues
 		const interactionItems = useMemo<ChatItem[]>(() => {
 			if (!activeInteractions || activeInteractions.length === 0) return [];
 
@@ -225,9 +284,18 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			isSendingRef.current = isSending;
 		}, [isSending]);
 
-		// Reset state when switching sessions (avoids expensive key-based remount)
+		// Reset state when switching sessions (avoids expensive key-based remount). Live bubbles are
+		// FILTERED by session rather than cleared: the store-side mirror may have already pushed the
+		// new session's bubbles (or a stale RAF may still fire afterwards) — filtering makes every
+		// interleaving converge on "only this session's bubbles" instead of racing a blind clear.
 		useEffect(() => {
-			setCurrentMessage(null);
+			const belongsToSession = (message: IMessage) =>
+				!message.sessionId || message.sessionId === sessionId;
+			if (pendingMessagesRef.current) {
+				pendingMessagesRef.current =
+					pendingMessagesRef.current.filter(belongsToSession);
+			}
+			setCurrentMessages((prev) => prev.filter(belongsToSession));
 			setLocalMessages([]);
 			setShouldAutoScroll(true);
 			setHasInitiallyScrolled(false);
@@ -275,29 +343,33 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			);
 		}, [messages, config?.tools, config?.default_tools]);
 
-		// Initial scroll to bottom when messages first load
-		useEffect(() => {
-			if (localMessages.length > 0 && !hasInitiallyScrolled) {
-				setTimeout(() => {
-					scrollToBottom();
-					setHasInitiallyScrolled(true);
-				}, 100);
-			}
-		}, [localMessages.length, hasInitiallyScrolled]);
+		const scrollMessagesToEnd = useCallback(() => {
+			const container = scrollContainerRef.current;
+			if (!container) return;
+			container.scrollTop = container.scrollHeight;
+		}, []);
+
+		// Pin the transcript to the bottom BEFORE the first paint — a deferred scroll flashes the
+		// oldest messages at the top on every mount and session switch. The follow-up passes catch
+		// late layout (async editor mount, images) without ever painting the top first; they are
+		// deliberately not cleaned up (one-shot, and the scroll callback no-ops once unmounted).
+		useLayoutEffect(() => {
+			if (localMessages.length === 0 || hasInitiallyScrolled) return;
+			scrollMessagesToEnd();
+			requestAnimationFrame(scrollMessagesToEnd);
+			setTimeout(scrollMessagesToEnd, 120);
+			setHasInitiallyScrolled(true);
+		}, [localMessages.length, hasInitiallyScrolled, scrollMessagesToEnd]);
 
 		const scrollToBottom = useCallback(() => {
-			if (!messagesEndRef.current) return;
 			if (!shouldAutoScroll) return;
 			isScrollingProgrammatically.current = true;
-			messagesEndRef.current.scrollIntoView({
-				behavior: "instant",
-				block: "end",
-			});
+			scrollMessagesToEnd();
 			// Reset the flag after scroll animation completes
 			setTimeout(() => {
 				isScrollingProgrammatically.current = false;
 			}, 500);
-		}, [shouldAutoScroll]);
+		}, [scrollMessagesToEnd, shouldAutoScroll]);
 
 		const isAtBottom = useCallback(() => {
 			if (!scrollContainerRef.current) return false;
@@ -326,7 +398,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			}
 		}, [
 			localMessages,
-			currentMessage,
+			currentMessages,
 			shouldAutoScroll,
 			hasInitiallyScrolled,
 			scrollToBottom,
@@ -364,34 +436,30 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		);
 
 		const handleVoiceModeSend = useCallback(
-			async (audioFile: File) => {
+			async (content: string, audioFile?: File) => {
 				// keep voice mode open so the orb can react to the spoken answer;
 				// VoiceMode closes itself once the answer has been delivered.
-				await handleSendMessage("", undefined, undefined, audioFile);
+				await handleSendMessage(content, undefined, undefined, audioFile);
 			},
 			[handleSendMessage],
 		);
 
-		// iOS keyboard/open focus handling to reduce layout jump and zoom
+		// Keep the transcript pinned without asking scrollIntoView to pan the
+		// document/visual viewport while iOS is opening its keyboard.
 		useEffect(() => {
+			let focusTimer = 0;
 			const onFocusIn = (e: FocusEvent) => {
 				const target = e.target as HTMLElement | null;
-				if (!target) return;
-				// Ensure the input stays visible when keyboard opens
-				if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") {
-					setTimeout(() => {
-						try {
-							messagesEndRef.current?.scrollIntoView({
-								block: "end",
-								behavior: "smooth",
-							});
-						} catch {}
-					}, 100);
-				}
+				if (!target?.closest("[data-fl-chat-composer]")) return;
+				window.clearTimeout(focusTimer);
+				focusTimer = window.setTimeout(scrollMessagesToEnd, 100);
 			};
 			document.addEventListener("focusin", onFocusIn);
-			return () => document.removeEventListener("focusin", onFocusIn);
-		}, []);
+			return () => {
+				window.clearTimeout(focusTimer);
+				document.removeEventListener("focusin", onFocusIn);
+			};
+		}, [scrollMessagesToEnd]);
 
 		// Dismiss keyboard when tapping outside inputs on iOS
 		useEffect(() => {
@@ -422,14 +490,16 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		useImperativeHandle(
 			ref,
 			() => ({
-				pushCurrentMessageUpdate: (message: IMessage) => {
+				pushCurrentMessageUpdate: (message: IMessage | IMessage[]) => {
 					// Throttle updates via requestAnimationFrame to avoid per-event re-renders
-					pendingMessageRef.current = message;
+					pendingMessagesRef.current = Array.isArray(message)
+						? message
+						: [message];
 					if (rafIdRef.current === null) {
 						rafIdRef.current = requestAnimationFrame(() => {
 							rafIdRef.current = null;
-							if (pendingMessageRef.current) {
-								setCurrentMessage(pendingMessageRef.current);
+							if (pendingMessagesRef.current) {
+								setCurrentMessages(pendingMessagesRef.current);
 							}
 						});
 					}
@@ -440,8 +510,8 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 						cancelAnimationFrame(rafIdRef.current);
 						rafIdRef.current = null;
 					}
-					pendingMessageRef.current = null;
-					setCurrentMessage(null);
+					pendingMessagesRef.current = null;
+					setCurrentMessages([]);
 				},
 				pushMessage: (message: IMessage) => {
 					setLocalMessages((prev) => [...prev, message]);
@@ -485,7 +555,8 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								className="w-full px-1 sm:px-4"
 								key={`msg-${item.data.id}`}
 								style={{
-									maxWidth: "var(--fl-chat-content-width, 64rem)",
+									maxWidth:
+										"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
 								}}
 							>
 								<MessageComponent
@@ -504,27 +575,35 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									getMessageTextContent(m) === sendingContent,
 							) && (
 								<div
-									className="flex w-full animate-in flex-col items-end space-y-1 px-4 fade-in slide-in-from-bottom-2 duration-200"
+									className="flex w-full animate-in flex-col items-start space-y-1 px-4 fade-in slide-in-from-bottom-2 duration-200"
 									style={{
-										maxWidth: "var(--fl-chat-content-width, 64rem)",
+										maxWidth:
+											"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
 									}}
 								>
 									<div
-										className="max-w-3xl px-4 py-2 shadow-sm"
+										className="w-full border-l-2 py-2 pr-4 pl-3.5"
 										data-fl-chat-message="user"
 										style={{
 											backgroundColor:
-												"var(--fl-chat-user-message-background, var(--muted))",
-											borderRadius: "var(--fl-chat-message-radius, 0.75rem)",
+												"var(--fl-chat-ask-background, transparent)",
+											borderLeftColor:
+												"var(--fl-chat-ask-rule, var(--primary))",
+											borderRadius:
+												"0 var(--fl-chat-message-radius, 0.75rem) var(--fl-chat-message-radius, 0.75rem) 0",
 											color:
 												"var(--fl-chat-user-message-foreground, var(--foreground))",
+											maxWidth: "var(--fl-chat-measure, 38rem)",
 										}}
 									>
-										<p className="whitespace-pre-wrap text-sm">
+										<span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+											Asked
+										</span>
+										<p className="line-clamp-6 whitespace-pre-wrap text-sm leading-relaxed">
 											{sendingContent}
 										</p>
 									</div>
-									<div className="flex items-center gap-2 pr-1">
+									<div className="flex items-center gap-2 pl-1">
 										<PuffLoader
 											size={16}
 											color={chatTheme === "dark" ? "white" : "black"}
@@ -535,30 +614,32 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									</div>
 								</div>
 							)}
-						{currentMessage && (
+						{currentMessages.map((liveMessage) => (
 							<div
 								className="w-full px-4"
-								key={`msg-${currentMessage.id}`}
+								key={`msg-${liveMessage.id}`}
 								style={{
-									maxWidth: "var(--fl-chat-content-width, 64rem)",
+									maxWidth:
+										"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
 								}}
 							>
 								<MessageComponent
 									loading
-									message={currentMessage}
+									message={liveMessage}
 									appId={appId}
 									boardId={boardId}
 									eventId={eventId}
 								/>
 							</div>
-						)}
+						))}
 						{interactionItems.map((item) =>
 							item.type === "interaction-group" ? (
 								<div
 									className="flex w-full flex-col items-start px-4"
 									key={`grp-${(item.data as IInteractionRequest[]).map((i) => i.id).join("-")}`}
 									style={{
-										maxWidth: "var(--fl-chat-content-width, 64rem)",
+										maxWidth:
+											"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
 									}}
 								>
 									<InteractionGroup
@@ -571,7 +652,8 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									className="flex w-full flex-col items-start px-4"
 									key={`int-${(item.data as IInteractionRequest).id}`}
 									style={{
-										maxWidth: "var(--fl-chat-content-width, 64rem)",
+										maxWidth:
+											"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
 									}}
 								>
 									<Interaction
@@ -581,13 +663,16 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								</div>
 							),
 						)}
-						<div ref={messagesEndRef} />
+						<div aria-hidden="true" />
 					</div>
 
 					{inlinePrompt && (
 						<div
 							className="mx-auto w-full shrink-0 px-2 pt-1"
-							style={{ maxWidth: "var(--fl-chat-content-width, 64rem)" }}
+							style={{
+								maxWidth:
+									"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+							}}
 						>
 							{inlinePrompt}
 						</div>
@@ -598,22 +683,40 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 						className="mx-auto w-full space-y-2 px-3"
 						data-fl-chat-composer-dock
 						style={{
-							maxWidth: "var(--fl-chat-content-width, 64rem)",
+							maxWidth:
+								"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
 							paddingBottom:
 								"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
 						}}
 					>
+						{concurrency && <ChatRunControls concurrency={concurrency} />}
 						{defaultActiveTools && (
 							<ChatBox
 								ref={chatBox}
 								availableTools={config?.tools ?? []}
 								defaultActiveTools={defaultActiveTools}
 								onSendMessage={handleSendMessage}
+								onContentChange={onDraftChange}
 								fileUpload={config?.allow_file_upload ?? false}
 								audioInput={voiceEnabled}
 								voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}
 								voiceInvoke={voiceConfig.invoke}
-								sendDisabled={isSending || isStreamActive}
+								voiceMaxDuration={voiceConfig.maxDuration}
+								// With concurrency the composer never locks: a send starts another
+								// turn or queues. Without it, a live stream still blocks as before.
+								sendDisabled={concurrency ? false : isSending || isStreamActive}
+								sendHint={
+									concurrency?.atCapacity
+										? "Queue this message"
+										: concurrency && concurrency.runs.length > 0
+											? "Start another response"
+											: undefined
+								}
+								onSteer={
+									concurrency && concurrency.runs.length > 0
+										? concurrency.onSteer
+										: undefined
+								}
 								onInterrupt={playback.stop}
 								onVoiceModeToggle={
 									voiceEnabled && voiceConfig.invoke === "auto"

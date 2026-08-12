@@ -2,6 +2,7 @@
 
 import { ChevronDown, Layers } from "lucide-react";
 import { useRef, useState } from "react";
+import { useAssetImage } from "../../hooks/use-asset-image";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
 import { cn } from "../../lib/utils";
 import type { IGroup } from "../../state/backend-state/types";
@@ -10,7 +11,6 @@ import {
 	fromWireVisibility,
 } from "../settings/visibility-status/visibility-meta";
 import { AppCard } from "../ui/app-card";
-import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import type { LibraryItem } from "./library-types";
 import { CARD_MIN_W_DESKTOP, CARD_MIN_W_MOBILE } from "./library-types";
 
@@ -23,7 +23,6 @@ export interface SuiteGroup {
 interface SuiteShelfProps {
 	suites: SuiteGroup[];
 	onAppClick: (id: string) => void;
-	onSettingsClick: () => void;
 	settingsHref?: (id: string) => string;
 	appHref?: (id: string) => string;
 	visibilityMode?: boolean;
@@ -59,7 +58,6 @@ export function SuiteShelf({ suites, ...rowProps }: Readonly<SuiteShelfProps>) {
 function SuiteRow({
 	suite,
 	onAppClick,
-	onSettingsClick,
 	settingsHref,
 	appHref,
 	visibilityMode,
@@ -69,8 +67,7 @@ function SuiteRow({
 }: Readonly<{ suite: SuiteGroup } & Omit<SuiteShelfProps, "suites">>) {
 	const { group, items } = suite;
 	const [expanded, setExpanded] = useState(false);
-	const [bannerFailed, setBannerFailed] = useState(false);
-	const [iconFailed, setIconFailed] = useState(false);
+	const banner = useAssetImage(group.banner);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const { primaryHue, isDark } = useThemeInfo();
 	const cardMin = isMobile ? CARD_MIN_W_MOBILE : CARD_MIN_W_DESKTOP;
@@ -97,23 +94,27 @@ function SuiteRow({
 		>
 			{/* Suite artwork sits behind the row as a soft edge wash, matching AppCard. */}
 			<div className="pointer-events-none absolute left-0 top-0 bottom-0 w-64 opacity-20 group-hover/suite:opacity-40 transition-opacity duration-300 overflow-hidden">
-				{group.banner && !bannerFailed ? (
+				<div
+					className="absolute inset-0"
+					style={{
+						background: `linear-gradient(${gradient.angle}deg, ${gradient.from}, ${gradient.to})`,
+						opacity: gradient.opacity,
+					}}
+				/>
+				{banner.canRender && (
 					// eslint-disable-next-line @next/next/no-img-element
 					<img
-						src={group.banner}
+						ref={banner.imgRef}
+						src={banner.src}
 						alt=""
-						className="w-full h-full object-cover object-right"
+						className={cn(
+							"absolute inset-0 h-full w-full object-cover object-right transition-opacity duration-500",
+							banner.loaded ? "opacity-100" : "opacity-0",
+						)}
 						loading="lazy"
 						decoding="async"
-						onError={() => setBannerFailed(true)}
-					/>
-				) : (
-					<div
-						className="absolute inset-0"
-						style={{
-							background: `linear-gradient(${gradient.angle}deg, ${gradient.from}, ${gradient.to})`,
-							opacity: gradient.opacity,
-						}}
+						onLoad={banner.onLoad}
+						onError={banner.onError}
 					/>
 				)}
 				<div className="absolute inset-0 bg-linear-to-r from-transparent to-card" />
@@ -128,8 +129,6 @@ function SuiteRow({
 				<SuiteGlyph
 					group={group}
 					items={items}
-					iconFailed={iconFailed}
-					onIconError={() => setIconFailed(true)}
 					primaryHue={primaryHue}
 					isDark={isDark}
 				/>
@@ -187,9 +186,6 @@ function SuiteRow({
 										metadata={item}
 										variant={isMobile ? "small" : "extended"}
 										onClick={() => handleClick(item.id)}
-										onSettingsClick={
-											visibilityMode ? undefined : onSettingsClick
-										}
 										settingsHref={
 											visibilityMode ? undefined : settingsHref?.(item.id)
 										}
@@ -214,31 +210,37 @@ function SuiteRow({
 function SuiteGlyph({
 	group,
 	items,
-	iconFailed,
-	onIconError,
 	primaryHue,
 	isDark,
 }: Readonly<{
 	group: IGroup;
 	items: LibraryItem[];
-	iconFailed: boolean;
-	onIconError: () => void;
 	primaryHue: number;
 	isDark: boolean;
 }>) {
-	if (group.icon && !iconFailed) {
+	const icon = useAssetImage(group.icon);
+
+	if (icon.canRender) {
 		return (
-			<Avatar className="h-11 w-11 rounded-xl shrink-0 ring-1 ring-border/50">
-				<AvatarImage
-					src={group.icon}
-					alt=""
-					className="rounded-xl"
-					onError={onIconError}
-				/>
-				<AvatarFallback className="rounded-xl">
+			<div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-xl ring-1 ring-border/50 bg-muted">
+				<span className="absolute inset-0 grid place-items-center">
 					<Layers className="h-5 w-5 text-muted-foreground" />
-				</AvatarFallback>
-			</Avatar>
+				</span>
+				{/* eslint-disable-next-line @next/next/no-img-element */}
+				<img
+					ref={icon.imgRef}
+					src={icon.src}
+					alt=""
+					loading="lazy"
+					decoding="async"
+					className={cn(
+						"absolute inset-0 h-full w-full object-cover transition-opacity duration-200",
+						icon.loaded ? "opacity-100" : "opacity-0",
+					)}
+					onLoad={icon.onLoad}
+					onError={icon.onError}
+				/>
+			</div>
 		);
 	}
 
@@ -283,37 +285,41 @@ function GlyphTile({
 	primaryHue: number;
 	isDark: boolean;
 }>) {
-	const [failed, setFailed] = useState(false);
+	const icon = useAssetImage(item.icon);
 	const gradient = hashToGradient(item.id, primaryHue, isDark);
 
 	return (
 		<div className={cn("relative overflow-hidden bg-muted", span)}>
-			{item.icon && !failed ? (
+			<div
+				className="absolute inset-0 flex items-center justify-center"
+				style={{
+					background: `linear-gradient(${gradient.angle}deg, ${gradient.from}, ${gradient.to})`,
+				}}
+			>
+				<span
+					className={cn(
+						"font-semibold text-white/90 leading-none",
+						large ? "text-sm" : "text-[8px]",
+					)}
+				>
+					{(item.name ?? item.id).substring(0, large ? 2 : 1).toUpperCase()}
+				</span>
+			</div>
+			{icon.canRender && (
 				// eslint-disable-next-line @next/next/no-img-element
 				<img
-					src={item.icon}
+					ref={icon.imgRef}
+					src={icon.src}
 					alt=""
-					className="absolute inset-0 h-full w-full object-cover"
+					className={cn(
+						"absolute inset-0 h-full w-full object-cover transition-opacity duration-200",
+						icon.loaded ? "opacity-100" : "opacity-0",
+					)}
 					loading="lazy"
 					decoding="async"
-					onError={() => setFailed(true)}
+					onLoad={icon.onLoad}
+					onError={icon.onError}
 				/>
-			) : (
-				<div
-					className="absolute inset-0 flex items-center justify-center"
-					style={{
-						background: `linear-gradient(${gradient.angle}deg, ${gradient.from}, ${gradient.to})`,
-					}}
-				>
-					<span
-						className={cn(
-							"font-semibold text-white/90 leading-none",
-							large ? "text-sm" : "text-[8px]",
-						)}
-					>
-						{(item.name ?? item.id).substring(0, large ? 2 : 1).toUpperCase()}
-					</span>
-				</div>
 			)}
 		</div>
 	);

@@ -36,7 +36,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/widgets", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/widgets", skip(state, user, query))]
 pub async fn get_widgets(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

@@ -1,209 +1,416 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Profile",
-  "type": "object",
-  "properties": {
-    "id": {
-      "type": "string",
-      "default": "e4mg7l699tcqpnochgpav2ba"
-    },
-    "name": {
-      "type": "string"
-    },
-    "description": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "icon": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "default": null
-    },
-    "thumbnail": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "interests": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "default": []
-    },
-    "tags": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "default": []
-    },
-    "hub": {
-      "type": "string",
-      "default": ""
-    },
-    "secure": {
-      "type": "boolean",
-      "default": true
-    },
-    "hubs": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "default": []
-    },
-    "apps": {
-      "type": [
-        "array",
-        "null"
-      ],
-      "items": {
-        "$ref": "#/$defs/ProfileApp"
-      },
-      "default": null
-    },
-    "shortcuts": {
-      "type": [
-        "array",
-        "null"
-      ],
-      "items": {
-        "$ref": "#/$defs/ProfileShortcut"
-      },
-      "default": null
-    },
-    "theme": {
-      "default": null
-    },
-    "bits": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "settings": {
-      "$ref": "#/$defs/Settings",
-      "default": {
-        "connection_mode": "simplebezier"
-      }
-    },
-    "updated": {
-      "type": "string"
-    },
-    "created": {
-      "type": "string"
-    }
-  },
-  "required": [
-    "name",
-    "bits",
-    "updated",
-    "created"
-  ],
-  "$defs": {
-    "ProfileApp": {
-      "type": "object",
-      "properties": {
-        "app_id": {
-          "type": "string"
-        },
-        "favorite": {
-          "type": "boolean"
-        },
-        "favorite_order": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32"
-        },
-        "pinned": {
-          "type": "boolean"
-        },
-        "pinned_order": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32"
-        }
-      },
-      "required": [
-        "app_id",
-        "favorite",
-        "pinned"
-      ]
-    },
-    "ProfileShortcut": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "profileId": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        },
-        "appId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "icon": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "order": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "createdAt": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "profileId",
-        "label",
-        "path",
-        "order",
-        "createdAt"
-      ]
-    },
-    "Settings": {
-      "type": "object",
-      "properties": {
-        "connection_mode": {
-          "$ref": "#/$defs/ConnectionMode"
-        }
-      },
-      "required": [
-        "connection_mode"
-      ]
-    },
-    "ConnectionMode": {
-      "type": "string",
-      "enum": [
-        "default",
-        "straight",
-        "step",
-        "smoothstep",
-        "simplebezier"
-      ]
-    }
-  }
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "Profile",
+	"type": "object",
+	"properties": {
+		"id": {
+			"type": "string",
+			"default": "etjuim3d733if5t032g50v2z"
+		},
+		"name": {
+			"type": "string"
+		},
+		"description": {
+			"type": ["string", "null"]
+		},
+		"icon": {
+			"type": ["string", "null"],
+			"default": null
+		},
+		"thumbnail": {
+			"type": ["string", "null"]
+		},
+		"interests": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"default": []
+		},
+		"tags": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"default": []
+		},
+		"hub": {
+			"type": "string",
+			"default": ""
+		},
+		"secure": {
+			"type": "boolean",
+			"default": true
+		},
+		"hubs": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"default": []
+		},
+		"apps": {
+			"type": ["array", "null"],
+			"items": {
+				"$ref": "#/$defs/ProfileApp"
+			},
+			"default": null
+		},
+		"shortcuts": {
+			"type": ["array", "null"],
+			"items": {
+				"$ref": "#/$defs/ProfileShortcut"
+			},
+			"default": null
+		},
+		"theme": {
+			"default": null
+		},
+		"bits": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			}
+		},
+		"custom_bits": {
+			"description": "User-owned private bits, hydrated per trust boundary: with decrypted\nprovider secrets only server-side per request/run and on the owner's\ndesktop; never in the browser client or the server profile row.\nSchema-wise these are plain `Bit`s (the wrapper is serde-transparent);\n`schemars(with)` keeps the generated schema referencing `Bit` instead\nof minting a duplicate inline type, which would cascade renames through\nthe quicktype-generated TS.",
+			"type": "array",
+			"items": {
+				"$ref": "#/$defs/Bit"
+			},
+			"default": []
+		},
+		"settings": {
+			"$ref": "#/$defs/Settings",
+			"default": {
+				"connection_mode": "simplebezier"
+			}
+		},
+		"updated": {
+			"type": "string"
+		},
+		"created": {
+			"type": "string"
+		}
+	},
+	"required": ["name", "bits", "updated", "created"],
+	"$defs": {
+		"ProfileApp": {
+			"type": "object",
+			"properties": {
+				"app_id": {
+					"type": "string"
+				},
+				"favorite": {
+					"type": "boolean"
+				},
+				"favorite_order": {
+					"type": ["integer", "null"],
+					"format": "int32"
+				},
+				"pinned": {
+					"type": "boolean"
+				},
+				"pinned_order": {
+					"type": ["integer", "null"],
+					"format": "int32"
+				}
+			},
+			"required": ["app_id", "favorite", "pinned"]
+		},
+		"ProfileShortcut": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"profileId": {
+					"type": "string"
+				},
+				"label": {
+					"type": "string"
+				},
+				"path": {
+					"type": "string"
+				},
+				"appId": {
+					"type": ["string", "null"]
+				},
+				"icon": {
+					"type": ["string", "null"]
+				},
+				"order": {
+					"type": "integer",
+					"format": "int32"
+				},
+				"createdAt": {
+					"type": "string"
+				}
+			},
+			"required": ["id", "profileId", "label", "path", "order", "createdAt"]
+		},
+		"Bit": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string",
+					"default": ""
+				},
+				"type": {
+					"$ref": "#/$defs/BitTypes",
+					"default": "Other"
+				},
+				"meta": {
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/Metadata"
+					},
+					"default": {}
+				},
+				"authors": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": []
+				},
+				"repository": {
+					"type": ["string", "null"],
+					"default": null
+				},
+				"download_link": {
+					"type": ["string", "null"],
+					"default": null
+				},
+				"file_name": {
+					"type": ["string", "null"],
+					"default": null
+				},
+				"hash": {
+					"type": "string",
+					"default": ""
+				},
+				"size": {
+					"type": ["integer", "null"],
+					"format": "uint64",
+					"minimum": 0,
+					"default": null
+				},
+				"hub": {
+					"type": "string",
+					"default": ""
+				},
+				"parameters": {
+					"default": null
+				},
+				"version": {
+					"type": ["string", "null"],
+					"default": null
+				},
+				"license": {
+					"type": ["string", "null"],
+					"default": null
+				},
+				"dependencies": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": []
+				},
+				"dependency_tree_hash": {
+					"type": "string",
+					"default": ""
+				},
+				"created": {
+					"type": "string",
+					"default": ""
+				},
+				"updated": {
+					"type": "string",
+					"default": ""
+				},
+				"model_slug": {
+					"type": ["string", "null"],
+					"default": null
+				},
+				"model_evaluation": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/LlmModelEvaluation"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"default": null
+				}
+			}
+		},
+		"BitTypes": {
+			"type": "string",
+			"enum": [
+				"Llm",
+				"Vlm",
+				"Tts",
+				"Stt",
+				"Embedding",
+				"ImageEmbedding",
+				"File",
+				"Media",
+				"ImageGeneration",
+				"VideoGeneration",
+				"Template",
+				"Tokenizer",
+				"TokenizerConfig",
+				"SpecialTokensMap",
+				"Config",
+				"Course",
+				"PreprocessorConfig",
+				"Projection",
+				"Project",
+				"Board",
+				"Other",
+				"ObjectDetection"
+			]
+		},
+		"Metadata": {
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": "string"
+				},
+				"description": {
+					"type": "string"
+				},
+				"long_description": {
+					"type": ["string", "null"]
+				},
+				"release_notes": {
+					"type": ["string", "null"]
+				},
+				"tags": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"use_case": {
+					"type": ["string", "null"]
+				},
+				"icon": {
+					"type": ["string", "null"]
+				},
+				"thumbnail": {
+					"type": ["string", "null"]
+				},
+				"preview_media": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"age_rating": {
+					"type": ["integer", "null"],
+					"format": "int32"
+				},
+				"website": {
+					"type": ["string", "null"]
+				},
+				"support_url": {
+					"type": ["string", "null"]
+				},
+				"docs_url": {
+					"type": ["string", "null"]
+				},
+				"organization_specific_values": {
+					"type": ["array", "null"],
+					"items": {
+						"type": "integer",
+						"format": "uint8",
+						"minimum": 0,
+						"maximum": 255
+					}
+				},
+				"created_at": {
+					"$ref": "#/$defs/SystemTime"
+				},
+				"updated_at": {
+					"$ref": "#/$defs/SystemTime"
+				}
+			},
+			"required": [
+				"name",
+				"description",
+				"tags",
+				"preview_media",
+				"created_at",
+				"updated_at"
+			]
+		},
+		"SystemTime": {
+			"type": "object",
+			"properties": {
+				"secs_since_epoch": {
+					"type": "integer",
+					"format": "uint64",
+					"minimum": 0
+				},
+				"nanos_since_epoch": {
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0
+				}
+			},
+			"required": ["secs_since_epoch", "nanos_since_epoch"]
+		},
+		"LlmModelEvaluation": {
+			"type": "object",
+			"properties": {
+				"slug": {
+					"type": "string"
+				},
+				"name": {
+					"type": "string"
+				},
+				"release_date": {
+					"type": ["string", "null"]
+				},
+				"creator_name": {
+					"type": "string"
+				},
+				"creator_slug": {
+					"type": "string"
+				},
+				"evaluations": true,
+				"pricing": true,
+				"median_output_tokens_per_second": {
+					"type": ["number", "null"],
+					"format": "double"
+				},
+				"median_time_to_first_token_seconds": {
+					"type": ["number", "null"],
+					"format": "double"
+				},
+				"median_time_to_first_answer_token": {
+					"type": ["number", "null"],
+					"format": "double"
+				}
+			},
+			"required": ["slug", "name", "creator_name", "creator_slug"]
+		},
+		"Settings": {
+			"type": "object",
+			"properties": {
+				"connection_mode": {
+					"$ref": "#/$defs/ConnectionMode"
+				}
+			},
+			"required": ["connection_mode"]
+		},
+		"ConnectionMode": {
+			"type": "string",
+			"enum": ["default", "straight", "step", "smoothstep", "simplebezier"]
+		}
+	}
 }

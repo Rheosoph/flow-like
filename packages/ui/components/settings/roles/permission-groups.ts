@@ -17,7 +17,7 @@ import {
 	Users,
 	Zap,
 } from "lucide-react";
-import { RolePermissions } from "../../../lib";
+import { RolePermissions } from "../../../lib/permission/role-permission";
 
 export interface PermissionEntry {
 	permission: RolePermissions;
@@ -294,11 +294,17 @@ export function countTotalPermissions(current: RolePermissions): {
 	return { active, total };
 }
 
-export function getPermissionLabel(perm: RolePermissions): string | undefined {
+export function getPermissionEntry(
+	perm: RolePermissions,
+): PermissionEntry | undefined {
 	for (const group of PERMISSION_GROUPS) {
 		for (const entry of group.permissions) {
-			if (entry.permission.equals(perm)) return entry.label;
+			if (entry.permission.equals(perm)) return entry;
 		}
 	}
 	return undefined;
+}
+
+export function getPermissionLabel(perm: RolePermissions): string | undefined {
+	return getPermissionEntry(perm)?.label;
 }

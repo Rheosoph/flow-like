@@ -120,7 +120,6 @@ export const nl = {
 	"design.feature3.desc":
 		"Dezelfde flow draait lokaal, staging, productie — geen herschrijvingen.",
 
-
 	// Portability
 	"portability.tagline": "Automatisering overal",
 	"portability.headline": "Bouw eenmaal, draai overal",
@@ -688,7 +687,6 @@ export const nl = {
 	"usecases.learnmore": "Meer weten",
 
 	"design.headline.highlight": "visueel",
-
 
 	"portability.headline.start": "Begin",
 	"portability.headline.offline": "offline",

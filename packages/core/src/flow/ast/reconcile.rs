@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use flow_like_ast::model::*;
 use flow_like_ast::to_camel_case;
 
-use crate::flow::board::{Board, LayerType};
+use crate::flow::board::{Board, Layer, LayerCache, LayerCacheScope, LayerType};
 use crate::flow::copilot::{
     BoardCommand, NodeMetadata, NodePosition, PinMetadata, PlaceholderPinDef, node_to_metadata,
 };
@@ -150,6 +150,13 @@ fn reconcile_inner(
     result.commands.extend(variable_changes.commands);
     result.diagnostics.extend(variable_changes.diagnostics);
 
+    // Function cache decorators are layer metadata rather than graph nodes/pins, so reconcile
+    // them on both the conservative and catalog-aware paths. This also makes removing a decorator
+    // explicit: an active live cache becomes `cache: None` on the layer.
+    result
+        .commands
+        .extend(reconcile_function_caches(existing, new));
+
     // Anchored `base.path = value` writes carry no `&Call`, so synthesize the equivalent
     // `struct_set` calls the anchor-keyed collectors below diff against / delete. These arenas own
     // the calls and must outlive the `new_calls`/`visible` maps that borrow them, so build them in
@@ -214,6 +221,16 @@ fn reconcile_inner(
                         value: new_value,
                         summary: Some(format!("Set {} on {}", arg.name, node.friendly_name)),
                     });
+                } else if is_widget_dynamic_binding_arg(&arg.name) {
+                    // These pins are minted by the node's `on_update` from the PERSISTED widget, so
+                    // a missing one almost always means the widget itself is not there yet (wrong
+                    // selector, or a page/widget build that has not landed). Saying only "no pin
+                    // named X; skipped" reads like a typo and silently drops the data binding.
+                    result.diagnostics.push(format!(
+                        "node {anchor} has no input pin named {:?} (occurrence {}); skipped. This is a widget data binding, and those pins only exist once the widget is persisted — check that the widget selector names an existing widget and that its page/widget build has completed, then re-check.",
+                        arg.name,
+                        occurrence + 1
+                    ));
                 } else {
                     result.diagnostics.push(format!(
                         "node {anchor} has no input pin named {:?} (occurrence {}); skipped",
@@ -358,6 +375,69 @@ fn reconcile_inner(
     result
 }
 
+fn function_cache_to_layer_cache(cache: &FunctionCache) -> LayerCache {
+    LayerCache {
+        enabled: true,
+        prefix: cache.namespace.clone(),
+        ttl_seconds: cache.ttl_seconds,
+        scope: match cache.scope {
+            FunctionCacheScope::App => LayerCacheScope::App,
+            FunctionCacheScope::User => LayerCacheScope::User,
+        },
+    }
+}
+
+fn matching_function_layer<'a>(existing: &'a Board, func: &FnDecl) -> Option<&'a Layer> {
+    if let Some(anchor) = func.anchor.as_deref() {
+        return existing.layers.get(anchor).filter(|layer| {
+            matches!(layer.r#type, LayerType::Function)
+                && to_camel_case(&layer.name) == to_camel_case(&func.name)
+        });
+    }
+
+    let normalized_name = to_camel_case(&func.name);
+    let mut matches = existing.layers.values().filter(|layer| {
+        matches!(layer.r#type, LayerType::Function) && to_camel_case(&layer.name) == normalized_name
+    });
+    let only = matches.next()?;
+    matches.next().is_none().then_some(only)
+}
+
+fn reconcile_function_caches(existing: &Board, ast: &BoardAst) -> Vec<BoardCommand> {
+    ast.functions
+        .iter()
+        .filter_map(|func| {
+            let layer = matching_function_layer(existing, func)?;
+            let desired = func.cache.as_ref().map(function_cache_to_layer_cache);
+            // Disabled cache records are equivalent to an absent decorator. Preserve those dormant
+            // settings unless FlowScript explicitly enables caching, avoiding a no-op rewrite.
+            let current = layer
+                .cache
+                .as_ref()
+                .filter(|cache| cache.is_active())
+                .map(|cache| {
+                    let mut cache = cache.clone();
+                    // Persisted `None` and explicit zero are the same permanent policy. Lowering
+                    // spells both as `ttlSeconds: 0`, so compare their canonical forms here to
+                    // keep an unchanged board -> FlowScript -> board round-trip command-free.
+                    if cache.ttl_seconds.is_none() {
+                        cache.ttl_seconds = Some(0);
+                    }
+                    cache
+                });
+            (current != desired).then(|| BoardCommand::UpdateLayerCache {
+                layer_id: layer.id.clone(),
+                summary: Some(if desired.is_some() {
+                    format!("Update cache for function {}", func.name)
+                } else {
+                    format!("Disable cache for function {}", func.name)
+                }),
+                cache: desired,
+            })
+        })
+        .collect()
+}
+
 /// Reject semantic declarations that would otherwise collide in the planner's name/id maps.
 /// Reconcile is atomic, so an ambiguous document must produce diagnostics and zero commands rather
 /// than creating duplicate variables or an orphan Function layer before a later declaration wins.
@@ -464,6 +544,71 @@ fn duplicate_ast_declaration_diagnostics(ast: &BoardAst) -> Vec<String> {
         "at the top level",
         &mut diagnostics,
     );
+    // Named events and functions are both registered as same-batch aliases by the apply planner.
+    // Two named events (even of different catalog types), or a function and named event sharing a
+    // name, therefore make `SetNodeFunctionRefs` resolution ambiguous. Reject that document here
+    // so `check_flowscript` can return an actionable diagnostic instead of allowing commit to
+    // queue a batch that apply must roll back atomically.
+    // Existing anchored declarations may already share a friendly name: the apply planner records
+    // that alias as ambiguous, but an unchanged round-trip remains valid because no command needs
+    // to resolve it. Grandfather that persisted state; reject a collision only when this document
+    // introduces at least one unanchored callable into the shared alias namespace.
+    let mut callable_declarations = BTreeMap::<&str, (usize, usize, Vec<(&str, bool)>)>::new();
+    for function in &ast.functions {
+        let entry = callable_declarations
+            .entry(function.name.as_str())
+            .or_default();
+        entry.0 += 1;
+        if function.anchor.is_none() {
+            entry.1 += 1;
+        }
+    }
+    for event in &ast.events {
+        let Some(event_name) = event
+            .event_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        else {
+            continue;
+        };
+        callable_declarations
+            .entry(event_name)
+            .or_default()
+            .2
+            .push((event.name.as_str(), event.anchor.is_none()));
+    }
+    for (name, (function_count, unanchored_function_count, mut events)) in callable_declarations {
+        let introduces_callable =
+            unanchored_function_count > 0 || events.iter().any(|(_, unanchored)| *unanchored);
+        if events.is_empty() || function_count + events.len() < 2 || !introduces_callable {
+            continue;
+        }
+        let mut event_types = events
+            .drain(..)
+            .map(|(event_type, _)| event_type)
+            .collect::<Vec<_>>();
+        event_types.sort_unstable();
+        let function_origin = match function_count {
+            0 => String::new(),
+            1 => "a function and ".to_string(),
+            count => format!("{count} functions and "),
+        };
+        let event_count = event_types.len();
+        let event_noun = if event_count == 1 {
+            "named event"
+        } else {
+            "named events"
+        };
+        diagnostics.push(format!(
+            "top-level FlowScript callable name `{name}` is ambiguous across {function_origin}{event_count} {event_noun} ({}); named events and functions share the apply resolver namespace, so give each callable a unique name; no commands were derived",
+            event_types
+                .into_iter()
+                .map(|event_type| format!("`{event_type}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     register_duplicates(
         ast.interfaces
             .iter()
@@ -633,53 +778,100 @@ fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
         duplicate: &mut HashSet<String>,
     ) {
         register(event.anchor.as_deref(), seen, duplicate);
-        visit_block(&event.body, seen, duplicate);
+        // The lowerer renders an entry node with MULTIPLE exec outputs as its EventBlock header
+        // plus an immediate arm-routing Branch carrying the SAME anchor (the arms select the
+        // entry's own labelled outputs). That pair is one entity: the planner resolves the
+        // anchored branch back to the existing entry node, so the reappearing anchor is legal
+        // exactly once, as the first body statement.
+        let mut statements = event.body.stmts.iter();
+        if let (
+            Some(event_anchor),
+            Some(Stmt::Branch {
+                call,
+                condition,
+                arms,
+                anchor,
+                ..
+            }),
+        ) = (
+            event
+                .anchor
+                .as_deref()
+                .map(str::trim)
+                .filter(|anchor| !anchor.is_empty()),
+            event.body.stmts.first(),
+        ) {
+            let branch_anchor = anchor
+                .as_deref()
+                .or(call.anchor.as_deref())
+                .map(str::trim)
+                .filter(|anchor| !anchor.is_empty());
+            if branch_anchor == Some(event_anchor) {
+                for argument in &call.args {
+                    visit_expr(&argument.value, None, seen, duplicate);
+                }
+                if let Some(condition) = condition {
+                    visit_expr(condition, None, seen, duplicate);
+                }
+                for arm in arms {
+                    visit_block(&arm.body, seen, duplicate);
+                }
+                statements.next();
+            }
+        }
+        for statement in statements {
+            visit_stmt(statement, seen, duplicate);
+        }
     }
 
     fn visit_block(block: &Block, seen: &mut HashSet<String>, duplicate: &mut HashSet<String>) {
         for statement in &block.stmts {
-            match statement {
-                Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
-                    visit_call(call, anchor.as_deref(), seen, duplicate)
+            visit_stmt(statement, seen, duplicate);
+        }
+    }
+
+    fn visit_stmt(statement: &Stmt, seen: &mut HashSet<String>, duplicate: &mut HashSet<String>) {
+        match statement {
+            Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
+                visit_call(call, anchor.as_deref(), seen, duplicate)
+            }
+            Stmt::Branch {
+                call,
+                condition,
+                arms,
+                anchor,
+                ..
+            } => {
+                visit_call(call, anchor.as_deref(), seen, duplicate);
+                if let Some(condition) = condition {
+                    visit_expr(condition, None, seen, duplicate);
                 }
-                Stmt::Branch {
-                    call,
-                    condition,
-                    arms,
-                    anchor,
-                    ..
-                } => {
-                    visit_call(call, anchor.as_deref(), seen, duplicate);
-                    if let Some(condition) = condition {
-                        visit_expr(condition, None, seen, duplicate);
-                    }
-                    for arm in arms {
-                        visit_block(&arm.body, seen, duplicate);
-                    }
+                for arm in arms {
+                    visit_block(&arm.body, seen, duplicate);
                 }
-                Stmt::Loop {
-                    call, body, anchor, ..
-                } => {
-                    visit_call(call, anchor.as_deref(), seen, duplicate);
-                    visit_block(body, seen, duplicate);
-                }
-                Stmt::Assign { value, anchor, .. } | Stmt::LocalAlias { value, anchor, .. } => {
-                    visit_expr(value, anchor.as_deref(), seen, duplicate)
-                }
-                Stmt::FieldAssign { value, anchor, .. } => {
-                    register(anchor.as_deref(), seen, duplicate);
+            }
+            Stmt::Loop {
+                call, body, anchor, ..
+            } => {
+                visit_call(call, anchor.as_deref(), seen, duplicate);
+                visit_block(body, seen, duplicate);
+            }
+            Stmt::Assign { value, anchor, .. } | Stmt::LocalAlias { value, anchor, .. } => {
+                visit_expr(value, anchor.as_deref(), seen, duplicate)
+            }
+            Stmt::FieldAssign { value, anchor, .. } => {
+                register(anchor.as_deref(), seen, duplicate);
+                visit_expr(value, None, seen, duplicate);
+            }
+            Stmt::Return { values, anchor } => {
+                register(anchor.as_deref(), seen, duplicate);
+                for value in values {
                     visit_expr(value, None, seen, duplicate);
                 }
-                Stmt::Return { values, anchor } => {
-                    register(anchor.as_deref(), seen, duplicate);
-                    for value in values {
-                        visit_expr(value, None, seen, duplicate);
-                    }
-                }
-                Stmt::Local(variable) => register(variable.anchor.as_deref(), seen, duplicate),
-                Stmt::Handler(event) => visit_event(event, seen, duplicate),
-                Stmt::Comment(_) => {}
             }
+            Stmt::Local(variable) => register(variable.anchor.as_deref(), seen, duplicate),
+            Stmt::Handler(event) => visit_event(event, seen, duplicate),
+            Stmt::Comment(_) => {}
         }
     }
 
@@ -1364,8 +1556,8 @@ fn function_layer_pins(
     impure: bool,
     interface_schemas: &HashMap<String, String>,
 ) -> Vec<LayerPinMetadata> {
-    let exec_pins = impure
-        .then(|| {
+    let exec_pins = if impure {
+        {
             vec![
                 LayerPinMetadata {
                     name: FUNCTION_EXEC_IN.to_string(),
@@ -1386,8 +1578,10 @@ fn function_layer_pins(
                     enforce_schema: false,
                 },
             ]
-        })
-        .unwrap_or_default();
+        }
+    } else {
+        Default::default()
+    };
     exec_pins
         .into_iter()
         .chain(
@@ -2067,6 +2261,7 @@ pub(crate) fn dynamic_placeholder_config_pin(node_type: &str) -> Option<&'static
 fn format_string_placeholders(template: &str) -> Vec<String> {
     let bytes = template.as_bytes();
     let mut names = Vec::new();
+    let mut seen = HashSet::new();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'{' {
@@ -2076,7 +2271,10 @@ fn format_string_placeholders(template: &str) -> Vec<String> {
                 end += 1;
             }
             if end > start && bytes.get(end) == Some(&b'}') {
-                names.push(template[start..end].to_string());
+                let name = &template[start..end];
+                if seen.insert(name) {
+                    names.push(name.to_string());
+                }
                 i = end + 1;
                 continue;
             }
@@ -2243,6 +2441,17 @@ pub(crate) fn synthesize_dynamic_input_pin_from_template(
         .then(|| generic_input_pin_metadata(requested_pin))
 }
 
+/// Whether an arg name refers to a widget's dynamic data-binding pin (`dyn_path_*` / `dyn_prop_*` /
+/// `dyn_cust_*`, in either snake_case or the camelCase form the UI surfaces use). These pins exist
+/// only after the widget is persisted, so a miss here has a specific, fixable cause worth naming.
+fn is_widget_dynamic_binding_arg(name: &str) -> bool {
+    const KINDS: [&str; 3] = ["path", "prop", "cust"];
+    KINDS.iter().any(|kind| {
+        name.starts_with(&format!("dyn_{kind}_"))
+            || name.starts_with(&to_camel_case(&format!("dyn_{kind}_")))
+    })
+}
+
 /// Whether `arg` targets a dynamic input pin the node's `on_update` will mint (one not yet live on
 /// the board node). Used by the config-edit path to DEFER a literal to apply — which creates the pin
 /// via `on_update`, then applies the write — instead of reporting a missing pin. Prefers the
@@ -2380,12 +2589,12 @@ fn schema_constraints_are_compatible(
 
     // struct_make/struct_break/struct_set boundary pins adopt the connected schema dynamically.
     // Preserve that behavior before applying the ordinary two-sided schema equality rule.
-    if matches!(input_name, "struct" | "struct_in" | "struct_out")
-        || matches!(output_name, "struct" | "struct_in" | "struct_out")
+    if (matches!(input_name, "struct" | "struct_in" | "struct_out")
+        || matches!(output_name, "struct" | "struct_in" | "struct_out"))
+        && input_data_type == "Struct"
+        && output_data_type == "Struct"
     {
-        if input_data_type == "Struct" && output_data_type == "Struct" {
-            return input_value_type == output_value_type;
-        }
+        return input_value_type == output_value_type;
     }
 
     // Match the runtime/UI contract: descriptive schemas are permissive unless one endpoint opts
@@ -2396,10 +2605,18 @@ fn schema_constraints_are_compatible(
         && input_data_type != "Generic"
         && output_data_type != "Generic"
     {
-        return matches!(
-            (input_schema.as_deref(), output_schema.as_deref()),
-            (Some(input), Some(output)) if input == output
-        );
+        return match (input_schema.as_deref(), output_schema.as_deref()) {
+            // Two declared contracts: they must be the same one. This is what catches a genuinely
+            // wrong struct, e.g. a `Bit` from findModel wired into embedDocument's
+            // `CachedEmbeddingModel` input without loading the model first.
+            (Some(input), Some(output)) => input == output,
+            // Only one side declares a contract, so there is nothing to contradict. An untyped
+            // `Struct` boundary pin — a FlowScript `function db(): (database: Struct)` parameter or
+            // return — adopts the connected schema, exactly like the struct_make/break/set boundary
+            // pins above. Rejecting these made factoring a shared handle into a helper impossible,
+            // which is precisely the decomposition BOARD_ORGANIZATION_GUIDANCE asks for.
+            _ => true,
+        };
     }
 
     true
@@ -2599,9 +2816,38 @@ fn default_exec_output_by_policy(
             {
                 return selector(many);
             }
-            select_exec_done(many)
+            select_sole_forward_exec_pin(many).or_else(|| select_exec_done(many))
         }
     }
+}
+
+fn is_error_exec_pin_name(name: &str) -> bool {
+    matches!(
+        name,
+        "error" | "exec_error" | "on_error" | "failure" | "failed"
+    )
+}
+
+/// `exec_out` + `error` is the catalog's dominant multi-output shape (527 `exec_out` against 169
+/// `error` pins), and hand-listing every one of those node types in [`EXEC_OUTPUT_POLICIES`] does
+/// not scale — so every DB write and UI update demanded a hand-written arm block just to continue
+/// sequentially. When the canonical `exec_out` is the ONLY non-error output, it is the only way
+/// forward, and continuation follows it exactly as the hand-written `batch_upsert_local_db` policy
+/// does; an unhandled error still terminates its own path.
+///
+/// Deliberately narrow: this recognizes the catalog's own `exec_out` convention only. A node with
+/// a second genuine outcome (`exec_out` + `empty`) and a custom/package node naming its outputs
+/// anything else (`success`/`exec_success`) stay ambiguous and keep demanding explicit arms rather
+/// than being guessed at.
+fn select_sole_forward_exec_pin(candidates: &[ExecPinCandidate]) -> Option<String> {
+    let mut forward = candidates
+        .iter()
+        .filter(|pin| !is_error_exec_pin_name(&pin.name));
+    let sole = forward.next()?;
+    if forward.next().is_some() || sole.name != "exec_out" {
+        return None;
+    }
+    Some(sole.name.clone())
 }
 
 fn select_exec_success(candidates: &[ExecPinCandidate]) -> Option<String> {
@@ -2690,6 +2936,10 @@ struct PlannedStmt {
     entity: NodeEntity,
     next_exec_pin: Option<String>,
     input_sources: Vec<ValueSource>,
+    /// This statement reuses an entity that the preceding statement already placed in the
+    /// execution chain. Bound arm blocks (`const r = call(); r { ... }`) only refine that
+    /// entity's outgoing branches; reconnecting its input would create a self-edge.
+    skip_exec_input_connection: bool,
     /// Additional execution tails the NEXT statement must also wire from — the final cursors of
     /// branch arms. Execution inputs are legal fan-in points, so `if (x) { a() } b()` wires `b`
     /// from BOTH the untaken `false` pin and `a`'s exec output.
@@ -2705,6 +2955,7 @@ impl PlannedStmt {
             entity,
             next_exec_pin: None,
             input_sources: Vec::new(),
+            skip_exec_input_connection: false,
             extra_exec_tails: Vec::new(),
             suppress_self_continuation: false,
         }
@@ -2849,6 +3100,58 @@ fn catalog_object_schema_fields(schema: &str) -> Option<(Option<String>, Vec<Str
         .and_then(flow_like_types::Value::as_str)
         .map(str::to_string);
     fields(&root, &root, 0).map(|fields| (title, fields))
+}
+
+/// Platform structs whose property list is authoritative even though `schemars` emits an open
+/// object schema, so the generic permissive path above cannot reject anything. Reading an undeclared
+/// member off one of these is a silent `null` at runtime — `struct_get` reports `found = false` and
+/// keeps going — so the repair hint travels with the field list.
+///
+/// Keyed by the schema's root `title`. Entries are `(title, declared fields, repair hint)`.
+const CLOSED_PLATFORM_STRUCTS: &[(&str, &[&str], &str)] = &[(
+    "FlowPath",
+    &["path", "store_ref", "cache_store_ref"],
+    "a FlowPath is a store handle, not a file object; read file attributes with the `Data/Files/Path` \
+     accessors instead: `filename({ path })`, `extension({ path })`, `rawPath({ path })`, \
+     `parent({ path })`, `child({ parentPath, childName })`, `setFilename({ inPath, filename })`, \
+     `setExtension({ path, extension })`, `fromRawPath({ basePath, rawPath })`, \
+     `pathReplaceSegment({ inPath, from, to })`",
+)];
+
+fn closed_platform_struct(
+    schema: &str,
+) -> Option<&'static (&'static str, &'static [&'static str], &'static str)> {
+    let root = flow_like_types::json::from_str::<flow_like_types::Value>(schema).ok()?;
+    let title = root.get("title").and_then(flow_like_types::Value::as_str)?;
+    CLOSED_PLATFORM_STRUCTS
+        .iter()
+        .find(|(known, _, _)| *known == title)
+}
+
+/// `Some((title, hint))` when `field` is provably absent from a known closed platform struct.
+fn closed_platform_struct_rejection(
+    schema: &str,
+    field: &str,
+) -> Option<(&'static str, &'static str)> {
+    let (title, fields, hint) = closed_platform_struct(schema)?;
+    if fields
+        .iter()
+        .any(|declared| pin_name_matches(declared, field))
+    {
+        return None;
+    }
+    Some((title, hint))
+}
+
+/// The declared (serialized) spelling of a member on a known closed struct. Member access accepts
+/// the camel form, but the runtime reads the JSON key verbatim, so `.storeRef` has to be lowered as
+/// `store_ref` or it selects nothing.
+fn closed_platform_struct_field_name(schema: &str, field: &str) -> Option<&'static str> {
+    let (_, fields, _) = closed_platform_struct(schema)?;
+    fields
+        .iter()
+        .find(|declared| pin_name_matches(declared, field))
+        .copied()
 }
 
 #[derive(Debug, Clone)]
@@ -3434,6 +3737,10 @@ struct StructuralPlanner<'a> {
     /// Ref ids for newly planned Event registration nodes. Event node types are catalog-extensible,
     /// so registration ordering cannot rely on a hard-coded list of built-in `events_*` names.
     event_entry_refs: HashSet<String>,
+    /// Existing Event entries already named by this FlowScript document. Stale-anchor recovery may
+    /// only rebind to an unclaimed live entry; otherwise two declarations could silently collapse
+    /// onto the same trigger node.
+    claimed_event_entries: HashSet<String>,
     disconnect_commands: Vec<BoardCommand>,
     connect_commands: Vec<BoardCommand>,
     update_commands: Vec<BoardCommand>,
@@ -3478,6 +3785,11 @@ struct StructuralPlanner<'a> {
     /// `var_{function}_{pin}` id, so repeated literal returns (branch arms, re-planned bodies)
     /// share one variable + `variable_get` instead of minting suffixed duplicates.
     planned_literal_return_sources: HashMap<String, ValueSource>,
+    /// Boundary pass-throughs materialized during THIS plan, keyed by `(function layer ref,
+    /// parameter pin)`. `already_planned` in `queue_validated_data_connection` dedupes the EDGE,
+    /// not the reroute NODE, so without this `return a, a` (or two branch arms returning the same
+    /// parameter) would mint a sibling reroute per return statement.
+    planned_boundary_passthroughs: HashMap<(String, String), ValueSource>,
     /// Optional hook to materialize a node's dynamic (`on_update`-generated) pins for a call, so a
     /// literal/connection targeting one resolves against a real pin instead of the predicted
     /// `synthesize_dynamic_input_pin` fallback. `None` for the pure static-catalog paths.
@@ -3497,6 +3809,7 @@ impl<'a> StructuralPlanner<'a> {
             result: ReconcileResult::default(),
             add_commands: Vec::new(),
             event_entry_refs: HashSet::new(),
+            claimed_event_entries: HashSet::new(),
             disconnect_commands: Vec::new(),
             connect_commands: Vec::new(),
             update_commands: Vec::new(),
@@ -3514,8 +3827,17 @@ impl<'a> StructuralPlanner<'a> {
             fn_ref_commands: Vec::new(),
             planned_functions: HashMap::new(),
             planned_literal_return_sources: HashMap::new(),
+            planned_boundary_passthroughs: HashMap::new(),
             enricher,
         }
+    }
+
+    fn reserve_declared_event_entries(&mut self, ast: &BoardAst) {
+        self.claimed_event_entries.extend(
+            declared_event_anchors(ast)
+                .into_iter()
+                .filter(|anchor| find_board_node(self.existing, anchor).is_some()),
+        );
     }
 
     /// Enrich a resolved node's metadata with the dynamic pins its `on_update` would create for this
@@ -3537,6 +3859,9 @@ impl<'a> StructuralPlanner<'a> {
 
     fn plan(mut self, ast: &BoardAst) -> ReconcileResult {
         self.interface_schemas = interface_schema_map(ast);
+        // Reserve every still-live explicit event anchor before planning. A stale declaration that
+        // appears earlier in the document must not steal the entry owned by a later declaration.
+        self.reserve_declared_event_entries(ast);
         self.push_scope();
         self.seed_top_level_variables(ast);
         // Function layers are created (and their impurity decided) up front so call sites in
@@ -3551,6 +3876,7 @@ impl<'a> StructuralPlanner<'a> {
         self.pop_scope();
 
         self.check_new_function_structure();
+        self.check_function_ref_targets();
         self.check_dangling_impure_execution();
 
         // The entry node is the registration target for the outer app Event. Materialize every
@@ -3923,6 +4249,262 @@ impl<'a> StructuralPlanner<'a> {
             || self.variable_refs.resolve(target).is_some()
     }
 
+    /// Resolve the exact catalog identity carried by an event declaration without invoking the
+    /// Generic/Simple fallback. A stale anchor may only create a replacement when this succeeds;
+    /// an alias-only header such as `wikiExplorerLoad()` does not retain enough type information
+    /// to decide whether the deleted node was Simple, Generic, or package-defined.
+    fn exact_event_metadata(&self, event: &EventBlock) -> Result<Option<NodeMetadata>, String> {
+        if !event.node_type.trim().is_empty() {
+            self.catalog
+                .resolve_type(&event.node_type)
+                .map(Some)
+                .map_err(|reason| {
+                    format!(
+                        "event `{}` declares exact node_type `{}`: {reason}",
+                        event.name, event.node_type
+                    )
+                })
+        } else {
+            Ok(self.catalog.resolve_display(&event.name).ok())
+        }
+    }
+
+    fn node_is_in_target_layer(&self, node: &Node, target_layer: Option<&str>) -> bool {
+        let direct_layer = node.layer.as_deref().filter(|layer| !layer.is_empty());
+        // Canonical flat storage is authoritative even when `layer` is None (root). Consult a
+        // containing layer only for legacy nested-only nodes; mirrored layer clones may be stale.
+        if self.existing.nodes.contains_key(&node.id) {
+            return direct_layer == target_layer;
+        }
+
+        let nested_layer = self
+            .existing
+            .layers
+            .values()
+            .find(|layer| layer.nodes.contains_key(&node.id))
+            .map(|layer| layer.id.as_str());
+        nested_layer == target_layer
+    }
+
+    fn event_entry_targets_node(&self, entry: &Node, target_node_id: &str) -> bool {
+        entry
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == PinType::Output && is_exec_pin(pin))
+            .flat_map(|pin| pin.connected_to.iter())
+            .any(|target_pin_id| {
+                self.board_index
+                    .pin_owner
+                    .get(target_pin_id.as_str())
+                    .is_some_and(|(owner, _)| owner.id == target_node_id)
+            })
+    }
+
+    /// A whole-document rewrite that drops the entry anchor must not mint a duplicate entry node:
+    /// the stranded old entry keeps every data edge hanging off its outputs (its `history` etc.
+    /// still feed body nodes), which renders as the new block's parameters and re-reconciles to a
+    /// spurious connect on every readback. Claim the live entry instead — but only on the strong
+    /// signal that it ALREADY drives this exact authored body, so a genuinely new sibling event
+    /// (whose body nodes are not yet driven by anything) still creates its own entry.
+    fn claim_existing_entry_for_unanchored_event(
+        &mut self,
+        event: &EventBlock,
+        target_layer: Option<&str>,
+    ) -> Option<NodeEntity> {
+        let exact_meta = self.exact_event_metadata(event).ok()?;
+        let first_body_node = first_existing_exec_body_node(self.existing, &event.body)?;
+        let first_body_node_id = first_body_node.id.clone();
+        let candidates: Vec<&Node> = all_board_nodes(self.existing)
+            .into_iter()
+            .filter(|node| {
+                !self.claimed_event_entries.contains(&node.id)
+                    && self.node_is_in_target_layer(node, target_layer)
+                    && node.start == Some(true)
+                    && event_entry_incompatibility(&node_to_metadata(node)).is_none()
+                    && exact_meta
+                        .as_ref()
+                        .is_none_or(|meta| node.name == meta.name)
+                    && event_parameter_contracts_match(
+                        node,
+                        &event.params,
+                        &self.interface_schemas,
+                        &self.existing.refs,
+                    )
+                    && self.event_entry_targets_node(node, &first_body_node_id)
+            })
+            .collect();
+        let [entry] = candidates.as_slice() else {
+            return None;
+        };
+        let entry_id = entry.id.clone();
+        let entry_friendly = entry.friendly_name.clone();
+        self.claimed_event_entries.insert(entry_id.clone());
+        let desired_name = event.event_name.as_deref().unwrap_or(&event.name);
+        if !pin_name_matches(&entry_friendly, desired_name) {
+            self.update_commands.push(BoardCommand::RenameNode {
+                node_id: entry_id.clone(),
+                friendly_name: desired_name.to_string(),
+                summary: Some(format!("Rename event to {desired_name}")),
+            });
+        }
+        self.result.corrections.push(format!(
+            "Bound event `{}` to live entry `{entry_id}`, which already drives this body, instead of creating a duplicate entry node.",
+            event.name
+        ));
+        Some(NodeEntity::Existing(entry_id))
+    }
+
+    /// Recover an event whose explicit identity anchor disappeared from the live board.
+    ///
+    /// Recovery is deliberately deterministic:
+    /// - one compatible, unclaimed entry in the same scope is rebound;
+    /// - no live match is recreated only when the catalog type is exact;
+    /// - incompatible or ambiguous matches stay blocking conflicts.
+    fn recover_missing_event_entry(
+        &mut self,
+        event: &EventBlock,
+        stale_anchor: &str,
+        target_layer: Option<String>,
+    ) -> Option<NodeEntity> {
+        let exact_meta = match self.exact_event_metadata(event) {
+            Ok(meta) => meta,
+            Err(diagnostic) => {
+                self.result.diagnostics.push(format!(
+                    "event `{}` anchors to `{stale_anchor}`, which no longer exists on the board; {diagnostic}",
+                    event.name
+                ));
+                return None;
+            }
+        };
+        let canonical_type_display = exact_meta.as_ref().map(|meta| to_camel_case(&meta.name));
+        let desired_alias = event.event_name.as_deref().or_else(|| {
+            canonical_type_display
+                .as_deref()
+                .filter(|display| !pin_name_matches(display, &event.name))
+                .map(|_| event.name.as_str())
+        });
+
+        let mut identity_matches = all_board_nodes(self.existing)
+            .into_iter()
+            .filter(|node| {
+                !self.claimed_event_entries.contains(&node.id)
+                    && self.node_is_in_target_layer(node, target_layer.as_deref())
+                    && node.start == Some(true)
+                    && event_entry_incompatibility(&node_to_metadata(node)).is_none()
+                    && match &exact_meta {
+                        Some(meta) => {
+                            node.name == meta.name
+                                && desired_alias.is_none_or(|alias| {
+                                    pin_name_matches(&node.friendly_name, alias)
+                                })
+                        }
+                        None => {
+                            (pin_name_matches(&node.name, &event.name)
+                                || pin_name_matches(&node.friendly_name, &event.name))
+                                && event.event_name.as_deref().is_none_or(|alias| {
+                                    pin_name_matches(&node.friendly_name, alias)
+                                })
+                        }
+                    }
+            })
+            .collect::<Vec<_>>();
+        identity_matches.sort_by(|left, right| left.id.cmp(&right.id));
+
+        let mut compatible = identity_matches
+            .iter()
+            .copied()
+            .filter(|node| {
+                event_parameter_contracts_match(
+                    node,
+                    &event.params,
+                    &self.interface_schemas,
+                    &self.existing.refs,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        // Several entries may legitimately share one event type. The old body's still-live first
+        // execution node is a stronger identity signal than name alone, so use it to narrow the
+        // candidates when exactly one entry currently drives that body.
+        if compatible.len() > 1
+            && let Some(first_body_node) = first_existing_exec_body_node(self.existing, &event.body)
+        {
+            let connected = compatible
+                .iter()
+                .copied()
+                .filter(|entry| self.event_entry_targets_node(entry, &first_body_node.id))
+                .collect::<Vec<_>>();
+            if connected.len() == 1 {
+                compatible = connected;
+            }
+        }
+
+        match compatible.as_slice() {
+            [entry] => {
+                self.claimed_event_entries.insert(entry.id.clone());
+                self.result.corrections.push(format!(
+                    "Re-anchored event `{}` from missing `{stale_anchor}` to live entry `{}`.",
+                    event.name, entry.id
+                ));
+                return Some(NodeEntity::Existing(entry.id.clone()));
+            }
+            entries @ [_, _, ..] => {
+                self.result.diagnostics.push(format!(
+                    "event `{}` anchors to `{stale_anchor}`, which no longer exists on the board; {} compatible live entries in the same scope make automatic re-anchoring ambiguous ({})",
+                    event.name,
+                    entries.len(),
+                    entries
+                        .iter()
+                        .map(|entry| format!("`{}`", entry.id))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                return None;
+            }
+            [] => {}
+        }
+
+        // A strong alias found the intended live entry but its payload changed. Recreating a
+        // sibling would hide a real contract conflict and leave two identically named triggers.
+        if desired_alias.is_some() && !identity_matches.is_empty() {
+            self.result.diagnostics.push(format!(
+                "event `{}` anchors to `{stale_anchor}`, which no longer exists on the board; the matching live entry has an incompatible parameter contract and cannot be re-anchored automatically",
+                event.name
+            ));
+            return None;
+        }
+
+        if exact_meta.is_some() {
+            if block_has_no_executable_statements(&event.body) {
+                self.result.diagnostics.push(format!(
+                    "event `{}` anchors to `{stale_anchor}`, which no longer exists on the board; refusing to recreate an event with no executable body nodes",
+                    event.name
+                ));
+                return None;
+            }
+            let recreated = self.add_entry_node(
+                &event.name,
+                &event.node_type,
+                event.event_name.as_deref(),
+                target_layer,
+                &event.params,
+            );
+            if recreated.is_some() {
+                self.result.corrections.push(format!(
+                    "Recreated event `{}` because anchor `{stale_anchor}` no longer exists; the applied board will assign a new anchor.",
+                    event.name
+                ));
+            }
+            return recreated;
+        }
+
+        self.result.diagnostics.push(format!(
+            "event `{}` anchors to `{stale_anchor}`, which no longer exists on the board; no unique compatible live entry was found and the alias-only header does not preserve an exact event type. Refresh FlowScript, or declare an explicit type such as `eventsGeneric {}(...)` before removing the stale anchor",
+            event.name, event.name
+        ));
+        None
+    }
+
     fn plan_event(&mut self, event: &EventBlock, target_layer: Option<String>) {
         if event.anchor.is_none() && block_has_no_executable_statements(&event.body) {
             self.result.diagnostics.push(format!(
@@ -3931,16 +4513,15 @@ impl<'a> StructuralPlanner<'a> {
             ));
         }
         let entry = match &event.anchor {
-            Some(anchor) => {
-                let entry = find_board_node(self.existing, anchor).and_then(|node| {
+            Some(anchor) => match find_board_node(self.existing, anchor) {
+                Some(node) => {
                     if !event.node_type.trim().is_empty() && node.name != event.node_type {
                         self.result.diagnostics.push(format!(
                             "event `{}` declares exact node_type `{}`, but anchor `{anchor}` resolves to `{}`",
                             event.name, event.node_type, node.name
                         ));
-                        return None;
-                    }
-                    if event.node_type.trim().is_empty()
+                        None
+                    } else if event.node_type.trim().is_empty()
                         && !pin_name_matches(&node.name, &event.name)
                         && !pin_name_matches(&node.friendly_name, &event.name)
                     {
@@ -3948,9 +4529,8 @@ impl<'a> StructuralPlanner<'a> {
                             "event `{}` keeps anchor `{anchor}`, but that anchor identifies `{}`; remove the anchor to replace the event type",
                             event.name, node.name
                         ));
-                        return None;
-                    }
-                    if !event_parameter_contracts_match(
+                        None
+                    } else if !event_parameter_contracts_match(
                         node,
                         &event.params,
                         &self.interface_schemas,
@@ -3960,39 +4540,37 @@ impl<'a> StructuralPlanner<'a> {
                             "event `{}` changes the parameter contract of anchored entry `{anchor}`; parameter names, order, types, containers, and authored schemas must match the live event outputs",
                             event.name
                         ));
-                        return None;
-                    }
-                    if let Some(event_name) = event
-                        .event_name
-                        .as_deref()
-                        .filter(|name| !name.trim().is_empty())
-                        && !pin_name_matches(&node.friendly_name, event_name)
-                    {
-                        self.update_commands.push(BoardCommand::RenameNode {
-                            node_id: anchor.clone(),
-                            friendly_name: event_name.to_string(),
-                            summary: Some(format!("Rename event to {event_name}")),
-                        });
-                    }
-                    Some(NodeEntity::Existing(anchor.clone()))
-                });
-                if entry.is_none() {
-                    if find_board_node(self.existing, anchor).is_none() {
-                        self.result.diagnostics.push(format!(
-                            "event `{}` anchors to `{anchor}`, which no longer exists on the board; its body was planned without an execution entry",
-                            event.name
-                        ));
+                        None
+                    } else {
+                        if let Some(event_name) = event
+                            .event_name
+                            .as_deref()
+                            .filter(|name| !name.trim().is_empty())
+                            && !pin_name_matches(&node.friendly_name, event_name)
+                        {
+                            self.update_commands.push(BoardCommand::RenameNode {
+                                node_id: anchor.clone(),
+                                friendly_name: event_name.to_string(),
+                                summary: Some(format!("Rename event to {event_name}")),
+                            });
+                        }
+                        self.claimed_event_entries.insert(anchor.clone());
+                        Some(NodeEntity::Existing(anchor.clone()))
                     }
                 }
-                entry
-            }
-            None => self.add_entry_node(
-                &event.name,
-                &event.node_type,
-                event.event_name.as_deref(),
-                target_layer.clone(),
-                &event.params,
-            ),
+                None => self.recover_missing_event_entry(event, anchor, target_layer.clone()),
+            },
+            None => self
+                .claim_existing_entry_for_unanchored_event(event, target_layer.as_deref())
+                .or_else(|| {
+                    self.add_entry_node(
+                        &event.name,
+                        &event.node_type,
+                        event.event_name.as_deref(),
+                        target_layer.clone(),
+                        &event.params,
+                    )
+                }),
         };
 
         self.push_scope();
@@ -4141,6 +4719,57 @@ impl<'a> StructuralPlanner<'a> {
         }
     }
 
+    /// A `tools:`/`fnRefs:` target must resolve to a concrete entry NODE at run time: the executor
+    /// looks it up in the flat node map (`ExecutionContext::get_referenced_functions`), derives the
+    /// tool name from that node's friendly name and the tool's WHOLE parameter schema from its data
+    /// OUTPUT pins, triggers it, and reads the tool result from the `set_result` an
+    /// `events_generic_return_result` writes.
+    ///
+    /// A FlowScript `function` materializes as a Function LAYER with boundary pins and no entry
+    /// node, so such a reference can never be registered: `apply` rejects it with "Function layer
+    /// `X` has no referenceable event/handler entry" and rolls the WHOLE batch back, and
+    /// `validate_and_deduplicate_fn_refs` would silently strip it even if apply accepted it.
+    /// Reject it here instead, where `check_flowscript` reports it with a fix — an apply-phase
+    /// `Err` is invisible to the model.
+    ///
+    /// Only NEW function layers are checked: an anchored layer may already hold an entry node that
+    /// the text does not re-declare, and apply resolves that case correctly today.
+    fn check_function_ref_targets(&mut self) {
+        let new_layer_targets: Vec<(String, String)> = self
+            .fn_ref_commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::SetNodeFunctionRefs { fn_refs, .. } => Some(fn_refs.clone()),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(
+                |name| match self.planned_functions.get(&name).map(|p| &p.entity) {
+                    Some(NodeEntity::Layer { ref_id, .. }) => Some((name, ref_id.clone())),
+                    _ => None,
+                },
+            )
+            .collect();
+
+        for (name, layer_ref) in new_layer_targets {
+            let has_entry = self.add_commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::AddNode {
+                        ref_id: Some(ref_id),
+                        target_layer: Some(target_layer),
+                        ..
+                    } if target_layer == &layer_ref && self.event_entry_refs.contains(ref_id)
+                )
+            });
+            if !has_entry {
+                self.result.diagnostics.push(format!(
+                    "new function `{name}` is referenced as an agent tool but its Function layer contains no event/handler entry node, so the reference cannot be registered at run time. Declare `{name}` as a handler block — `{name}(<params>) {{ … return <value> }}` — instead of `function {name}(…)`; the handler's data outputs become the tool's arguments and its `return` becomes the tool result"
+                ));
+            }
+        }
+    }
+
     /// Execution entry for an impure function body: the layer's `exec_in` boundary pin. The
     /// runtime `control_call_function` node finds the body's entry node by following exactly this
     /// edge, so without it the body would never run.
@@ -4272,7 +4901,7 @@ impl<'a> StructuralPlanner<'a> {
             let continues_exec = current.next_exec_pin.is_some()
                 || (accepts_exec && !self.entity_exec_output_pins(&current.entity).is_empty());
 
-            if accepts_exec {
+            if accepts_exec && !current.skip_exec_input_connection {
                 if previous_execs.is_empty() {
                     // No execution predecessor to wire from (e.g. a function body's first node):
                     // exempt it from the dangling-execution warning.
@@ -4640,9 +5269,27 @@ impl<'a> StructuralPlanner<'a> {
                             Some(pin) => Some(ExecCursor::with_output(entity, Some(pin))),
                             None => {
                                 if !arm.body.stmts.is_empty() {
+                                    // Name the node and list the real labels: without them the
+                                    // model guesses spellings (`error`, `execError`, ...) for
+                                    // many rounds instead of fixing the label in one.
+                                    let node_name = if call.display.trim().is_empty() {
+                                        entity.node_ref()
+                                    } else {
+                                        call.display.clone()
+                                    };
+                                    let available = self.entity_exec_output_pins(&entity);
+                                    let available = if available.is_empty() {
+                                        "none".to_string()
+                                    } else {
+                                        available
+                                            .iter()
+                                            .map(|name| to_camel_case(name))
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    };
                                     self.result.diagnostics.push(format!(
-                                        "branch arm label `{}` does not match an execution output on `{}`; its body was not wired — use the exact exec pin name as the arm label",
-                                        arm.label, call.display
+                                        "branch arm label `{}` does not match an execution output on `{node_name}` (available execution outputs: {available}); its body was not wired — use the exact exec pin name as the arm label",
+                                        arm.label
                                     ));
                                 }
                                 None
@@ -4657,34 +5304,32 @@ impl<'a> StructuralPlanner<'a> {
                 }
                 stashed_splices.append(&mut self.pending_exec_splices);
                 self.pending_exec_splices = stashed_splices;
-                if bind.is_some() && is_placeholder_call(call) {
-                    None
-                } else {
-                    entity.map(|entity| {
-                        // The statement AFTER a branch continues from the arm tails plus the one
-                        // exec output no arm claimed (e.g. `false` for a lone `if`). When every
-                        // output is claimed, only the arm tails carry execution forward.
-                        let arm_pins: HashSet<String> = arms
-                            .iter()
-                            .filter_map(|arm| self.resolve_arm_exec_pin(&entity, &arm.label))
-                            .collect();
-                        let remaining: Vec<String> = self
-                            .entity_exec_output_pin_refs(&entity)
-                            .into_iter()
-                            .filter(|pin| !arm_pins.contains(pin))
-                            .collect();
-                        let mut planned = PlannedStmt::new(entity);
-                        planned.extra_exec_tails = arm_tails;
-                        match remaining.as_slice() {
-                            [single] => planned.next_exec_pin = Some(single.clone()),
-                            [] => planned.suppress_self_continuation = true,
-                            // Several unclaimed outputs (a bare multi-output call with one
-                            // labelled arm): leave the default policy machinery to decide.
-                            _ => {}
-                        }
-                        planned
-                    })
-                }
+                entity.map(|entity| {
+                    // The statement AFTER a branch continues from the arm tails plus the one
+                    // exec output no arm claimed (e.g. `false` for a lone `if`). When every
+                    // output is claimed, only the arm tails carry execution forward.
+                    let arm_pins: HashSet<String> = arms
+                        .iter()
+                        .filter_map(|arm| self.resolve_arm_exec_pin(&entity, &arm.label))
+                        .collect();
+                    let remaining: Vec<String> = self
+                        .entity_exec_output_pin_refs(&entity)
+                        .into_iter()
+                        .filter(|pin| !arm_pins.contains(pin))
+                        .collect();
+                    let mut planned = PlannedStmt::new(entity);
+                    planned.extra_exec_tails = arm_tails;
+                    planned.skip_exec_input_connection =
+                        bind.is_some() && is_placeholder_call(call);
+                    match remaining.as_slice() {
+                        [single] => planned.next_exec_pin = Some(single.clone()),
+                        [] => planned.suppress_self_continuation = true,
+                        // Several unclaimed outputs (a bare multi-output call with one
+                        // labelled arm): leave the default policy machinery to decide.
+                        _ => {}
+                    }
+                    planned
+                })
             }
             Stmt::Loop {
                 bind,
@@ -4806,6 +5451,26 @@ impl<'a> StructuralPlanner<'a> {
             return Some(NodeEntity::Existing(anchor.clone()));
         }
 
+        // An unanchored declaration still has a stable identity: its name. FlowScript forbids two
+        // top-level functions sharing one name, so a same-named Function layer IS this function.
+        // Without this, a fresh full-document draft (a repair, or any run that did not carry the
+        // `//@n` anchors) re-creates every layer, and the board's own canonical readback then holds
+        // duplicate declarations that no longer reconcile — the board stops round-tripping.
+        let normalized_name = to_camel_case(&func.name);
+        let existing_by_name: Vec<String> = self
+            .existing
+            .layers
+            .iter()
+            .filter(|(_, layer)| {
+                matches!(layer.r#type, LayerType::Function)
+                    && to_camel_case(&layer.name) == normalized_name
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        if let [only] = existing_by_name.as_slice() {
+            return Some(NodeEntity::Existing(only.clone()));
+        }
+
         let ref_id = format!("${}", self.next_ref);
         self.next_ref += 1;
         let pins = function_layer_pins(func, impure, &self.interface_schemas);
@@ -4832,6 +5497,7 @@ impl<'a> StructuralPlanner<'a> {
             position: Some(position),
             color: None,
             target_layer: None,
+            cache: func.cache.as_ref().map(function_cache_to_layer_cache),
             summary: Some(format!("Create function {}", func.name)),
         });
         Some(NodeEntity::Layer { ref_id, pins })
@@ -4892,6 +5558,27 @@ impl<'a> StructuralPlanner<'a> {
                     ));
                     continue;
                 };
+                // `return <bare parameter>`: `seed_function_params` binds parameters to this
+                // layer's own boundary Input pins, so this edge would be layer -> itself, which
+                // `connect_pins` rejects and which rolls the whole apply batch back. Splice the
+                // board's pass-through primitive between the two boundary pins instead. This is
+                // the data-side twin of `wire_function_exit`'s existing self-reference guard.
+                let (source, output_pin) = if source.node.node_ref() == layer.node_ref() {
+                    match self.boundary_return_passthrough(
+                        &layer,
+                        &output_pin,
+                        &return_param,
+                        &function_name,
+                    ) {
+                        Some(spliced) => {
+                            let pin = spliced.output_pin.clone().unwrap_or_default();
+                            (spliced, pin)
+                        }
+                        None => continue,
+                    }
+                } else {
+                    (source, output_pin)
+                };
                 self.queue_validated_data_connection(
                     &source,
                     output_pin,
@@ -4951,6 +5638,107 @@ impl<'a> StructuralPlanner<'a> {
     /// Reverse the `events_generic_return_result` sugar: reuse the anchored result node (or add a
     /// fresh one), wire the returned value into its `response` input, and chain it into the exec
     /// flow as a terminal statement.
+    /// Bridge a Function layer's parameter pin to one of its own return pins (`return <param>`).
+    ///
+    /// That value both enters and leaves the SAME layer, and the direct edge is not representable:
+    /// `connect_pins` rejects `from_node == to_node` outright ("Cannot connect a node to itself",
+    /// aborting the whole apply); it could not be persisted anyway, because the command mutates two
+    /// independent clones of one entity and the second upsert erases the first; and
+    /// `control_call_function::read_outputs` resolves a return pin's dependency by searching the
+    /// execution graph's NODES, so a boundary-owned dependency leaves the output silently unset.
+    ///
+    /// The board's primitive for a wire that must become two edges is `reroute`: a pure
+    /// pass-through that `lower::resolve_source` already collapses back to the bare parameter
+    /// reference and that `BoardIndex::data_source_for_pin_id` already traces through, so the text
+    /// round-trips unchanged and the deletion planner never treats it as authored.
+    ///
+    /// Returns the source to wire the return pin from, or `None` when the bridge already exists on
+    /// the live board (no-op) or could not be built (diagnosed).
+    fn boundary_return_passthrough(
+        &mut self,
+        layer: &NodeEntity,
+        param_pin: &str,
+        return_param: &PinMetadata,
+        function_name: &str,
+    ) -> Option<ValueSource> {
+        // An applied bridge collapses back to `{layer, param}` in `BoardIndex`
+        // (`data_source_for_pin_id` traces through reroutes and falls back to `boundary_sources`),
+        // so the reconciler's ordinary already-wired test recognises it and the round-trip is a
+        // no-op. Without this the reroute chain would grow by one node on every apply.
+        let already_wired = self
+            .existing_sources_for_input_ref(layer, &return_param.name)
+            .into_iter()
+            .any(|existing| {
+                existing.node.node_ref() == layer.node_ref()
+                    && existing.output_pin.as_deref() == Some(param_pin)
+            });
+        if already_wired {
+            return None;
+        }
+
+        // Both reroute pins are Generic, so `planned_output_is_compatible` short-circuits and the
+        // two spliced edges validate against ANY contract. Type-check the parameter against the
+        // declared return pin here, which is what the (unrepresentable) direct edge did.
+        let boundary_source = ValueSource {
+            node: layer.clone(),
+            output_pin: Some(param_pin.to_string()),
+        };
+        let Some(output) = self.planned_source_output_type(&boundary_source) else {
+            self.result.diagnostics.push(format!(
+                "return of parameter `{param_pin}` as `{}` in function `{function_name}` has no exact source output contract; skipped connection",
+                return_param.name
+            ));
+            return None;
+        };
+        if !planned_output_is_compatible(return_param, &output, &self.existing.refs) {
+            self.result.diagnostics.push(format!(
+                "return of parameter `{param_pin}` for `{}` in function `{function_name}` has incompatible pin types or schemas: the parameter is `{}/{}`, but the return pin requires `{}/{}`; use a catalog-declared conversion before returning it",
+                return_param.name,
+                output.data_type,
+                output.value_type,
+                return_param.data_type,
+                return_param.value_type
+            ));
+            return None;
+        }
+
+        let key = (layer.node_ref(), param_pin.to_string());
+        if let Some(source) = self.planned_boundary_passthroughs.get(&key) {
+            return Some(source.clone());
+        }
+
+        let meta = self.resolve_variable_node("reroute", "Reroute")?;
+        let route_in = metadata_input_pin(&meta, "route_in")?.clone();
+        let route_out_name = metadata_output_pin(&meta, "route_out")?.name.clone();
+
+        let entity = self.queue_add_node(meta, Some(layer.node_ref()));
+        if !self.queue_validated_data_connection(
+            &boundary_source,
+            param_pin.to_string(),
+            &entity,
+            &route_in,
+            &route_in.name,
+            "Connect FlowScript function parameter pass-through".to_string(),
+            &format!(
+                "parameter `{param_pin}` returned as `{}` in function `{function_name}`",
+                return_param.name
+            ),
+            false,
+        ) {
+            // The incoming half was rejected (and diagnosed); queueing only the outgoing half
+            // would leave a reroute wired to nothing and the return pin reading Null.
+            return None;
+        }
+
+        let source = ValueSource {
+            node: entity,
+            output_pin: Some(route_out_name),
+        };
+        self.planned_boundary_passthroughs
+            .insert(key, source.clone());
+        Some(source)
+    }
+
     fn plan_event_return(
         &mut self,
         values: &[Expr],
@@ -5780,6 +6568,18 @@ impl<'a> StructuralPlanner<'a> {
                 ));
                 continue;
             };
+            // An explicit `structGet`/`structSet` never reaches the member-access check, so the same
+            // closed-struct rejection has to guard the literal-call spelling of it.
+            if let Some((title, hint)) =
+                self.closed_struct_field_call_rejection(call, meta, input, &source, &output_pin)
+            {
+                let selected = self.literal_struct_field_argument(call).unwrap_or_default();
+                self.result.diagnostics.push(format!(
+                    "`{}` reads field `{selected}` from a `{title}`, which has no such field; {hint}",
+                    call.display
+                ));
+                continue;
+            }
             if !self.queue_validated_data_connection(
                 &source,
                 output_pin.clone(),
@@ -6552,11 +7352,11 @@ impl<'a> StructuralPlanner<'a> {
         let current = *index;
         *index += 1;
         let (base_x, base_y) = self.rightmost_existing_position(target_layer);
-        let position = NodePosition {
+
+        NodePosition {
             x: base_x + 260.0 * ((current % COLUMNS) as f64 + 1.0),
             y: base_y + 160.0 * ((current / COLUMNS) as f64),
-        };
-        position
+        }
     }
 
     fn rightmost_existing_position(&self, target_layer: Option<&str>) -> (f64, f64) {
@@ -6597,10 +7397,10 @@ impl<'a> StructuralPlanner<'a> {
             }
         };
         for node in nodes {
-            if let Some((x, y, _)) = node.coordinates {
-                if rightmost.map_or(true, |(rx, _)| x > rx) {
-                    rightmost = Some((x, y));
-                }
+            if let Some((x, y, _)) = node.coordinates
+                && rightmost.is_none_or(|(rx, _)| x > rx)
+            {
+                rightmost = Some((x, y));
             }
         }
         rightmost
@@ -6637,8 +7437,13 @@ impl<'a> StructuralPlanner<'a> {
         else {
             let outputs = self.entity_exec_output_pins(&previous.entity);
             if outputs.len() > 1 {
+                let arm_labels = outputs
+                    .iter()
+                    .map(|name| format!("{}: {{ ... }}", to_camel_case(name)))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 self.result.diagnostics.push(format!(
-                    "node `{}` has multiple execution outputs ({}) and no default continuation policy; add an explicit policy before auto-wiring sequential FlowScript calls",
+                    "node `{}` has multiple execution outputs ({}) and no default continuation policy; bind it (`const r = call({{ ... }})`) and handle its outputs in an arm block `r {{ {arm_labels} }}` — arm labels must be these exact execution output names — instead of a plain sequential statement",
                     previous.entity.node_ref(),
                     outputs.join(", ")
                 ));
@@ -6920,6 +7725,40 @@ impl<'a> StructuralPlanner<'a> {
     /// Reject the generic `struct_get` fallback when catalog metadata proves it wrong.
     /// Schema-less scalar Struct and dynamic Generic/Normal outputs remain intentionally open;
     /// concrete scalars and collection containers are authoritative even without a schema.
+    /// The literal `field` argument of an explicit struct-field call, when it is a plain string.
+    fn literal_struct_field_argument(&self, call: &Call) -> Option<String> {
+        call.args
+            .iter()
+            .find(|candidate| candidate.name == "field")
+            .and_then(|candidate| literal_expr_to_value(&candidate.value))
+            .and_then(|value| value.as_str().map(str::to_string))
+    }
+
+    /// `Some((title, hint))` when an explicit `structGet`/`structSet` selects a member that a known
+    /// closed platform struct does not declare. Member-access sugar is covered separately by
+    /// [`Self::schema_allows_member_access`]; this is the literal-call spelling of the same mistake.
+    fn closed_struct_field_call_rejection(
+        &self,
+        call: &Call,
+        meta: &NodeMetadata,
+        input: &PinMetadata,
+        source: &ValueSource,
+        output_pin: &str,
+    ) -> Option<(&'static str, &'static str)> {
+        if !matches!(meta.name.as_str(), "struct_get" | "struct_set") {
+            return None;
+        }
+        if !matches!(input.name.as_str(), "struct" | "struct_in") {
+            return None;
+        }
+        let field = self.literal_struct_field_argument(call)?;
+        let shape = self.source_output_shape(&ValueSource {
+            node: source.node.clone(),
+            output_pin: Some(output_pin.to_string()),
+        })?;
+        closed_platform_struct_rejection(shape.schema.as_deref()?, &field)
+    }
+
     fn schema_allows_member_access(&mut self, source: &ValueSource, field: &str) -> bool {
         let Some(shape) = self.source_output_shape(source) else {
             return true;
@@ -6952,6 +7791,16 @@ impl<'a> StructuralPlanner<'a> {
         };
         if shape.value_type != "Normal" {
             return true;
+        }
+
+        // Platform structs the generic path cannot close, checked before it so an open schema does
+        // not wave through a member that silently resolves to null at runtime.
+        if let Some((title, hint)) = closed_platform_struct_rejection(schema, field) {
+            self.result.diagnostics.push(format!(
+                "catalog output `{}.{}` is a `{title}`, which has no field `{field}`; {hint}",
+                shape.node_type, shape.pin_name
+            ));
+            return false;
         }
 
         let Some((title, fields)) = catalog_object_schema_fields(schema) else {
@@ -7104,11 +7953,24 @@ impl<'a> StructuralPlanner<'a> {
         let meta = self.catalog.resolve_call(&probe).ok()?;
         let entity = self.queue_add_node(meta.clone(), target_layer);
 
+        // Member access accepts the camel spelling, but the runtime selects the JSON key verbatim,
+        // so a known struct's declared name wins over what the author typed.
+        let selector = self
+            .source_output_shape(&base)
+            .and_then(|shape| {
+                shape
+                    .schema
+                    .as_deref()
+                    .and_then(|schema| closed_platform_struct_field_name(schema, field))
+            })
+            .unwrap_or(field)
+            .to_string();
+
         if let Some(field_pin) = metadata_input_pin(&meta, "field") {
             self.queue_update_input(
                 &entity,
                 field_pin,
-                flow_like_types::Value::String(field.to_string()),
+                flow_like_types::Value::String(selector),
                 &meta,
             );
         }
@@ -7118,8 +7980,8 @@ impl<'a> StructuralPlanner<'a> {
                 .output_pin
                 .clone()
                 .or_else(|| self.resolve_entity_output_pin(&base.node, None));
-            if let Some(from_pin) = from_pin {
-                if !self.queue_validated_data_connection(
+            if let Some(from_pin) = from_pin
+                && !self.queue_validated_data_connection(
                     &base,
                     from_pin,
                     &entity,
@@ -7128,9 +7990,9 @@ impl<'a> StructuralPlanner<'a> {
                     format!("Read struct field `{field}`"),
                     &format!("struct member access `{field}`"),
                     false,
-                ) {
-                    return None;
-                }
+                )
+            {
+                return None;
             }
         }
 
@@ -7161,8 +8023,8 @@ impl<'a> StructuralPlanner<'a> {
                 .output_pin
                 .clone()
                 .or_else(|| self.resolve_entity_output_pin(&base.node, None));
-            if let Some(from_pin) = from_pin {
-                if !self.queue_validated_data_connection(
+            if let Some(from_pin) = from_pin
+                && !self.queue_validated_data_connection(
                     &base,
                     from_pin,
                     &entity,
@@ -7171,9 +8033,9 @@ impl<'a> StructuralPlanner<'a> {
                     "Read array length".to_string(),
                     "array length access",
                     false,
-                ) {
-                    return None;
-                }
+                )
+            {
+                return None;
             }
         }
 
@@ -8351,6 +9213,73 @@ impl<'a> StructuralPlanner<'a> {
     }
 }
 
+fn declared_event_anchors(ast: &BoardAst) -> HashSet<String> {
+    fn visit_event(event: &EventBlock, anchors: &mut HashSet<String>) {
+        if let Some(anchor) = &event.anchor {
+            anchors.insert(anchor.clone());
+        }
+        visit_block(&event.body, anchors);
+    }
+
+    fn visit_block(block: &Block, anchors: &mut HashSet<String>) {
+        for statement in &block.stmts {
+            match statement {
+                Stmt::Branch { arms, .. } => {
+                    for arm in arms {
+                        visit_block(&arm.body, anchors);
+                    }
+                }
+                Stmt::Loop { body, .. } => visit_block(body, anchors),
+                Stmt::Handler(event) => visit_event(event, anchors),
+                Stmt::Let { .. }
+                | Stmt::Call { .. }
+                | Stmt::Assign { .. }
+                | Stmt::FieldAssign { .. }
+                | Stmt::LocalAlias { .. }
+                | Stmt::Return { .. }
+                | Stmt::Local(_)
+                | Stmt::Comment(_) => {}
+            }
+        }
+    }
+
+    let mut anchors = HashSet::new();
+    for event in &ast.events {
+        visit_event(event, &mut anchors);
+    }
+    for function in &ast.functions {
+        visit_block(&function.body, &mut anchors);
+    }
+    anchors
+}
+
+/// The first still-live execution statement in an authored event body. Pure aliases/comments are
+/// skipped because an Event entry connects to the first node carrying an Execution input.
+fn first_existing_exec_body_node<'a>(board: &'a Board, block: &Block) -> Option<&'a Node> {
+    for statement in &block.stmts {
+        let anchor = match statement {
+            Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
+                anchor.as_deref().or(call.anchor.as_deref())
+            }
+            Stmt::Branch { call, anchor, .. } | Stmt::Loop { call, anchor, .. } => {
+                anchor.as_deref().or(call.anchor.as_deref())
+            }
+            Stmt::Assign { anchor, .. }
+            | Stmt::FieldAssign { anchor, .. }
+            | Stmt::LocalAlias { anchor, .. }
+            | Stmt::Return { anchor, .. } => anchor.as_deref(),
+            // A nested handler is an independent entry point, not part of this event's chain.
+            Stmt::Handler(_) | Stmt::Local(_) | Stmt::Comment(_) => None,
+        };
+        if let Some(node) = anchor.and_then(|anchor| find_board_node(board, anchor))
+            && exec_input_pin(node).is_some()
+        {
+            return Some(node);
+        }
+    }
+    None
+}
+
 fn ast_has_unanchored_calls(ast: &BoardAst) -> bool {
     for ev in &ast.events {
         if ev.anchor.is_none() {
@@ -8917,7 +9846,147 @@ pub fn reconcile_text_with_catalog_enriched(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::board::{Board, ExecutionMode, ExecutionStage, Layer, LayerType};
+    use crate::flow::board::{
+        Board, ExecutionMode, ExecutionStage, Layer, LayerCache, LayerCacheScope, LayerType,
+    };
+
+    fn exec_pin(name: &str, index: u16) -> ExecPinCandidate {
+        ExecPinCandidate {
+            name: name.to_string(),
+            friendly_name: name.to_string(),
+            index,
+        }
+    }
+
+    #[test]
+    fn exec_out_plus_error_continues_from_exec_out_without_a_hand_listed_policy() {
+        // The catalog's dominant multi-output shape. Requiring an arm block for every one of these
+        // made plain sequential persistence uncompilable unless the author hand-wired each call.
+        let candidates = [exec_pin("exec_out", 0), exec_pin("error", 1)];
+        for node_type in ["insert_local_db", "upsert_local_db", "a2ui_update_table"] {
+            assert_eq!(
+                default_exec_output_by_policy(node_type, &candidates),
+                Some("exec_out".to_string()),
+                "{node_type} should continue from its only forward output"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unanchored_function_updates_the_same_named_layer_instead_of_duplicating_it() {
+        let mut board = empty_board();
+        let layer = Layer::new(
+            "layer-render".to_string(),
+            "renderThreads".to_string(),
+            LayerType::Function,
+        );
+        board.layers.insert(layer.id.clone(), layer);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "function renderThreads() {\n    logInfo({ message: \"threads\" })\n}\n",
+            &[catalog_meta(
+                "log_info",
+                "Log Info",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            )],
+        );
+
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::CreateLayer { name, .. } if name == "renderThreads")),
+            "a second layer named renderThreads would make the board's own readback invalid: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn an_undeclared_boundary_schema_adopts_the_connected_contract() {
+        // `function adventureDb(): (database: Struct)` — an untyped boundary pin carries no schema,
+        // so an enforcing consumer has nothing to contradict and the handle may flow through.
+        assert!(schema_constraints_are_compatible(
+            "database",
+            "Struct",
+            "Normal",
+            Some("{\"title\":\"LocalDatabase\"}"),
+            true,
+            "database",
+            "Struct",
+            "Normal",
+            None,
+            false,
+            &HashMap::new(),
+        ));
+    }
+
+    #[test]
+    fn two_declared_schemas_must_still_match() {
+        // findModel returns a `Bit`; embedDocument wants a loaded `CachedEmbeddingModel`. Both
+        // sides declare a contract, so this stays a real error the author has to fix.
+        assert!(!schema_constraints_are_compatible(
+            "model",
+            "Struct",
+            "Normal",
+            Some("{\"title\":\"CachedEmbeddingModel\"}"),
+            true,
+            "model",
+            "Struct",
+            "Normal",
+            Some("{\"title\":\"Bit\"}"),
+            false,
+            &HashMap::new(),
+        ));
+    }
+
+    #[test]
+    fn non_canonical_forward_pins_are_still_never_guessed() {
+        // Custom/package nodes keep the "do not guess" stance: only the catalog's own `exec_out`
+        // convention is recognized, everything else needs an explicit policy or explicit arms.
+        for forward in ["success", "exec_success", "next"] {
+            assert_eq!(
+                default_exec_output_by_policy(
+                    "custom_split",
+                    &[exec_pin(forward, 0), exec_pin("error", 1)]
+                ),
+                None,
+                "{forward} must not be auto-wired"
+            );
+        }
+    }
+
+    #[test]
+    fn two_real_outcomes_still_demand_explicit_arms() {
+        let candidates = [
+            exec_pin("exec_out", 0),
+            exec_pin("empty", 1),
+            exec_pin("error", 2),
+        ];
+        assert_eq!(
+            default_exec_output_by_policy("vector_search_local_db", &candidates),
+            None,
+            "a genuine second outcome must not be auto-wired away"
+        );
+    }
+
+    #[test]
+    fn hand_listed_policies_still_win_over_the_general_rule() {
+        let candidates = [
+            exec_pin("exec_success", 0),
+            exec_pin("exec_error", 1),
+            exec_pin("exec_out", 2),
+        ];
+        assert_eq!(
+            default_exec_output_by_policy("http_fetch", &candidates),
+            Some("exec_success".to_string())
+        );
+    }
+
     use crate::flow::execution::LogLevel;
     use crate::flow::node::Node;
     use crate::flow::pin::{PinOptions, ValueType};
@@ -8941,6 +10010,7 @@ mod tests {
             log_level: LogLevel::Info,
             execution_mode: ExecutionMode::Hybrid,
             refs: HashMap::new(),
+            internal_refs: HashMap::new(),
             layers: HashMap::new(),
             page_ids: Vec::new(),
             hash: None,
@@ -9957,6 +11027,28 @@ const apiKey: string = "ordinary-default"   //@v:var_api
         assert!(result.diagnostics[0].contains("duplicate FlowScript anchor"));
     }
 
+    /// The lowerer renders an entry node with multiple exec outputs as its EventBlock header
+    /// PLUS an immediate arm-routing branch carrying the same anchor. That pair is one entity
+    /// and must not trip the duplicate-anchor preflight; the same anchor reappearing anywhere
+    /// else stays a duplicate.
+    #[test]
+    fn entry_arm_routing_branch_shares_the_event_anchor_without_tripping_preflight() {
+        let arm_routing = "eventsSimple() {   //@n:entrynode\n    if (eventsSimple()) { // exec_out   //@n:entrynode\n        logInfo({ message: \"hi\" })\n    }\n}\n";
+        let ast = flow_like_ast::parse(arm_routing).expect("parse arm-routing form");
+        assert!(
+            duplicate_ast_anchors(&ast).is_empty(),
+            "the entry's own arm-routing branch must not count as a duplicate anchor"
+        );
+
+        let elsewhere = "eventsSimple() {   //@n:entrynode\n    logInfo({ message: \"hi\" })   //@n:entrynode\n}\n";
+        let ast = flow_like_ast::parse(elsewhere).expect("parse misuse form");
+        assert_eq!(
+            duplicate_ast_anchors(&ast),
+            vec!["entrynode".to_string()],
+            "a non-first-branch reuse of the entry anchor stays a duplicate"
+        );
+    }
+
     #[test]
     fn duplicate_variables_fail_closed_before_colliding_create_commands() {
         let ast = flow_like_ast::parse(
@@ -9995,6 +11087,115 @@ function helper() {
         assert!(result.diagnostics.iter().any(|diagnostic| {
             diagnostic.contains("duplicate FlowScript function declaration `helper`")
         }));
+    }
+
+    #[test]
+    fn duplicate_named_events_fail_closed_before_function_refs_become_ambiguous() {
+        let ast = flow_like_ast::parse(
+            r#"const untouched: string = "value"
+
+eventsGeneric deleteAdventure(payload: Struct, adventureId: string) {
+}
+
+eventsWidgetAction deleteAdventure(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+}
+
+eventsSimple menuPageLoad() {
+    a2uiInstantiateWidget({ widgetSelector: "adventure-card", instanceId: "card", fnRefs: [deleteAdventure] })
+}
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile_with_catalog(&empty_board(), &ast, &[]);
+
+        assert!(
+            result.commands.is_empty(),
+            "an ambiguous callable name must reject the whole document before command derivation: {:?}",
+            result.commands
+        );
+        let diagnostic = result
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.contains("callable name `deleteAdventure` is ambiguous"))
+            .expect("duplicate named-event diagnostic");
+        assert!(diagnostic.contains("`eventsGeneric`"), "{diagnostic}");
+        assert!(diagnostic.contains("`eventsWidgetAction`"), "{diagnostic}");
+        assert!(
+            diagnostic.contains("give each callable a unique name"),
+            "{diagnostic}"
+        );
+    }
+
+    #[test]
+    fn duplicate_anchored_event_aliases_remain_valid_for_persisted_round_trips() {
+        let ast = flow_like_ast::parse(
+            r#"eventStart event() {   //@n:event_a
+}
+
+eventTimer event() {   //@n:event_b
+}
+"#,
+        )
+        .expect("parse");
+
+        let diagnostics = duplicate_ast_declaration_diagnostics(&ast);
+        assert!(
+            diagnostics.is_empty(),
+            "persisted entries may share a friendly alias when no new callable must resolve it: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn function_and_named_event_collision_fail_closed_in_the_shared_resolver_namespace() {
+        let ast = flow_like_ast::parse(
+            r#"function deleteAdventure() {
+}
+
+eventsGeneric deleteAdventure(payload: Struct) {
+}
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile_with_catalog(&empty_board(), &ast, &[]);
+
+        assert!(result.commands.is_empty());
+        let diagnostic = result
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.contains("callable name `deleteAdventure` is ambiguous"))
+            .expect("cross-category callable diagnostic");
+        assert!(
+            diagnostic.contains("a function and 1 named event"),
+            "{diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("share the apply resolver namespace"),
+            "{diagnostic}"
+        );
+    }
+
+    #[test]
+    fn unique_function_and_named_event_callables_pass_declaration_preflight() {
+        let ast = flow_like_ast::parse(
+            r#"function eraseAdventure() {
+}
+
+eventsGeneric deleteAdventure(payload: Struct) {
+}
+
+eventsWidgetAction deleteAdventureCard(widgetInstanceId: string) {
+}
+"#,
+        )
+        .expect("parse");
+
+        let diagnostics = duplicate_ast_declaration_diagnostics(&ast);
+        assert!(
+            diagnostics.is_empty(),
+            "unique callable names must remain valid: {diagnostics:?}"
+        );
     }
 
     #[test]
@@ -10496,6 +11697,236 @@ simpleEvent() {   //@n:event
         ]
     }
 
+    /// Deliberately OPEN, copied from the generated pin schema: the rejection must not depend on the
+    /// schema closing itself, because `schemars` never does for FlowPath.
+    const FLOW_PATH_PIN_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"FlowPath","type":"object","properties":{"path":{"type":"string"},"store_ref":{"type":"string"},"cache_store_ref":{"type":["string","null"]}},"required":["path","store_ref"]}"#;
+
+    fn flow_path_catalog() -> Vec<NodeMetadata> {
+        // Named `file`, not `path`: the real node's output pin IS `path`, which shadows the
+        // same-named struct member and would resolve to the pin before member access is reached.
+        let mut file = pin_meta("file", "Struct", PinType::Output);
+        file.enforce_schema = true;
+        file.schema = Some(FLOW_PATH_PIN_SCHEMA.to_string());
+        let mut open_struct = pin_meta("record", "Struct", PinType::Output);
+        open_struct.schema = Some(
+            r#"{"title":"Mail","type":"object","properties":{"subject":{"type":"string"}}}"#
+                .to_string(),
+        );
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "path_from_upload_dir",
+                "Upload Dir",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![pin_meta("exec_out", "Execution", PinType::Output), file],
+            ),
+            catalog_meta(
+                "open_record",
+                "Open Record",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    open_struct,
+                ],
+            ),
+            catalog_meta(
+                "struct_get",
+                "Get Field",
+                vec![
+                    pin_meta("struct", "Struct", PinType::Input),
+                    pin_meta("field", "String", PinType::Input),
+                ],
+                vec![pin_meta("value", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_get",
+                "Variable Get",
+                vec![pin_meta("var_ref", "String", PinType::Input)],
+                vec![pin_meta("value_ref", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "Generic", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ]
+    }
+
+    fn struct_get_added(result: &ReconcileResult) -> bool {
+        result.commands.iter().any(|command| {
+            matches!(command, BoardCommand::AddNode { node_type, .. } if node_type == "struct_get")
+        })
+    }
+
+    fn struct_get_field_literal(result: &ReconcileResult) -> Option<String> {
+        result.commands.iter().find_map(|command| match command {
+            BoardCommand::UpdateNodePin { pin_id, value, .. } if pin_id == "field" => {
+                value.as_str().map(str::to_string)
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn flow_path_member_access_is_rejected_with_accessor_hint() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const file = pathFromUploadDir({})
+    log({ text: file.filename })
+}
+"#,
+            &flow_path_catalog(),
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("`FlowPath`")
+                    && diagnostic.contains("has no field `filename`")
+                    && diagnostic.contains("filename({ path })")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(!struct_get_added(&result));
+    }
+
+    #[test]
+    fn flow_path_declared_fields_still_resolve() {
+        for member in ["path", "storeRef", "cacheStoreRef"] {
+            let result = reconcile_text_with_catalog(
+                &empty_board(),
+                &format!(
+                    r#"eventsSimple() {{
+    const file = pathFromUploadDir({{}})
+    log({{ text: file.{member} }})
+}}
+"#
+                ),
+                &flow_path_catalog(),
+            );
+            assert!(
+                result.diagnostics.is_empty(),
+                "{member}: {:?}",
+                result.diagnostics
+            );
+            assert!(struct_get_added(&result), "{member}");
+        }
+    }
+
+    #[test]
+    fn flow_path_camel_member_lowers_to_the_declared_field_name() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const file = pathFromUploadDir({})
+    log({ text: file.storeRef })
+}
+"#,
+            &flow_path_catalog(),
+        );
+
+        // The runtime selects the JSON key verbatim, so `storeRef` has to be written as `store_ref`.
+        assert_eq!(
+            struct_get_field_literal(&result).as_deref(),
+            Some("store_ref"),
+            "{:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn explicit_struct_get_on_a_flow_path_field_is_rejected() {
+        let rejected = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const file = pathFromUploadDir({})
+    log({ text: structGet({ struct: file, field: "extension" }) })
+}
+"#,
+            &flow_path_catalog(),
+        );
+        assert!(
+            rejected.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("`FlowPath`")
+                    && diagnostic.contains("extension")
+                    && diagnostic.contains("extension({ path })")
+            }),
+            "{:?}",
+            rejected.diagnostics
+        );
+
+        let allowed = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const file = pathFromUploadDir({})
+    log({ text: structGet({ struct: file, field: "path" }) })
+}
+"#,
+            &flow_path_catalog(),
+        );
+        assert!(allowed.diagnostics.is_empty(), "{:?}", allowed.diagnostics);
+    }
+
+    /// KNOWN GAP: a FlowPath read from a board variable escapes the rejection. A FlowScript
+    /// `const file: Struct` declaration supplies its own title-less `{"type":"object"}` schema
+    /// (`packages/ast/src/schema.rs:386`), and that authored contract wins over the board
+    /// variable's real schema in `variable_value_contract`, so there is no `FlowPath` title left to
+    /// match. Fixing it means propagating pin schemas onto variable contracts — a separate change.
+    /// Node-output sources, which is how file values normally flow, are covered.
+    #[test]
+    #[ignore = "variable contracts drop the FlowPath schema; needs schema propagation first"]
+    fn flow_path_variable_member_access_is_rejected() {
+        let mut board = empty_board();
+        let mut variable = Variable::new("file", VariableType::Struct, ValueType::Normal);
+        variable.id = "var_file".to_string();
+        variable.schema = Some(FLOW_PATH_PIN_SCHEMA.to_string());
+        board.variables.insert(variable.id.clone(), variable);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"const file: Struct = {}   //@v:var_file
+
+eventsSimple() {
+    log({ text: file.filename })
+}
+"#,
+            &flow_path_catalog(),
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("`FlowPath`") && diagnostic.contains("filename")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn open_schema_structs_other_than_flow_path_still_accept_members() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const record = openRecord({})
+    log({ text: record.body })
+}
+"#,
+            &flow_path_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(struct_get_added(&result));
+    }
+
     fn schema_member_catalog() -> Vec<NodeMetadata> {
         let mut email = pin_meta("email", "Struct", PinType::Output);
         email.enforce_schema = true;
@@ -10570,6 +12001,41 @@ simpleEvent() {   //@n:event
         assert!(
             result.commands.is_empty(),
             "no-op member-chain round-trip must be empty; got {:?} from text:\n{text}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn unchanged_bracketed_struct_member_roundtrip_reuses_accessor() {
+        // Non-identifier struct keys render with bracketed string syntax. Parsing that canonical
+        // text must preserve `Member`, otherwise reconcile mistakes the struct for an array and
+        // replaces this accessor with `array_get`.
+        let mut board = board_with_struct_member_chain();
+        let field_pin = board
+            .nodes
+            .get_mut("getter")
+            .and_then(|node| {
+                node.pins
+                    .values_mut()
+                    .find(|pin| pin.pin_type == PinType::Input && pin.name == "field")
+            })
+            .expect("struct_get field pin");
+        field_pin.default_value = Some(b"\"row-rejection-reason\"".to_vec());
+
+        let text = anchored_text(&board);
+        assert!(
+            text.contains("[\"row-rejection-reason\"]"),
+            "canonical FlowScript should use bracketed member syntax:\n{text}"
+        );
+        let result = reconcile_text_with_catalog(&board, &text, &member_chain_catalog());
+        assert!(
+            result.diagnostics.is_empty(),
+            "bracketed member round-trip must stay valid: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.commands.is_empty(),
+            "bracketed member round-trip must be a no-op; got {:?} from text:\n{text}",
             result.commands
         );
     }
@@ -11789,6 +13255,161 @@ simpleEvent() {   //@n:event
         }));
     }
 
+    /// A root event can register a sibling root entry as an agent tool. The graph-level handler
+    /// still belongs to the registering event's lexical FlowScript scope: its body may read that
+    /// event's payload outputs (for example the current chat attachments). Lowering must nest the
+    /// handler under the owner event so those exact cross-entry pin edges remain resolvable when
+    /// the anchored text is reconciled against the same board.
+    #[test]
+    fn root_agent_tool_handler_capture_roundtrips_as_noop() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("simple_agent", "Simple Agent", "", "events");
+        event.id = "simple-agent".to_string();
+        event.set_start(true);
+        let event_exec = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let attachments = event
+            .add_output_pin("attachments", "Attachments", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut register = Node::new(
+            "agent_register_function_tools",
+            "Register Function Tools",
+            "",
+            "agent",
+        );
+        register.id = "register-tools".to_string();
+        register.set_can_reference_fns(true);
+        register
+            .fn_refs
+            .as_mut()
+            .expect("function references enabled")
+            .fn_refs
+            .push("attachment-handler".to_string());
+        let registered_agent = register
+            .add_output_pin("agent", "Agent", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(register.id.clone(), register);
+
+        let mut invoke = Node::new("agent_invoke", "Invoke Agent", "", "agent");
+        invoke.id = "invoke-agent".to_string();
+        let invoke_exec = invoke
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let invoke_agent = invoke
+            .add_input_pin("agent", "Agent", "", VariableType::Struct)
+            .id
+            .clone();
+        invoke.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(invoke.id.clone(), invoke);
+
+        let mut handler = Node::new("events_generic", "Extract Current Attachment", "", "events");
+        handler.id = "attachment-handler".to_string();
+        handler.set_start(true);
+        handler.set_can_be_referenced_by_fns(true);
+        let handler_exec = handler
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        handler.add_output_pin("payload", "Payload", "", VariableType::Struct);
+        handler.add_output_pin("filename", "Filename", "", VariableType::String);
+        board.nodes.insert(handler.id.clone(), handler);
+
+        let mut extract = Node::new(
+            "extract_attachment_pages",
+            "Extract Attachment Pages",
+            "",
+            "files",
+        );
+        extract.id = "extract-pages".to_string();
+        let extract_exec = extract
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let current_attachments = extract
+            .add_input_pin(
+                "current_attachments",
+                "Current Attachments",
+                "",
+                VariableType::Struct,
+            )
+            .id
+            .clone();
+        extract.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        extract.add_output_pin("result", "Result", "", VariableType::String);
+        board.nodes.insert(extract.id.clone(), extract);
+
+        connect(
+            &mut board,
+            "simple-agent",
+            &event_exec,
+            "invoke-agent",
+            &invoke_exec,
+        );
+        connect(
+            &mut board,
+            "register-tools",
+            &registered_agent,
+            "invoke-agent",
+            &invoke_agent,
+        );
+        connect(
+            &mut board,
+            "attachment-handler",
+            &handler_exec,
+            "extract-pages",
+            &extract_exec,
+        );
+        connect(
+            &mut board,
+            "simple-agent",
+            &attachments,
+            "extract-pages",
+            &current_attachments,
+        );
+
+        let ast = super::super::lower_to_ast(&board);
+        assert_eq!(
+            ast.events.len(),
+            1,
+            "the referenced tool entry must not be rendered as a sibling root event"
+        );
+        assert!(
+            ast.events[0].body.stmts.iter().any(|statement| matches!(
+                statement,
+                Stmt::Handler(handler)
+                    if handler.anchor.as_deref() == Some("attachment-handler")
+            )),
+            "the referenced tool entry must be nested in its unique registering event"
+        );
+
+        let text = anchored_text(&board);
+        let catalog = board
+            .nodes
+            .values()
+            .map(node_to_metadata)
+            .collect::<Vec<_>>();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "the owner event's attachments parameter must remain visible to its tool handler:\n{text}\n{:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.commands.is_empty(),
+            "an unchanged anchored owner/handler graph must be a no-op:\n{text}\n{:?}",
+            result.commands
+        );
+    }
+
     #[test]
     fn catalog_aware_reconcile_skips_synthetic_tools_arg_without_diagnostic() {
         // `agentRegisterFunctionTools` has no `tools` input pin — its function references are a
@@ -11852,6 +13473,71 @@ simpleEvent() {   //@n:event
             )),
             "expected SetNodeFunctionRefs with [fetchPage]: {:?}",
             result.commands
+        );
+    }
+
+    /// A top-level `function` used as an agent tool materializes as `CreateLayer` + boundary pins
+    /// and nothing else, while apply requires each `SetNodeFunctionRefs` target to resolve to a
+    /// node carrying `fn_refs.can_be_referenced_by_fns`. Without a reconcile-side check, `check`
+    /// says `valid`, `commit` says `queued` with zero diagnostics, and the apply dies with
+    /// "Function layer `X` has no referenceable event/handler entry", rolling the whole document
+    /// back — a failure the model can neither see nor attribute.
+    ///
+    /// Minting an `events_generic` entry to make it apply is NOT the remedy: that entry exposes
+    /// only `payload`, so the tool advertises a `{payload}` schema the model's named arguments
+    /// never bind to, and `execute_tool_call` reads the `set_result` that only
+    /// `events_generic_return_result` writes — a function's `return` wires to layer boundary pins,
+    /// which the tool path never reads. It would apply clean and return the literal
+    /// "Tool executed successfully".
+    #[test]
+    fn function_used_as_agent_tool_is_diagnosed_by_name() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "log_info",
+                "Log Info",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "agent_register_function_tools",
+                "Register Function Tools",
+                vec![pin_meta("agent_in", "Struct", PinType::Input)],
+                vec![pin_meta("agent_out", "Struct", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function summarizeTicket(subject: string): (headline: string) {
+    logInfo({ message: subject })
+    return "summarized"
+}
+
+eventsSimple() {
+    const agent = agentRegisterFunctionTools({ agentIn: "{}", tools: [summarizeTicket] })
+    logInfo({ message: agent.agentOut })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("summarizeTicket") && d.contains("no event/handler entry")),
+            "a `function` used as an agent tool must be diagnosed BY NAME at check time: {:#?}",
+            result.diagnostics
         );
     }
 
@@ -12290,6 +13976,200 @@ simpleEvent() {   //@n:event
 
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         assert!(result.commands.is_empty(), "{:?}", result.commands);
+    }
+
+    #[test]
+    fn function_cache_decorator_updates_and_removes_existing_layer_cache() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "cached-function".to_string(),
+            "Cached Lookup".to_string(),
+            LayerType::Function,
+        );
+        layer.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "old".to_string(),
+            ttl_seconds: Some(60),
+            scope: LayerCacheScope::App,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+
+        let updated = flow_like_ast::parse(
+            "@cache({ namespace: \"pricing\", ttlSeconds: 3600, scope: \"user\" })\nfunction cachedLookup() {   //@l:cached-function\n}\n",
+        )
+        .expect("parse cached function");
+        let result = reconcile(&board, &updated);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateLayerCache {
+                layer_id,
+                cache: Some(LayerCache {
+                    enabled: true,
+                    prefix,
+                    ttl_seconds: Some(3600),
+                    scope: LayerCacheScope::User,
+                }),
+                ..
+            } if layer_id == "cached-function" && prefix == "pricing"
+        )));
+
+        let uncached =
+            flow_like_ast::parse("function cachedLookup() {   //@l:cached-function\n}\n")
+                .expect("parse uncached function");
+        let result = reconcile(&board, &uncached);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateLayerCache {
+                layer_id,
+                cache: None,
+                ..
+            } if layer_id == "cached-function"
+        )));
+    }
+
+    #[test]
+    fn permanent_cached_function_board_roundtrips_without_commands() {
+        for (index, persisted_ttl) in [None, Some(0)].into_iter().enumerate() {
+            let mut board = empty_board();
+            let mut layer = Layer::new(
+                format!("cached-function-{index}"),
+                "Cached Lookup".to_string(),
+                LayerType::Function,
+            );
+            layer.cache = Some(LayerCache {
+                enabled: true,
+                prefix: "pricing".to_string(),
+                ttl_seconds: persisted_ttl,
+                scope: LayerCacheScope::User,
+            });
+            board.layers.insert(layer.id.clone(), layer);
+
+            let ast = crate::flow::ast::lower_to_ast(&board);
+            let source = flow_like_ast::render(
+                &ast,
+                &flow_like_ast::RenderOptions {
+                    anchors: true,
+                    ..Default::default()
+                },
+            );
+            assert!(
+                source
+                    .contains("@cache({ namespace: \"pricing\", ttlSeconds: 0, scope: \"user\" })")
+            );
+            let parsed =
+                flow_like_ast::parse(&source).expect("canonical cached function should parse");
+            let result = reconcile(&board, &parsed);
+            assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+            assert!(
+                result.commands.is_empty(),
+                "permanent cache form {persisted_ttl:?} must round-trip as a no-op: {:?}",
+                result.commands
+            );
+        }
+    }
+
+    #[test]
+    fn default_cached_function_roundtrips_as_bare_decorator_without_commands() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "cached-function".to_string(),
+            "Cached Lookup".to_string(),
+            LayerType::Function,
+        );
+        layer.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "global".to_string(),
+            ttl_seconds: Some(300),
+            scope: LayerCacheScope::App,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+
+        let ast = crate::flow::ast::lower_to_ast(&board);
+        let source = flow_like_ast::render(
+            &ast,
+            &flow_like_ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+        assert!(source.starts_with("@cache\nfunction cachedLookup"));
+
+        let parsed = flow_like_ast::parse(&source).expect("default cache should parse");
+        let result = reconcile(&board, &parsed);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.is_empty(),
+            "semantic cache defaults must round-trip as a no-op: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn bare_cache_creates_a_function_layer_with_semantic_defaults() {
+        let catalog = vec![catalog_meta(
+            "log_info",
+            "Log Info",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("message", "String", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        )];
+        let ast = flow_like_ast::parse(
+            "@cache\nfunction cachedLookup() {\n    logInfo({ message: \"lookup\" })\n}\n",
+        )
+        .expect("bare cache should parse");
+        let result = reconcile_with_catalog(&empty_board(), &ast, &catalog);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::CreateLayer {
+                layer_type: Some(layer_type),
+                cache: Some(LayerCache {
+                    enabled: true,
+                    prefix,
+                    ttl_seconds: Some(300),
+                    scope: LayerCacheScope::App,
+                }),
+                ..
+            } if layer_type == "Function" && prefix == "global"
+        )));
+    }
+
+    #[test]
+    fn new_cached_function_carries_cache_on_create_layer() {
+        let catalog = vec![catalog_meta(
+            "log_info",
+            "Log Info",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("message", "String", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        )];
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "@cache({ namespace: \"pricing\", ttlSeconds: 15, scope: \"user\" })\nfunction cachedLookup() {\n    logInfo({ message: \"lookup\" })\n}\n",
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::CreateLayer {
+                layer_type: Some(layer_type),
+                cache: Some(LayerCache {
+                    enabled: true,
+                    prefix,
+                    ttl_seconds: Some(15),
+                    scope: LayerCacheScope::User,
+                }),
+                ..
+            } if layer_type == "Function" && prefix == "pricing"
+        )));
     }
 
     #[test]
@@ -13841,6 +15721,406 @@ function second(): (result: int) {
             "multi-value event return must be diagnosed: {:?}",
             result.diagnostics
         );
+    }
+
+    fn stale_event_entry(
+        id: &str,
+        friendly_name: &str,
+        layer: Option<&str>,
+        query_type: Option<VariableType>,
+    ) -> Node {
+        let mut event = Node::new("events_generic", friendly_name, "", "events");
+        event.id = id.to_string();
+        event.layer = layer.map(str::to_string);
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        if let Some(query_type) = query_type {
+            event.add_output_pin("query", "Query", "", query_type);
+        }
+        event
+    }
+
+    fn stale_event_catalog() -> Vec<NodeMetadata> {
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "events_generic",
+                "Generic Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "notify",
+                "Notify",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ]
+    }
+
+    #[test]
+    fn stale_alias_event_anchor_rebinds_unique_compatible_live_entry() {
+        let mut board = empty_board();
+        board.nodes.insert(
+            "live-event".to_string(),
+            stale_event_entry(
+                "live-event",
+                "Wiki Explorer Load",
+                None,
+                Some(VariableType::String),
+            ),
+        );
+        // Same identity and scope, but a different payload contract. It must not make the
+        // compatible String event ambiguous or receive either newly planned edge.
+        board.nodes.insert(
+            "incompatible-event".to_string(),
+            stale_event_entry(
+                "incompatible-event",
+                "Wiki Explorer Load",
+                None,
+                Some(VariableType::Integer),
+            ),
+        );
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"wikiExplorerLoad(query: string) {   //@n:gone-event
+    notify({ message: query })
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("gone-event") && correction.contains("live-event")
+        }));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. }
+                if matches!(node_type.as_str(), "events_simple" | "events_generic")
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, ref_id: Some(ref_id), .. }
+                if node_type == "notify" && ref_id == "$0"
+        )));
+        for (from_pin, to_pin) in [("exec_out", "exec_in"), ("query", "message")] {
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::ConnectPins {
+                        from_node,
+                        from_pin: actual_from_pin,
+                        to_node,
+                        to_pin: actual_to_pin,
+                        ..
+                    } if from_node == "live-event"
+                        && actual_from_pin == from_pin
+                        && to_node == "$0"
+                        && actual_to_pin == to_pin
+                )),
+                "missing recovered event edge {from_pin} -> {to_pin}: {:?}",
+                result.commands
+            );
+        }
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, .. } if from_node == "incompatible-event"
+        )));
+    }
+
+    #[test]
+    fn stale_typed_event_anchor_recreates_exact_catalog_entry_when_no_live_match() {
+        let ast = BoardAst {
+            events: vec![EventBlock {
+                name: "wikiExplorerLoad".to_string(),
+                node_type: "events_generic".to_string(),
+                event_name: None,
+                params: Vec::new(),
+                body: Block {
+                    stmts: vec![Stmt::Call {
+                        call: Call {
+                            node_type: "notify".to_string(),
+                            display: "notify".to_string(),
+                            args: Vec::new(),
+                            anchor: None,
+                        },
+                        anchor: None,
+                    }],
+                },
+                anchor: Some("gone-event".to_string()),
+            }],
+            ..BoardAst::default()
+        };
+
+        let result = reconcile_with_catalog(&empty_board(), &ast, &stale_event_catalog());
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result
+                .corrections
+                .iter()
+                .any(|correction| correction.contains("Recreated event")
+                    && correction.contains("gone-event"))
+        );
+        let notify_index = result
+            .commands
+            .iter()
+            .position(|command| {
+                matches!(
+                    command,
+                    BoardCommand::AddNode { node_type, ref_id: Some(ref_id), .. }
+                        if node_type == "notify" && ref_id == "$1"
+                )
+            })
+            .expect("notify body node");
+        let event_index = result
+            .commands
+            .iter()
+            .position(|command| {
+                matches!(
+                    command,
+                    BoardCommand::AddNode {
+                        node_type,
+                        ref_id: Some(ref_id),
+                        friendly_name: Some(friendly_name),
+                        target_layer: None,
+                        ..
+                    } if node_type == "events_generic"
+                        && ref_id == "$0"
+                        && friendly_name == "wikiExplorerLoad"
+                )
+            })
+            .expect("recreated exact event entry");
+        assert!(
+            event_index > notify_index,
+            "event registration stays last: {:?}",
+            result.commands
+        );
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == "$0"
+                    && from_pin == "exec_out"
+                    && to_node == "$1"
+                    && to_pin == "exec_in"
+        )));
+        assert!(!result.commands.iter().any(|command| match command {
+            BoardCommand::ConnectPins {
+                from_node, to_node, ..
+            } => {
+                from_node == "gone-event" || to_node == "gone-event"
+            }
+            BoardCommand::UpdateNodePin { node_id, .. }
+            | BoardCommand::RemoveNode { node_id, .. }
+            | BoardCommand::RenameNode { node_id, .. } => node_id == "gone-event",
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn stale_event_with_unavailable_explicit_type_does_not_rebind_by_alias() {
+        let mut board = empty_board();
+        board.nodes.insert(
+            "live-event".to_string(),
+            stale_event_entry("live-event", "Wiki Explorer Load", None, None),
+        );
+        let ast = BoardAst {
+            events: vec![EventBlock {
+                name: "wikiExplorerLoad".to_string(),
+                node_type: "events_unavailable".to_string(),
+                event_name: None,
+                params: Vec::new(),
+                body: Block {
+                    stmts: vec![Stmt::Call {
+                        call: Call {
+                            node_type: "notify".to_string(),
+                            display: "notify".to_string(),
+                            args: Vec::new(),
+                            anchor: None,
+                        },
+                        anchor: None,
+                    }],
+                },
+                anchor: Some("gone-event".to_string()),
+            }],
+            ..BoardAst::default()
+        };
+
+        let result = reconcile_with_catalog(&board, &ast, &stale_event_catalog());
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("gone-event")
+                && diagnostic.contains("exact node_type `events_unavailable`")
+                && diagnostic.contains("not available in the catalog")
+        }));
+        assert!(result.corrections.is_empty());
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, .. } if from_node == "live-event"
+        )));
+    }
+
+    #[test]
+    fn stale_canonical_event_header_recreates_exact_catalog_entry() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsGeneric wikiExplorerLoad() {   //@n:gone-event
+    notify({})
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode {
+                node_type,
+                friendly_name: Some(friendly_name),
+                ..
+            } if node_type == "events_generic" && friendly_name == "wikiExplorerLoad"
+        )));
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("Recreated event") && correction.contains("gone-event")
+        }));
+    }
+
+    #[test]
+    fn stale_event_anchor_does_not_guess_between_compatible_live_entries() {
+        let mut board = empty_board();
+        for id in ["event-a", "event-b"] {
+            board.nodes.insert(
+                id.to_string(),
+                stale_event_entry(id, "Wiki Explorer Load", None, None),
+            );
+        }
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"wikiExplorerLoad() {   //@n:gone-event
+    notify({})
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("gone-event")
+                    && diagnostic.contains("ambiguous")
+                    && diagnostic.contains("event-a")
+                    && diagnostic.contains("event-b")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. }
+                if matches!(node_type.as_str(), "events_simple" | "events_generic")
+        )));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, .. }
+                if matches!(from_node.as_str(), "event-a" | "event-b")
+        )));
+    }
+
+    #[test]
+    fn stale_alias_event_anchor_without_live_match_remains_blocking() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"wikiExplorerLoad() {   //@n:gone-event
+    notify({})
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("gone-event")
+                    && diagnostic.contains("alias-only")
+                    && diagnostic.contains("exact event type")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. }
+                if matches!(node_type.as_str(), "events_simple" | "events_generic")
+        )));
+    }
+
+    #[test]
+    fn nested_stale_event_rebinds_only_within_function_layer() {
+        let mut board = empty_board();
+        let layer = Layer::new(
+            "helper-layer".to_string(),
+            "Helper".to_string(),
+            LayerType::Function,
+        );
+        board.layers.insert(layer.id.clone(), layer);
+        board.nodes.insert(
+            "root-event".to_string(),
+            stale_event_entry("root-event", "Wiki Explorer Load", None, None),
+        );
+        board.nodes.insert(
+            "nested-event".to_string(),
+            stale_event_entry(
+                "nested-event",
+                "Wiki Explorer Load",
+                Some("helper-layer"),
+                None,
+            ),
+        );
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function helper() {   //@l:helper-layer
+    wikiExplorerLoad() {   //@n:gone-event
+        notify({})
+    }
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode {
+                node_type,
+                ref_id: Some(ref_id),
+                target_layer: Some(target_layer),
+                ..
+            } if node_type == "notify"
+                && ref_id == "$0"
+                && target_layer == "helper-layer"
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == "nested-event"
+                    && from_pin == "exec_out"
+                    && to_node == "$0"
+                    && to_pin == "exec_in"
+        )));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, .. } if from_node == "root-event"
+        )));
     }
 
     #[test]
@@ -16462,6 +18742,19 @@ eventsSimple() {
         )]
     }
 
+    #[test]
+    fn repeated_string_format_placeholders_are_unique_and_ordered() {
+        let query = "SELECT id, parent_id, title, path, updated_at FROM wiki_pages \
+            WHERE lower(title) LIKE lower('%{query}%') \
+            OR lower(path) LIKE lower('%{query}%') \
+            ORDER BY path LIMIT 50 OFFSET {offset};";
+
+        assert_eq!(
+            format_string_placeholders(query),
+            vec!["query".to_string(), "offset".to_string()]
+        );
+    }
+
     fn render_template_dynamic_catalog() -> Vec<NodeMetadata> {
         vec![catalog_meta(
             "string_render_template",
@@ -16786,6 +19079,16 @@ eventsSimple() {
                 vec![pin_meta("exec_out", "Execution", PinType::Output)],
             ),
         ]);
+        catalog
+    }
+
+    fn required_struct_set_value_catalog() -> Vec<NodeMetadata> {
+        let mut catalog = struct_accumulator_catalog();
+        catalog
+            .iter_mut()
+            .find(|meta| meta.name == "struct_set")
+            .expect("struct_set catalog entry")
+            .required_inputs = vec!["value".to_string()];
         catalog
     }
 
@@ -17518,6 +19821,118 @@ eventsSimple() {
             .collect()
     }
 
+    fn reroute_catalog() -> Vec<NodeMetadata> {
+        let mut catalog = string_format_dynamic_catalog();
+        catalog.push(catalog_meta(
+            "reroute",
+            "Reroute",
+            vec![pin_meta("route_in", "Generic", PinType::Input)],
+            vec![pin_meta("route_out", "Generic", PinType::Output)],
+        ));
+        catalog
+    }
+
+    /// `seed_function_params` binds every parameter to `ValueSource { node: <the function layer> }`,
+    /// so `return <bare param>` used to queue `ConnectPins { from_node: "$0", to_node: "$0" }` with
+    /// ZERO diagnostics: `check` reported `valid`, `commit` reported `queued`, and the apply then
+    /// hard-errored in `connect_pins` ("Cannot connect a node to itself") and rolled the entire
+    /// batch back. The value must instead route through a `reroute` INSIDE the layer, which
+    /// `lower::resolve_source` collapses back to the bare parameter reference.
+    #[test]
+    fn function_return_of_bare_parameter_never_queues_a_layer_self_edge() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function greet(name: string): (message: string, echoed: string) {
+    const formatted = stringFormat({ formatString: "Hello {name}", name: name })
+    return formatted.value, name
+}
+"#,
+            &reroute_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            self_connections(&result.commands).is_empty(),
+            "returning a bare function parameter must not queue a layer -> layer self-edge; \
+             `connect_pins` rejects it and rolls the whole apply batch back: {:?}",
+            self_connections(&result.commands)
+        );
+
+        // The `echoed` return pin must still be fed, from a real node inside the layer.
+        let feed = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::ConnectPins {
+                    from_node,
+                    to_node,
+                    to_pin,
+                    ..
+                } if to_node == "$0" && to_pin == "echoed" => Some(from_node.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "the `echoed` return pin must be wired: {:#?}",
+                    result.commands
+                )
+            });
+        assert_ne!(
+            feed, "$0",
+            "the pass-through must be a real node, not the layer"
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::AddNode { node_type, ref_id: Some(ref_id), target_layer, .. }
+                    if node_type == "reroute"
+                        && ref_id == &feed
+                        && target_layer.as_deref() == Some("$0")
+            )),
+            "the pass-through must be a `reroute` INSIDE the function layer — \
+             `control_call_function::find_node_id_by_pin` only searches the layer's own nodes: {:#?}",
+            result.commands
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, .. }
+                    if from_node == "$0" && from_pin == "name" && to_node == &feed
+            )),
+            "the pass-through must read the `name` boundary parameter: {:#?}",
+            result.commands
+        );
+    }
+
+    /// The spliced `reroute`'s pins are Generic, so both spliced edges validate against any
+    /// contract. The return-type check must therefore happen on the parameter -> return-pin pair
+    /// explicitly, or `function f(a: string): (b: int) { return a }` would apply clean and fail at
+    /// run time inside `from_value::<T>` at an arbitrary downstream consumer.
+    #[test]
+    fn function_return_of_mismatched_parameter_is_still_diagnosed() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function greet(name: string): (message: string, count: int) {
+    const formatted = stringFormat({ formatString: "Hello {name}", name: name })
+    return formatted.value, name
+}
+"#,
+            &reroute_catalog(),
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("incompatible pin types") && d.contains("`name`")),
+            "a parameter returned into an incompatible return pin must be diagnosed: {:?}",
+            result.diagnostics
+        );
+        assert!(self_connections(&result.commands).is_empty());
+    }
+
     #[test]
     fn catalog_aware_reconcile_const_bound_struct_set_avoids_self_connection() {
         let board = empty_board();
@@ -17745,6 +20160,82 @@ eventsSimple() {
         }
 
         board
+    }
+
+    fn board_with_null_struct_accumulator() -> Board {
+        let mut board = board_with_struct_accumulator(false);
+        board
+            .nodes
+            .get_mut("acc")
+            .expect("accumulator node")
+            .pins
+            .values_mut()
+            .find(|pin| pin.pin_type == PinType::Input && pin.name == "value")
+            .expect("accumulator value pin")
+            .default_value = Some(b"null".to_vec());
+        board
+    }
+
+    #[test]
+    fn lower_preserves_explicit_null_struct_set_value() {
+        let board = board_with_null_struct_accumulator();
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+
+        assert!(
+            text.contains("row.title = null"),
+            "an explicit struct_set.value=null must survive lowering:\n{text}"
+        );
+        assert!(
+            !text.contains("field: \"title\" }).structOut"),
+            "lowering must not emit a structSet call with its required value omitted:\n{text}"
+        );
+    }
+
+    #[test]
+    fn explicit_null_struct_set_value_roundtrips_and_satisfies_required_input() {
+        let board = board_with_null_struct_accumulator();
+        let catalog = required_struct_set_value_catalog();
+        let anchored = super::super::board_to_flowscript(
+            &board,
+            &flow_like_ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+
+        let roundtrip = reconcile_text_with_catalog(&board, &anchored, &catalog);
+        assert!(
+            roundtrip.diagnostics.is_empty(),
+            "unchanged null-valued struct_set must remain valid: {:?}\n{anchored}",
+            roundtrip.diagnostics
+        );
+        assert!(
+            roundtrip.commands.is_empty(),
+            "unchanged null-valued struct_set must be a no-op: {:?}",
+            roundtrip.commands
+        );
+
+        let unanchored =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+        let recreated = reconcile_text_with_catalog(&empty_board(), &unanchored, &catalog);
+        assert!(
+            recreated.diagnostics.is_empty(),
+            "rendered null-valued struct_set must reconcile from scratch: {:?}\n{unanchored}",
+            recreated.diagnostics
+        );
+        assert!(
+            recreated.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if command_node_type(&recreated.commands, node_id).as_deref()
+                        == Some("struct_set")
+                        && pin_id == "value"
+                        && value == &flow_like_types::Value::Null
+            )),
+            "reconcile must restore the explicit null value: {:?}",
+            recreated.commands
+        );
     }
 
     #[test]
@@ -18439,6 +20930,113 @@ eventsSimple() {
                 result.commands
             );
         }
+    }
+
+    #[test]
+    fn bound_multi_exec_arm_tails_feed_the_following_statement() {
+        // A lowered arm block refers back to the preceding bound call with a placeholder:
+        //
+        //   const split = customSplit()
+        //   split { ... }
+        //
+        // The arm statement must replace the stale `split` cursor with its arm tails without
+        // reconnecting `split` to itself. Otherwise the following statement steals the default
+        // `exec_success` edge and leaves the success body disconnected.
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "custom_split",
+                "Custom Split",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![
+                    pin_meta("exec_error", "Execution", PinType::Output),
+                    pin_meta("exec_success", "Execution", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "log_info",
+                "Log Info",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    const split = customSplit()
+    split {
+        exec_success: {
+            logInfo({ message: "success" })
+        }
+        exec_error: {
+            logInfo({ message: "error" })
+        }
+    }
+    logInfo({ message: "after" })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        for (from_node, from_pin, to_node) in [
+            ("$1", "exec_success", "$2"),
+            ("$1", "exec_error", "$3"),
+            ("$2", "exec_out", "$4"),
+            ("$3", "exec_out", "$4"),
+        ] {
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::ConnectPins {
+                        from_node: actual_from_node,
+                        from_pin: actual_from_pin,
+                        to_node: actual_to_node,
+                        to_pin,
+                        ..
+                    } if actual_from_node == from_node
+                        && actual_from_pin == from_pin
+                        && actual_to_node == to_node
+                        && to_pin == "exec_in"
+                )),
+                "missing exec edge {from_node}.{from_pin} -> {to_node}.exec_in: {:?}",
+                result.commands
+            );
+        }
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins {
+                    from_node,
+                    to_node,
+                    ..
+                } if from_node == "$1" && to_node == "$4"
+            )),
+            "the following statement must fan in from the arm tails, not bypass them: {:?}",
+            result.commands
+        );
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins {
+                    from_node,
+                    to_node,
+                    ..
+                } if from_node == "$1" && to_node == "$1"
+            )),
+            "the bound arm block must not reconnect the split node to itself: {:?}",
+            result.commands
+        );
     }
 
     #[test]

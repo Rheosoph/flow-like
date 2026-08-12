@@ -22,7 +22,7 @@ use futures::{StreamExt, TryStreamExt};
 use image::ImageReader;
 use serde::Deserialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 pub mod fork;
 pub mod graph;
 pub mod saved_queries;
@@ -190,6 +190,9 @@ pub async fn upsert_board(
             }
 
             if let Some(data) = board_data {
+                board.log_level = data.log_level;
+                board.stage = data.stage;
+                board.execution_mode = data.execution_mode;
                 board.variables = data.variables;
                 board.comments = data.comments;
                 board.nodes = data.nodes;
@@ -199,6 +202,7 @@ pub async fn upsert_board(
                 board.version = data.version;
                 board.viewport = data.viewport;
                 board.page_ids = data.page_ids;
+                board.created_at = data.created_at;
                 board.updated_at = data.updated_at;
                 board.hash();
             }
@@ -227,6 +231,9 @@ pub async fn upsert_board(
         let mut board = board.lock().await;
         board.name = name;
         board.description = description;
+        board.log_level = board_data.log_level;
+        board.stage = board_data.stage;
+        board.execution_mode = board_data.execution_mode;
         board.variables = board_data.variables;
         board.comments = board_data.comments;
         board.nodes = board_data.nodes;
@@ -346,6 +353,12 @@ pub async fn push_app_meta(
     app_id: String,
     mut metadata: Metadata,
     language: Option<String>,
+    // Mirroring already-timestamped metadata (a remote sync) must keep the
+    // caller's `updated_at` — stamping `now()` there overwrites the real
+    // last-modified time with "whenever this sync happened", which happens on
+    // nearly every app load and made recency sort meaningless. A genuine local
+    // edit has no authoritative timestamp yet, so that path still wants `now()`.
+    preserve_updated_at: Option<bool>,
 ) -> Result<(), TauriFunctionError> {
     let state = TauriFlowLikeState::construct(&app_handle).await?;
     let old_meta = App::get_meta(app_id.clone(), state.clone(), language.clone(), None)
@@ -357,7 +370,9 @@ pub async fn push_app_meta(
         metadata.thumbnail = old_meta.thumbnail;
         metadata.preview_media = old_meta.preview_media;
         metadata.created_at = old_meta.created_at;
-        metadata.updated_at = SystemTime::now();
+        if !preserve_updated_at.unwrap_or(false) {
+            metadata.updated_at = SystemTime::now();
+        }
     }
 
     App::push_meta(app_id, metadata, state, language, None).await?;
@@ -720,7 +735,7 @@ pub async fn app_add_package(
     let mut app = App::load(app_id, flow_like_state).await?;
     app.packages.insert(package_id, version);
     app.save().await?;
-    let _ = app_handle.emit("catalog-updated", ());
+    super::developer::emit_catalog_updated(&app_handle);
     Ok(())
 }
 
@@ -734,7 +749,7 @@ pub async fn app_remove_package(
     let mut app = App::load(app_id, flow_like_state).await?;
     app.packages.remove(&package_id);
     app.save().await?;
-    let _ = app_handle.emit("catalog-updated", ());
+    super::developer::emit_catalog_updated(&app_handle);
     Ok(())
 }
 

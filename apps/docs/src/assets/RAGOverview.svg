@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-labelledby="title desc">
+  <title id="title">Flow-Like retrieval-augmented generation architecture</title>
+  <desc id="desc">An indexing lane chunks and embeds documents into a knowledge index. A query lane embeds a user question, retrieves relevant context from that index, and uses it to generate a grounded answer.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#17191f"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="10" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <marker id="coralArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#ff7656"/></marker>
+    <marker id="greenArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#34d399"/></marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.4px}.heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}.sub{fill:#a7adb8;font-size:17px}.lane{font-size:14px;font-weight:760;letter-spacing:1.8px}.stage{fill:#f7f8fa;font-size:18px;font-weight:700}.note{fill:#8f97a4;font-size:14px}
+    </style>
+  </defs>
+  <rect width="1440" height="720" rx="28" fill="url(#bg)"/><rect width="1440" height="720" rx="28" fill="url(#grid)"/>
+  <rect x="64" y="58" width="184" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/><circle cx="84" cy="75" r="5" fill="#ff7656"/><text x="99" y="81" class="kicker">RAG SYSTEM</text>
+  <text x="64" y="136" class="heading">Index once. Retrieve on every question.</text>
+  <text x="64" y="169" class="sub">Ground model responses in relevant passages from your own knowledge base.</text>
+
+  <rect x="64" y="212" width="1312" height="176" rx="26" fill="#191c22" stroke="#4a3a37" stroke-width="2"/>
+  <rect x="84" y="232" width="132" height="30" rx="15" fill="#ff7656" opacity=".13"/><text x="150" y="252" text-anchor="middle" class="lane" fill="#ff8a68">INDEX ONCE</text>
+  <path d="M330 304H414M594 304H678M858 304H952" fill="none" stroke="#ff7656" stroke-width="4" stroke-linecap="round" marker-end="url(#coralArrow)"/>
+  <g><rect x="106" y="274" width="224" height="72" rx="18" fill="#22252c" stroke="#464c57"/><text x="218" y="305" text-anchor="middle" class="stage">Documents</text><text x="218" y="330" text-anchor="middle" class="note">Files and text</text></g>
+  <g><rect x="414" y="274" width="180" height="72" rx="18" fill="#25222a" stroke="#5d4b55"/><text x="504" y="305" text-anchor="middle" class="stage">Chunk</text><text x="504" y="330" text-anchor="middle" class="note">With metadata</text></g>
+  <g><rect x="678" y="274" width="180" height="72" rx="18" fill="#25222a" stroke="#5d4b55"/><text x="768" y="305" text-anchor="middle" class="stage">Embed</text><text x="768" y="330" text-anchor="middle" class="note">Vectorize</text></g>
+  <g><rect x="952" y="262" width="330" height="96" rx="22" fill="#1f2a27" stroke="#34d399" stroke-width="2"/><ellipse cx="1002" cy="291" rx="24" ry="10" fill="none" stroke="#34d399" stroke-width="3"/><path d="M978 291v28c0 6 11 10 24 10s24-4 24-10v-28" fill="none" stroke="#34d399" stroke-width="3"/><text x="1138" y="302" text-anchor="middle" class="stage">Knowledge index</text><text x="1138" y="329" text-anchor="middle" class="note">Searchable passages</text></g>
+
+  <rect x="64" y="420" width="1312" height="212" rx="26" fill="#191c22" stroke="#315145" stroke-width="2"/>
+  <rect x="84" y="440" width="226" height="30" rx="15" fill="#34d399" opacity=".12"/><text x="197" y="460" text-anchor="middle" class="lane" fill="#64e7b7">ANSWER EACH QUESTION</text>
+  <path d="M312 536H376M536 536H600M776 536H840M1024 536H1088" fill="none" stroke="#34d399" stroke-width="4" stroke-linecap="round" marker-end="url(#greenArrow)"/>
+  <path d="M1117 358 C1117 390 916 391 916 480" fill="none" stroke="#a78bfa" stroke-width="4" stroke-linecap="round" stroke-dasharray="8 8" marker-end="url(#greenArrow)"/>
+  <g><rect x="104" y="500" width="208" height="72" rx="18" fill="#22252c" stroke="#464c57"/><text x="208" y="531" text-anchor="middle" class="stage">User question</text><text x="208" y="556" text-anchor="middle" class="note">Natural language</text></g>
+  <g><rect x="376" y="500" width="160" height="72" rx="18" fill="#25222a" stroke="#5d4b55"/><text x="456" y="531" text-anchor="middle" class="stage">Embed</text><text x="456" y="556" text-anchor="middle" class="note">Same model</text></g>
+  <g><rect x="600" y="500" width="176" height="72" rx="18" fill="#25222a" stroke="#5d4b55"/><text x="688" y="531" text-anchor="middle" class="stage">Retrieve</text><text x="688" y="556" text-anchor="middle" class="note">Relevant chunks</text></g>
+  <g><rect x="840" y="500" width="184" height="72" rx="18" fill="#25222a" stroke="#5d4b55"/><text x="932" y="531" text-anchor="middle" class="stage">Add context</text><text x="932" y="556" text-anchor="middle" class="note">Prompt evidence</text></g>
+  <g><rect x="1088" y="488" width="238" height="96" rx="22" fill="#1f2a27" stroke="#34d399" stroke-width="2"/><circle cx="1125" cy="536" r="20" fill="#34d399"/><path d="M1115 536l7 7 14-17" fill="none" stroke="#12201b" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><text x="1230" y="526" text-anchor="middle" class="stage">Grounded answer</text><text x="1230" y="553" text-anchor="middle" class="note">Generated with sources</text></g>
+  <text x="720" y="680" text-anchor="middle" class="sub">Retrieval adds evidence to the prompt; the model still generates the final response.</text>
+</svg>

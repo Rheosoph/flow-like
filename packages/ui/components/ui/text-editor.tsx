@@ -2,24 +2,21 @@
 
 import { remarkMdx, remarkMention } from "@platejs/markdown";
 import { PlateStatic, type Value, createSlateEditor } from "platejs";
-import { Plate, usePlateEditor } from "platejs/react";
 import {
 	type KeyboardEvent,
 	type MouseEvent,
+	Suspense,
+	lazy,
 	memo,
 	useContext,
-	useEffect,
 	useMemo,
-	useRef,
-	useState,
 } from "react";
 import remarkBreaks from "remark-breaks";
 import remarkEmoji from "remark-emoji";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import { BaseEditorKit } from "../editor/editor-base-kit";
-import { createEditorKit } from "../editor/editor-kit";
 import { AIUsageAppContext } from "../editor/ai-usage-context";
+import { BaseEditorKit } from "../editor/editor-base-kit";
 import {
 	type MentionItem,
 	MentionItemsProvider,
@@ -28,7 +25,24 @@ import { preprocessDirectiveBlocks } from "../editor/plugins/remark-directives";
 import { remarkFocusNodes } from "../editor/plugins/remark-focus-nodes";
 import { remarkInlineSpoiler } from "../editor/plugins/remark-inline-spoiler";
 import { remarkUserMention } from "../editor/plugins/remark-user-mention";
-import { Editor, EditorContainer } from "../editor/ui/editor";
+import {
+	DEFAULT_UPLOAD_PREFIX,
+	EditorUploadContext,
+} from "../editor/upload-context";
+import {
+	LazyPlateStatic,
+	WINDOWING_BLOCK_THRESHOLD,
+	indexEditorPaths,
+} from "./lazy-plate-static";
+
+// Read-only rendering is by far the common case — a2ui pages, chat transcripts, database
+// previews — and it needs none of the editing machinery. Reaching the editable editor through
+// a dynamic import keeps `createEditorKit` and its three dozen plugin kits out of their bundles.
+const TextEditorEditable = lazy(() =>
+	import("./text-editor-editable").then((module) => ({
+		default: module.TextEditorEditable,
+	})),
+);
 
 const EMPTY_MENTION_ITEMS: ReadonlyArray<MentionItem> = [];
 
@@ -36,7 +50,7 @@ const EMPTY_MENTION_ITEMS: ReadonlyArray<MentionItem> = [];
  * A prefix to identify content that is serialized as Plate's native JSON.
  * This allows switching from initial Markdown to JSON after the first edit.
  */
-const PLATE_JSON_PREFIX = "plate_json::";
+export const PLATE_JSON_PREFIX = "plate_json::";
 
 type PlateLikeNode = {
 	children?: PlateLikeNode[];
@@ -86,6 +100,75 @@ const MINIMAL_STATIC_PLUGIN_IDS = new Set([
 	"ul",
 ]);
 
+export const STATIC_EDITOR_CLASSNAME =
+	"py-0 [&_h1:first-of-type]:mt-0 [&_h2:first-of-type]:mt-0 [&_h3:first-of-type]:mt-0 [&_h4:first-of-type]:mt-0 [&_h5:first-of-type]:mt-0 [&_h6:first-of-type]:mt-0";
+
+/** Wrapper styling shared by every read-only markdown surface. */
+export const PROSE_WRAPPER_CLASSNAME =
+	"overflow-hidden [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_code]:wrap-break-word [&_p]:[overflow-wrap:anywhere] [&_li]:[overflow-wrap:anywhere]";
+
+/**
+ * The full remark set. Streaming and settled rendering must share this list, or
+ * the same markdown parses differently in the two phases — `$5 … $10` in prose
+ * became an inline equation mid-stream and repaired itself on completion.
+ */
+export const RICH_REMARK_PLUGINS: ReadonlyArray<unknown> = [
+	[remarkMath, { singleDollarTextMath: false }],
+	remarkGfm,
+	remarkBreaks,
+	remarkMdx,
+	remarkMention,
+	remarkEmoji as unknown,
+	remarkFocusNodes,
+	remarkUserMention,
+	remarkInlineSpoiler,
+];
+
+const MINIMAL_REMARK_PLUGINS: ReadonlyArray<unknown> = [
+	remarkGfm,
+	remarkBreaks,
+	remarkFocusNodes,
+	remarkUserMention,
+	remarkInlineSpoiler,
+];
+
+/**
+ * Focus-node and user-mention elements render as plain spans, so the click is
+ * delegated from the wrapper. Shared by every read-only prose surface.
+ */
+export function createStaticProseHandlers({
+	onFocusNode,
+	onUserMention,
+}: Readonly<{
+	onFocusNode?: (nodeId: string) => void;
+	onUserMention?: (sub: string) => void;
+}>) {
+	const handle = (
+		e: MouseEvent<HTMLDivElement> | KeyboardEvent<HTMLDivElement>,
+	) => {
+		const target = e.target as HTMLElement;
+		const focusSpan = target.closest("[data-focus-node-id]");
+		if (focusSpan && onFocusNode) {
+			e.preventDefault();
+			const nodeId = focusSpan.getAttribute("data-focus-node-id");
+			if (nodeId) onFocusNode(nodeId);
+		}
+		const userMentionSpan = target.closest("[data-user-mention-sub]");
+		if (userMentionSpan && onUserMention) {
+			e.preventDefault();
+			const sub = userMentionSpan.getAttribute("data-user-mention-sub");
+			if (sub) onUserMention(sub);
+		}
+	};
+
+	return {
+		onClick: handle,
+		onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
+			if (e.key === "Enter" || e.key === " ") handle(e);
+		},
+	};
+}
+
 const toValue = (nodes: PlateLikeNode[]): Value => nodes as unknown as Value;
 
 const paragraphValue = (text: string): Value =>
@@ -124,7 +207,7 @@ const splitMarkdownPreservingCodeBlocks = (markdown: string): string[] => {
 /**
  * Post-process Plate nodes to convert focus://, invalid://, and user:// links to custom elements
  */
-const transformSpecialLinks = (
+export const transformSpecialLinks = (
 	nodes: ReadonlyArray<PlateLikeNode>,
 ): PlateLikeNode[] => {
 	return nodes.map((node) => {
@@ -275,78 +358,6 @@ export const safeDeserialize = (
 	}
 };
 
-function TextEditorInner({
-	initialContent,
-	onChange,
-	isMarkdown,
-	onFocusNode,
-}: Readonly<{
-	initialContent: string;
-	onChange: (content: string) => void;
-	isMarkdown?: boolean;
-	onFocusNode?: (nodeId: string) => void;
-}>) {
-	const appId = useContext(AIUsageAppContext);
-	const editorPlugins = useMemo(() => createEditorKit(appId), [appId]);
-	const remarkPlugins = useMemo(
-		() => [
-			[remarkMath, { singleDollarTextMath: false }],
-			remarkGfm,
-			remarkBreaks,
-			remarkMdx,
-			remarkMention,
-			remarkEmoji as unknown,
-			remarkFocusNodes,
-			remarkUserMention,
-			remarkInlineSpoiler,
-		],
-		[],
-	);
-	const lastEmittedContentRef = useRef(initialContent);
-	const [editorSeed, setEditorSeed] = useState(initialContent);
-
-	useEffect(() => {
-		if (initialContent === lastEmittedContentRef.current) {
-			return;
-		}
-
-		lastEmittedContentRef.current = initialContent;
-		setEditorSeed(initialContent);
-	}, [initialContent]);
-
-	const editor = usePlateEditor(
-		{
-			id: "rendered-editor",
-			plugins: editorPlugins,
-			value: (self) =>
-				safeDeserialize(self, editorSeed, isMarkdown ?? false, remarkPlugins),
-		},
-		[editorSeed, isMarkdown, remarkPlugins, editorPlugins],
-	);
-
-	return (
-		<Plate
-			editor={editor}
-			onChange={({ editor }) => {
-				const serializedNodes = editor.children;
-				const newContent = `${PLATE_JSON_PREFIX}${JSON.stringify(
-					serializedNodes,
-				)}`;
-
-				if (newContent === lastEmittedContentRef.current) {
-					return;
-				}
-				lastEmittedContentRef.current = newContent;
-				onChange(newContent);
-			}}
-		>
-			<EditorContainer>
-				<Editor variant="none" className="px-4 py-2" />
-			</EditorContainer>
-		</Plate>
-	);
-}
-
 function TextEditorStatic({
 	initialContent,
 	isMarkdown,
@@ -360,29 +371,7 @@ function TextEditorStatic({
 	onFocusNode?: (nodeId: string) => void;
 	onUserMention?: (sub: string) => void;
 }>) {
-	const remarkPlugins = useMemo(
-		() =>
-			minimal
-				? [
-						remarkGfm,
-						remarkBreaks,
-						remarkFocusNodes,
-						remarkUserMention,
-						remarkInlineSpoiler,
-					]
-				: [
-						[remarkMath, { singleDollarTextMath: false }],
-						remarkGfm,
-						remarkBreaks,
-						remarkMdx,
-						remarkMention,
-						remarkEmoji as unknown,
-						remarkFocusNodes,
-						remarkUserMention,
-						remarkInlineSpoiler,
-					],
-		[minimal],
-	);
+	const remarkPlugins = minimal ? MINIMAL_REMARK_PLUGINS : RICH_REMARK_PLUGINS;
 
 	// Use minimal plugin set for better performance in read-only contexts
 	const plugins = useMemo(
@@ -428,58 +417,40 @@ function TextEditorStatic({
 		);
 	}, [initialContent, isMarkdown, remarkPlugins, plugins]);
 
-	const editor = useMemo(
-		() =>
-			createSlateEditor({
-				id: "static-rendered-editor",
-				plugins,
-				value,
-			}),
-		[plugins, value],
-	);
+	const editor = useMemo(() => {
+		const staticEditor = createSlateEditor({
+			id: "static-rendered-editor",
+			plugins,
+			value,
+			// NodeIdPlugin stamps ids by running a setNodes transform per node,
+			// and each transform re-runs normalization for the surrounding block.
+			// On documents with tables that turns initial normalization quadratic
+			// (240 tables: 14s with ids, 6ms without). Read-only rendering never
+			// reads the ids, so skip the pass entirely.
+			nodeId: false,
+		});
+		indexEditorPaths(staticEditor);
+		return staticEditor;
+	}, [plugins, value]);
 
-	const handleStaticInteraction = (
-		e: MouseEvent<HTMLDivElement> | KeyboardEvent<HTMLDivElement>,
-	) => {
-		const target = e.target as HTMLElement;
-		const focusSpan = target.closest("[data-focus-node-id]");
-		if (focusSpan && onFocusNode) {
-			e.preventDefault();
-			const nodeId = focusSpan.getAttribute("data-focus-node-id");
-			if (nodeId) {
-				onFocusNode(nodeId);
-			}
-		}
-		const userMentionSpan = target.closest("[data-user-mention-sub]");
-		if (userMentionSpan && onUserMention) {
-			e.preventDefault();
-			const sub = userMentionSpan.getAttribute("data-user-mention-sub");
-			if (sub) {
-				onUserMention(sub);
-			}
-		}
-	};
+	const isLongDocument = value.length > WINDOWING_BLOCK_THRESHOLD;
 
 	return (
 		<div
-			onClick={handleStaticInteraction}
-			onKeyDown={(e) => {
-				if (e.key === "Enter" || e.key === " ") {
-					handleStaticInteraction(e);
-				}
-			}}
-			className="overflow-hidden [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_code]:wrap-break-word"
+			{...createStaticProseHandlers({ onFocusNode, onUserMention })}
+			className={PROSE_WRAPPER_CLASSNAME}
 		>
-			<PlateStatic
-				editor={editor}
-				className="py-0 [&_h1:first-of-type]:mt-0 [&_h2:first-of-type]:mt-0 [&_h3:first-of-type]:mt-0 [&_h4:first-of-type]:mt-0 [&_h5:first-of-type]:mt-0 [&_h6:first-of-type]:mt-0"
-			/>
+			{isLongDocument ? (
+				<LazyPlateStatic editor={editor} className={STATIC_EDITOR_CLASSNAME} />
+			) : (
+				<PlateStatic editor={editor} className={STATIC_EDITOR_CLASSNAME} />
+			)}
 		</div>
 	);
 }
 
 type TextEditorProps = {
-	/** App owning this editable content; used for hosted-model usage attribution. */
+	/** App owning this editable content; used for hosted-model usage attribution and media uploads. */
 	appId?: string;
 	initialContent: string;
 	onChange?: (content: string) => void;
@@ -489,6 +460,10 @@ type TextEditorProps = {
 	onFocusNode?: (nodeId: string) => void;
 	onUserMention?: (sub: string) => void;
 	mentionItems?: ReadonlyArray<MentionItem>;
+	/** Storage folder that pasted, dropped and picked media is uploaded into. */
+	uploadPrefix?: string;
+	/** `user` uploads into the caller's private area instead of the shared app area. */
+	uploadScope?: "app" | "user";
 };
 
 export const TextEditor = memo(function TextEditor({
@@ -501,34 +476,52 @@ export const TextEditor = memo(function TextEditor({
 	onFocusNode,
 	onUserMention,
 	mentionItems,
+	uploadPrefix,
+	uploadScope,
 }: Readonly<TextEditorProps>) {
 	const items = mentionItems ?? EMPTY_MENTION_ITEMS;
 	const inheritedAppId = useContext(AIUsageAppContext);
+	const resolvedAppId = appId ?? inheritedAppId;
+	const uploadConfig = useMemo(
+		() => ({
+			appId: resolvedAppId,
+			prefix: uploadPrefix ?? DEFAULT_UPLOAD_PREFIX,
+			scope: uploadScope ?? ("app" as const),
+		}),
+		[resolvedAppId, uploadPrefix, uploadScope],
+	);
+
 	if (editable && onChange) {
 		return (
-			<AIUsageAppContext.Provider value={appId ?? inheritedAppId}>
-				<MentionItemsProvider value={items}>
-					<TextEditorInner
-						initialContent={initialContent}
-						onChange={(content: string) => {
-							onChange(content);
-						}}
-						isMarkdown={isMarkdown}
-						onFocusNode={onFocusNode}
-					/>
-				</MentionItemsProvider>
+			<AIUsageAppContext.Provider value={resolvedAppId}>
+				<EditorUploadContext.Provider value={uploadConfig}>
+					<MentionItemsProvider value={items}>
+						<Suspense fallback={<div className="px-4 py-2" />}>
+							<TextEditorEditable
+								initialContent={initialContent}
+								onChange={(content: string) => {
+									onChange(content);
+								}}
+								isMarkdown={isMarkdown}
+								onFocusNode={onFocusNode}
+							/>
+						</Suspense>
+					</MentionItemsProvider>
+				</EditorUploadContext.Provider>
 			</AIUsageAppContext.Provider>
 		);
 	}
 	return (
-		<MentionItemsProvider value={items}>
-			<TextEditorStatic
-				initialContent={initialContent}
-				isMarkdown={isMarkdown}
-				minimal={minimal}
-				onFocusNode={onFocusNode}
-				onUserMention={onUserMention}
-			/>
-		</MentionItemsProvider>
+		<AIUsageAppContext.Provider value={resolvedAppId}>
+			<MentionItemsProvider value={items}>
+				<TextEditorStatic
+					initialContent={initialContent}
+					isMarkdown={isMarkdown}
+					minimal={minimal}
+					onFocusNode={onFocusNode}
+					onUserMention={onUserMention}
+				/>
+			</MentionItemsProvider>
+		</AIUsageAppContext.Provider>
 	);
 });

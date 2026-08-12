@@ -1,3 +1,9 @@
+pub mod adaboost;
 pub mod decision_tree;
+pub mod knn;
+pub mod logistic;
+pub mod multinomial_nb;
 pub mod naive_bayes;
+pub mod one_class_svm;
+pub mod random_forest;
 pub mod svm;

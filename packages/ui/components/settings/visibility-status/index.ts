@@ -16,6 +16,10 @@ export {
 	type IVisibilityEntityNoun,
 	type IVisibilityTransitionWarning,
 } from "./visibility-meta";
+export {
+	VisibilityUpgradeDialog,
+	type VisibilityUpgradeDialogProps,
+} from "./visibility-upgrade-dialog";
 export { AppPublicationPage } from "./app-publication-page";
 export { AppPublicationBanner } from "./app-publication-banner";
 export {

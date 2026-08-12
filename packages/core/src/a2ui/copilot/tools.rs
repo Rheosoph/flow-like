@@ -107,13 +107,17 @@ Properties:
 - icon: BoundValue (string) - Lucide icon name (e.g., "send", "plus", "trash")
 - iconPosition: BoundValue - "left" | "right" (default: "left")
 - tooltip: BoundValue (string) - Tooltip text on hover
-- actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }] - actions[0] fires on click (inside the component object)
+- actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }] - legacy default; only actions[0] fires when no named click handler exists
+- eventHandlers: { "click": [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }] } - optional ordered actions for this exact component event
 
 Action wiring (same contract for every interactive component):
 - "workflow_event" invokes ONE named board event; context carries routing ids ONLY (nodeId, optional boardId/appId)
 - NEVER copy element/dashboard values into the context - the event body reads current element state itself at runtime (Get Element -> Get Element Value / Get File Input Files)
-- Other built-in names: "navigate_page" (context.route, optional context.queryParams) and "external_link" (context.url)
-- A board can set or re-point this later with Set Element Action (a2uiSetElementAction)
+- Other built-in names: "navigate_page" (context.route, optional context.queryParams), "external_link" (context.url) and "widget_event" (context.actionId, inside a widget only)
+- The action "name" is one of those FIXED verbs - never a board node name, event name or widget action id; those go in the context. An unrecognized name is dropped at runtime (the control renders and does nothing) and emit_ui rejects it
+- Exact eventHandlers entries override the legacy default; an explicit [] disables that event
+- Events added after a component shipped (textField "input"/"submit"/"focus"/"blur", slider "input", select "open"/"close", table "rowClick"/"cellClick"/"selectionChange"/"sortChange", chart "pointClick", richText "change"/"blur"/"imageUploaded"/"imageUploadError") need an EXACT entry - they ignore both actions[0] and "*"
+- A board can set or re-point the legacy default or a named event later with Set Element Action (a2uiSetElementAction; optional event_name)
 
 Example:
 {
@@ -204,7 +208,7 @@ Example:
         "userprofile" | "user_profile" => r#"UserProfile - Fetch and display a Flow-Like user by subject/sub ID
 Properties:
 - type: "userProfile" (required)
-- value: BoundValue - user subject/sub ID. Compatible with Set Element Value.
+- value: BoundValue - user subject/sub ID. Compatible with Set Element Value. The "local" sub of an unauthenticated execution renders the current user.
 - variant: BoundValue - "avatar" | "chip" | "row" | "detailed" | "card"
 - avatarSize: BoundValue - "xs" | "sm" | "md" | "lg" | "xl" | "2xl"
 - showHover: BoundValue (boolean) - enable hover details
@@ -248,6 +252,35 @@ Example:
     "placeholder": { "literalString": "Enter email" },
     "inputType": { "literalString": "email" },
     "label": { "literalString": "Email Address" }
+  }
+}"#
+        .to_string(),
+
+        "richtext" | "rich_text" => r#"RichText - Formatted document editor
+Properties:
+- type: "richText" (required)
+- value: BoundValue - The document, a "plate_json::"-prefixed string. NOT markdown: convert with the Rich Text to Markdown (utils_md_plate_to_md) or Rich Text to HTML (utils_md_plate_to_html) node
+- label / helperText / placeholder: BoundValue string
+- readOnly / disabled: BoundValue boolean
+- error: BoundValue boolean
+- uploadPrefix: BoundValue string - storage folder for pasted or dropped images (default "a2ui/<surface>/<component>")
+- uploadScope: BoundValue string - "app" (shared, default) or "user" (the viewer's private area)
+- minHeight / maxHeight: BoundValue string - CSS lengths
+- debounceMs: BoundValue number - pause before "change" fires (default 600, min 100)
+- Images are uploaded into app storage and stored in the document as durable "storage://..." paths, so the document keeps working after signed URLs expire
+- Events: "change", "blur", "imageUploaded", "imageUploadError" - all need EXACT eventHandlers entries
+
+Example:
+{
+  "id": "article-body",
+  "component": {
+    "type": "richText",
+    "value": { "path": "$.article.body" },
+    "label": { "literalString": "Article" },
+    "uploadPrefix": { "literalString": "articles/images" },
+    "eventHandlers": {
+      "change": [{ "name": "workflow_event", "context": { "event": "save_draft" } }]
+    }
   }
 }"#
         .to_string(),
@@ -378,7 +411,8 @@ Properties:
 - height: BoundValue (string, CSS value e.g. "600px")
 - responsive: BoundValue (boolean) - auto agenda on narrow widths
 - compactBreakpoint: BoundValue (number, px)
-- actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]; interactions fire with _action_context { interaction: "create"|"move"|"resize"|"open"|"delete", id?, start, end, ... }
+- actions: legacy default action, same contract as button - [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]; interactions fire with _action_context { interaction: "create"|"update"|"move"|"resize"|"open"|"delete", id?, start, end, ... }
+- eventHandlers: optional ordered action lists keyed by "create" | "update" | "move" | "resize" | "open" | "delete"
 
 Example:
 {
@@ -413,7 +447,8 @@ Properties:
 - height: BoundValue (string, CSS value e.g. "600px")
 - responsive: BoundValue (boolean) - auto compact on narrow widths
 - compactBreakpoint: BoundValue (number, px)
-- actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]; interactions fire with _action_context { interaction: "create"|"move"|"resize"|"open"|"delete"|"link", id?, start?, end?, fromId?, toId? }
+- actions: legacy default action, same contract as button - [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]; interactions fire with _action_context { interaction: "create"|"update"|"move"|"resize"|"open"|"delete"|"link"|"reorder", id?, start?, end?, fromId?, toId? }
+- eventHandlers: optional ordered action lists keyed by "create" | "update" | "move" | "resize" | "open" | "delete" | "link" | "reorder"
 
 Example:
 {
@@ -736,6 +771,34 @@ mod tests {
         }
     }
 
+    /// Substring search that ignores matches inside a longer identifier, so a documented event
+    /// name like `selectionChange` is not mistaken for the legacy `onChange` prop.
+    fn contains_standalone(haystack: &str, needle: &str) -> bool {
+        let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+        let boundary_before = needle.starts_with(is_ident);
+        let boundary_after = needle.ends_with(is_ident);
+        haystack.match_indices(needle).any(|(index, matched)| {
+            let before_ok = !boundary_before
+                || haystack[..index]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|c| !is_ident(c));
+            let after_ok = !boundary_after
+                || haystack[index + matched.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !is_ident(c));
+            before_ok && after_ok
+        })
+    }
+
+    #[test]
+    fn legacy_shape_check_ignores_longer_identifiers() {
+        assert!(!contains_standalone("\"selectionChange\"", "onChange"));
+        assert!(contains_standalone("- onChange: BoundValue", "onChange"));
+        assert!(contains_standalone("\"onChange\": []", "onChange"));
+    }
+
     #[test]
     fn pages_document_actions_as_name_context_arrays() {
         // The runtime contract is `component.actions: [{ "name": ..., "context": {...} }]`
@@ -744,10 +807,20 @@ mod tests {
         // the emit_ui validator.
         for component_type in DETAILED_PAGE_TYPES {
             let page = get_component_schema(component_type);
-            for legacy in ["onClick", "onChange", "onClose", "\"emit\"", "\"update\""] {
+            // Legacy event-keyed props. Matched on identifier boundaries so a documented event
+            // name like `selectionChange` is not read as the old `onChange` prop.
+            for legacy in ["onClick", "onChange", "onClose"] {
                 assert!(
-                    !page.contains(legacy),
+                    !contains_standalone(&page, legacy),
                     "{component_type} page still documents the legacy '{legacy}' action shape"
+                );
+            }
+            // Legacy action names. Checked in action-name position only: calendar/gantt
+            // legitimately document "update" as an `_action_context.interaction` value.
+            for legacy in ["emit", "update"] {
+                assert!(
+                    !page.contains(&format!(r#""name": "{legacy}""#)),
+                    "{component_type} page still documents '{legacy}' as an action name"
                 );
             }
             if page.contains("actions:") {
@@ -902,6 +975,111 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn catalog_documents_every_interactive_component_and_how_to_choose() {
+        // The historical failure: voiceInput (and feedback/appLink/geoMap) were absent from the
+        // docs entirely, so the model imitated them from generic parts. Every registered
+        // interactive type must appear, and the selection table must map intents to types.
+        let docs = crate::a2ui::copilot::get_full_documentation();
+        for component_type in [
+            "`button`",
+            "`textField`",
+            "`select`",
+            "`slider`",
+            "`checkbox`",
+            "`switch`",
+            "`radioGroup`",
+            "`dateTimeInput`",
+            "`fileInput`",
+            "`imageInput`",
+            "`voiceInput`",
+            "`feedback`",
+            "`appLink`",
+            "`link`",
+            "`geoMap`",
+        ] {
+            assert!(
+                docs.contains(component_type),
+                "component docs must list {component_type}"
+            );
+        }
+        assert!(docs.contains("## Choosing the Right Component"));
+        assert!(docs.contains("push-to-talk"));
+        assert!(docs.contains("## Voice Input (voiceInput)"));
+        assert!(docs.contains("\"type\": \"voiceInput\""));
+        assert!(docs.contains("multiline"));
+        assert!(docs.contains("Never invent a type"));
+    }
+
+    #[test]
+    fn style_guide_teaches_design_reflection_and_reliable_channels() {
+        let docs = crate::a2ui::copilot::get_full_documentation();
+        assert!(docs.contains("## Design Reflection (BEFORE emitting)"));
+        assert!(docs.contains("Signature moment"));
+        assert!(docs.contains("NO runtime Tailwind engine"));
+        assert!(docs.contains("responsiveOverrides"));
+        assert!(docs.contains("## Typography (three real families already exist - use them)"));
+        assert!(docs.contains("var(--primary)"));
+        assert!(docs.contains("Never style\n   `:root`") || docs.contains("Never style `:root`"));
+        assert!(docs.contains("mobile-first"));
+    }
+
+    #[test]
+    fn style_guide_offers_distinct_directions_and_the_real_type_roles() {
+        // Diversity here cannot ride on hue (--primary is fixed by the app theme and hardcoded
+        // palette classes break dark mode), so the guide must supply structural directions and
+        // the three font families the theme actually ships.
+        let docs = crate::a2ui::copilot::get_full_documentation();
+        assert!(docs.contains("## Worked Direction Recipes"));
+        for direction in [
+            "### INSTRUMENT",
+            "### LEDGER",
+            "### LUMEN",
+            "### ATELIER",
+            "### BLUEPRINT",
+            "### MARQUEE",
+        ] {
+            assert!(
+                docs.contains(direction),
+                "missing direction recipe: {direction}"
+            );
+        }
+        for family in ["var(--font-serif)", "var(--font-mono)", "var(--font-sans)"] {
+            assert!(docs.contains(family), "type roles must name {family}");
+        }
+        assert!(docs.contains("`text-5xl`/`text-6xl` are NOT\n  compiled"));
+        assert!(docs.contains("fp-design: macro="));
+    }
+
+    #[test]
+    fn style_guide_does_not_prescribe_the_defaults_the_contract_bans() {
+        // The guide used to ship the exact recipes the design contract lists as banned tells,
+        // so the catalog and the guidance contradicted each other inside one prompt.
+        let docs = crate::a2ui::copilot::get_full_documentation();
+        for slop in [
+            "from-primary to-purple-500",
+            "border-l-4 border-primary pl-4",
+            "linear-gradient(135deg, var(--primary) 0%, purple 100%)",
+            "rounded-full bg-primary/10 text-primary px-3 py-1",
+        ] {
+            assert!(
+                !docs.contains(slop),
+                "component docs still prescribe a banned default: {slop}"
+            );
+        }
+        // A blanket hue scan cannot work here: the guide legitimately QUOTES `bg-[#ff00aa]` and
+        // `bg-white` as counter-examples, and "purples" is a Nivo palette name. So assert on the
+        // recipe forms above, and that every custom color in the guide is theme-derived.
+        let style_guide = crate::a2ui::copilot::get_documentation_section("style")
+            .expect("style section must exist");
+        assert!(style_guide.contains("color-mix(in oklab, var(--"));
+        assert!(style_guide.contains("NEVER hardcoded palette classes"));
+        assert!(
+            !style_guide.contains("rgba(0, 0, 0,"),
+            "style guide still ships a non-theme shadow color"
+        );
     }
 
     #[test]

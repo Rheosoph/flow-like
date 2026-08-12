@@ -1,9 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
 import {
 	type IAppRouteState,
 	type IRouteMapping,
 	injectDataFunction,
 } from "@flow-like/flow-like-ui";
+import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 
@@ -16,6 +16,30 @@ interface RemoteRouteMapping {
 
 function toRouteMapping(r: RemoteRouteMapping): IRouteMapping {
 	return { path: r.path, eventId: r.eventId };
+}
+
+/**
+ * Merge server route data with routes backed by the device's local event
+ * catalog. The server wins for a conflicting path, while a local-only path is
+ * retained so an incomplete remote mirror cannot hide a Local interface.
+ */
+export function mergeLocalAndRemoteRoutes(
+	localRoutes: IRouteMapping[],
+	remoteRoutes: IRouteMapping[],
+): IRouteMapping[] {
+	const merged = new Map<string, IRouteMapping>();
+
+	for (const route of localRoutes) {
+		merged.set(route.path, route);
+	}
+
+	for (const route of remoteRoutes) {
+		merged.set(route.path, route);
+	}
+
+	return Array.from(merged.values()).toSorted((a, b) =>
+		a.path.localeCompare(b.path),
+	);
 }
 
 export class RouteState implements IAppRouteState {
@@ -41,16 +65,29 @@ export class RouteState implements IAppRouteState {
 				this.backend.auth,
 			);
 			const mapped = remote.map(toRouteMapping);
-			for (const r of mapped) {
-				await invoke("set_app_route", {
-					appId,
-					path: r.path,
-					eventId: r.eventId,
-				}).catch(() => {});
-			}
-			return mapped;
+
+			// Mirroring the routes locally is one IPC round trip each, and nothing in the
+			// returned mapping depends on those writes having landed — they only serve the next
+			// offline read. Running them ahead of the caller charged the first paint of every
+			// app for a list it already had in hand.
+			this.backend.backgroundTaskHandler(
+				Promise.allSettled(
+					mapped.map((r) =>
+						invoke("set_app_route", {
+							appId,
+							path: r.path,
+							eventId: r.eventId,
+						}),
+					),
+				).then(() => undefined),
+			);
+
+			return mergeLocalAndRemoteRoutes(local, mapped);
 		};
 
+		// Routes are optional metadata: an app without any mapping falls back to
+		// its default event. Reporting a failed refresh as an error would make a
+		// network hiccup indistinguishable from "this app is not available".
 		if (force) {
 			try {
 				const remoteData = await syncRemote();
@@ -58,7 +95,6 @@ export class RouteState implements IAppRouteState {
 				this.backend.queryClient.setQueryData(queryKey, remoteData);
 				return remoteData;
 			} catch (error) {
-				if (local.length === 0) throw error;
 				console.warn(
 					"[RouteSync] Forced route fetch failed, falling back to local routes:",
 					error,

@@ -41,10 +41,11 @@ export class WebTeamState implements ITeamState {
 		appId: string,
 		name: string,
 		maxUses: number,
+		expiresInHours?: number,
 	): Promise<void> {
 		await apiPut(
 			`apps/${appId}/team/link`,
-			{ name, max_uses: maxUses },
+			{ name, max_uses: maxUses, expires_in_hours: expiresInHours ?? null },
 			this.backend.auth,
 		);
 	}
@@ -141,20 +142,40 @@ export class WebTeamState implements ITeamState {
 		}
 	}
 
-	async acceptInvite(inviteId: string): Promise<void> {
-		await apiPost(
-			`user/invites/${inviteId}/accept`,
-			undefined,
+	async getAppInvites(
+		appId: string,
+		offset?: number,
+		limit?: number,
+	): Promise<IInvite[]> {
+		const params = new URLSearchParams();
+		if (offset !== undefined) params.set("offset", offset.toString());
+		if (limit !== undefined) params.set("limit", limit.toString());
+
+		try {
+			return await apiGet<IInvite[]>(
+				`apps/${appId}/team/invites?${params}`,
+				this.backend.auth,
+			);
+		} catch {
+			return [];
+		}
+	}
+
+	async revokeAppInvite(appId: string, inviteId: string): Promise<void> {
+		await apiDelete(
+			`apps/${appId}/team/invites/${inviteId}`,
 			this.backend.auth,
 		);
 	}
 
+	// Accept/decline are POST and DELETE on the invite itself — there are no
+	// /accept and /reject sub-paths on the server.
+	async acceptInvite(inviteId: string): Promise<void> {
+		await apiPost(`user/invites/${inviteId}`, undefined, this.backend.auth);
+	}
+
 	async rejectInvite(inviteId: string): Promise<void> {
-		await apiPost(
-			`user/invites/${inviteId}/reject`,
-			undefined,
-			this.backend.auth,
-		);
+		await apiDelete(`user/invites/${inviteId}`, this.backend.auth);
 	}
 
 	async inviteUser(

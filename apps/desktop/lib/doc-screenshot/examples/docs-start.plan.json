@@ -1,0 +1,174 @@
+{
+	"schema": "flow-like.doc-screenshot-plan/v1",
+	"app": "desktop",
+	"outputDir": "apps/docs/src/assets",
+	"tauriFixture": "../fixtures/docs-start.tauri.json",
+	"defaults": {
+		"viewport": {
+			"width": 1624,
+			"height": 1060,
+			"deviceScaleFactor": 2
+		},
+		"theme": "dark",
+		"format": "webp",
+		"timeoutMs": 120000,
+		"settleMs": 350,
+		"disableAnimations": true,
+		"hideScrollbars": true
+	},
+	"scenarios": [
+		{
+			"name": "first-use",
+			"path": "/onboarding",
+			"query": {
+				"capture": "docs"
+			},
+			"localStorage": {
+				"sidebar_state": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "button[aria-pressed]",
+					"state": "visible"
+				},
+				{
+					"type": "click",
+					"selector": "button[aria-pressed]",
+					"index": 0
+				},
+				{
+					"type": "waitFor",
+					"selector": "button[aria-pressed=\"true\"]",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "selecting-first-profile",
+					"output": "SelectingFirstProfile.webp",
+					"mode": "viewport"
+				},
+				{
+					"type": "goto",
+					"path": "/onboarding/download",
+					"query": {
+						"profiles": "starter-chatting",
+						"capture": "docs"
+					}
+				},
+				{
+					"type": "waitFor",
+					"text": "Great Selection!"
+				},
+				{
+					"type": "delay",
+					"ms": 2200
+				},
+				{
+					"type": "capture",
+					"name": "loading-first-models",
+					"output": "LoadingFirstModels.webp",
+					"mode": "viewport",
+					"hideSelectors": ["[data-sonner-toaster]"]
+				}
+			]
+		},
+		{
+			"name": "home-profiles-and-models",
+			"path": "/",
+			"query": {
+				"capture": "docs"
+			},
+			"localStorage": {
+				"sidebar_state": "true",
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "What do you want to"
+				},
+				{
+					"type": "capture",
+					"name": "landing-page",
+					"output": "LandingPage.webp",
+					"mode": "viewport"
+				},
+				{
+					"type": "click",
+					"selector": "button[data-sidebar=\"menu-button\"][data-size=\"lg\"]"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"dropdown-menu-content\"][data-state=\"open\"]",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "switch-and-edit-profiles",
+					"output": "SwitchAndEditProfiles.webp",
+					"mode": "element",
+					"selector": "[data-slot=\"dropdown-menu-content\"][data-state=\"open\"]",
+					"padding": 12
+				},
+				{
+					"type": "goto",
+					"path": "/settings/profiles",
+					"query": {
+						"capture": "docs"
+					}
+				},
+				{
+					"type": "waitFor",
+					"selector": "#name",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "profile-settings",
+					"output": "ProfileSettings.webp",
+					"mode": "viewport"
+				},
+				{
+					"type": "goto",
+					"path": "/settings/ai",
+					"query": {
+						"capture": "docs"
+					}
+				},
+				{
+					"type": "waitFor",
+					"selector": "article",
+					"state": "visible"
+				},
+				{
+					"type": "waitFor",
+					"text": "9 available"
+				},
+				{
+					"type": "capture",
+					"name": "model-catalog",
+					"output": "ModelCatalog.webp",
+					"mode": "viewport"
+				},
+				{
+					"type": "click",
+					"selector": "article:has([title=\"Gemma 4B Local\"]) button[aria-label=\"Model actions\"]"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"dropdown-menu-content\"][data-state=\"open\"]",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "adding-model-to-profile",
+					"output": "AddingModelToProfile.webp",
+					"mode": "element",
+					"selector": "article:has([title=\"Gemma 4B Local\"])",
+					"padding": 12
+				}
+			]
+		}
+	]
+}

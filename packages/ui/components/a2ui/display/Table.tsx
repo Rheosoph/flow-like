@@ -44,9 +44,11 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "../../ui/index";
+import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { toEventContextValue } from "../event-context";
 import type {
 	BoundValue,
 	TableCellComponent,
@@ -55,11 +57,26 @@ import type {
 	TableRowComponent,
 } from "../types";
 
+/** Table never dispatched actions before, so no surface can have meant to
+ * subscribe to these through `*` or `actions[0]`. */
+const EXACT_ONLY = { legacyFallback: false, wildcardFallback: false };
+
 type SortDirection = "asc" | "desc" | null;
 
 interface ColumnFilter {
 	column: number;
 	value: string;
+}
+
+/**
+ * A rendered row paired with the record it came from. Search, filter, sort and
+ * pagination all reorder rows, so the position on screen says nothing about
+ * the record — events must report `index` and `source`, not the visual slot.
+ */
+interface TableRowModel {
+	index: number;
+	cells: string[];
+	source: Record<string, unknown>;
 }
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -274,7 +291,9 @@ function SortableHeaderCell({
 export function A2UITable({
 	component,
 	style,
+	componentId,
 }: ComponentProps<TableComponent>) {
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const columns = useResolved<TableColumn[]>(component.columns) ?? [];
 	const data = useResolved<Record<string, unknown>[]>(component.data) ?? [];
 	const caption = useResolved<string>(component.caption);
@@ -349,21 +368,23 @@ export function A2UITable({
 		return col.id;
 	};
 
-	const rows: string[][] = React.useMemo(() => {
-		return data.map((row) =>
-			columns.map((col) => {
+	const rows: TableRowModel[] = React.useMemo(() => {
+		return data.map((row, index) => ({
+			index,
+			source: row,
+			cells: columns.map((col) => {
 				const accessor = getAccessor(col);
 				const value = row[accessor];
 				return value != null ? String(value) : "";
 			}),
-		);
+		}));
 	}, [data, columns]);
 
 	const searchedRows = React.useMemo(() => {
 		if (!searchable || !searchQuery.trim()) return rows;
 		const query = searchQuery.toLowerCase();
 		return rows.filter((row) =>
-			row.some((cell) => cell.toLowerCase().includes(query)),
+			row.cells.some((cell) => cell.toLowerCase().includes(query)),
 		);
 	}, [rows, searchQuery, searchable]);
 
@@ -371,7 +392,7 @@ export function A2UITable({
 		if (columnFilters.length === 0) return searchedRows;
 		return searchedRows.filter((row) =>
 			columnFilters.every((filter) => {
-				const cellValue = row[filter.column]?.toLowerCase() || "";
+				const cellValue = row.cells[filter.column]?.toLowerCase() || "";
 				return cellValue.includes(filter.value.toLowerCase());
 			}),
 		);
@@ -381,8 +402,8 @@ export function A2UITable({
 		if (!sortable || sortColumn === null || sortDirection === null)
 			return filteredRows;
 		return [...filteredRows].sort((a, b) => {
-			const aVal = a[sortColumn] || "";
-			const bVal = b[sortColumn] || "";
+			const aVal = a.cells[sortColumn] || "";
+			const bVal = b.cells[sortColumn] || "";
 
 			const aNum = Number.parseFloat(aVal);
 			const bNum = Number.parseFloat(bVal);
@@ -410,7 +431,7 @@ export function A2UITable({
 		(format: "csv" | "markdown") => {
 			const visibleHeaders = visibleColumns.map((idx) => headers[idx]);
 			const visibleRows = sortedRows.map((row) =>
-				visibleColumns.map((idx) => row[idx]),
+				visibleColumns.map((idx) => row.cells[idx]),
 			);
 			const text =
 				format === "csv"
@@ -426,25 +447,37 @@ export function A2UITable({
 	const handleDownload = React.useCallback(() => {
 		const visibleHeaders = visibleColumns.map((idx) => headers[idx]);
 		const visibleRows = sortedRows.map((row) =>
-			visibleColumns.map((idx) => row[idx]),
+			visibleColumns.map((idx) => row.cells[idx]),
 		);
 		downloadCSV(visibleHeaders, visibleRows);
 	}, [headers, sortedRows, visibleColumns]);
 
-	const handleColumnSort = React.useCallback((columnIndex: number) => {
-		setSortColumn((prevCol) => {
-			if (prevCol !== columnIndex) {
-				setSortDirection("asc");
-				return columnIndex;
-			}
-			setSortDirection((prevDir) => {
-				if (prevDir === "asc") return "desc";
-				if (prevDir === "desc") return null;
-				return "asc";
-			});
-			return columnIndex;
-		});
-	}, []);
+	const handleColumnSort = React.useCallback(
+		(columnIndex: number) => {
+			const nextDirection: SortDirection =
+				sortColumn !== columnIndex
+					? "asc"
+					: sortDirection === "asc"
+						? "desc"
+						: sortDirection === "desc"
+							? null
+							: "asc";
+
+			setSortColumn(columnIndex);
+			setSortDirection(nextDirection);
+			void triggerEvent(
+				"sortChange",
+				component,
+				{
+					columnIndex,
+					columnId: columns[columnIndex]?.id ?? null,
+					direction: nextDirection,
+				},
+				EXACT_ONLY,
+			);
+		},
+		[sortColumn, sortDirection, columns, component, triggerEvent],
+	);
 
 	const handleColumnFilter = React.useCallback(
 		(columnIndex: number, value: string) => {
@@ -513,25 +546,109 @@ export function A2UITable({
 		setCurrentPage(0);
 	}, []);
 
-	const toggleRowSelection = React.useCallback((rowIndex: number) => {
-		setSelectedRows((prev) => {
-			const next = new Set(prev);
+	const applySelection = React.useCallback(
+		(next: Set<number>) => {
+			setSelectedRows(next);
+			const selected = [...next].sort((a, b) => a - b);
+			void triggerEvent(
+				"selectionChange",
+				component,
+				{
+					selectedIndexes: selected,
+					selectedRows: selected.map((index) =>
+						toEventContextValue(rows[index]?.source ?? null),
+					),
+				},
+				EXACT_ONLY,
+			);
+		},
+		[component, rows, triggerEvent],
+	);
+
+	const toggleRowSelection = React.useCallback(
+		(rowIndex: number) => {
+			const next = new Set(selectedRows);
 			if (next.has(rowIndex)) {
 				next.delete(rowIndex);
 			} else {
 				next.add(rowIndex);
 			}
-			return next;
-		});
-	}, []);
+			applySelection(next);
+		},
+		[applySelection, selectedRows],
+	);
+
+	const allPageRowsSelected =
+		paginatedRows.length > 0 &&
+		paginatedRows.every((row) => selectedRows.has(row.index));
 
 	const toggleAllRows = React.useCallback(() => {
-		if (selectedRows.size === paginatedRows.length) {
-			setSelectedRows(new Set());
-		} else {
-			setSelectedRows(new Set(paginatedRows.map((_, i) => i)));
-		}
-	}, [selectedRows.size, paginatedRows.length]);
+		applySelection(
+			allPageRowsSelected
+				? new Set()
+				: new Set(paginatedRows.map((row) => row.index)),
+		);
+	}, [allPageRowsSelected, applySelection, paginatedRows]);
+
+	const handleRowClick = React.useCallback(
+		(row: TableRowModel) => {
+			void triggerEvent(
+				"rowClick",
+				component,
+				{
+					rowIndex: row.index,
+					row: toEventContextValue(row.source),
+					cells: row.cells,
+				},
+				EXACT_ONLY,
+			);
+		},
+		[component, triggerEvent],
+	);
+
+	const handleCellClick = React.useCallback(
+		(row: TableRowModel, columnIndex: number) => {
+			void triggerEvent(
+				"cellClick",
+				component,
+				{
+					rowIndex: row.index,
+					columnIndex,
+					columnId: columns[columnIndex]?.id ?? null,
+					value: row.cells[columnIndex] ?? null,
+					row: toEventContextValue(row.source),
+				},
+				EXACT_ONLY,
+			);
+		},
+		[columns, component, triggerEvent],
+	);
+
+	// One handler on the row keeps the row keyboard-reachable; the column comes
+	// from the cell that was actually hit, so the selection column cannot shift
+	// the index the board receives.
+	const handleRowActivate = React.useCallback(
+		(row: TableRowModel, target: EventTarget | null, fromPointer: boolean) => {
+			handleRowClick(row);
+			if (!fromPointer) return;
+
+			const cell =
+				target instanceof Element
+					? target.closest("[data-column-index]")
+					: null;
+			const columnIndex = Number.parseInt(
+				cell?.getAttribute("data-column-index") ?? "",
+				10,
+			);
+			if (Number.isInteger(columnIndex)) handleCellClick(row, columnIndex);
+		},
+		[handleCellClick, handleRowClick],
+	);
+
+	const rowsInteractive = Boolean(
+		component.eventHandlers?.rowClick?.length ||
+			component.eventHandlers?.cellClick?.length,
+	);
 
 	const hasActiveFilters =
 		searchQuery.trim() || columnFilters.length > 0 || sortColumn !== null;
@@ -753,10 +870,7 @@ export function A2UITable({
 									{selectable && (
 										<th className="w-8 px-2 py-1.5">
 											<Checkbox
-												checked={
-													selectedRows.size === paginatedRows.length &&
-													paginatedRows.length > 0
-												}
+												checked={allPageRowsSelected}
 												onCheckedChange={toggleAllRows}
 												className="h-3.5 w-3.5"
 											/>
@@ -781,20 +895,37 @@ export function A2UITable({
 					<tbody>
 						{paginatedRows.map((row, rowIdx) => (
 							<tr
-								key={rowIdx}
+								key={row.index}
 								className={cn(
 									bordered && "border-b border-border",
 									striped && rowIdx % 2 === 1 && "bg-muted/50",
 									hoverable && "hover:bg-muted/30 transition-colors",
-									selectable && selectedRows.has(rowIdx) && "bg-primary/10",
+									selectable && selectedRows.has(row.index) && "bg-primary/10",
+									rowsInteractive && "cursor-pointer",
 								)}
+								tabIndex={rowsInteractive ? 0 : undefined}
+								onClick={
+									rowsInteractive
+										? (event) => handleRowActivate(row, event.target, true)
+										: undefined
+								}
+								onKeyDown={
+									rowsInteractive
+										? (event) => {
+												if (event.key !== "Enter" && event.key !== " ") return;
+												event.preventDefault();
+												handleRowActivate(row, event.target, false);
+											}
+										: undefined
+								}
 							>
 								{selectable && (
 									<td className="w-8 px-2 py-1.5">
 										<Checkbox
-											checked={selectedRows.has(rowIdx)}
-											onCheckedChange={() => toggleRowSelection(rowIdx)}
+											checked={selectedRows.has(row.index)}
+											onCheckedChange={() => toggleRowSelection(row.index)}
 											className="h-3.5 w-3.5"
+											onClick={(event) => event.stopPropagation()}
 										/>
 									</td>
 								)}
@@ -809,13 +940,14 @@ export function A2UITable({
 									return (
 										<td
 											key={colIdx}
+											data-column-index={colIdx}
 											className={cn(
 												"px-2 py-1.5",
 												alignClass,
 												compact && "py-1",
 											)}
 										>
-											{row[colIdx]}
+											{row.cells[colIdx]}
 										</td>
 									);
 								})}

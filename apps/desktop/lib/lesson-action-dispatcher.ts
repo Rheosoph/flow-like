@@ -52,8 +52,13 @@ export async function dispatchLessonAction(
 		case "NAVIGATE": {
 			const appId = await resolveActionAppId(action, ctx);
 			if (!appId) return;
-			const params = new URLSearchParams({ id: appId, ...(action.params ?? {}) });
-			const subpath = action.subpath.startsWith("/") ? action.subpath : `/library/config/${action.subpath}`;
+			const params = new URLSearchParams({
+				id: appId,
+				...(action.params ?? {}),
+			});
+			const subpath = action.subpath.startsWith("/")
+				? action.subpath
+				: `/library/config/${action.subpath}`;
 			ctx.router.push(`${subpath}?${params.toString()}`);
 			return;
 		}
@@ -87,7 +92,10 @@ export async function dispatchLessonAction(
 				app: appId,
 				addNode: action.nodeTypeId,
 				...(action.coords
-					? { coordsX: String(action.coords[0]), coordsY: String(action.coords[1]) }
+					? {
+							coordsX: String(action.coords[0]),
+							coordsY: String(action.coords[1]),
+						}
 					: {}),
 			});
 			ctx.router.push(`/flow?${params.toString()}`);

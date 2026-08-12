@@ -1,0 +1,479 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+const items = [
+  { title: t("v4.rules.item1.title"), desc: t("v4.rules.item1.desc") },
+  { title: t("v4.rules.item2.title"), desc: t("v4.rules.item2.desc") },
+  { title: t("v4.rules.item3.title"), desc: t("v4.rules.item3.desc") },
+  { title: t("v4.rules.item4.title"), desc: t("v4.rules.item4.desc"), link: "/thirdparty" },
+  { title: t("v4.rules.item5.title"), desc: t("v4.rules.item5.desc"), link: "/security" },
+  { title: t("v4.rules.item6.title"), desc: t("v4.rules.item6.desc"), link: "/security" },
+];
+
+const scores = [
+  { label: t("v4.rules.score.privacy"), value: 9 },
+  { label: t("v4.rules.score.security"), value: 9 },
+  { label: t("v4.rules.score.performance"), value: 8 },
+  { label: t("v4.rules.score.governance"), value: 9 },
+  { label: t("v4.rules.score.reliability"), value: 8 },
+  { label: t("v4.rules.score.cost"), value: 7 },
+];
+---
+
+<section id="rules" class="rules-band relative isolate overflow-hidden py-24 md:py-32">
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="rules-orb rules-orb--warm"></div>
+    <div class="rules-orb rules-orb--cool"></div>
+  </div>
+
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="rules-reveal max-w-3xl text-left mb-12 md:mb-16">
+      <span class="rules-kicker mb-6 inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-4 py-1.5 font-mono text-[0.7rem] font-medium uppercase tracking-[0.16em] text-primary">
+        {t("v4.rules.kicker")}
+      </span>
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight text-foreground">
+        {t("v4.rules.headline")}
+      </h2>
+      <p class="mt-5 text-base sm:text-lg text-muted-foreground leading-relaxed">
+        {t("v4.rules.body")}
+      </p>
+    </div>
+
+    <div class="grid grid-cols-1 items-start gap-10 lg:grid-cols-12 lg:gap-12">
+      <!-- Permission dialog visual -->
+      <div class="rules-reveal lg:col-span-5">
+        <div class="rules-stage relative rounded-2xl border border-border/40 px-4 py-10 sm:px-8 sm:py-12 lg:sticky lg:top-24">
+          <div
+            class="rules-dialog relative mx-auto max-w-sm rounded-xl border border-border/70 bg-card dark:border-white/15 dark:bg-muted/40"
+            role="group"
+            aria-label={t("v4.rules.dialog.aria")}
+          >
+            <div class="p-5 sm:p-6">
+              <div class="flex items-start gap-3.5">
+                <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 text-primary" aria-hidden="true">
+                  <svg class="h-4.5 w-4.5" width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+                    <circle cx="9" cy="9" r="6.75" />
+                    <ellipse cx="9" cy="9" rx="3" ry="6.75" />
+                    <path d="M2.5 9 h13" />
+                  </svg>
+                </div>
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm font-semibold leading-snug text-foreground">{t("v4.rules.dialog.title")}</p>
+                  <p class="mt-1 text-[0.8rem] leading-relaxed text-muted-foreground">{t("v4.rules.dialog.body")}</p>
+                  <span class="mt-2 block font-mono text-[0.65rem] uppercase tracking-wider text-muted-foreground/50">{t("v4.rules.dialog.grant")}</span>
+                </div>
+              </div>
+              <div class="mt-5 flex justify-end gap-2">
+                <span class="inline-flex cursor-default items-center rounded-lg border border-border/70 bg-muted/40 px-4 py-1.5 text-xs font-medium text-muted-foreground">
+                  {t("v4.rules.dialog.deny")}
+                </span>
+                <span class="rules-allow inline-flex cursor-default items-center rounded-lg bg-primary px-4 py-1.5 text-xs font-semibold text-primary-foreground">
+                  {t("v4.rules.dialog.allow")}
+                </span>
+              </div>
+            </div>
+            <div class="border-t border-border/60 px-5 py-4 sm:px-6 sm:py-5 dark:border-white/10">
+              <span class="font-mono text-[0.65rem] uppercase tracking-wider text-muted-foreground/60">{t("v4.rules.dialog.scoresLabel")}</span>
+              <ul class="mt-3 space-y-2.5">
+                {scores.map((s) => (
+                  <li class="flex items-center gap-3">
+                    <span class="w-24 shrink-0 text-[0.7rem] leading-none text-muted-foreground">{s.label}</span>
+                    <span class="rules-meter__track relative h-1.5 flex-1 overflow-hidden rounded-full bg-muted dark:bg-muted-foreground/20">
+                      <span class="rules-meter__fill absolute inset-y-0 left-0 rounded-full bg-primary/80" style={`--w: ${s.value * 10}%`}></span>
+                    </span>
+                    <span class="w-3 shrink-0 text-right font-mono text-[0.65rem] leading-none tabular-nums text-muted-foreground/70">{s.value}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Checklist -->
+      <div class="lg:col-span-7">
+        <div class="rules-reveal mb-8" data-rules-progress-wrap>
+          <div class="mb-2 flex items-center justify-between">
+            <span class="text-sm font-medium text-muted-foreground">
+              <span data-rules-count class="tabular-nums font-semibold text-foreground">0</span>/<span>6</span>
+              {t("v4.rules.progress")}
+            </span>
+            <span data-rules-done class="text-sm font-medium text-primary/80 opacity-0 transition-opacity duration-500">{t("v4.rules.progressDone")}</span>
+          </div>
+          <div class="rules-progress-track h-2 overflow-hidden rounded-full bg-muted/60">
+            <div
+              data-rules-bar
+              class="rules-progress-fill h-full rounded-full bg-gradient-to-r from-primary/80 to-primary/60 transition-[width] duration-700 ease-out"
+              style="width: 0%;"
+              role="progressbar"
+              aria-label={t("v4.rules.progress")}
+              aria-valuenow="0"
+              aria-valuemin="0"
+              aria-valuemax="6"
+            ></div>
+          </div>
+        </div>
+
+        <div class="space-y-4">
+          {items.map((item, i) => (
+            <div
+              class="rules-check rules-reveal group relative rounded-xl border border-border/40 bg-background/60 p-5 backdrop-blur-sm transition-colors hover:border-primary/25 hover:bg-primary/[0.02] sm:p-6 dark:border-white/10"
+              data-rules-index={i}
+            >
+              <div class="flex items-start gap-4">
+                <div class="rules-check__icon mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-primary/25 bg-primary/10 text-primary opacity-40 transition-opacity duration-500">
+                  <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3.5 8.5 L6.5 11.5 L12.5 5" />
+                  </svg>
+                </div>
+                <div class="min-w-0 flex-1">
+                  <h3 class="text-sm font-semibold leading-snug text-foreground">{item.title}</h3>
+                  <p class="mt-1 text-sm leading-relaxed text-muted-foreground">{item.desc}</p>
+                  {item.link && (
+                    <a
+                      href={item.link}
+                      class="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary/80 transition-colors hover:text-primary"
+                    >
+                      {t("v4.common.verify")}
+                      <svg class="h-3 w-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M2.5 6 h7 M6.5 3 L9.5 6 L6.5 9" />
+                      </svg>
+                    </a>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+
+    <p class="rules-uth mt-12 max-w-3xl text-left text-xs leading-relaxed text-muted-foreground/70"><span class="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-muted-foreground/60">{t("v4.common.underTheHood")}</span> — {t("v4.rules.uth")}</p>
+  </div>
+</section>
+
+<style>
+  /* ── Contrast band ──────────────────────────────────────────────────
+     A distinct, richer band in BOTH themes.
+     Light theme → deep-charcoal band (text flips to near-white).
+     Dark theme  → elevated warm-charcoal surface, framed + inner glow.
+     Band-local tokens remap text utilities so existing markup adapts. */
+  .rules-band {
+    --band-fill-top: #101119;
+    --band-fill-bot: #0c0d13;
+    --band-ink: #f5f1ec;
+    --band-ink-muted: #a9a6b2;
+    --band-surface-top: #22232e;
+    --band-surface-bot: #191a24;
+    --band-panel-top: rgba(255, 255, 255, 0.05);
+    --band-panel-bot: rgba(255, 255, 255, 0.014);
+    --band-line: rgba(245, 241, 236, 0.1);
+    --band-line-soft: rgba(245, 241, 236, 0.07);
+    --band-seam: color-mix(in oklch, var(--primary) 16%, rgba(245, 241, 236, 0.12));
+    --band-amber: oklch(0.78 0.14 62);
+    --band-glow: color-mix(in oklch, var(--primary) 55%, transparent);
+
+    /* remap text tokens so text-foreground / text-muted-foreground pop on the band */
+    --foreground: var(--band-ink);
+    --color-foreground: var(--band-ink);
+    --muted-foreground: var(--band-ink-muted);
+    --color-muted-foreground: var(--band-ink-muted);
+    --muted: #20212b;
+    --color-muted: #20212b;
+
+    background: linear-gradient(180deg, var(--band-fill-top), var(--band-fill-bot));
+    border-top: 1px solid var(--band-seam);
+    border-bottom: 1px solid var(--band-seam);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      inset 0 70px 160px -90px color-mix(in oklch, var(--primary) 22%, transparent);
+    color: var(--band-ink);
+  }
+  :global(.dark) .rules-band {
+    --band-fill-top: #17181f;
+    --band-fill-bot: #121218;
+    --band-surface-top: #24262f;
+    --band-surface-bot: #1c1d27;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      inset 0 70px 170px -90px color-mix(in oklch, var(--primary) 26%, transparent),
+      0 -1px 0 rgba(0, 0, 0, 0.4);
+  }
+
+  /* ── Ambience ─────────────────────────────────────────────────────── */
+  .rules-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(100px);
+    opacity: 0.4;
+  }
+  .rules-orb--warm {
+    width: 520px;
+    height: 520px;
+    top: -100px;
+    left: -140px;
+    background: radial-gradient(circle, color-mix(in oklch, var(--primary) 24%, transparent), transparent 70%);
+  }
+  .rules-orb--cool {
+    width: 440px;
+    height: 440px;
+    bottom: -80px;
+    right: -120px;
+    opacity: 0.32;
+    background: radial-gradient(circle, color-mix(in oklch, var(--band-amber) 20%, transparent), transparent 70%);
+  }
+
+  /* ── Permission-dialog stage ──────────────────────────────────────── */
+  .rules-stage {
+    border-color: var(--band-line-soft) !important;
+    background-image: radial-gradient(color-mix(in oklch, var(--band-ink) 11%, transparent) 1px, transparent 1px);
+    background-size: 18px 18px;
+  }
+  .rules-stage::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: radial-gradient(ellipse 72% 60% at 50% 42%, color-mix(in oklch, var(--primary) 12%, transparent), transparent 74%);
+    pointer-events: none;
+  }
+
+  /* ── OS-style permission dialog: crisp floating instrument ────────── */
+  .rules-dialog {
+    z-index: 1;
+    background: linear-gradient(180deg, var(--band-surface-top), var(--band-surface-bot)) !important;
+    border: 1px solid var(--band-line) !important;
+    box-shadow:
+      0 32px 72px -28px rgba(0, 0, 0, 0.66),
+      0 10px 28px -14px rgba(0, 0, 0, 0.5),
+      inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    transform: scale(0.96) translateY(10px);
+    opacity: 0;
+    transition: transform 0.7s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.6s ease;
+  }
+  .rules-dialog.is-open {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+  .rules-dialog > div + div {
+    border-top-color: var(--band-line-soft) !important;
+  }
+  .rules-allow {
+    box-shadow:
+      0 8px 22px -8px var(--band-glow),
+      inset 0 0 0 1px color-mix(in oklch, #fff 22%, transparent);
+  }
+
+  /* ── Quality-score meters: confident coral → amber ────────────────── */
+  .rules-meter__track {
+    background: rgba(255, 255, 255, 0.07) !important;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  }
+  .rules-meter__fill {
+    width: 0%;
+    background: linear-gradient(90deg, var(--primary), var(--band-amber)) !important;
+    box-shadow: 0 0 10px -1px var(--band-glow);
+    transition: width 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .rules-dialog.is-filled .rules-meter__fill {
+    width: var(--w);
+  }
+  .rules-dialog.is-filled .rules-meter__fill:nth-child(1) { transition-delay: 0.05s; }
+  .rules-dialog.is-filled li:nth-child(2) .rules-meter__fill { transition-delay: 0.1s; }
+  .rules-dialog.is-filled li:nth-child(3) .rules-meter__fill { transition-delay: 0.15s; }
+  .rules-dialog.is-filled li:nth-child(4) .rules-meter__fill { transition-delay: 0.2s; }
+  .rules-dialog.is-filled li:nth-child(5) .rules-meter__fill { transition-delay: 0.25s; }
+  .rules-dialog.is-filled li:nth-child(6) .rules-meter__fill { transition-delay: 0.3s; }
+
+  /* ── Progress bar ─────────────────────────────────────────────────── */
+  .rules-progress-track {
+    background: rgba(255, 255, 255, 0.06) !important;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  }
+  .rules-progress-fill {
+    background: linear-gradient(90deg, var(--primary), var(--band-amber)) !important;
+    box-shadow: 0 0 16px -3px var(--band-glow);
+  }
+
+  /* ── Checklist: instrument cards + glowing checks ─────────────────── */
+  .rules-check {
+    background: linear-gradient(180deg, var(--band-panel-top), var(--band-panel-bot)) !important;
+    border: 1px solid var(--band-line-soft) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+    transition: border-color 0.3s ease, background 0.3s ease, box-shadow 0.3s ease;
+  }
+  .rules-check:hover {
+    border-color: color-mix(in oklch, var(--primary) 38%, transparent) !important;
+    background: linear-gradient(180deg, color-mix(in oklch, var(--primary) 7%, var(--band-panel-top)), var(--band-panel-bot)) !important;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 12px 30px -18px var(--band-glow);
+  }
+  .rules-check__icon {
+    transition: opacity 0.5s ease, background 0.5s ease, border-color 0.5s ease, box-shadow 0.5s ease, color 0.5s ease;
+  }
+  .rules-check.is-checked .rules-check__icon {
+    opacity: 1;
+    color: #fff;
+    background: var(--primary);
+    border-color: color-mix(in oklch, var(--primary) 80%, #fff) !important;
+    box-shadow:
+      0 0 0 3px color-mix(in oklch, var(--primary) 18%, transparent),
+      0 0 16px -1px var(--band-glow);
+  }
+
+  /* ── Reveal ───────────────────────────────────────────────────────── */
+  .rules-reveal {
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .rules-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .rules-reveal,
+    .rules-dialog,
+    .rules-meter__fill,
+    .rules-progress-fill {
+      transition: none !important;
+    }
+    .rules-reveal {
+      transform: none !important;
+      opacity: 1 !important;
+    }
+    .rules-dialog {
+      transform: none !important;
+      opacity: 1 !important;
+    }
+    .rules-meter__fill {
+      width: var(--w) !important;
+    }
+  }
+</style>
+
+<script>
+  function initRules() {
+    const section = document.getElementById("rules");
+    if (!section) return;
+
+    const reveals = section.querySelectorAll<HTMLElement>(".rules-reveal");
+    const checkItems = section.querySelectorAll<HTMLElement>(".rules-check");
+    const dialog = section.querySelector<HTMLElement>(".rules-dialog");
+    const progressBar = section.querySelector<HTMLElement>("[data-rules-bar]");
+    const countEl = section.querySelector<HTMLElement>("[data-rules-count]");
+    const doneLabel = section.querySelector<HTMLElement>("[data-rules-done]");
+    const progressWrap = section.querySelector<HTMLElement>("[data-rules-progress-wrap]");
+    const total = 6;
+    let animated = false;
+
+    const reduced =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    function finishAll() {
+      reveals.forEach((el) => el.classList.add("is-visible"));
+      checkItems.forEach((el) => el.classList.add("is-checked"));
+      dialog?.classList.add("is-open", "is-filled");
+      if (progressBar) {
+        progressBar.style.width = "100%";
+        progressBar.setAttribute("aria-valuenow", String(total));
+      }
+      if (countEl) countEl.textContent = String(total);
+      if (doneLabel) doneLabel.style.opacity = "1";
+    }
+
+    if (reduced || !("IntersectionObserver" in window)) {
+      finishAll();
+      return;
+    }
+
+    const revealIO = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            revealIO.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -8% 0px", threshold: 0.1 },
+    );
+    reveals.forEach((el) => revealIO.observe(el));
+
+    if (dialog) {
+      const dialogIO = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (entry.isIntersecting) {
+              dialog.classList.add("is-open");
+              setTimeout(() => dialog.classList.add("is-filled"), 450);
+              dialogIO.unobserve(entry.target);
+            }
+          }
+        },
+        { threshold: 0.35 },
+      );
+      dialogIO.observe(dialog);
+    }
+
+    const progressIO = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && !animated) {
+            animated = true;
+            animateProgress();
+            progressIO.unobserve(entry.target);
+          }
+        }
+      },
+      { threshold: 0.3 },
+    );
+    if (progressWrap) progressIO.observe(progressWrap);
+
+    function animateProgress() {
+      let current = 0;
+      const staggerMs = 280;
+
+      function tick() {
+        if (current > total) return;
+
+        if (progressBar) {
+          progressBar.style.width = `${(current / total) * 100}%`;
+          progressBar.setAttribute("aria-valuenow", String(current));
+        }
+        if (countEl) countEl.textContent = String(current);
+
+        if (current > 0) {
+          const item = checkItems[current - 1];
+          if (item) item.classList.add("is-checked");
+        }
+
+        if (current === total && doneLabel) {
+          doneLabel.style.opacity = "1";
+        }
+
+        current++;
+        if (current <= total) {
+          setTimeout(tick, staggerMs);
+        }
+      }
+
+      tick();
+    }
+  }
+
+  initRules();
+</script>

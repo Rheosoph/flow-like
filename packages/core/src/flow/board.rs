@@ -14,6 +14,7 @@ use crate::{
     },
 };
 use commands::GenericCommand;
+use commands::nodes::update_node::UpdateNodeCommand;
 use flow_like_storage::object_store::{self, ObjectStore, UpdateVersion, path::Path};
 use flow_like_types::proto;
 use flow_like_types::{FromProto, ToProto, create_id, sync::Mutex};
@@ -30,6 +31,15 @@ use tracing::instrument;
 
 pub mod cleanup;
 pub mod commands;
+
+/// Reserved board-ref namespace for host bookkeeping that must be persisted atomically with a
+/// board mutation but must never participate in FlowScript, semantic fingerprints, or user-facing
+/// context. Values under this prefix are opaque to the workflow engine.
+pub const INTERNAL_BOARD_REF_PREFIX: &str = "__flow_like_internal_v1/";
+
+pub fn is_internal_board_ref(key: &str) -> bool {
+    key.starts_with(INTERNAL_BOARD_REF_PREFIX)
+}
 
 #[derive(Debug, Clone)]
 pub enum BoardParent {
@@ -90,11 +100,69 @@ pub enum VersionType {
     Patch,
 }
 
+/// Who a layer's cached results belong to. Mirrors the scopes the flow cache backends
+/// understand; kept here so the layer settings do not have to depend on the catalog.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerCacheScope {
+    /// Shared by everyone who can execute in the app.
+    #[default]
+    App,
+    /// Private to the user who triggered the run.
+    User,
+}
+
+impl LayerCacheScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::App => "app",
+            Self::User => "user",
+        }
+    }
+}
+
+/// Result caching for a layer invoked as a function.
+///
+/// A hit replaces the whole call: the function body never runs, so its side effects do
+/// not happen either. Only turn this on for layers whose outputs are a function of their
+/// inputs.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LayerCache {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Namespace every entry for this layer is written under, so one layer's cache can be
+    /// invalidated without touching the rest of the app's.
+    #[serde(default)]
+    pub prefix: String,
+    /// Lifetime of an entry in seconds. `None` or `0` keeps it until it is invalidated.
+    #[serde(default)]
+    pub ttl_seconds: Option<u64>,
+    #[serde(default)]
+    pub scope: LayerCacheScope,
+}
+
+impl LayerCache {
+    pub fn is_active(&self) -> bool {
+        self.enabled
+    }
+
+    /// The TTL handed to the cache backend. Layer settings define both omission and `0` as
+    /// "never expires", so normalize both to explicit `Some(0)`. At the remote cache boundary,
+    /// `None` instead means "use the deployment default" and would violate that layer contract.
+    pub fn ttl(&self) -> Option<u64> {
+        Some(self.ttl_seconds.unwrap_or(0))
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct Layer {
     pub id: String,
     pub parent_id: Option<String>,
     pub name: String,
+    /// Folder the layer is filed under in the sidebar, nested with forward slashes.
+    /// Empty means the top level. Purely organizational, it does not affect execution.
+    #[serde(default)]
+    pub category: Option<String>,
     pub r#type: LayerType,
     pub nodes: HashMap<String, Node>,
     pub variables: HashMap<String, Variable>,
@@ -106,6 +174,8 @@ pub struct Layer {
     pub comment: Option<String>,
     pub error: Option<String>,
     pub color: Option<String>,
+    #[serde(default)]
+    pub cache: Option<LayerCache>,
     pub hash: Option<u64>,
 }
 
@@ -115,6 +185,7 @@ impl Layer {
             id,
             parent_id: None,
             name,
+            category: None,
             r#type,
             nodes: HashMap::new(),
             variables: HashMap::new(),
@@ -126,6 +197,7 @@ impl Layer {
             comment: None,
             error: None,
             color: None,
+            cache: None,
             hash: None,
         }
     }
@@ -141,6 +213,10 @@ impl Layer {
         hasher.append(self.id.as_bytes());
         hasher.append(self.name.as_bytes());
         hasher.append(format!("{:?}", self.r#type).as_bytes());
+
+        if let Some(category) = &self.category {
+            hasher.append(category.as_bytes());
+        }
 
         if let Some(parent_id) = &self.parent_id {
             hasher.append(parent_id.as_bytes());
@@ -185,8 +261,29 @@ impl Layer {
             hasher.append(color.as_bytes());
         }
 
+        if let Some(cache) = &self.cache {
+            hasher.append(&[cache.enabled as u8]);
+            hasher.append(cache.prefix.as_bytes());
+            hasher.append(&cache.ttl_seconds.unwrap_or_default().to_le_bytes());
+            hasher.append(cache.scope.as_str().as_bytes());
+        }
+
         self.hash = Some(hasher.finalize64());
     }
+}
+
+/// A page the board lists but whose payload could not be read on this host.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+pub struct UnreadablePage {
+    pub page_id: String,
+    pub reason: String,
+}
+
+/// The readable pages of a board plus the ids it lists that could not be read.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default)]
+pub struct LoadedPages {
+    pub pages: Vec<Page>,
+    pub unreadable: Vec<UnreadablePage>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone)]
@@ -203,6 +300,11 @@ pub struct Board {
     pub log_level: LogLevel,
     pub execution_mode: ExecutionMode,
     pub refs: HashMap<String, String>,
+    /// Persisted host bookkeeping, intentionally excluded from Board JSON and all semantic
+    /// workflow surfaces. External crates can only access this map through the prefix-validating
+    /// methods on `Board`.
+    #[serde(skip)]
+    pub(crate) internal_refs: HashMap<String, String>,
     pub layers: HashMap<String, Layer>,
     pub page_ids: Vec<String>,
     pub hash: Option<u64>,
@@ -257,10 +359,25 @@ fn execution_mode_marker(mode: &ExecutionMode) -> u8 {
     }
 }
 
+/// Pin ids are the only part of a node another machine cannot re-derive: everything else
+/// `on_update` produces is a deterministic function of the board it already replayed.
+fn pin_ids_match(current: &Node, previous: &Node) -> bool {
+    current.pins.len() == previous.pins.len()
+        && current.pins.keys().all(|id| previous.pins.contains_key(id))
+}
+
 impl Board {
     /// Create a new board with a unique ID
     /// The board is created in the base directory appended with the ID
     pub fn new(id: Option<String>, base_dir: Path, app_state: Arc<FlowLikeState>) -> Self {
+        let mut board = Self::new_detached(id, base_dir);
+        board.app_state = Some(app_state);
+        board
+    }
+
+    /// Create a board without runtime state. Deterministic transforms, importers, and fixtures can
+    /// use this constructor and attach credentials before calling storage or execution methods.
+    pub fn new_detached(id: Option<String>, base_dir: Path) -> Self {
         let id = id.unwrap_or(create_id());
         let board_dir = base_dir;
 
@@ -282,10 +399,11 @@ impl Board {
             page_ids: Vec::new(),
             hash: None,
             refs: HashMap::new(),
+            internal_refs: HashMap::new(),
             parent: None,
             board_dir,
             logic_nodes: HashMap::new(),
-            app_state: Some(app_state.clone()),
+            app_state: None,
         };
         board.hash();
         board
@@ -294,6 +412,74 @@ impl Board {
     pub fn mark_changed(&mut self) {
         self.updated_at = SystemTime::now();
         self.hash();
+    }
+
+    /// Read one host-owned board reference. Public workflow refs are deliberately inaccessible
+    /// through this API, and a non-reserved key can never alias into the internal namespace.
+    pub fn internal_ref(&self, key: &str) -> Option<&str> {
+        is_internal_board_ref(key)
+            .then(|| self.internal_refs.get(key).map(String::as_str))
+            .flatten()
+    }
+
+    /// Persist one host-owned board reference after enforcing the reserved namespace boundary.
+    pub fn insert_internal_ref(
+        &mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> flow_like_types::Result<Option<String>> {
+        let key = key.into();
+        if !is_internal_board_ref(&key) {
+            return Err(flow_like_types::anyhow!(
+                "internal board reference keys must start with '{INTERNAL_BOARD_REF_PREFIX}'"
+            ));
+        }
+        Ok(self.internal_refs.insert(key, value.into()))
+    }
+
+    /// Remove one host-owned board reference. Non-reserved keys are never removed by this API.
+    pub fn remove_internal_ref(&mut self, key: &str) -> Option<String> {
+        is_internal_board_ref(key)
+            .then(|| self.internal_refs.remove(key))
+            .flatten()
+    }
+
+    /// Iterate over one reserved sub-namespace without exposing the backing map for mutation.
+    pub fn internal_refs_with_prefix<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> impl Iterator<Item = (&'a str, &'a str)> + 'a {
+        let valid_prefix = is_internal_board_ref(prefix);
+        self.internal_refs.iter().filter_map(move |(key, value)| {
+            (valid_prefix && key.starts_with(prefix)).then_some((key.as_str(), value.as_str()))
+        })
+    }
+
+    /// Retain selected values in one reserved sub-namespace while leaving every other host-owned
+    /// namespace untouched.
+    pub fn retain_internal_refs_with_prefix<F>(
+        &mut self,
+        prefix: &str,
+        mut retain: F,
+    ) -> flow_like_types::Result<()>
+    where
+        F: FnMut(&str, &str) -> bool,
+    {
+        if !is_internal_board_ref(prefix) {
+            return Err(flow_like_types::anyhow!(
+                "internal board reference prefixes must start with '{INTERNAL_BOARD_REF_PREFIX}'"
+            ));
+        }
+        self.internal_refs
+            .retain(|key, value| !key.starts_with(prefix) || retain(key.as_str(), value.as_str()));
+        self.internal_refs.shrink_to_fit();
+        Ok(())
+    }
+
+    /// Remove all host bookkeeping before a board is copied into a semantic artifact such as a
+    /// template, immutable published version, or fork.
+    pub fn clear_internal_refs(&mut self) {
+        self.internal_refs.clear();
     }
 
     /// Derives a governed ontology action's parameter schema from the start
@@ -386,7 +572,11 @@ impl Board {
         hasher.append(&[self.log_level.to_u8()]);
         hasher.append(&[execution_mode_marker(&self.execution_mode)]);
 
-        let mut refs = self.refs.iter().collect::<Vec<_>>();
+        let mut refs = self
+            .refs
+            .iter()
+            .filter(|(key, _)| !is_internal_board_ref(key))
+            .collect::<Vec<_>>();
         refs.sort_by_key(|(key, _)| *key);
         for (key, value) in refs {
             hasher.append(key.as_bytes());
@@ -447,6 +637,26 @@ impl Board {
         }
 
         self.hash = Some(hasher.finalize64());
+    }
+
+    /// Recompute catalog-derived node schemas for an already-open board.
+    ///
+    /// Hosts call this when their node/widget registry becomes available or is
+    /// replaced after the board was loaded. The refresh is deliberately
+    /// in-memory only: it must not make the board look user-edited or persist
+    /// schema-only changes behind the user's back.
+    pub async fn refresh_node_definitions(&mut self, state: Arc<FlowLikeState>) {
+        let updated_at = self.updated_at;
+        let hash = self.hash;
+
+        // A registry replacement can also replace NodeLogic implementations.
+        // Do not let the board's per-node logic cache pin it to the old one.
+        self.logic_nodes.clear();
+        self.node_updates(state).await;
+        self.cleanup();
+
+        self.updated_at = updated_at;
+        self.hash = hash;
     }
 
     async fn node_updates(&mut self, state: Arc<FlowLikeState>) {
@@ -621,12 +831,79 @@ impl Board {
         Ok(command)
     }
 
+    /// Restate every node whose pin identities `on_update` derived rather than the batch itself.
+    ///
+    /// Pins minted inside `on_update` — function-call mirrors, `string_format` placeholders — are
+    /// allocated with `create_id()`, so any machine that re-derives them gets *different* ids. The
+    /// returned batch is not only local undo history: the desktop ships it to the Hub and replays it
+    /// there verbatim. A `ConnectPin` that targets such a pin therefore only resolves if the batch
+    /// also carries the node state that owns it.
+    ///
+    /// `on_update` implementations reconcile mirrored pins by name, so replaying explicit node state
+    /// makes the replayer adopt these ids instead of minting a second set.
+    fn derived_node_state_commands(
+        &self,
+        before: &HashMap<String, Node>,
+        executed: &[GenericCommand],
+    ) -> Vec<GenericCommand> {
+        let mut described = HashMap::<&str, &Node>::new();
+        for command in executed {
+            match command {
+                GenericCommand::AddNode(command) => {
+                    described.insert(command.node.id.as_str(), &command.node);
+                }
+                GenericCommand::UpdateNode(command) => {
+                    described.insert(command.node.id.as_str(), &command.node);
+                }
+                GenericCommand::CopyPaste(command) => {
+                    for node in &command.new_nodes {
+                        described.insert(node.id.as_str(), node);
+                    }
+                }
+                GenericCommand::UpsertLayer(command) => {
+                    for node in command.layer.nodes.values() {
+                        described.insert(node.id.as_str(), node);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut restated = self
+            .nodes
+            .iter()
+            .filter_map(|(node_id, current)| {
+                // `node_updates` runs `on_update` on every node, so a layer edit can re-mint pins on
+                // a node no command in this batch mentions.
+                let previous = described
+                    .get(node_id.as_str())
+                    .copied()
+                    .or_else(|| before.get(node_id))?;
+                if pin_ids_match(current, previous) {
+                    return None;
+                }
+                Some((
+                    node_id.clone(),
+                    GenericCommand::UpdateNode(UpdateNodeCommand {
+                        node: current.clone(),
+                        old_node: Some(previous.clone()),
+                    }),
+                ))
+            })
+            .collect::<Vec<_>>();
+        // Map iteration order is randomized, and the remote retry identity is a digest of the exact
+        // payload — an unstable order would turn every retry into an idempotency conflict.
+        restated.sort_by(|(left, _), (right, _)| left.cmp(right));
+        restated.into_iter().map(|(_, command)| command).collect()
+    }
+
     pub async fn execute_commands(
         &mut self,
         commands: Vec<GenericCommand>,
         state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Vec<GenericCommand>> {
         let mut commands = commands;
+        let nodes_before = self.nodes.clone();
         for index in 0..commands.len() {
             if let Err(error) = commands[index].validate(self, state.clone()).await {
                 let recovery_errors = self
@@ -666,6 +943,8 @@ impl Board {
         self.node_updates(state).await;
         self.cleanup();
         self.mark_changed();
+        let derived = self.derived_node_state_commands(&nodes_before, &commands);
+        commands.extend(derived);
         Ok(commands)
     }
 
@@ -831,6 +1110,7 @@ impl Board {
         // this while the floating draft still points at its previous version.
         let mut published = self.clone();
         published.version = version;
+        published.clear_internal_refs();
         published.hash();
 
         let board_version_path = self
@@ -897,14 +1177,12 @@ impl Board {
         let board = published.to_proto();
         if let Err(create_error) =
             compress_to_file_create(store.clone(), board_version_path, &board).await
-        {
-            if !published
+            && !published
                 .snapshot_matches_current(version, Some(store.clone()))
                 .await
                 .unwrap_or(false)
-            {
-                return Err(create_error);
-            }
+        {
+            return Err(create_error);
         }
 
         // The board object is the publication marker, so do one final read of
@@ -1419,7 +1697,7 @@ impl Board {
         board
     }
 
-    #[instrument(name = "Board::load", skip(app_state), level = "debug")]
+    #[instrument(name = "Board::load", skip(app_state, path), level = "debug")]
     pub async fn load(
         path: Path,
         id: &str,
@@ -1553,16 +1831,34 @@ impl Board {
         self.load_page_with_legacy_fallback(&store, page_id).await
     }
 
+    /// Read every page the board lists.
+    ///
+    /// A board carries page ids, its pages are separate files, and the two can legitimately
+    /// disagree: a board synced from a remote arrives before its payloads do. One unreadable
+    /// page must therefore never cost the caller the rest of the board — the ids that failed
+    /// are reported alongside the pages that loaded so callers can surface or repair them.
+    /// Only a board-level storage failure is an error.
     pub async fn load_all_pages(
         &self,
         store: Option<Arc<dyn ObjectStore>>,
-    ) -> flow_like_types::Result<Vec<Page>> {
+    ) -> flow_like_types::Result<LoadedPages> {
         let store = self.get_store(store).await?;
-        let mut pages = Vec::with_capacity(self.page_ids.len());
+        let mut loaded = LoadedPages {
+            pages: Vec::with_capacity(self.page_ids.len()),
+            unreadable: Vec::new(),
+        };
+
         for page_id in &self.page_ids {
-            pages.push(self.load_page_with_legacy_fallback(&store, page_id).await?);
+            match self.load_page_with_legacy_fallback(&store, page_id).await {
+                Ok(page) => loaded.pages.push(page),
+                Err(error) => loaded.unreadable.push(UnreadablePage {
+                    page_id: page_id.clone(),
+                    reason: error.to_string(),
+                }),
+            }
         }
-        Ok(pages)
+
+        Ok(loaded)
     }
 
     /// Load a page from the canonical board-scoped binary-proto path,
@@ -1750,7 +2046,9 @@ impl Board {
         let to = self.board_dir.child(format!("{}.template", self.id));
         let store = self.get_store(store).await?;
 
-        let board = self.to_proto();
+        let mut template = self.clone();
+        template.clear_internal_refs();
+        let board = template.to_proto();
         compress_to_file(store.clone(), to, &board).await?;
 
         for page_id in &self.page_ids {
@@ -1780,7 +2078,9 @@ impl Board {
                 version.0, version.1, version.2
             ));
 
-        let board = self.to_proto();
+        let mut template = self.clone();
+        template.clear_internal_refs();
+        let board = template.to_proto();
         compress_to_file(store.clone(), to, &board).await?;
 
         for page_id in &self.page_ids {
@@ -1819,6 +2119,8 @@ impl Board {
                     "{}_{}_{}.template",
                     version.0, version.1, version.2
                 ));
+            let mut old_template = old_template.clone();
+            old_template.clear_internal_refs();
             compress_to_file(store.clone(), to, &old_template.to_proto()).await?;
 
             for page_id in &old_template.page_ids {
@@ -2094,6 +2396,55 @@ mod tests {
         Arc::new(flow_like_state)
     }
 
+    struct RefreshDefinitionLogic {
+        label: &'static str,
+    }
+
+    #[flow_like_types::async_trait]
+    impl crate::flow::node::NodeLogic for RefreshDefinitionLogic {
+        fn get_node(&self) -> crate::flow::node::Node {
+            crate::flow::node::Node::new("refresh_definition_test", self.label, "", "test")
+        }
+
+        async fn run(
+            &self,
+            _: &mut crate::flow::execution::context::ExecutionContext,
+        ) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+
+        async fn on_update(&self, node: &mut crate::flow::node::Node, _: &super::Board) {
+            node.friendly_name = self.label.to_string();
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_node_definitions_uses_current_registry_without_marking_board_dirty() {
+        use crate::flow::node::NodeLogic;
+
+        let state = flow_state().await;
+        let old_logic: Arc<dyn NodeLogic> = Arc::new(RefreshDefinitionLogic { label: "Old logic" });
+        let new_logic: Arc<dyn NodeLogic> = Arc::new(RefreshDefinitionLogic { label: "New logic" });
+
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+        let node = old_logic.get_node();
+        let node_id = node.id.clone();
+        board.nodes.insert(node_id.clone(), node);
+        board
+            .logic_nodes
+            .insert("refresh_definition_test".to_string(), old_logic);
+
+        state.node_registry().write().await.push_node(new_logic);
+        let updated_at = board.updated_at;
+        board.hash = Some(0xdead_beef);
+
+        board.refresh_node_definitions(state).await;
+
+        assert_eq!(board.nodes[&node_id].friendly_name, "New logic");
+        assert_eq!(board.updated_at, updated_at);
+        assert_eq!(board.hash, Some(0xdead_beef));
+    }
+
     #[tokio::test]
     async fn serialize_board() {
         let state = flow_state().await;
@@ -2106,6 +2457,54 @@ mod tests {
             super::Board::from_proto(flow_like_types::proto::Board::decode(&buf[..]).unwrap());
 
         assert_eq!(board.id, deser_board.id);
+    }
+
+    #[tokio::test]
+    async fn internal_refs_roundtrip_in_proto_but_not_board_json_or_semantic_hash() {
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state);
+        let original_hash = board.content_hash();
+        let key = format!("{}test-receipt", super::INTERNAL_BOARD_REF_PREFIX);
+        board
+            .insert_internal_ref(key.clone(), "opaque")
+            .expect("reserved key");
+
+        assert_eq!(board.content_hash(), original_hash);
+        let json = serde_json::to_value(&board).expect("board JSON");
+        assert!(json.get("internal_refs").is_none());
+        assert!(
+            json.get("refs")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|refs| !refs.contains_key(&key))
+        );
+
+        let proto = board.to_proto();
+        assert_eq!(
+            proto.internal_refs.get(&key).map(String::as_str),
+            Some("opaque")
+        );
+        let restored = super::Board::from_proto(proto);
+        assert_eq!(restored.internal_ref(&key), Some("opaque"));
+        assert!(!restored.refs.contains_key(&key));
+    }
+
+    #[tokio::test]
+    async fn legacy_prefixed_refs_migrate_to_internal_proto_storage() {
+        let state = flow_state().await;
+        let board = super::Board::new(None, Path::from("boards"), state);
+        let mut proto = board.to_proto();
+        let key = format!("{}legacy", super::INTERNAL_BOARD_REF_PREFIX);
+        proto.refs.insert(key.clone(), "receipt".to_string());
+
+        let restored = super::Board::from_proto(proto);
+        assert_eq!(restored.internal_ref(&key), Some("receipt"));
+        assert!(!restored.refs.contains_key(&key));
+        let migrated = restored.to_proto();
+        assert!(!migrated.refs.contains_key(&key));
+        assert_eq!(
+            migrated.internal_refs.get(&key).map(String::as_str),
+            Some("receipt")
+        );
     }
 
     #[tokio::test]
@@ -2134,6 +2533,39 @@ mod tests {
             .unwrap()
             .schema = Some("[]".to_string());
         assert!(board.action_parameter_schema(&start_id).is_err());
+    }
+
+    #[tokio::test]
+    async fn listing_pages_survives_one_unreadable_payload() {
+        use crate::a2ui::widget::Page;
+
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state);
+        board
+            .save_page(&Page::new("page-1", "First", "/"), None)
+            .await
+            .unwrap();
+        board
+            .save_page(&Page::new("page-2", "Second", "/second"), None)
+            .await
+            .unwrap();
+        // A board synced from a remote knows page ids whose payloads never arrived.
+        board.page_ids.push("page-missing".to_string());
+
+        let loaded = board.load_all_pages(None).await.unwrap();
+
+        assert_eq!(
+            loaded
+                .pages
+                .iter()
+                .map(|page| page.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["page-1", "page-2"],
+            "an unreadable page must not cost the caller the rest of the board"
+        );
+        assert_eq!(loaded.unreadable.len(), 1);
+        assert_eq!(loaded.unreadable[0].page_id, "page-missing");
+        assert!(!loaded.unreadable[0].reason.is_empty());
     }
 
     #[tokio::test]

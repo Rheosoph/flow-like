@@ -12,8 +12,9 @@ use axum::{
 };
 use flow_like_types::create_id;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
-    TransactionTrait,
+    ActiveValue::Set,
+    ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter, TransactionTrait,
+    sea_query::{Expr, OnConflict},
 };
 
 #[utoipa::path(
@@ -37,7 +38,10 @@ use sea_orm::{
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/team/link/join/{token}", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/team/link/join/{token}",
+    skip(state, user, token)
+)]
 pub async fn join_invite_link(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -45,24 +49,27 @@ pub async fn join_invite_link(
 ) -> Result<Json<()>, ApiError> {
     let sub = user.sub()?;
     ensure_user_exists(&state, &sub).await?;
-    let txn = state.db.begin().await?;
+    // Tokens are credentials: never log or audit them in full.
+    let token_hint: String = token.chars().take(8).collect();
 
     let max_prototype = state.platform_config.max_users_prototype.unwrap_or(-1);
 
     let membership_exists = membership::Entity::find()
         .filter(membership::Column::AppId.eq(app_id.clone()))
         .filter(membership::Column::UserId.eq(sub.clone()))
-        .one(&txn)
+        .one(&state.db)
         .await?;
 
     if membership_exists.is_some() {
-        tracing::warn!(
-            "User {} is trying to join app {} but is already a member",
+        tracing::debug!(
+            "User {} redeemed an invite link for app {} but is already a member",
             sub,
             app_id
         );
-        return Err(ApiError::FORBIDDEN);
+        return Ok(Json(()));
     }
+
+    let txn = state.db.begin().await?;
 
     let (invite_link, app) = invite_link::Entity::find()
         .filter(invite_link::Column::Token.eq(token.clone()))
@@ -72,48 +79,38 @@ pub async fn join_invite_link(
         .await?
         .ok_or_else(|| {
             tracing::warn!(
-                "User {} attempted to join app {} with invalid invite token {}",
+                "User {} attempted to join app {} with invalid invite token {}…",
                 sub,
                 app_id,
-                token
+                token_hint
             );
             ApiError::NOT_FOUND
         })?;
 
-    let current_count = invite_link.count_joined;
-    let max_uses = invite_link.max_uses;
-
-    if max_uses > 0 && current_count >= max_uses {
+    if let Some(expires_at) = invite_link.expires_at
+        && expires_at < chrono::Utc::now().naive_utc()
+    {
         tracing::warn!(
-            "User {} is trying to join app {} but the invite link has reached its maximum uses",
+            "User {} attempted to join app {} with expired invite link {}",
             sub,
-            app_id
+            app_id,
+            invite_link.id
         );
-        return Err(ApiError::FORBIDDEN);
+        return Err(ApiError::NOT_FOUND);
     }
 
     let app = app.ok_or(ApiError::NOT_FOUND)?;
 
     if matches!(app.visibility, Visibility::Private | Visibility::Offline) {
         tracing::warn!(
-            "User {} is trying to invite a user to app {} but the app is not public",
-            user.sub()?,
+            "User {} is trying to join app {} but the app is not public",
+            sub,
             app_id
         );
         return Err(ApiError::FORBIDDEN);
     }
 
     let default_role_id = app.default_role_id.ok_or(ApiError::NOT_FOUND)?;
-
-    if matches!(app.visibility, Visibility::Offline | Visibility::Private) {
-        tracing::warn!(
-            "User {} is trying to join app {} but the app is private or offline",
-            sub,
-            app_id
-        );
-
-        return Err(ApiError::FORBIDDEN);
-    }
 
     if max_prototype > 0 && app.visibility == Visibility::Prototype {
         let user_count = membership::Entity::find()
@@ -131,7 +128,42 @@ pub async fn join_invite_link(
         }
     }
 
-    let membership = membership::ActiveModel {
+    // Atomic claim: the WHERE guard makes concurrent redeems of a limited link
+    // serialize on the row instead of racing the earlier SELECT's snapshot.
+    let claim = invite_link::Entity::update_many()
+        .col_expr(
+            invite_link::Column::CountJoined,
+            Expr::col(invite_link::Column::CountJoined).add(1),
+        )
+        .col_expr(
+            invite_link::Column::UpdatedAt,
+            Expr::value(chrono::Utc::now().naive_utc()),
+        )
+        .filter(invite_link::Column::Id.eq(invite_link.id.clone()))
+        .filter(
+            Condition::any()
+                .add(invite_link::Column::MaxUses.lte(0))
+                .add(
+                    Expr::col(invite_link::Column::CountJoined)
+                        .lt(Expr::col(invite_link::Column::MaxUses)),
+                ),
+        )
+        .exec(&txn)
+        .await?;
+
+    if claim.rows_affected == 0 {
+        tracing::warn!(
+            "User {} is trying to join app {} but invite link {} has reached its maximum uses",
+            sub,
+            app_id,
+            invite_link.id
+        );
+        return Err(ApiError::FORBIDDEN);
+    }
+
+    // Invite links intentionally bypass the purchase flow: a link is a team
+    // grant from an admin, not a storefront entry point.
+    let new_membership = membership::ActiveModel {
         id: Set(create_id()),
         user_id: Set(sub.clone()),
         app_id: Set(app_id.clone()),
@@ -141,22 +173,32 @@ pub async fn join_invite_link(
         joined_via: Set(Some("invite_link".to_string())),
     };
 
-    membership.insert(&txn).await?;
+    let inserted = membership::Entity::insert(new_membership)
+        .on_conflict(
+            OnConflict::columns([membership::Column::UserId, membership::Column::AppId])
+                .do_nothing()
+                .to_owned(),
+        )
+        .exec_without_returning(&txn)
+        .await?;
 
-    let mut invite_link: invite_link::ActiveModel = invite_link.into();
-    invite_link.count_joined = Set(current_count + 1);
-    invite_link.updated_at = Set(chrono::Utc::now().naive_utc());
-    invite_link.update(&txn).await?;
+    if inserted == 0 {
+        // Concurrent redeem by the same user: roll back so the counter claim
+        // above is released, then report success like the fast path.
+        txn.rollback().await?;
+        return Ok(Json(()));
+    }
 
     txn.commit().await?;
 
+    let link_id = invite_link.id;
     audit_branch!(
         state,
         user,
         app_id,
         "membership.join",
         "InviteLink",
-        token,
+        link_id,
         "User joined via invite link"
     );
     Ok(Json(()))

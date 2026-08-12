@@ -40,6 +40,9 @@ function DragPreview({ data }: { data: DragData }) {
 			const match = data.componentId.match(/^([a-zA-Z]+)/);
 			return match?.[1] || "Component";
 		}
+		if ("name" in data) {
+			return data.name;
+		}
 		if ("widgetId" in data) {
 			return "Widget";
 		}

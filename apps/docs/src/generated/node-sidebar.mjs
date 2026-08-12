@@ -55,6 +55,10 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/ai/agents/builder/agent-register-memory"
               },
               {
+                "label": "Register Remote MCP Tools",
+                "slug": "nodes/ai/agents/builder/agent-register-remote-mcp-tools"
+              },
+              {
                 "label": "Register Thinking Tool",
                 "slug": "nodes/ai/agents/builder/agent-register-thinking"
               },
@@ -161,6 +165,10 @@ export const generatedNodeSidebar = [
                     "slug": "nodes/ai/generative/audio/options/ai-audio-tts-options-xai"
                   }
                 ]
+              },
+              {
+                "label": "Local Speech to Text",
+                "slug": "nodes/ai/generative/audio/ai-audio-local-speech-to-text"
               },
               {
                 "label": "Local Text to Speech",
@@ -379,6 +387,10 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/ai/generative/provider/ai-generative-build-anthropic"
               },
               {
+                "label": "Atlas Cloud Model",
+                "slug": "nodes/ai/generative/provider/ai-generative-build-atlascloud"
+              },
+              {
                 "label": "Cohere Model",
                 "slug": "nodes/ai/generative/provider/ai-generative-build-cohere"
               },
@@ -409,6 +421,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "LM Studio Model",
                 "slug": "nodes/ai/generative/provider/ai-generative-build-lmstudio"
+              },
+              {
+                "label": "MiniMax Model",
+                "slug": "nodes/ai/generative/provider/ai-generative-build-minimax"
               },
               {
                 "label": "Mira Model",
@@ -829,12 +845,36 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/ai/ml/classification"
               },
               {
+                "label": "Fit Novelty Detection (One-Class SVM)",
+                "slug": "nodes/ai/ml/classification/fit-one-class-svm"
+              },
+              {
+                "label": "Train Classifier (AdaBoost)",
+                "slug": "nodes/ai/ml/classification/fit-adaboost"
+              },
+              {
                 "label": "Train Classifier (Decision Tree)",
                 "slug": "nodes/ai/ml/classification/fit-decision-tree"
               },
               {
+                "label": "Train Classifier (K-Nearest Neighbours)",
+                "slug": "nodes/ai/ml/classification/fit-knn-classifier"
+              },
+              {
+                "label": "Train Classifier (Logistic Regression)",
+                "slug": "nodes/ai/ml/classification/fit-logistic-regression"
+              },
+              {
+                "label": "Train Classifier (Multinomial Naive Bayes)",
+                "slug": "nodes/ai/ml/classification/fit-multinomial-naive-bayes"
+              },
+              {
                 "label": "Train Classifier (Naive Bayes)",
                 "slug": "nodes/ai/ml/classification/fit-naive-bayes"
+              },
+              {
+                "label": "Train Classifier (Random Forest)",
+                "slug": "nodes/ai/ml/classification/fit-random-forest"
               },
               {
                 "label": "Train Classifier (SVM)",
@@ -849,6 +889,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Overview",
                 "slug": "nodes/ai/ml/clustering"
+              },
+              {
+                "label": "Fit Clustering (Gaussian Mixture)",
+                "slug": "nodes/ai/ml/clustering/fit-gaussian-mixture"
               },
               {
                 "label": "Train Clustering (DBSCAN)",
@@ -907,8 +951,16 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/ai/ml/metrics/ml-eval-confusion-matrix"
               },
               {
+                "label": "ROC-AUC & Log Loss",
+                "slug": "nodes/ai/ml/metrics/ml-roc-auc"
+              },
+              {
                 "label": "Regression Metrics",
                 "slug": "nodes/ai/ml/metrics/ml-eval-regression"
+              },
+              {
+                "label": "Silhouette Score",
+                "slug": "nodes/ai/ml/metrics/ml-silhouette-score"
               }
             ]
           },
@@ -919,6 +971,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Overview",
                 "slug": "nodes/ai/ml/model-info"
+              },
+              {
+                "label": "Feature Importance",
+                "slug": "nodes/ai/ml/model-info/ml-feature-importance"
               },
               {
                 "label": "Get Centroids",
@@ -995,6 +1051,10 @@ export const generatedNodeSidebar = [
                     "slug": "nodes/ai/ml/onnx/face"
                   },
                   {
+                    "label": "Analyze Faces",
+                    "slug": "nodes/ai/ml/onnx/face/face-id-analyze"
+                  },
+                  {
                     "label": "Compare Faces",
                     "slug": "nodes/ai/ml/onnx/face/compare-faces"
                   },
@@ -1009,6 +1069,14 @@ export const generatedNodeSidebar = [
                   {
                     "label": "Face Embedding",
                     "slug": "nodes/ai/ml/onnx/face/onnx-face-embedding"
+                  },
+                  {
+                    "label": "Load Face Analyzer",
+                    "slug": "nodes/ai/ml/onnx/face/face-id-load-analyzer"
+                  },
+                  {
+                    "label": "Unload Face Analyzer",
+                    "slug": "nodes/ai/ml/onnx/face/face-id-unload-analyzer"
                   }
                 ]
               },
@@ -1023,6 +1091,10 @@ export const generatedNodeSidebar = [
                   {
                     "label": "Named Entity Recognition",
                     "slug": "nodes/ai/ml/onnx/nlp/onnx-ner"
+                  },
+                  {
+                    "label": "Zero-Shot NER (GLiNER)",
+                    "slug": "nodes/ai/ml/onnx/nlp/onnx-gliner"
                   }
                 ]
               },
@@ -1117,6 +1189,66 @@ export const generatedNodeSidebar = [
             ]
           },
           {
+            "label": "Ordinal",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/ai/ml/ordinal"
+              },
+              {
+                "label": "Ordinal Metrics",
+                "slug": "nodes/ai/ml/ordinal/ml-ordinal-metrics"
+              },
+              {
+                "label": "Train Ordinal Model (Adjacent Category)",
+                "slug": "nodes/ai/ml/ordinal/fit-ordinal-adjacent-category"
+              },
+              {
+                "label": "Train Ordinal Model (Continuation Ratio)",
+                "slug": "nodes/ai/ml/ordinal/fit-ordinal-continuation-ratio"
+              },
+              {
+                "label": "Train Ordinal Model (Frank & Hall)",
+                "slug": "nodes/ai/ml/ordinal/fit-ordinal-frank-hall"
+              },
+              {
+                "label": "Train Ordinal Model (Neural CORAL/CORN)",
+                "slug": "nodes/ai/ml/ordinal/fit-ordinal-neural"
+              },
+              {
+                "label": "Train Ordinal Model (Proportional Odds)",
+                "slug": "nodes/ai/ml/ordinal/fit-ordinal-logistic"
+              },
+              {
+                "label": "Train Ordinal Model (Ridge)",
+                "slug": "nodes/ai/ml/ordinal/fit-ordinal-ridge"
+              }
+            ]
+          },
+          {
+            "label": "Preprocessing",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/ai/ml/preprocessing"
+              },
+              {
+                "label": "Apply Transform",
+                "slug": "nodes/ai/ml/preprocessing/ml-apply-transform"
+              },
+              {
+                "label": "Fit Feature Scaler",
+                "slug": "nodes/ai/ml/preprocessing/fit-feature-scaler"
+              },
+              {
+                "label": "Fit TF-IDF Vectorizer",
+                "slug": "nodes/ai/ml/preprocessing/fit-tfidf-vectorizer"
+              }
+            ]
+          },
+          {
             "label": "Reduction",
             "collapsed": true,
             "items": [
@@ -1145,6 +1277,22 @@ export const generatedNodeSidebar = [
               {
                 "label": "Train Regression (Linear)",
                 "slug": "nodes/ai/ml/regression/fit-linear-regression"
+              },
+              {
+                "label": "Train Regressor (GLM / Tweedie)",
+                "slug": "nodes/ai/ml/regression/fit-glm"
+              },
+              {
+                "label": "Train Regressor (K-Nearest Neighbours)",
+                "slug": "nodes/ai/ml/regression/fit-knn-regressor"
+              },
+              {
+                "label": "Train Regressor (Ridge/Lasso/ElasticNet)",
+                "slug": "nodes/ai/ml/regression/fit-elastic-net"
+              },
+              {
+                "label": "Train Regressor (SVM)",
+                "slug": "nodes/ai/ml/regression/fit-svm-regression"
               }
             ]
           },
@@ -1175,8 +1323,16 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/ai/ml/tuning/ai-ml-tuning-auto-classifier"
               },
               {
+                "label": "Auto Ordinal",
+                "slug": "nodes/ai/ml/tuning/ai-ml-tuning-auto-ordinal"
+              },
+              {
                 "label": "Grid Search",
                 "slug": "nodes/ai/ml/tuning/ai-ml-tuning-grid-search"
+              },
+              {
+                "label": "Ordinal Grid Search",
+                "slug": "nodes/ai/ml/tuning/ai-ml-tuning-ordinal-grid-search"
               }
             ]
           },
@@ -1337,6 +1493,32 @@ export const generatedNodeSidebar = [
             "slug": "nodes/ai/processing/ai-processing-yake-extraction"
           }
         ]
+      }
+    ]
+  },
+  {
+    "label": "Audio",
+    "collapsed": true,
+    "items": [
+      {
+        "label": "Overview",
+        "slug": "nodes/audio"
+      },
+      {
+        "label": "Analyze Audio",
+        "slug": "nodes/audio/video-analyze-audio"
+      },
+      {
+        "label": "Audio To WAV",
+        "slug": "nodes/audio/video-audio-to-wav"
+      },
+      {
+        "label": "Detect Silence",
+        "slug": "nodes/audio/video-detect-silence"
+      },
+      {
+        "label": "Transform Audio",
+        "slug": "nodes/audio/video-transform-audio"
       }
     ]
   },
@@ -2625,6 +2807,44 @@ export const generatedNodeSidebar = [
         ]
       },
       {
+        "label": "Cache",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/data/cache"
+          },
+          {
+            "label": "Delete Cache Entry",
+            "slug": "nodes/data/cache/cache-delete"
+          },
+          {
+            "label": "Get or Write Cache",
+            "slug": "nodes/data/cache/cache-get-or-write"
+          },
+          {
+            "label": "Has Cache Entry",
+            "slug": "nodes/data/cache/cache-has"
+          },
+          {
+            "label": "Invalidate Cache Namespace",
+            "slug": "nodes/data/cache/cache-invalidate-namespace"
+          },
+          {
+            "label": "Open Cache",
+            "slug": "nodes/data/cache/cache-open"
+          },
+          {
+            "label": "Read Cache",
+            "slug": "nodes/data/cache/cache-read"
+          },
+          {
+            "label": "Write Cache",
+            "slug": "nodes/data/cache/cache-write"
+          }
+        ]
+      },
+      {
         "label": "DataFusion",
         "collapsed": true,
         "items": [
@@ -2791,6 +3011,10 @@ export const generatedNodeSidebar = [
             ]
           },
           {
+            "label": "Cached SQL Query",
+            "slug": "nodes/data/datafusion/df-sql-query-cached"
+          },
+          {
             "label": "Create DataFusion Session",
             "slug": "nodes/data/datafusion/df-create-session"
           },
@@ -2805,6 +3029,10 @@ export const generatedNodeSidebar = [
           {
             "label": "Mount Parquet",
             "slug": "nodes/data/datafusion/df-mount-parquet"
+          },
+          {
+            "label": "Register Excel (DataFusion)",
+            "slug": "nodes/data/datafusion/df-register-excel"
           },
           {
             "label": "Register Lance Table",
@@ -2839,6 +3067,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Delete",
                 "slug": "nodes/data/database/delete/filter-delete-local-db"
+              },
+              {
+                "label": "Drop Table",
+                "slug": "nodes/data/database/delete/drop-table-local-db"
               },
               {
                 "label": "Purge",
@@ -2885,8 +3117,24 @@ export const generatedNodeSidebar = [
                     "slug": "nodes/data/database/graph/query/graph-cypher-query"
                   },
                   {
+                    "label": "Find Paths",
+                    "slug": "nodes/data/database/graph/query/graph-paths"
+                  },
+                  {
+                    "label": "Graph Analytics",
+                    "slug": "nodes/data/database/graph/query/graph-analytics"
+                  },
+                  {
                     "label": "Graph Neighbors",
                     "slug": "nodes/data/database/graph/query/graph-neighbors"
+                  },
+                  {
+                    "label": "Graph Sample",
+                    "slug": "nodes/data/database/graph/query/graph-sample"
+                  },
+                  {
+                    "label": "Graph Search",
+                    "slug": "nodes/data/database/graph/query/graph-search"
                   },
                   {
                     "label": "Graph Subgraph",
@@ -3071,6 +3319,10 @@ export const generatedNodeSidebar = [
           {
             "label": "Open Database",
             "slug": "nodes/data/database/open-local-db"
+          },
+          {
+            "label": "Open Remote Database",
+            "slug": "nodes/data/database/open-remote-db"
           }
         ]
       },
@@ -3379,6 +3631,10 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/data/files/operations/storage-delete"
               },
               {
+                "label": "Diff Directory",
+                "slug": "nodes/data/files/operations/path-get-changes"
+              },
+              {
                 "label": "Get",
                 "slug": "nodes/data/files/operations/path-get"
               },
@@ -3425,6 +3681,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Sign URLs",
                 "slug": "nodes/data/files/operations/sign-urls"
+              },
+              {
+                "label": "Write Directory Manifest",
+                "slug": "nodes/data/files/operations/path-write-manifest"
               }
             ]
           },
@@ -4709,6 +4969,102 @@ export const generatedNodeSidebar = [
     ]
   },
   {
+    "label": "Data Studio",
+    "collapsed": true,
+    "items": [
+      {
+        "label": "Overview",
+        "slug": "nodes/data-studio"
+      },
+      {
+        "label": "Actions",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/data-studio/actions"
+          },
+          {
+            "label": "Ontology Action Input",
+            "slug": "nodes/data-studio/actions/ontology-action-input"
+          },
+          {
+            "label": "Prepare Ontology Action",
+            "slug": "nodes/data-studio/actions/ontology-action-request"
+          }
+        ]
+      },
+      {
+        "label": "Objects",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/data-studio/objects"
+          },
+          {
+            "label": "Query Ontology Objects",
+            "slug": "nodes/data-studio/objects/ontology-query-objects"
+          }
+        ]
+      },
+      {
+        "label": "Remote Actions",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/data-studio/remote-actions"
+          },
+          {
+            "label": "Invoke Remote Ontology Action",
+            "slug": "nodes/data-studio/remote-actions/ontology-action-request-remote"
+          }
+        ]
+      },
+      {
+        "label": "Remote Objects",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/data-studio/remote-objects"
+          },
+          {
+            "label": "Query Remote Ontology Children",
+            "slug": "nodes/data-studio/remote-objects/ontology-query-remote-children"
+          },
+          {
+            "label": "Query Remote Ontology Objects",
+            "slug": "nodes/data-studio/remote-objects/ontology-query-remote-objects"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "label": "Diagnostics",
+    "collapsed": true,
+    "items": [
+      {
+        "label": "Overview",
+        "slug": "nodes/diagnostics"
+      },
+      {
+        "label": "Pick Codec Backend",
+        "slug": "nodes/diagnostics/video-pick-codec-backend"
+      },
+      {
+        "label": "Probe Codec Backends",
+        "slug": "nodes/diagnostics/video-probe-codec-backends"
+      },
+      {
+        "label": "Probe Platform Codec",
+        "slug": "nodes/diagnostics/video-probe-platform-codec"
+      }
+    ]
+  },
+  {
     "label": "Document",
     "collapsed": true,
     "items": [
@@ -4817,6 +5173,10 @@ export const generatedNodeSidebar = [
           {
             "label": "Compress PDF",
             "slug": "nodes/document/pdf/pdf-compress"
+          },
+          {
+            "label": "Create PDF from Markdown",
+            "slug": "nodes/document/pdf/pdf-create-from-markdown"
           },
           {
             "label": "Decrypt PDF",
@@ -5223,6 +5583,14 @@ export const generatedNodeSidebar = [
             "slug": "nodes/events/chat/events-chat-push-text-to-step"
           },
           {
+            "label": "Push Widget",
+            "slug": "nodes/events/chat/events-chat-push-widget"
+          },
+          {
+            "label": "Push Widgets",
+            "slug": "nodes/events/chat/events-chat-push-widgets"
+          },
+          {
             "label": "Remove Step",
             "slug": "nodes/events/chat/events-chat-remove-step"
           }
@@ -5239,6 +5607,28 @@ export const generatedNodeSidebar = [
           {
             "label": "Return Generic Result",
             "slug": "nodes/events/generic/events-generic-return-result"
+          }
+        ]
+      },
+      {
+        "label": "Remote",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/events/remote"
+          },
+          {
+            "label": "Call Remote API",
+            "slug": "nodes/events/remote/call-remote-api"
+          },
+          {
+            "label": "Call Remote Chat",
+            "slug": "nodes/events/remote/call-remote-chat"
+          },
+          {
+            "label": "Call Remote Event",
+            "slug": "nodes/events/remote/call-remote-event"
           }
         ]
       },
@@ -5409,6 +5799,14 @@ export const generatedNodeSidebar = [
             "slug": "nodes/image/transform/resize-image"
           }
         ]
+      },
+      {
+        "label": "Convert Image Format",
+        "slug": "nodes/image/video-convert-image-format"
+      },
+      {
+        "label": "Transform Image",
+        "slug": "nodes/image/video-transform-image"
       }
     ]
   },
@@ -5705,6 +6103,20 @@ export const generatedNodeSidebar = [
     ]
   },
   {
+    "label": "Streaming",
+    "collapsed": true,
+    "items": [
+      {
+        "label": "Overview",
+        "slug": "nodes/streaming"
+      },
+      {
+        "label": "Package HLS VOD",
+        "slug": "nodes/streaming/video-package-hls-vod"
+      }
+    ]
+  },
+  {
     "label": "Structs",
     "collapsed": true,
     "items": [
@@ -5757,6 +6169,40 @@ export const generatedNodeSidebar = [
     ]
   },
   {
+    "label": "Subtitles",
+    "collapsed": true,
+    "items": [
+      {
+        "label": "Overview",
+        "slug": "nodes/subtitles"
+      },
+      {
+        "label": "Add Subtitle Track",
+        "slug": "nodes/subtitles/video-add-subtitle-track"
+      },
+      {
+        "label": "Burn Subtitles Into Video",
+        "slug": "nodes/subtitles/video-burn-subtitles"
+      },
+      {
+        "label": "Extract Subtitle Track",
+        "slug": "nodes/subtitles/video-extract-subtitle-track"
+      },
+      {
+        "label": "Parse Subtitles",
+        "slug": "nodes/subtitles/video-parse-subtitles"
+      },
+      {
+        "label": "Shift Subtitle File",
+        "slug": "nodes/subtitles/video-shift-subtitle-file"
+      },
+      {
+        "label": "Write Subtitles",
+        "slug": "nodes/subtitles/video-write-subtitles"
+      }
+    ]
+  },
+  {
     "label": "UI",
     "collapsed": true,
     "items": [
@@ -5787,6 +6233,10 @@ export const generatedNodeSidebar = [
             "slug": "nodes/ui/container"
           },
           {
+            "label": "Get Widget Element",
+            "slug": "nodes/ui/container/a2ui-widget-get-element"
+          },
+          {
             "label": "Instantiate Widget",
             "slug": "nodes/ui/container/a2ui-instantiate-widget"
           },
@@ -5795,8 +6245,20 @@ export const generatedNodeSidebar = [
             "slug": "nodes/ui/container/a2ui-push-to-container"
           },
           {
+            "label": "Query Widget",
+            "slug": "nodes/ui/container/a2ui-widget-query"
+          },
+          {
             "label": "Remove From Container",
             "slug": "nodes/ui/container/a2ui-remove-from-container"
+          },
+          {
+            "label": "Set Widget Text",
+            "slug": "nodes/ui/container/a2ui-widget-set-text"
+          },
+          {
+            "label": "Update Widget Inputs",
+            "slug": "nodes/ui/container/a2ui-widget-update-inputs"
           }
         ]
       },
@@ -5853,6 +6315,20 @@ export const generatedNodeSidebar = [
               {
                 "label": "Set Button Label",
                 "slug": "nodes/ui/elements/button/a2ui-set-button-label"
+              }
+            ]
+          },
+          {
+            "label": "Calendar",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/ui/elements/calendar"
+              },
+              {
+                "label": "Update Calendar",
+                "slug": "nodes/ui/elements/calendar/a2ui-update-calendar"
               }
             ]
           },
@@ -5953,6 +6429,10 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/ui/elements/display/a2ui-set-badge-content"
               },
               {
+                "label": "Set Diff Content",
+                "slug": "nodes/ui/elements/display/a2ui-set-diff-content"
+              },
+              {
                 "label": "Set Icon",
                 "slug": "nodes/ui/elements/display/a2ui-set-icon"
               },
@@ -6003,6 +6483,20 @@ export const generatedNodeSidebar = [
             ]
           },
           {
+            "label": "Gantt",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/ui/elements/gantt"
+              },
+              {
+                "label": "Update Gantt",
+                "slug": "nodes/ui/elements/gantt/a2ui-update-gantt"
+              }
+            ]
+          },
+          {
             "label": "GeoMap",
             "collapsed": true,
             "items": [
@@ -6031,6 +6525,20 @@ export const generatedNodeSidebar = [
               {
                 "label": "Get Tooltip Content",
                 "slug": "nodes/ui/elements/get/a2ui-get-tooltip-content"
+              }
+            ]
+          },
+          {
+            "label": "Graph",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/ui/elements/graph"
+              },
+              {
+                "label": "Update Graph",
+                "slug": "nodes/ui/elements/graph/a2ui-update-graph"
               }
             ]
           },
@@ -7131,6 +7639,18 @@ export const generatedNodeSidebar = [
           {
             "label": "HTML to Markdown",
             "slug": "nodes/utils/markdown/utils-md-html-to-md"
+          },
+          {
+            "label": "Markdown to HTML",
+            "slug": "nodes/utils/markdown/utils-md-md-to-html"
+          },
+          {
+            "label": "Rich Text to HTML",
+            "slug": "nodes/utils/markdown/utils-md-plate-to-html"
+          },
+          {
+            "label": "Rich Text to Markdown",
+            "slug": "nodes/utils/markdown/utils-md-plate-to-md"
           }
         ]
       },
@@ -7421,12 +7941,44 @@ export const generatedNodeSidebar = [
             "slug": "nodes/utils/user"
           },
           {
+            "label": "Check User Has Role",
+            "slug": "nodes/utils/user/utils-user-check-user-has-role"
+          },
+          {
+            "label": "Check User Permission",
+            "slug": "nodes/utils/user/utils-user-check-user-permission"
+          },
+          {
+            "label": "Get Current User",
+            "slug": "nodes/utils/user/utils-user-get-current-user"
+          },
+          {
             "label": "Get Current User Info",
             "slug": "nodes/utils/user/utils-user-get-current-user-info"
           },
           {
+            "label": "Get Effective User Permissions",
+            "slug": "nodes/utils/user/utils-user-get-effective-user-permissions"
+          },
+          {
             "label": "Get Executing User",
             "slug": "nodes/utils/user/utils-user-get-executing-user"
+          },
+          {
+            "label": "Get Project User",
+            "slug": "nodes/utils/user/utils-user-get-project-user"
+          },
+          {
+            "label": "Get User Attribute",
+            "slug": "nodes/utils/user/utils-user-get-user-attribute"
+          },
+          {
+            "label": "Get User Attributes",
+            "slug": "nodes/utils/user/utils-user-get-user-attributes"
+          },
+          {
+            "label": "Get User Roles",
+            "slug": "nodes/utils/user/utils-user-get-user-roles"
           },
           {
             "label": "Has Attribute",
@@ -7439,6 +7991,26 @@ export const generatedNodeSidebar = [
           {
             "label": "Is Technical User",
             "slug": "nodes/utils/user/utils-user-is-technical-user"
+          },
+          {
+            "label": "List Project Users",
+            "slug": "nodes/utils/user/utils-user-list-project-users"
+          },
+          {
+            "label": "List Users with Attribute",
+            "slug": "nodes/utils/user/utils-user-list-users-with-attribute"
+          },
+          {
+            "label": "List Users with Role",
+            "slug": "nodes/utils/user/utils-user-list-users-with-role"
+          },
+          {
+            "label": "Resolve User",
+            "slug": "nodes/utils/user/utils-user-resolve-user"
+          },
+          {
+            "label": "Search Users",
+            "slug": "nodes/utils/user/utils-user-search-users"
           }
         ]
       },
@@ -7463,6 +8035,152 @@ export const generatedNodeSidebar = [
       {
         "label": "Set Variable",
         "slug": "nodes/variable/variable-set"
+      }
+    ]
+  },
+  {
+    "label": "Video",
+    "collapsed": true,
+    "items": [
+      {
+        "label": "Overview",
+        "slug": "nodes/video"
+      },
+      {
+        "label": "Containers",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/video/containers"
+          },
+          {
+            "label": "Remux Video",
+            "slug": "nodes/video/containers/video-remux"
+          }
+        ]
+      },
+      {
+        "label": "Editing",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/video/editing"
+          },
+          {
+            "label": "Concatenate Videos",
+            "slug": "nodes/video/editing/video-concat"
+          },
+          {
+            "label": "Trim On Keyframes",
+            "slug": "nodes/video/editing/video-trim-keyframes"
+          }
+        ]
+      },
+      {
+        "label": "Inspect",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/video/inspect"
+          },
+          {
+            "label": "Detect Video Container",
+            "slug": "nodes/video/inspect/video-detect-container"
+          },
+          {
+            "label": "Probe Media Info",
+            "slug": "nodes/video/inspect/video-probe-media-info"
+          }
+        ]
+      },
+      {
+        "label": "Packets",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/video/packets"
+          },
+          {
+            "label": "Bitstream Convert",
+            "slug": "nodes/video/packets/video-bitstream-convert"
+          },
+          {
+            "label": "Normalize Timestamps",
+            "slug": "nodes/video/packets/video-normalize-timestamps"
+          }
+        ]
+      },
+      {
+        "label": "Planning",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/video/planning"
+          },
+          {
+            "label": "Check Remux Compatibility",
+            "slug": "nodes/video/planning/video-check-remux-compatibility"
+          }
+        ]
+      },
+      {
+        "label": "Preview",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/video/preview"
+          },
+          {
+            "label": "Contact Sheet",
+            "slug": "nodes/video/preview/video-contact-sheet"
+          },
+          {
+            "label": "Extract Thumbnail",
+            "slug": "nodes/video/preview/video-extract-thumbnail"
+          }
+        ]
+      },
+      {
+        "label": "Tracks",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/video/tracks"
+          },
+          {
+            "label": "Extract Track",
+            "slug": "nodes/video/tracks/video-extract-track"
+          }
+        ]
+      },
+      {
+        "label": "Transcode",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/video/transcode"
+          },
+          {
+            "label": "Encode AV1",
+            "slug": "nodes/video/transcode/video-encode-av1"
+          },
+          {
+            "label": "Transcode Video",
+            "slug": "nodes/video/transcode/video-transcode-video"
+          },
+          {
+            "label": "Transform Video",
+            "slug": "nodes/video/transcode/video-transform-video"
+          }
+        ]
       }
     ]
   },
@@ -7653,6 +8371,10 @@ export const generatedNodeSidebar = [
           {
             "label": "Grab IP-Camera Frame",
             "slug": "nodes/web/camera/web-camera-grab-frame"
+          },
+          {
+            "label": "Grab RTSP Frame",
+            "slug": "nodes/web/camera/web-camera-grab-rtsp-frame"
           },
           {
             "label": "Write Image to Data URL",

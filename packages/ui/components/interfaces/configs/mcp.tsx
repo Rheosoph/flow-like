@@ -2064,6 +2064,7 @@ export function McpConfig({
 	onConfigUpdate,
 	eventId,
 	appId,
+	section,
 }: IConfigInterfaceProps) {
 	useEffect(() => {
 		if (!(config as McpSink)?.sink_type) {
@@ -2217,134 +2218,142 @@ export function McpConfig({
 		}
 	};
 
+	// The events surface renders one section at a time; anywhere else (and for
+	// any section this component doesn't know) it renders whole.
+	const shows = (id: string) => !section || section === id;
+
 	return (
 		<div className="w-full space-y-4">
-			<Alert>
-				<Server className="h-4 w-4" />
-				<AlertTitle className="flex items-center gap-2">
-					MCP Server
-					<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs">
-						<Cloud className="h-3 w-3" /> Remote only
-					</span>
-				</AlertTitle>
-				<AlertDescription>
-					Exposes the workflow as a remote Model Context Protocol server. Tools,
-					resources, prompts and authentication are declared inside the board
-					and mounted at <code>/m/&#123;event_id&#125;</code>.
-				</AlertDescription>
-			</Alert>
+			{shows("server") && (
+				<>
+					<Alert>
+						<Server className="h-4 w-4" />
+						<AlertTitle className="flex items-center gap-2">
+							MCP Server
+							<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs">
+								<Cloud className="h-3 w-3" /> Remote only
+							</span>
+						</AlertTitle>
+						<AlertDescription>
+							Exposes the workflow as a remote Model Context Protocol server.
+							Tools, resources, prompts and authentication are declared inside
+							the board and mounted at <code>/m/&#123;event_id&#125;</code>.
+						</AlertDescription>
+					</Alert>
 
-			{endpointUrl ? (
-				<div className="space-y-3 rounded-md border bg-muted/30 p-3">
-					<EndpointField
-						label="Streamable HTTP"
-						value={endpointUrl}
-						copyKey="streamable"
-						copied={copied}
-						onCopy={copy}
-					/>
-					<EndpointField
-						label="Legacy SSE"
-						value={endpointUrl}
-						copyKey="sse"
-						copied={copied}
-						onCopy={copy}
-					/>
-				</div>
-			) : (
-				<p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-					Save the event to see its endpoint URL.
-				</p>
-			)}
-
-			{eventId && appId && backend.eventState.listEventAliases && (
-				<InspectorSurface>
-					<InspectorHeader
-						title="Public Alias"
-						subtitle="Give this MCP server a stable, readable mount path."
-						icon={<Link2 className="h-4 w-4" />}
-					/>
-					<div className="space-y-3 p-3">
-						<div className="flex flex-col gap-2 lg:flex-row lg:items-center">
-							<div className="shrink-0 rounded-md border bg-muted px-2 py-2 font-mono text-xs text-muted-foreground">
-								{baseUrl}/m/
-							</div>
-							<Input
-								value={aliasInput}
-								onChange={(event) => {
-									setAliasError(null);
-									setAliasInput(event.target.value);
-								}}
-								placeholder="my-mcp"
-								className="font-mono text-xs"
-								disabled={aliasBusy}
+					{endpointUrl ? (
+						<div className="space-y-3 rounded-md border bg-muted/30 p-3">
+							<EndpointField
+								label="Streamable HTTP"
+								value={endpointUrl}
+								copyKey="streamable"
+								copied={copied}
+								onCopy={copy}
 							/>
-							<Button
-								type="button"
-								variant="outline"
-								onClick={saveAlias}
-								disabled={
-									aliasBusy ||
-									!backend.eventState.upsertEventAlias ||
-									!aliasInput.trim() ||
-									aliasInput.trim().toLowerCase() === currentAlias
-								}
-							>
-								{aliasBusy ? (
-									<Loader2 className="h-4 w-4 animate-spin" />
-								) : (
-									<Check className="h-4 w-4" />
-								)}
-								Save
-							</Button>
-							<Button
-								type="button"
-								size="icon"
-								variant="ghost"
-								onClick={deleteAlias}
-								disabled={
-									aliasBusy ||
-									!currentAlias ||
-									!backend.eventState.deleteEventAlias
-								}
-								title="Remove alias"
-							>
-								<Trash2 className="h-4 w-4" />
-							</Button>
+							<EndpointField
+								label="Legacy SSE"
+								value={endpointUrl}
+								copyKey="sse"
+								copied={copied}
+								onCopy={copy}
+							/>
 						</div>
-						{aliasUrl && (
-							<div className="flex items-center gap-2">
-								<Input
-									readOnly
-									value={aliasUrl}
-									className="font-mono text-xs"
-								/>
-								<Button
-									type="button"
-									size="icon"
-									variant="outline"
-									onClick={() => copy("alias", aliasUrl)}
-									title="Copy"
-								>
-									{copied === "alias" ? (
-										<Check className="h-4 w-4" />
-									) : (
-										<Copy className="h-4 w-4" />
-									)}
-								</Button>
+					) : (
+						<p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+							Save the event to see its endpoint URL.
+						</p>
+					)}
+
+					{eventId && appId && backend.eventState.listEventAliases && (
+						<InspectorSurface>
+							<InspectorHeader
+								title="Public Alias"
+								subtitle="Give this MCP server a stable, readable mount path."
+								icon={<Link2 className="h-4 w-4" />}
+							/>
+							<div className="space-y-3 p-3">
+								<div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+									<div className="shrink-0 rounded-md border bg-muted px-2 py-2 font-mono text-xs text-muted-foreground">
+										{baseUrl}/m/
+									</div>
+									<Input
+										value={aliasInput}
+										onChange={(event) => {
+											setAliasError(null);
+											setAliasInput(event.target.value);
+										}}
+										placeholder="my-mcp"
+										className="font-mono text-xs"
+										disabled={aliasBusy}
+									/>
+									<Button
+										type="button"
+										variant="outline"
+										onClick={saveAlias}
+										disabled={
+											aliasBusy ||
+											!backend.eventState.upsertEventAlias ||
+											!aliasInput.trim() ||
+											aliasInput.trim().toLowerCase() === currentAlias
+										}
+									>
+										{aliasBusy ? (
+											<Loader2 className="h-4 w-4 animate-spin" />
+										) : (
+											<Check className="h-4 w-4" />
+										)}
+										Save
+									</Button>
+									<Button
+										type="button"
+										size="icon"
+										variant="ghost"
+										onClick={deleteAlias}
+										disabled={
+											aliasBusy ||
+											!currentAlias ||
+											!backend.eventState.deleteEventAlias
+										}
+										title="Remove alias"
+									>
+										<Trash2 className="h-4 w-4" />
+									</Button>
+								</div>
+								{aliasUrl && (
+									<div className="flex items-center gap-2">
+										<Input
+											readOnly
+											value={aliasUrl}
+											className="font-mono text-xs"
+										/>
+										<Button
+											type="button"
+											size="icon"
+											variant="outline"
+											onClick={() => copy("alias", aliasUrl)}
+											title="Copy"
+										>
+											{copied === "alias" ? (
+												<Check className="h-4 w-4" />
+											) : (
+												<Copy className="h-4 w-4" />
+											)}
+										</Button>
+									</div>
+								)}
+								{aliasError && (
+									<div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive">
+										<AlertCircle className="h-3 w-3 shrink-0" />
+										<span className="truncate">{aliasError}</span>
+									</div>
+								)}
 							</div>
-						)}
-						{aliasError && (
-							<div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive">
-								<AlertCircle className="h-3 w-3 shrink-0" />
-								<span className="truncate">{aliasError}</span>
-							</div>
-						)}
-					</div>
-				</InspectorSurface>
+						</InspectorSurface>
+					)}
+				</>
 			)}
 
-			{eventId && appId && (
+			{shows("registry") && eventId && appId && (
 				<McpSetupPanel
 					version={registrationData?.event_version ?? null}
 					auths={authRows}
@@ -2357,7 +2366,7 @@ export function McpConfig({
 				/>
 			)}
 
-			{endpointUrl && (
+			{shows("inspector") && endpointUrl && (
 				<McpInspectorPanel
 					endpointUrl={endpointUrl}
 					aliasUrl={aliasUrl}

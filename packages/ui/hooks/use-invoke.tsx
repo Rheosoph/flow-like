@@ -7,6 +7,7 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { isEqual } from "lodash-es";
+import { useCallback } from "react";
 import { useBackend } from "../state/backend-state";
 
 type BackendFunction<T, Args extends any[]> = (...args: Args) => Promise<T>;
@@ -188,24 +189,27 @@ export function useInvalidateInfiniteInvoke() {
 	 * @param {any[]} [additionalDeps=[]] Optional additional dependencies to include in the queryKey.
 	 * @returns {Promise<void>} A promise that resolves when the invalidation is complete.
 	 */
-	const invalidate = <T, Args extends any[]>(
-		backendFn: BackendFunctionWithPagination<T, Args>,
-		args: Args,
-		pageSize = 50,
-		additionalDeps: any[] = [],
-	): Promise<void> => {
-		const queryKeyPrefix = toQueryKey([
-			backendFn.name || "infiniteBackendFn",
-			...args,
-			pageSize,
-			...additionalDeps,
-		]);
-		return queryClient.invalidateQueries({
-			queryKey: queryKeyPrefix,
-		});
-	};
-
-	return invalidate;
+	// Callers put this in effect dependency arrays, where a fresh identity per
+	// render turns a one-off invalidation into a refetch loop.
+	return useCallback(
+		<T, Args extends any[]>(
+			backendFn: BackendFunctionWithPagination<T, Args>,
+			args: Args,
+			pageSize = 50,
+			additionalDeps: any[] = [],
+		): Promise<void> => {
+			const queryKeyPrefix = toQueryKey([
+				backendFn.name || "infiniteBackendFn",
+				...args,
+				pageSize,
+				...additionalDeps,
+			]);
+			return queryClient.invalidateQueries({
+				queryKey: queryKeyPrefix,
+			});
+		},
+		[queryClient],
+	);
 }
 
 /**
@@ -228,22 +232,25 @@ export function useInvalidateInvoke() {
 	 * @param {BackendFunction<T, Args>} backendFn The backend function used in `useInvoke` calls.
 	 * @returns {Promise<void>} A promise that resolves when the invalidation is complete.
 	 */
-	const invalidate = <T, Args extends any[]>(
-		backendFn: BackendFunction<T, Args>,
-		args: Args,
-		additionalDeps: any[] = [],
-	): Promise<void> => {
-		const queryKeyPrefix = toQueryKey([
-			backendFn.name || "backendFn",
-			...args,
-			...additionalDeps,
-		]);
-		return queryClient.invalidateQueries({
-			queryKey: queryKeyPrefix,
-		});
-	};
-
-	return invalidate;
+	// Callers put this in effect dependency arrays, where a fresh identity per
+	// render turns a one-off invalidation into a refetch loop.
+	return useCallback(
+		<T, Args extends any[]>(
+			backendFn: BackendFunction<T, Args>,
+			args: Args,
+			additionalDeps: any[] = [],
+		): Promise<void> => {
+			const queryKeyPrefix = toQueryKey([
+				backendFn.name || "backendFn",
+				...args,
+				...additionalDeps,
+			]);
+			return queryClient.invalidateQueries({
+				queryKey: queryKeyPrefix,
+			});
+		},
+		[queryClient],
+	);
 }
 
 export function injectData<T, Args extends any[]>(

@@ -8,6 +8,7 @@ mod state;
 #[cfg(desktop)]
 mod tray;
 pub mod utils;
+mod widget_protocol;
 
 // Stub for tray_update_state on non-desktop platforms
 #[cfg(not(desktop))]
@@ -29,7 +30,11 @@ use flow_like_catalog::{get_catalog, initialize as initialize_catalog};
 use flow_like_types::{sync::Mutex, tokio::time::interval};
 use settings::Settings;
 use state::TauriFlowLikeState;
+#[cfg(target_os = "ios")]
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::{sync::Arc, time::Duration};
+#[cfg(debug_assertions)]
+use tauri::Url;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 #[cfg(desktop)]
@@ -39,6 +44,19 @@ use tauri_plugin_updater::UpdaterExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{deeplink::handle_deep_link, event_bus::EventBus};
+
+#[cfg(debug_assertions)]
+fn flowpilot_e2e_cli_url() -> Option<Url> {
+    let url = Url::parse(&std::env::var("FLOWPILOT_E2E_CLI_URL").ok()?).ok()?;
+    let cli_mode = url
+        .query_pairs()
+        .any(|(key, value)| key == "cli" && value == "1");
+    (url.scheme() == "http"
+        && url.host_str() == Some("localhost")
+        && url.path() == "/developer/flowpilot-e2e"
+        && cli_mode)
+        .then_some(url)
+}
 
 #[cfg(target_os = "macos")]
 fn disable_app_nap() {
@@ -142,36 +160,109 @@ fn tune_windows_webview(window: &tauri::WebviewWindow) {
     }
 }
 
-/// JS snippet that probes CSS env(safe-area-inset-*) and applies the values
-/// as CSS custom properties. Also re-syncs `--fl-mobile-vvh` so the body
-/// height is correct after `harden_ios_webview_scroll` changes the scroll
-/// view's content inset adjustment (which affects `visualViewport.height`).
+/// `UIEdgeInsets` — four `CGFloat`, which is `f64` on 64-bit iOS.
 #[cfg(target_os = "ios")]
-const IOS_SAFE_AREA_JS: &str = concat!(
-    "(function(){",
-    "var d=document.documentElement;",
-    "var p=document.createElement('div');",
-    "p.style.cssText='position:fixed;left:-9999px;top:0;width:1px;height:1px;",
-    "padding-top:env(safe-area-inset-top,0px);",
-    "padding-bottom:env(safe-area-inset-bottom,0px);",
-    "visibility:hidden;pointer-events:none';",
-    "(document.body||d).appendChild(p);",
-    "var cs=getComputedStyle(p);",
-    "var t=Math.round(parseFloat(cs.paddingTop)||0);",
-    "var b=Math.round(parseFloat(cs.paddingBottom)||0);",
-    "p.remove();",
-    "t=Math.max(t,window.__FL_NATIVE_SAFE_TOP||0);",
-    "b=Math.max(b,window.__FL_NATIVE_SAFE_BOTTOM||0);",
-    "if(t>0||b>0){",
-    "d.style.setProperty('--fl-native-safe-top',t+'px');",
-    "d.style.setProperty('--fl-native-safe-bottom',b+'px');",
-    "window.__FL_NATIVE_SAFE_TOP=t;",
-    "window.__FL_NATIVE_SAFE_BOTTOM=b;",
-    "}",
-    "var vvh=Math.round((window.visualViewport?window.visualViewport.height:0)||window.innerHeight);",
-    "if(vvh>0)d.style.setProperty('--fl-mobile-vvh',vvh+'px');",
-    "})();"
-);
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct UIEdgeInsets {
+    top: f64,
+    left: f64,
+    bottom: f64,
+    right: f64,
+}
+
+#[cfg(target_os = "ios")]
+unsafe impl objc2::Encode for UIEdgeInsets {
+    const ENCODING: objc2::Encoding = objc2::Encoding::Struct(
+        "UIEdgeInsets",
+        &[
+            objc2::Encoding::Double,
+            objc2::Encoding::Double,
+            objc2::Encoding::Double,
+            objc2::Encoding::Double,
+        ],
+    );
+}
+
+/// Latest safe-area insets measured from UIKit, in CSS px. Monotonic (`fetch_max`)
+/// so a transient 0 during rotation or backgrounding can never shrink the layout.
+#[cfg(target_os = "ios")]
+type NativeInsets = Arc<(AtomicI64, AtomicI64)>;
+
+/// Read the real UIKit safe-area insets into `sink`.
+///
+/// This is the authoritative source. CSS `env(safe-area-inset-*)` only resolves
+/// to non-zero once the viewport meta carries `viewport-fit=cover` *and* WebKit
+/// has completed a layout pass (WebKit #191872), so the web side can silently
+/// report 0 and let the header slide under the Dynamic Island. UIKit always
+/// knows. Mirrors the Android `FlowLikeInsets` bridge, which has had a real
+/// native source all along.
+///
+/// UIKit reports points, which map 1:1 to CSS px in WKWebView — unlike Android's
+/// physical pixels, these need no devicePixelRatio scaling.
+#[cfg(target_os = "ios")]
+fn probe_ios_native_insets(window: &tauri::WebviewWindow, sink: NativeInsets) {
+    if let Err(err) = window.with_webview(move |webview| unsafe {
+        use objc2::runtime::AnyObject;
+
+        let view: *mut AnyObject = webview.inner().cast();
+        if view.is_null() {
+            return;
+        }
+
+        // The hosting UIWindow already reports the device insets while the
+        // webview itself may still be mid-layout; fall back if not attached yet.
+        let host: *mut AnyObject = objc2::msg_send![view, window];
+        let target = if host.is_null() { view } else { host };
+
+        let insets: UIEdgeInsets = objc2::msg_send![target, safeAreaInsets];
+        let top = insets.top.max(0.0).ceil() as i64;
+        let bottom = insets.bottom.max(0.0).ceil() as i64;
+
+        sink.0.fetch_max(top, Ordering::Relaxed);
+        sink.1.fetch_max(bottom, Ordering::Relaxed);
+    }) {
+        tracing::warn!("Failed to read iOS safe-area insets: {}", err);
+    }
+}
+
+/// JS that folds the native insets together with CSS env(safe-area-inset-*) and
+/// applies the larger of the two as CSS custom properties. Also re-syncs
+/// `--fl-mobile-vvh` so the body height is correct after
+/// `harden_ios_webview_scroll` changes the scroll view's content inset
+/// adjustment (which affects `visualViewport.height`).
+#[cfg(target_os = "ios")]
+fn ios_safe_area_js(native_top: i64, native_bottom: i64) -> String {
+    format!(
+        concat!(
+            "(function(){{",
+            "var d=document.documentElement;",
+            "var p=document.createElement('div');",
+            "p.style.cssText='position:fixed;left:-9999px;top:0;width:1px;height:1px;",
+            "padding-top:env(safe-area-inset-top,0px);",
+            "padding-bottom:env(safe-area-inset-bottom,0px);",
+            "visibility:hidden;pointer-events:none';",
+            "(document.body||d).appendChild(p);",
+            "var cs=getComputedStyle(p);",
+            "var t=Math.round(parseFloat(cs.paddingTop)||0);",
+            "var b=Math.round(parseFloat(cs.paddingBottom)||0);",
+            "p.remove();",
+            "t=Math.max(t,{native_top},window.__FL_NATIVE_SAFE_TOP||0);",
+            "b=Math.max(b,{native_bottom},window.__FL_NATIVE_SAFE_BOTTOM||0);",
+            "if(t>0||b>0){{",
+            "d.style.setProperty('--fl-native-safe-top',t+'px');",
+            "d.style.setProperty('--fl-native-safe-bottom',b+'px');",
+            "window.__FL_NATIVE_SAFE_TOP=t;",
+            "window.__FL_NATIVE_SAFE_BOTTOM=b;",
+            "}}",
+            "var vvh=Math.round((window.visualViewport?window.visualViewport.height:0)||window.innerHeight);",
+            "if(vvh>0)d.style.setProperty('--fl-mobile-vvh',vvh+'px');",
+            "}})();"
+        ),
+        native_top = native_top,
+        native_bottom = native_bottom,
+    )
+}
 
 // --- iOS Release logging -----------------------------------------------------
 #[cfg(all(target_os = "ios", not(debug_assertions)))]
@@ -226,16 +317,23 @@ macro_rules! eprintln { ($($t:tt)*) => { tracing::error!($($t)*); } }
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
 pub fn run() {
+    // Reference point for the anonymous `app_start` performance metric; taken
+    // before any init work so the frontend can measure process start to first render.
+    functions::telemetry::mark_process_start();
+
+    // Crash buffering is armed from the settings file on disk before the hook is
+    // installed, so panics between here and `init_crash_capture` are still
+    // captured. Silent no-op when the file is absent or crash reports are off.
+    functions::telemetry::init_crash_reporting_from_disk();
+
     // Ensure panics are logged with backtraces in release too.
     std::panic::set_hook(Box::new(|info| {
+        let backtrace = std::backtrace::Backtrace::force_capture().to_string();
         // Use write! instead of eprintln! to avoid a double-panic when stderr
         // is a broken pipe (e.g. the parent process that captured output has gone away).
         let _ = std::io::Write::write_fmt(
             &mut std::io::stderr(),
-            format_args!(
-                "PANIC: {info}\n{}\n",
-                std::backtrace::Backtrace::force_capture()
-            ),
+            format_args!("PANIC: {info}\n{backtrace}\n"),
         );
         // The debug devtools plugin installs a dynamic tracing layer. If that layer itself panics
         // during initialization/event dispatch, re-entering `tracing` from the panic hook can
@@ -258,6 +356,24 @@ pub fn run() {
         {
             let _ = sentry::capture_message(&format!("panic: {info}"), sentry::Level::Fatal);
         }
+
+        // Anonymous crash capture into the local buffer. No-ops until startup
+        // wired it and whenever crash reports are declined. Unparsable
+        // backtraces travel as context so the frame contract stays typed.
+        let (stacktrace, context) = match functions::telemetry::parse_backtrace_frames(&backtrace) {
+            Some(frames) => (Some(frames), None),
+            None => (
+                None,
+                Some(serde_json::json!({ "backtrace": backtrace.as_str() })),
+            ),
+        };
+        functions::telemetry::track_error_blocking(
+            "panic",
+            &info.to_string(),
+            "fatal",
+            stacktrace,
+            context,
+        );
     }));
     #[cfg(all(target_os = "ios", not(debug_assertions)))]
     ios_release_logging::init();
@@ -357,6 +473,7 @@ pub fn run() {
 
     let user_dir = settings_state.user_dir.clone();
     let blob_dir = settings_state.user_dir.join("blob_store");
+    let idb_sql_dir = settings_state.user_dir.join("idb_sqlite");
     config.register_user_store(build_store(settings_state.user_dir.clone()));
 
     config.register_app_storage_store(build_store(project_dir.clone()));
@@ -392,10 +509,26 @@ pub fn run() {
     );
 
     settings_state.set_config(&config);
+    // Wires the panic hook's crash buffer before any managed state exists, so
+    // startup panics are captured too.
+    functions::telemetry::init_crash_capture(&mut settings_state);
     let settings_state = Arc::new(Mutex::new(settings_state));
     let (http_client, refetch_rx) = HTTPClient::new();
     let state = FlowLikeState::new(config, http_client);
     let state_ref = Arc::new(state);
+    let registry_state = Arc::new(Mutex::new(None));
+
+    // Package widgets are resolved from installed package manifests; without
+    // this source the widget provider only ever sees project widgets.
+    let widget_source_state = state_ref.clone();
+    let widget_source_registry = registry_state.clone();
+    tauri::async_runtime::spawn(async move {
+        widget_source_state
+            .register_package_widget_source(Arc::new(functions::registry::RegistryWidgetSource(
+                widget_source_registry,
+            )))
+            .await;
+    });
 
     let initialized_state = state_ref.clone();
     tauri::async_runtime::spawn(async move {
@@ -496,10 +629,21 @@ pub fn run() {
     let settings_state_for_sink = settings_state.clone();
     let shared_wasm_engine =
         state::TauriWasmEngineState::create_shared().expect("Failed to create shared WasmEngine");
-    let mut builder = tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // Tauri requires this plugin to be registered first so a secondary process exits before any
+    // other plugin or application setup hook runs.
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(handle_instance));
+    }
+
+    builder = widget_protocol::register(builder);
+
+    builder = builder
         .manage(state::TauriSettingsState(settings_state.clone()))
         .manage(state::TauriFlowLikeState(state_ref.clone()))
-        .manage(state::TauriRegistryState(Arc::new(Mutex::new(None))))
+        .manage(state::TauriRegistryState(registry_state))
         .manage(state::TauriWasmEngineState(shared_wasm_engine))
         .manage(state::TauriRecordingState::new())
         .plugin(tauri_plugin_http::init())
@@ -511,6 +655,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
+            #[cfg(debug_assertions)]
+            if let Some(url) = flowpilot_e2e_cli_url()
+                && let Some(main) = app.get_webview_window("main")
+                && let Err(error) = main.navigate(url)
+            {
+                tracing::error!(%error, "Failed to navigate to the FlowPilot E2E CLI runner");
+            }
+
             let storage_cleanup_handle = app.app_handle().clone();
             tauri::async_runtime::spawn(async move {
                 flow_like_types::tokio::time::sleep(Duration::from_secs(2)).await;
@@ -521,6 +673,11 @@ pub fn run() {
                 {
                     tracing::warn!(error = %error, "Automatic local log cleanup failed");
                 }
+            });
+
+            let telemetry_handle = app.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                functions::telemetry::track(&telemetry_handle, "app_started", None).await;
             });
 
             // Start the WasmEngine epoch ticker inside the async runtime
@@ -621,13 +778,23 @@ pub fn run() {
             {
                 let ios_handle = app.app_handle().clone();
                 tauri::async_runtime::spawn(async move {
+                    // `with_webview` dispatches to the main thread, so each tick
+                    // evals the values resolved by the previous one. The extra
+                    // trailing delay guarantees the run ends on an eval rather
+                    // than on a read whose result is never applied.
+                    let insets: NativeInsets = Arc::new((AtomicI64::new(0), AtomicI64::new(0)));
+
                     // Wait for the WKWebView to be fully initialised before
                     // touching ObjC properties — calling too early crashes.
-                    for delay_ms in [100, 300, 700, 1500, 3000] {
+                    for delay_ms in [100, 300, 700, 1500, 3000, 5000] {
                         flow_like_types::tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                         if let Some(main) = ios_handle.get_webview_window("main") {
                             harden_ios_webview_scroll(&main);
-                            let _ = main.eval(IOS_SAFE_AREA_JS);
+                            probe_ios_native_insets(&main, insets.clone());
+                            let _ = main.eval(&ios_safe_area_js(
+                                insets.0.load(Ordering::Relaxed),
+                                insets.1.load(Ordering::Relaxed),
+                            ));
                         }
                     }
                 });
@@ -851,16 +1018,19 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_flow_like_dexie_blob_offload::init(Some(
-            blob_dir,
-        )))
+        .plugin(tauri_plugin_flow_like_dexie_blob_offload::init(
+            Some(blob_dir),
+            Some(idb_sql_dir),
+        ))
         .invoke_handler(tauri::generate_handler![
             update,
+            deeplink::deeplink_replay_pending,
             functions::file::get_path_meta,
             functions::ai::invoke::stream_chat_completion,
             functions::ai::invoke::chat_completion,
             functions::ai::invoke::find_best_model,
             functions::system::get_system_info,
+            functions::system::can_host_mlx,
             functions::system::list_apps_for_file,
             functions::system::open_file_with_app,
             functions::storage_management::get_local_storage_overview,
@@ -884,6 +1054,9 @@ pub fn run() {
             functions::settings::profiles::delete_profile,
             functions::settings::profiles::add_bit,
             functions::settings::profiles::remove_bit,
+            functions::settings::profiles::upsert_custom_bit,
+            functions::settings::profiles::remove_custom_bit,
+            functions::settings::profiles::get_custom_bits,
             functions::settings::profiles::get_bits_in_current_profile,
             functions::settings::profiles::change_profile_image,
             functions::settings::profiles::read_profile_icon,
@@ -932,6 +1105,7 @@ pub fn run() {
             functions::app::tables::db_add_column,
             functions::app::tables::db_alter_column,
             functions::app::tables::db_drop_index,
+            functions::app::tables::db_drop_table,
             functions::app::graph::graph_list_overlays,
             functions::app::graph::graph_list_imports,
             functions::app::graph::graph_create_overlay,
@@ -990,6 +1164,7 @@ pub fn run() {
             functions::flow::board::execute_commands,
             functions::flow::board::apply_flowscript,
             functions::flow::board::lint_flowscript,
+            functions::flow::board::check_flowscript_reconcile,
             functions::flow::board::get_flowscript,
             functions::flow::board::get_execution_elements,
             functions::flow::board::save_board,
@@ -1015,9 +1190,17 @@ pub fn run() {
             functions::ai::copilot::copilot_chat,
             functions::ai::copilot::cancel_copilot_chat,
             functions::ai::copilot::flowpilot_flow_ir_commit_disposition,
+            functions::ai::copilot::flowpilot_create_board_edit_job,
+            functions::ai::copilot::flowpilot_list_board_edit_jobs,
+            functions::ai::copilot::flowpilot_get_board_edit_job,
+            functions::ai::copilot::flowpilot_resolve_board_edit_job,
+            functions::ai::copilot::flowpilot_claim_board_edit_job_delivery,
+            functions::ai::copilot::flowpilot_ack_board_edit_job_delivery,
             functions::ai::copilot::flowpilot_apply_flow_ir_commit,
             functions::ai::copilot::global_chat,
             functions::ai::copilot::global_chat_resume,
+            functions::ai::copilot::global_chat_steer,
+            functions::ai::copilot::global_chat_take_unconsumed_steering,
             functions::ai::copilot::global_chat_memory_status,
             functions::ai::copilot::global_chat_clear_memory,
             functions::ai::copilot::global_chat_list_memories,
@@ -1047,6 +1230,7 @@ pub fn run() {
             functions::a2ui::widget::close_widget,
             functions::a2ui::widget::get_widget_meta,
             functions::a2ui::widget::push_widget_meta,
+            functions::a2ui::widget::respond_widget_query,
             functions::a2ui::page::get_pages,
             functions::a2ui::page::get_page,
             functions::a2ui::page::get_page_by_route,
@@ -1082,6 +1266,8 @@ pub fn run() {
             functions::developer::developer_inspect_node,
             functions::developer::developer_inspect_package,
             functions::developer::developer_find_publish_wasm,
+            functions::developer::developer_find_publish_artifacts,
+            functions::developer::developer_prepare_widget_preview,
             functions::developer::developer_read_manifest,
             functions::developer::developer_run_node,
             functions::developer::developer_load_into_catalog,
@@ -1116,12 +1302,16 @@ pub fn run() {
             functions::feedback::get_offline_feedback,
             functions::feedback::get_offline_feedback_stats,
             functions::feedback::delete_offline_feedback,
+            functions::telemetry::get_telemetry_settings,
+            functions::telemetry::set_telemetry_enabled,
+            functions::telemetry::queue_telemetry_event,
+            functions::telemetry::drain_telemetry_events,
+            functions::telemetry::ack_telemetry_events,
+            functions::telemetry::set_crash_reports_enabled,
+            functions::telemetry::drain_telemetry_errors,
+            functions::telemetry::ack_telemetry_errors,
+            functions::telemetry::app_start_elapsed_ms,
         ]);
-
-    #[cfg(desktop)]
-    {
-        builder = builder.plugin(tauri_plugin_single_instance::init(handle_instance));
-    }
 
     #[cfg(debug_assertions)]
     {
@@ -1145,10 +1335,13 @@ pub fn run() {
 fn handle_instance(app: &AppHandle, args: Vec<String>, _cwd: String) {
     #[cfg(desktop)]
     {
-        let _ = app
-            .get_webview_window("main")
-            .expect("no main window")
-            .set_focus();
+        let flowpilot_e2e_cli = args.iter().any(|arg| arg == "--flowpilot-e2e-cli");
+        if !flowpilot_e2e_cli {
+            let _ = app
+                .get_webview_window("main")
+                .expect("no main window")
+                .set_focus();
+        }
     }
 
     println!(

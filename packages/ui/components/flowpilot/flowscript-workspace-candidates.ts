@@ -4,6 +4,10 @@ export interface FlowScriptWorkspaceCandidate {
 	completion?: string;
 	retained_full_source?: string;
 	regression?: Record<string, unknown>;
+	/** Bounded legacy compiler diagnostics carried with this exact source snapshot. */
+	diagnostics?: unknown[];
+	/** Bounded structured compiler diagnostics carried with this exact source snapshot. */
+	structured_diagnostics?: unknown[];
 }
 
 export interface FlowScriptCandidateProfile {
@@ -67,7 +71,9 @@ export function profileFlowScriptCandidate(
 	source: string,
 ): FlowScriptCandidateProfile {
 	const helperFunctions = new Set<string>();
-	for (const match of source.matchAll(/\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) {
+	for (const match of source.matchAll(
+		/\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g,
+	)) {
 		helperFunctions.add(normalizedSymbol(match[1] ?? ""));
 	}
 
@@ -86,7 +92,13 @@ export function profileFlowScriptCandidate(
 
 	for (const rawLine of source.replace(/\r\n/g, "\n").split("\n")) {
 		const line = rawLine.trim();
-		if (!line || line === "{" || line === "}" || line.startsWith("//") || line.startsWith("@")) {
+		if (
+			!line ||
+			line === "{" ||
+			line === "}" ||
+			line.startsWith("//") ||
+			line.startsWith("@")
+		) {
 			depth += braceDelta(rawLine);
 			if (activeHelper && depth < activeHelper.depth) activeHelper = undefined;
 			if (activeEvent && depth < activeEvent.depth) activeEvent = undefined;
@@ -97,14 +109,14 @@ export function profileFlowScriptCandidate(
 		const helperDeclaration = line.match(
 			/^function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/,
 		);
-		const eventDeclaration = line.match(/^(events[A-Za-z0-9_]*)\s*\(/);
+		const eventDeclaration = line.match(
+			/^(events[A-Za-z0-9_]*)(?:\s+([A-Za-z_][A-Za-z0-9_]*))?\s*\(/,
+		);
 		const interfaceDeclaration = line.match(
 			/^interface\s+([A-Za-z_][A-Za-z0-9_]*)/,
 		);
 		if (depth === 0) {
-			const variable = line.match(
-				/^(?:const|let)\s+([A-Za-z_][A-Za-z0-9_]*)/,
-			);
+			const variable = line.match(/^(?:const|let)\s+([A-Za-z_][A-Za-z0-9_]*)/);
 			if (variable?.[1]) topLevelVariables.add(normalizedSymbol(variable[1]));
 		}
 		if (interfaceDeclaration?.[1]) {
@@ -124,10 +136,16 @@ export function profileFlowScriptCandidate(
 			};
 		}
 
+		const helperDeclarationName = normalizedSymbol(
+			helperDeclaration?.[1] ?? "",
+		);
+		const eventDeclarationType = normalizedSymbol(eventDeclaration?.[1] ?? "");
+		const eventDeclarationAlias = normalizedSymbol(eventDeclaration?.[2] ?? "");
 		const calls = callNamesInLine(line).filter(
 			(name) =>
-				name !== normalizedSymbol(helperDeclaration?.[1] ?? "") &&
-				name !== normalizedSymbol(eventDeclaration?.[1] ?? ""),
+				name !== helperDeclarationName &&
+				name !== eventDeclarationType &&
+				name !== eventDeclarationAlias,
 		);
 		for (const name of calls) {
 			callSites += 1;
@@ -138,7 +156,11 @@ export function profileFlowScriptCandidate(
 					helperDomainCallSites += 1;
 				}
 			}
-			if (activeEvent && helperFunctions.has(name) && !activeEvent.calledHelper) {
+			if (
+				activeEvent &&
+				helperFunctions.has(name) &&
+				!activeEvent.calledHelper
+			) {
 				activeEvent.calledHelper = true;
 				eventsCallingHelpers += 1;
 			}
@@ -205,9 +227,11 @@ export function detectFlowScriptCandidateRegression(
 		candidateSymbols.has(symbol),
 	).length;
 	const identityWasLost =
-		previousSymbols.size >= 2 && retainedScopeSymbols * 2 < previousSymbols.size;
+		previousSymbols.size >= 2 &&
+		retainedScopeSymbols * 2 < previousSymbols.size;
 	const multipleEventScopeWasLost =
-		previous.eventEntries >= 2 && candidate.eventEntries * 2 < previous.eventEntries;
+		previous.eventEntries >= 2 &&
+		candidate.eventEntries * 2 < previous.eventEntries;
 	if (!(identityWasLost || multipleEventScopeWasLost)) return undefined;
 
 	return {
@@ -230,6 +254,106 @@ function isModularWorkingSlice(profile: FlowScriptCandidateProfile) {
 
 function sourceKey(source: string): string {
 	return source.replace(/\r\n/g, "\n").trim();
+}
+
+const MAX_WORKSPACE_DIAGNOSTICS = 20;
+const MAX_WORKSPACE_DIAGNOSTIC_TEXT_CHARS = 600;
+const WORKSPACE_DIAGNOSTIC_FIELDS = [
+	"id",
+	"code",
+	"phase",
+	"severity",
+	"message",
+	"line",
+	"column",
+	"span",
+	"source_span",
+	"path",
+	"ast_path",
+	"scope",
+	"function",
+	"expected",
+	"actual",
+	"declaration",
+	"pin",
+	"fix",
+	"occurrences",
+	"related_messages",
+] as const;
+
+function boundedWorkspaceDiagnostic(value: unknown): unknown {
+	if (typeof value === "string") {
+		return value.slice(0, MAX_WORKSPACE_DIAGNOSTIC_TEXT_CHARS);
+	}
+	if (
+		value === null ||
+		typeof value === "number" ||
+		typeof value === "boolean"
+	) {
+		return value;
+	}
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return String(value).slice(0, MAX_WORKSPACE_DIAGNOSTIC_TEXT_CHARS);
+	}
+
+	const record = value as Record<string, unknown>;
+	const bounded: Record<string, unknown> = {};
+	for (const key of WORKSPACE_DIAGNOSTIC_FIELDS) {
+		const field = record[key];
+		if (field === undefined) continue;
+		if (
+			field === null ||
+			typeof field === "number" ||
+			typeof field === "boolean"
+		) {
+			bounded[key] = field;
+			continue;
+		}
+		if (typeof field === "string") {
+			bounded[key] = field.slice(0, MAX_WORKSPACE_DIAGNOSTIC_TEXT_CHARS);
+			continue;
+		}
+		try {
+			bounded[key] = JSON.stringify(field).slice(
+				0,
+				MAX_WORKSPACE_DIAGNOSTIC_TEXT_CHARS,
+			);
+		} catch {
+			bounded[key] = "[diagnostic detail unavailable]";
+		}
+	}
+	return Object.keys(bounded).length > 0
+		? bounded
+		: "[unstructured diagnostic omitted]";
+}
+
+function boundedWorkspaceDiagnostics(value: unknown): unknown[] | undefined {
+	if (!Array.isArray(value) || value.length === 0) return undefined;
+	return value
+		.slice(0, MAX_WORKSPACE_DIAGNOSTICS)
+		.map(boundedWorkspaceDiagnostic);
+}
+
+/** Prefer the structured compiler list while retaining compatibility with legacy diagnostics. */
+export function flowScriptWorkspaceDiagnostics(
+	candidate: FlowScriptWorkspaceCandidate,
+): readonly unknown[] {
+	return candidate.structured_diagnostics?.length
+		? candidate.structured_diagnostics
+		: (candidate.diagnostics ?? []);
+}
+
+/** A later clean candidate supersedes earlier transient validation-error snapshots. */
+export function flowScriptWorkspaceRepairResolved(
+	candidate: FlowScriptWorkspaceCandidate,
+): boolean {
+	return [
+		"valid",
+		"queued",
+		"already_queued",
+		"no_changes",
+		"applied",
+	].includes(candidate.status?.trim().toLowerCase() ?? "");
 }
 
 /** Parse either a raw FlowScript document or the streamed `{source,status}` envelope. */
@@ -263,6 +387,14 @@ export function parseFlowScriptWorkspaceCandidate(
 				!Array.isArray(parsed.regression)
 			) {
 				candidate.regression = parsed.regression as Record<string, unknown>;
+			}
+			const diagnostics = boundedWorkspaceDiagnostics(parsed.diagnostics);
+			if (diagnostics) candidate.diagnostics = diagnostics;
+			const structuredDiagnostics = boundedWorkspaceDiagnostics(
+				parsed.structured_diagnostics,
+			);
+			if (structuredDiagnostics) {
+				candidate.structured_diagnostics = structuredDiagnostics;
 			}
 			return candidate;
 		}
@@ -350,8 +482,7 @@ export function protectFlowScriptCandidateCompleteness(
 		return {
 			...candidate,
 			completion: "partial_working_slice",
-			retained_full_source:
-				candidate.retained_full_source ?? previous.source,
+			retained_full_source: candidate.retained_full_source ?? previous.source,
 			regression: candidate.regression ?? { ...regression },
 		};
 	}
@@ -407,9 +538,10 @@ export function resolveFinalFlowScriptWorkspaceCandidate(
 ): FlowScriptWorkspaceCandidate | undefined {
 	const parsed = parseFlowScriptWorkspaceCandidate(workspace);
 	const resolved = resolveFlowScriptWorkspaceCandidate(history, parsed);
-	const validated = resolved && parsed && !parsed.status && hasValidatedCommands
-		? { ...resolved, status: "queued" }
-		: resolved;
+	const validated =
+		resolved && parsed && !parsed.status && hasValidatedCommands
+			? { ...resolved, status: "queued" }
+			: resolved;
 	return protectFlowScriptCandidateCompleteness(history, validated);
 }
 

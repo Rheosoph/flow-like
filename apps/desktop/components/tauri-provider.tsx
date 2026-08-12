@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
-import { createId } from "@paralleldrive/cuid2";
 import {
 	type IApiKeyState,
 	type IApiState,
@@ -43,10 +42,14 @@ import {
 	useInvoke,
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
-import type { ICommandSync } from "@flow-like/flow-like-ui/lib";
-import Dexie, { type EntityTable } from "dexie";
+import type {
+	ICommandSync,
+	ICommandSyncArchive,
+} from "@flow-like/flow-like-ui/lib";
 import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
 import type { IAnalyticsState } from "@flow-like/flow-like-ui/state/backend-state/analytics-state";
+import { createId } from "@paralleldrive/cuid2";
+import Dexie, { type EntityTable } from "dexie";
 import { useCallback, useEffect, useRef, useTransition } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 import { appsDB } from "../lib/apps-db";
@@ -60,12 +63,13 @@ import { TauriApiState } from "./tauri-provider/api-state";
 import { AppState } from "./tauri-provider/app-state";
 import { BitState } from "./tauri-provider/bit-state";
 import { BoardState } from "./tauri-provider/board-state";
+import type { CommandSyncRemoteIdentity } from "./tauri-provider/command-sync";
 import { DatabaseState } from "./tauri-provider/db-state";
-import { QueryState } from "./tauri-provider/query-state";
 import { EventState } from "./tauri-provider/event-state";
 import { GraphState } from "./tauri-provider/graph-state";
 import { HelperState } from "./tauri-provider/helper-state";
 import { PageState } from "./tauri-provider/page-state";
+import { QueryState } from "./tauri-provider/query-state";
 import { RegistryState } from "./tauri-provider/registry-state";
 import { RoleState } from "./tauri-provider/role-state";
 import { RouteState } from "./tauri-provider/route-state";
@@ -143,6 +147,7 @@ export class TauriBackend implements IBackendState {
 		public queryClient?: QueryClient,
 		public auth?: AuthContextProps,
 		public profile?: IProfile,
+		private readonly canHostMLX = false,
 	) {
 		this._apiState = new TauriApiState();
 		this.apiState = this._apiState;
@@ -177,6 +182,7 @@ export class TauriBackend implements IBackendState {
 		return {
 			needsSignIn: isIos,
 			canHostLlamaCPP: !isIos,
+			canHostMLX: this.canHostMLX,
 			canHostEmbeddings: true,
 			canExecuteLocally: true,
 		};
@@ -184,6 +190,7 @@ export class TauriBackend implements IBackendState {
 
 	pushProfile(profile: IProfile) {
 		this.profile = profile;
+		this.refreshRemoteCatalogQueries();
 	}
 
 	pushAuthContext(auth: AuthContextProps) {
@@ -195,16 +202,60 @@ export class TauriBackend implements IBackendState {
 			?.catch((e) =>
 				console.warn("[RegistryAuth] Failed to set auth token:", e),
 			);
+		this.refreshRemoteCatalogQueries();
 	}
 
 	pushQueryClient(queryClient: QueryClient) {
 		this.queryClient = queryClient;
+		this.refreshRemoteCatalogQueries();
+	}
+
+	private refreshRemoteCatalogQueries() {
+		if (
+			!this.queryClient ||
+			!this.profile ||
+			!this.auth ||
+			this.auth.isLoading
+		) {
+			return;
+		}
+
+		// /use can mount while native auth/profile bootstrap is still in progress.
+		// Its local-only result is otherwise cached under the force-refresh key and
+		// remains fresh after the backend becomes capable of remote synchronization.
+		void Promise.all([
+			this.queryClient.invalidateQueries({
+				queryKey: [this.routeState.getRoutes.name || "backendFn"],
+				refetchType: "active",
+			}),
+			this.queryClient.invalidateQueries({
+				queryKey: [this.eventState.getEvents.name || "backendFn"],
+				refetchType: "active",
+			}),
+		]).catch((error) => {
+			console.warn(
+				"[CatalogSync] Failed to refresh routes/events after auth bootstrap:",
+				error,
+			);
+		});
 	}
 
 	async isOffline(appId: string): Promise<boolean> {
+		const visibility = await this.appVisibility(appId);
+		return visibility === undefined || visibility === IAppVisibility.Offline;
+	}
+
+	/** True only when local metadata explicitly identifies an app as local-only. */
+	async isLocalOnly(appId: string): Promise<boolean> {
+		return (await this.appVisibility(appId)) === IAppVisibility.Offline;
+	}
+
+	private async appVisibility(
+		appId: string,
+	): Promise<IAppVisibility | undefined> {
 		const status = await appsDB.visibility.get(appId);
 		if (typeof status !== "undefined") {
-			return status.visibility === IAppVisibility.Offline;
+			return status.visibility;
 		}
 		try {
 			const app = await invoke<{ visibility?: IAppVisibility }>("get_app", {
@@ -212,24 +263,232 @@ export class TauriBackend implements IBackendState {
 			});
 			const visibility = app.visibility ?? IAppVisibility.Offline;
 			await appsDB.visibility.put({ visibility, appId });
-			return visibility === IAppVisibility.Offline;
+			return visibility;
 		} catch {
-			return true;
+			return undefined;
 		}
 	}
 
 	async pushOfflineSyncCommand(
 		appId: string,
 		boardId: string,
-		commands: IGenericCommand[],
+		chunks: IGenericCommand[][],
+		idempotencyKey?: string,
+		chunkOffset = 0,
+		commands?: IGenericCommand[],
+		blockedReason?: string,
+		remoteIdentity?: CommandSyncRemoteIdentity,
 	) {
-		console.log("Pushing offline sync command", { appId, boardId, commands });
-		await offlineSyncDB.commands.put({
-			commandId: createId(),
-			appId: appId,
-			boardId: boardId,
-			commands: commands,
-			createdAt: new Date(),
+		console.log("Pushing offline sync command", {
+			appId,
+			boardId,
+			chunkCount: chunks.length,
+			commandCount:
+				chunks.reduce((count, chunk) => count + chunk.length, 0) +
+				(commands?.length ?? 0),
+			blocked: Boolean(blockedReason),
+		});
+		const commandId = idempotencyKey
+			? `${appId}\u001f${boardId}\u001f${idempotencyKey}`
+			: createId();
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			// Preserve an already-queued undelivered tail. A renderer replay of the full receipt
+			// must not overwrite it and resend chunks that the server already accepted.
+			if (idempotencyKey && (await offlineSyncDB.commands.get(commandId)))
+				return;
+			const latest = await offlineSyncDB.commands.orderBy("sequence").last();
+			const sequence = Math.max(Date.now() * 1000, (latest?.sequence ?? 0) + 1);
+			await offlineSyncDB.commands.put({
+				commandId,
+				appId,
+				boardId,
+				chunks,
+				commands,
+				createdAt: new Date(),
+				idempotencyKey,
+				chunkOffset,
+				sequence,
+				blockedReason,
+				remoteIdentityVersion: 1,
+				remoteProfileId: remoteIdentity
+					? remoteIdentity.remoteProfileId
+					: this.profile?.id,
+				remotePrincipalId: remoteIdentity
+					? remoteIdentity.remotePrincipalId
+					: this.auth?.user?.profile.sub,
+				remoteHub: remoteIdentity
+					? remoteIdentity.remoteHub
+					: this.profile?.hub,
+				deferReceiptAckUntilNativeTerminal:
+					idempotencyKey?.startsWith("flowpilot-board-edit:") === true,
+			});
+		});
+	}
+
+	async checkpointOfflineSyncCommand(
+		commandId: string,
+		remainingChunks: IGenericCommand[][],
+		chunkOffset: number,
+		idempotencyKey: string,
+		receiptKey: string,
+		deferReceiptAck: boolean,
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing) return;
+			const deferredReceiptAcks = deferReceiptAck
+				? Array.from(
+						new Set([...(existing.deferredReceiptAcks ?? []), receiptKey]),
+					)
+				: existing.deferredReceiptAcks;
+			await offlineSyncDB.commands.put({
+				...existing,
+				commands: undefined,
+				chunks: remainingChunks,
+				chunkOffset,
+				idempotencyKey,
+				pendingReceiptAck: deferReceiptAck ? undefined : receiptKey,
+				deferredReceiptAcks,
+			});
+		});
+	}
+
+	async migrateLegacyOfflineSyncCommand(
+		commandId: string,
+		chunks: IGenericCommand[][],
+		idempotencyKey: string,
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing || existing.chunks) return;
+			// Freeze the exact recovery partition and key before its first POST. Recomputing
+			// either after a crash could reuse `:0` for a different digest and permanently
+			// conflict with the server's durable idempotency receipt.
+			await offlineSyncDB.commands.put({
+				...existing,
+				commands: undefined,
+				chunks,
+				chunkOffset: existing.chunkOffset ?? 0,
+				idempotencyKey,
+			});
+		});
+	}
+
+	async blockOfflineSyncCommand(
+		commandId: string,
+		blockedReason: string,
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing) return;
+			await offlineSyncDB.commands.put({
+				...existing,
+				blockedReason,
+			});
+		});
+	}
+
+	/**
+	 * Replace the payload of a queued batch that has never been delivered.
+	 *
+	 * Only used to restate `on_update`-derived node state a batch failed to capture, so the batch
+	 * becomes replayable on the Hub. The row keeps its id, sequence, idempotency key and remote
+	 * identity, so ordering and ownership are untouched; the caller must guarantee the server has
+	 * not seen this payload, because the durable receipt is keyed on its digest.
+	 */
+	async repairOfflineSyncCommand(
+		commandId: string,
+		chunks: IGenericCommand[][],
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing) return;
+			if ((existing.chunkOffset ?? 0) !== 0 || existing.pendingReceiptAck) {
+				return;
+			}
+			await offlineSyncDB.commands.put({
+				...existing,
+				chunks,
+				commands: undefined,
+			});
+		});
+	}
+
+	/**
+	 * Record why a delivery attempt failed. Purely diagnostic: the batch stays queued and ordered,
+	 * but the reason survives restarts so a permanently rejected payload is visible instead of
+	 * silently blocking every later edit for the same board.
+	 */
+	async recordOfflineSyncFailure(
+		commandId: string,
+		failure: { status?: number; message: string },
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing) return;
+			await offlineSyncDB.commands.put({
+				...existing,
+				lastFailureStatus: failure.status,
+				lastFailureMessage: failure.message.slice(0, 2000),
+				lastFailureAt: new Date(),
+				failedAttempts: (existing.failedAttempts ?? 0) + 1,
+			});
+		});
+	}
+
+	async bindLegacyOfflineSyncCommand(
+		commandId: string,
+		remoteIdentity: CommandSyncRemoteIdentity,
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing || existing.remoteIdentityVersion === 1) return;
+			await offlineSyncDB.commands.put({
+				...existing,
+				remoteIdentityVersion: 1,
+				remoteProfileId: remoteIdentity.remoteProfileId,
+				remotePrincipalId: remoteIdentity.remotePrincipalId,
+				remoteHub: remoteIdentity.remoteHub,
+			});
+		});
+	}
+
+	async completeOfflineSyncReceiptAck(
+		commandId: string,
+		pendingReceiptAck: string,
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing || existing.pendingReceiptAck !== pendingReceiptAck) return;
+			if (
+				(existing.chunks?.length ?? 0) === 0 &&
+				(existing.deferredReceiptAcks?.length ?? 0) === 0
+			) {
+				await offlineSyncDB.commands.delete(commandId);
+				return;
+			}
+			await offlineSyncDB.commands.put({
+				...existing,
+				pendingReceiptAck: undefined,
+			});
+		});
+	}
+
+	async deferOfflineSyncReceiptAck(
+		commandId: string,
+		receiptKey: string,
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing || existing.pendingReceiptAck !== receiptKey) return;
+			await offlineSyncDB.commands.put({
+				...existing,
+				pendingReceiptAck: undefined,
+				deferReceiptAckUntilNativeTerminal: true,
+				deferredReceiptAcks: Array.from(
+					new Set([...(existing.deferredReceiptAcks ?? []), receiptKey]),
+				),
+			});
 		});
 	}
 
@@ -244,9 +503,11 @@ export class TauriBackend implements IBackendState {
 			})
 			.toArray();
 
-		return commands.toSorted(
-			(a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
-		);
+		return commands.toSorted((a, b) => {
+			const aOrder = a.sequence ?? a.createdAt.getTime() * 1000;
+			const bOrder = b.sequence ?? b.createdAt.getTime() * 1000;
+			return aOrder - bOrder || a.commandId.localeCompare(b.commandId);
+		});
 	}
 
 	async clearOfflineSyncCommands(
@@ -255,6 +516,60 @@ export class TauriBackend implements IBackendState {
 		boardId: string,
 	): Promise<void> {
 		await offlineSyncDB.commands.delete(commandId);
+	}
+
+	/**
+	 * Move queued batches out of the outbox as part of an explicit server-authoritative reset.
+	 *
+	 * Archive and delete share one transaction: a crash between them would either lose the only
+	 * copy of an undelivered edit or leave it queued and still wedging the board.
+	 */
+	async archiveOfflineSyncCommands(
+		appId: string,
+		boardId: string,
+		commandIds: readonly string[],
+		archiveReason: string,
+	): Promise<number> {
+		if (commandIds.length === 0) return 0;
+		const archivedAt = new Date();
+		let archived = 0;
+		await offlineSyncDB.transaction(
+			"rw",
+			offlineSyncDB.commands,
+			offlineSyncDB.discarded,
+			async () => {
+				for (const commandId of commandIds) {
+					const existing = await offlineSyncDB.commands.get(commandId);
+					if (
+						!existing ||
+						existing.appId !== appId ||
+						existing.boardId !== boardId
+					)
+						continue;
+					await offlineSyncDB.discarded.put({
+						...existing,
+						archiveId: `${commandId}${archivedAt.getTime()}`,
+						archivedAt,
+						archiveReason,
+					});
+					await offlineSyncDB.commands.delete(commandId);
+					archived += 1;
+				}
+			},
+		);
+		return archived;
+	}
+
+	async listOfflineSyncArchive(
+		appId: string,
+		boardId: string,
+	): Promise<ICommandSyncArchive[]> {
+		const entries = await offlineSyncDB.discarded
+			.where({ appId: appId, boardId: boardId })
+			.toArray();
+		return entries.toSorted(
+			(a, b) => a.archivedAt.getTime() - b.archivedAt.getTime(),
+		);
 	}
 
 	async getBoardLineage(
@@ -287,6 +602,17 @@ export class TauriBackend implements IBackendState {
 				recordedAt: new Date(),
 			});
 		});
+	}
+
+	/**
+	 * Forget the last applied revision for one board.
+	 *
+	 * `recordBoardLineage` only moves forward, so a lineage stamped from a clock-skewed local
+	 * board refuses every real server revision afterwards. A server-authoritative reset must
+	 * clear it, or the snapshot it just fetched is rejected by the next background sync.
+	 */
+	async clearBoardLineage(appId: string, boardId: string): Promise<void> {
+		await boardLineageDB.lineage.delete(boardLineageKey(appId, boardId));
 	}
 
 	async uploadSignedUrl(
@@ -422,11 +748,14 @@ export function TauriProvider({
 		}
 	}, [backend, queryClient]);
 
-	// Listen for catalog-updated events from the backend to refresh the node catalog
+	// Registry changes can also change dynamic pins on already-open boards.
+	// Native refreshes those cached boards before emitting this event; invalidate
+	// both query families so the editor picks up the refreshed contracts.
 	useEffect(() => {
 		const unlisten = listen("catalog-updated", () => {
 			queryClient.invalidateQueries({ queryKey: ["getCatalog"] });
 			queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes"] });
+			queryClient.invalidateQueries({ queryKey: ["getBoard"] });
 		});
 		return () => {
 			unlisten.then((fn) => fn());
@@ -442,6 +771,8 @@ export function TauriProvider({
 			.then(() => {
 				queryClient.invalidateQueries({ queryKey: ["getCatalog"] });
 				queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes"] });
+				// The event listener may still be attaching during startup.
+				queryClient.invalidateQueries({ queryKey: ["getBoard"] });
 			})
 			.catch((e: unknown) => {
 				console.warn("Registry init (eager):", e);
@@ -449,29 +780,55 @@ export function TauriProvider({
 	}, [backend, queryClient]);
 
 	useEffect(() => {
-		console.time("TauriProvider Initialization");
-		const backend = new TauriBackend((promise) => {
-			promise
-				.then((result) => {
-					console.log("Background task completed:", result);
-				})
-				.catch((error) => {
-					console.error("Background task failed:", error);
-				});
-		}, queryClient);
-		console.timeEnd("TauriProvider Initialization");
+		let cancelled = false;
 
-		console.time("Setting Backend");
-		setBackend(backend);
-		console.timeEnd("Setting Backend");
+		const initializeBackend = async () => {
+			let canHostMLX = false;
+			try {
+				canHostMLX = await invoke<boolean>("can_host_mlx");
+			} catch (error) {
+				console.warn("Failed to detect MLX support:", error);
+			}
 
-		console.time("Setting Download Backend");
-		setDownloadBackend(backend);
-		console.timeEnd("Setting Download Backend");
+			// Publish the backend only after capability detection. Consumers never
+			// observe a stale backend object whose synchronous capabilities changed
+			// without a React store update.
+			if (cancelled || !mountedRef.current) return;
 
-		scheduleIDBCleanup();
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, []);
+			console.time("TauriProvider Initialization");
+			const backend = new TauriBackend(
+				(promise) => {
+					promise
+						.then((result) => {
+							console.log("Background task completed:", result);
+						})
+						.catch((error) => {
+							console.error("Background task failed:", error);
+						});
+				},
+				queryClient,
+				undefined,
+				undefined,
+				canHostMLX,
+			);
+			console.timeEnd("TauriProvider Initialization");
+
+			console.time("Setting Backend");
+			setBackend(backend);
+			console.timeEnd("Setting Backend");
+
+			console.time("Setting Download Backend");
+			setDownloadBackend(backend);
+			console.timeEnd("Setting Download Backend");
+
+			scheduleIDBCleanup();
+		};
+
+		void initializeBackend();
+		return () => {
+			cancelled = true;
+		};
+	}, [queryClient, setBackend, setDownloadBackend]);
 
 	if (!backend) {
 		return <LoadingScreen progress={50} />;

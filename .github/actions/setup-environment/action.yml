@@ -79,6 +79,7 @@ runs:
     - name: Install Rust stable
       uses: dtolnay/rust-toolchain@stable
       with:
+        toolchain: 1.97.1
         targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
     - name: Install frontend dependencies

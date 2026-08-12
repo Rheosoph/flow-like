@@ -39,6 +39,22 @@
 	--chart-3: oklch(0.6227 0.2289 23.472);
 	--chart-4: oklch(0.7814 0.1487 63.8806);
 	--chart-5: oklch(0.5975 0.0196 285.7923);
+	/* modality palette — what a model takes in and puts out */
+	--m-text: #5b647a;
+	--m-image: #16a34a;
+	--m-audio: #db2777;
+	--m-speech: #7c5cf0;
+	--m-embed: #0891b2;
+	--m-video: #d97706;
+	--m-chat: #2563eb;
+	/* peer standing vs. the median of the same deployment class */
+	--st-back: #b4566a;
+	--st-typ: #5b647a;
+	--st-fore: #16a34a;
+	/* where a model runs */
+	--dep-hosted: #0284c7;
+	--dep-local: #5b647a;
+	--dep-remote: #2563eb;
 	--sidebar: oklch(0.9706 0.0057 84.5662);
 	--sidebar-foreground: oklch(0.1816 0.0296 259.8006);
 	--sidebar-primary: oklch(0.8201 0.1553 87.9297);
@@ -85,6 +101,48 @@
 	--fl-chat-pad-bottom: 1rem;
 	--fl-chat-user-message-background: var(--muted);
 
+	/* Reading surface. Global rather than scoped to .fl-chat-root, because the
+	   FlowPilot chat renders outside that wrapper and needs the same treatment. */
+	--fl-chat-measure: 38rem;
+	/* One column width shared by the message rows and the composer, so their
+	   edges line up. Artifacts may break the prose measure but not this.
+	   Deliberately NOT resolved into a --fl-chat-column here: --fl-chat-content-width
+	   is declared on .fl-chat-root, so a min() computed at :root would freeze at
+	   46rem and ignore any per-chat override. The use sites resolve it instead. */
+	--fl-chat-wide: 46rem;
+	/* The question is a margin note, not a card — the rule carries it. */
+	--fl-chat-ask-background: transparent;
+	--fl-chat-prose-font: "Source Serif 4", "Iowan Old Style", Charter,
+		"Bitstream Charter", Georgia, ui-serif, serif;
+	--fl-chat-prose-size: 1.0625rem;
+	--fl-chat-prose-leading: 1.72;
+	--fl-chat-ask-foreground: var(--muted-foreground);
+	--fl-chat-ask-rule: var(--primary);
+	--fl-chat-rule: color-mix(in oklch, var(--border) 70%, transparent);
+	--fl-chat-rule-strong: var(--border);
+
+	/* Chrome-on-demand: the toolbar rests at this opacity until reached for. */
+	--fl-chat-chrome-rest: 0.45;
+
+	/* --chart-1..5 span only ~40deg of hue, so they read as one colour in a
+	   categorical series. This ramp keeps the brand ember first and spaces the rest. */
+	--fl-chat-chart-1: oklch(0.6724 0.208 34.7886);
+	--fl-chat-chart-2: oklch(0.6 0.19 295);
+	--fl-chat-chart-3: oklch(0.68 0.115 195);
+	--fl-chat-chart-4: oklch(0.77 0.15 75);
+	--fl-chat-chart-5: oklch(0.58 0.16 255);
+	--fl-chat-chart-6: oklch(0.66 0.145 150);
+	--fl-chat-chart-7: oklch(0.64 0.185 350);
+	--fl-chat-chart-8: oklch(0.56 0.042 250);
+	--fl-chat-chart-text: var(--foreground);
+	--fl-chat-chart-text-muted: var(--muted-foreground);
+	--fl-chat-chart-grid: color-mix(in oklch, var(--border) 60%, transparent);
+	--fl-chat-chart-axis: var(--border);
+	--fl-chat-chart-empty: color-mix(in oklch, var(--muted) 70%, transparent);
+	--fl-chat-chart-tooltip-background: var(--popover);
+	--fl-chat-chart-tooltip-foreground: var(--popover-foreground);
+	--fl-chat-chart-tooltip-border: var(--border);
+
 	--pin-string: oklch(71.8% 0.202 349.761);
 	--pin-integer: oklch(78.9% 0.154 211.53);
 	--pin-float: oklch(79.2% 0.209 151.711);
@@ -125,6 +183,19 @@
 	--chart-3: oklch(0.6227 0.2289 23.472);
 	--chart-4: oklch(0.7814 0.1487 63.8806);
 	--chart-5: oklch(0.6984 0.0157 264.467);
+	--m-text: #94a3b8;
+	--m-image: #05df72;
+	--m-audio: #fb64b6;
+	--m-speech: #9e6bff;
+	--m-embed: #00d3f2;
+	--m-video: #f9a143;
+	--m-chat: #60a5fa;
+	--st-back: #d98a99;
+	--st-typ: #94a3b8;
+	--st-fore: #22c55e;
+	--dep-hosted: #38bdf8;
+	--dep-local: #94a3b8;
+	--dep-remote: #5b93ff;
 	--sidebar: oklch(0.1212 0.0304 253.9385);
 	--sidebar-foreground: oklch(0.9593 0.0103 81.7951);
 	--sidebar-primary: oklch(0.8399 0.1599 87.829);
@@ -161,6 +232,15 @@
 		var(--muted) 30%,
 		transparent
 	);
+
+	/* Chart hues need a little more lightness to hold up on a dark ground. */
+	--fl-chat-chart-2: oklch(0.68 0.175 295);
+	--fl-chat-chart-3: oklch(0.75 0.11 195);
+	--fl-chat-chart-4: oklch(0.82 0.14 75);
+	--fl-chat-chart-5: oklch(0.68 0.155 255);
+	--fl-chat-chart-6: oklch(0.74 0.14 150);
+	--fl-chat-chart-7: oklch(0.71 0.175 350);
+	--fl-chat-chart-8: oklch(0.68 0.038 250);
 
 	--pin-string: oklch(71.8% 0.202 349.761);
 	--pin-integer: oklch(78.9% 0.154 211.53);
@@ -202,6 +282,71 @@
 	--fl-chat-background-position: center;
 }
 
+/* Chrome on demand: the toolbar recedes until you reach for it. Hover, keyboard
+   focus, touch devices and live runs all bring it back to full strength, so it is
+   never the only way to reach a control. */
+.fl-chat-chrome {
+	opacity: var(--fl-chat-chrome-rest, 0.45);
+	transition: opacity 260ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.fl-chat-chrome:hover,
+.fl-chat-chrome:focus-within,
+.fl-chat-chrome[data-chrome-pinned="true"] {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.fl-chat-chrome {
+		opacity: 1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.fl-chat-chrome {
+		transition: none;
+	}
+}
+
+/* The answer is the document: a text serif at a real measure. Artifacts (widgets,
+   charts, tables, code) deliberately break that measure and keep the UI faces. */
+[data-fl-chat-prose] {
+	max-width: var(--fl-chat-measure, 38rem);
+	font-family: var(--fl-chat-prose-font);
+	font-size: var(--fl-chat-prose-size, 1.0625rem);
+	line-height: var(--fl-chat-prose-leading, 1.72);
+	letter-spacing: -0.003em;
+}
+
+[data-fl-chat-prose] :is(code, pre, kbd, samp) {
+	font-family: var(--font-mono);
+	font-size: 0.8125em;
+	letter-spacing: 0;
+}
+
+[data-fl-chat-prose] :is(table, pre, blockquote) {
+	max-width: none;
+}
+
+[data-fl-chat-prose] :is(table, th, td) {
+	font-family: var(--font-sans);
+	font-size: 0.8125rem;
+	letter-spacing: 0;
+}
+
+[data-fl-chat-prose] :is(h1, h2, h3, h4) {
+	letter-spacing: -0.012em;
+	text-wrap: balance;
+}
+
+/* Chat-embedded widgets and charts are UI, not prose. */
+[data-fl-chat-prose] [data-slate-void],
+[data-fl-chat-prose] figure {
+	font-family: var(--font-sans);
+	font-size: 0.875rem;
+	line-height: 1.5;
+}
+
 /* Background art needs local contrast, not one heavy wash over the whole image. These
    values remain CSS variables so event-level custom CSS can tune the treatment. */
 .fl-chat-root:where([data-fl-chat-has-background="true"]) {
@@ -213,6 +358,12 @@
 	--fl-chat-user-message-background: color-mix(
 		in oklch,
 		var(--muted) 82%,
+		transparent
+	);
+	/* Over background art the note needs a scrim to stay legible. */
+	--fl-chat-ask-background: color-mix(
+		in oklch,
+		var(--background) 76%,
 		transparent
 	);
 	--fl-chat-ai-message-background: color-mix(
@@ -392,6 +543,19 @@
 		50% {
 			animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
 			transform: translateY(-20%);
+		}
+	}
+
+	@keyframes fl-orb-breathe {
+		0%,
+		100% {
+			opacity: 0.55;
+			transform: scale(1);
+		}
+
+		50% {
+			opacity: 0.18;
+			transform: scale(1.055);
 		}
 	}
 
@@ -1119,6 +1283,37 @@
 	}
 }
 
+/* Safe-area helpers. Prefer the app's resolved --fl-safe-* vars (which fold in
+   native-injected insets) and fall back to raw env() so they also work outside
+   the Tauri shell. */
+@utility pt-safe {
+	padding-top: var(--fl-safe-top, env(safe-area-inset-top, 0px));
+}
+
+@utility pb-safe {
+	padding-bottom: var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px));
+}
+
+@utility px-safe {
+	padding-left: var(--fl-safe-left, env(safe-area-inset-left, 0px));
+	padding-right: var(--fl-safe-right, env(safe-area-inset-right, 0px));
+}
+
+/* Keyboard-aware viewport height. --fl-mobile-vvh tracks visualViewport.height
+   (written by IOSWebviewHardening) so the shell shrinks when the soft keyboard
+   opens; falls back to the dynamic viewport everywhere else. */
+@utility h-vvh {
+	height: var(--fl-mobile-vvh, 100dvh);
+}
+
+/* WKWebView already pans the visual viewport to reveal a focused input. Keep
+ * the app shell in stable layout coordinates there; consuming the live visual
+ * viewport height as well moves bottom-pinned chat composers upward twice.
+ * Android/Blink continues to use --fl-mobile-vvh through h-vvh above. */
+html[data-desktop-app][data-engine="webkit"] .h-vvh {
+	height: 100dvh;
+}
+
 @layer utilities {
 	.backdrop-blur-fallback {
 		@supports (backdrop-filter: blur(1px)) {
@@ -1167,6 +1362,24 @@
 }
 
 /*
+ * While a text field is focused (soft keyboard up, see IOSWebviewHardening) the
+ * mobile bottom nav gives its space back, so a pinned composer is never squeezed
+ * out of the shrunken viewport and left behind the keyboard.
+ */
+html[data-fl-keyboard="open"] .fl-mobile-bottom-nav {
+	display: none;
+}
+
+/* The phone chat page sits above an in-flow bottom nav. That nav already owns
+ * the home-indicator inset, so keep only a symmetric 12px composer gap here. */
+@media (width < 48rem) {
+	[data-fl-chat-bottom-nav] [data-fl-chat-composer-dock] {
+		--fl-safe-bottom: 0px;
+		--fl-chat-pad-bottom: 0.75rem;
+	}
+}
+
+/*
  * WebKit (WKWebView / Safari) performance gate.
  * A runtime script sets data-engine="webkit" on <html> for WebKit engines, which
  * paint backdrop-filter far slower than Blink. Disable it there (backgrounds are
@@ -1175,4 +1388,216 @@
 html[data-engine="webkit"] [class*="backdrop-blur"] {
 	-webkit-backdrop-filter: none !important;
 	backdrop-filter: none !important;
+}
+
+/* Structured A2UI responsive styles use fixed classes so persisted values do
+ * not depend on Tailwind discovering dynamically supplied JSON class names. */
+@media (min-width: 640px) {
+	.a2ui-sm-display {
+		display: var(--a2ui-sm-display);
+	}
+	.a2ui-sm-flex-direction {
+		flex-direction: var(--a2ui-sm-flex-direction);
+	}
+	.a2ui-sm-justify-content {
+		justify-content: var(--a2ui-sm-justify-content);
+	}
+	.a2ui-sm-align-items {
+		align-items: var(--a2ui-sm-align-items);
+	}
+	.a2ui-sm-gap {
+		gap: var(--a2ui-sm-gap);
+	}
+	.a2ui-sm-grid-cols {
+		grid-template-columns: var(--a2ui-sm-grid-cols);
+	}
+	.a2ui-sm-width {
+		width: var(--a2ui-sm-width);
+	}
+	.a2ui-sm-height {
+		height: var(--a2ui-sm-height);
+	}
+	.a2ui-sm-padding {
+		padding: var(--a2ui-sm-padding);
+	}
+	.a2ui-sm-margin {
+		margin: var(--a2ui-sm-margin);
+	}
+	.a2ui-sm-font-size {
+		font-size: var(--a2ui-sm-font-size);
+	}
+	.a2ui-sm-text-align {
+		text-align: var(--a2ui-sm-text-align);
+	}
+	.a2ui-sm-order {
+		order: var(--a2ui-sm-order);
+	}
+}
+
+@media (min-width: 768px) {
+	.a2ui-md-display {
+		display: var(--a2ui-md-display);
+	}
+	.a2ui-md-flex-direction {
+		flex-direction: var(--a2ui-md-flex-direction);
+	}
+	.a2ui-md-justify-content {
+		justify-content: var(--a2ui-md-justify-content);
+	}
+	.a2ui-md-align-items {
+		align-items: var(--a2ui-md-align-items);
+	}
+	.a2ui-md-gap {
+		gap: var(--a2ui-md-gap);
+	}
+	.a2ui-md-grid-cols {
+		grid-template-columns: var(--a2ui-md-grid-cols);
+	}
+	.a2ui-md-width {
+		width: var(--a2ui-md-width);
+	}
+	.a2ui-md-height {
+		height: var(--a2ui-md-height);
+	}
+	.a2ui-md-padding {
+		padding: var(--a2ui-md-padding);
+	}
+	.a2ui-md-margin {
+		margin: var(--a2ui-md-margin);
+	}
+	.a2ui-md-font-size {
+		font-size: var(--a2ui-md-font-size);
+	}
+	.a2ui-md-text-align {
+		text-align: var(--a2ui-md-text-align);
+	}
+	.a2ui-md-order {
+		order: var(--a2ui-md-order);
+	}
+}
+
+@media (min-width: 1024px) {
+	.a2ui-lg-display {
+		display: var(--a2ui-lg-display);
+	}
+	.a2ui-lg-flex-direction {
+		flex-direction: var(--a2ui-lg-flex-direction);
+	}
+	.a2ui-lg-justify-content {
+		justify-content: var(--a2ui-lg-justify-content);
+	}
+	.a2ui-lg-align-items {
+		align-items: var(--a2ui-lg-align-items);
+	}
+	.a2ui-lg-gap {
+		gap: var(--a2ui-lg-gap);
+	}
+	.a2ui-lg-grid-cols {
+		grid-template-columns: var(--a2ui-lg-grid-cols);
+	}
+	.a2ui-lg-width {
+		width: var(--a2ui-lg-width);
+	}
+	.a2ui-lg-height {
+		height: var(--a2ui-lg-height);
+	}
+	.a2ui-lg-padding {
+		padding: var(--a2ui-lg-padding);
+	}
+	.a2ui-lg-margin {
+		margin: var(--a2ui-lg-margin);
+	}
+	.a2ui-lg-font-size {
+		font-size: var(--a2ui-lg-font-size);
+	}
+	.a2ui-lg-text-align {
+		text-align: var(--a2ui-lg-text-align);
+	}
+	.a2ui-lg-order {
+		order: var(--a2ui-lg-order);
+	}
+}
+
+@media (min-width: 1280px) {
+	.a2ui-xl-display {
+		display: var(--a2ui-xl-display);
+	}
+	.a2ui-xl-flex-direction {
+		flex-direction: var(--a2ui-xl-flex-direction);
+	}
+	.a2ui-xl-justify-content {
+		justify-content: var(--a2ui-xl-justify-content);
+	}
+	.a2ui-xl-align-items {
+		align-items: var(--a2ui-xl-align-items);
+	}
+	.a2ui-xl-gap {
+		gap: var(--a2ui-xl-gap);
+	}
+	.a2ui-xl-grid-cols {
+		grid-template-columns: var(--a2ui-xl-grid-cols);
+	}
+	.a2ui-xl-width {
+		width: var(--a2ui-xl-width);
+	}
+	.a2ui-xl-height {
+		height: var(--a2ui-xl-height);
+	}
+	.a2ui-xl-padding {
+		padding: var(--a2ui-xl-padding);
+	}
+	.a2ui-xl-margin {
+		margin: var(--a2ui-xl-margin);
+	}
+	.a2ui-xl-font-size {
+		font-size: var(--a2ui-xl-font-size);
+	}
+	.a2ui-xl-text-align {
+		text-align: var(--a2ui-xl-text-align);
+	}
+	.a2ui-xl-order {
+		order: var(--a2ui-xl-order);
+	}
+}
+
+@media (min-width: 1536px) {
+	.a2ui-xxl-display {
+		display: var(--a2ui-xxl-display);
+	}
+	.a2ui-xxl-flex-direction {
+		flex-direction: var(--a2ui-xxl-flex-direction);
+	}
+	.a2ui-xxl-justify-content {
+		justify-content: var(--a2ui-xxl-justify-content);
+	}
+	.a2ui-xxl-align-items {
+		align-items: var(--a2ui-xxl-align-items);
+	}
+	.a2ui-xxl-gap {
+		gap: var(--a2ui-xxl-gap);
+	}
+	.a2ui-xxl-grid-cols {
+		grid-template-columns: var(--a2ui-xxl-grid-cols);
+	}
+	.a2ui-xxl-width {
+		width: var(--a2ui-xxl-width);
+	}
+	.a2ui-xxl-height {
+		height: var(--a2ui-xxl-height);
+	}
+	.a2ui-xxl-padding {
+		padding: var(--a2ui-xxl-padding);
+	}
+	.a2ui-xxl-margin {
+		margin: var(--a2ui-xxl-margin);
+	}
+	.a2ui-xxl-font-size {
+		font-size: var(--a2ui-xxl-font-size);
+	}
+	.a2ui-xxl-text-align {
+		text-align: var(--a2ui-xxl-text-align);
+	}
+	.a2ui-xxl-order {
+		order: var(--a2ui-xxl-order);
+	}
 }

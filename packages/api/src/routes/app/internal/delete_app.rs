@@ -74,6 +74,23 @@ pub async fn delete_app(
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to delete metadata: {}", e)))?;
 
     txn.commit().await?;
+
+    // Cache entries live outside the relational database on the redis and dynamodb
+    // backends, so the FK cascade cannot reclaim them. Best-effort: a failure here
+    // must not resurrect an already-deleted app, and orphaned TTL'd entries expire on
+    // their own anyway.
+    if let Some(cache_store) = state.cache_store.clone() {
+        match cache_store.delete_app(&app_id).await {
+            Ok(deleted) if deleted > 0 => {
+                tracing::info!(deleted, app_id = %app_id, "Removed cache entries of deleted app");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(error = %error, app_id = %app_id, "Failed to remove cache entries of deleted app");
+            }
+        }
+    }
+
     audit_branch!(
         state,
         user,

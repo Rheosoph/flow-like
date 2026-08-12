@@ -2,5 +2,5 @@
 	"$schema": "http://json-schema.org/draft-07/schema#",
 	"title": "BitProvider",
 	"type": "string",
-	"enum": ["Local", "AzureOpenAI", "Bedrock", "OpenAI", "Anthropic"]
+	"enum": ["Local", "MLX", "AzureOpenAI", "Bedrock", "OpenAI", "Anthropic"]
 }

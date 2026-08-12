@@ -10,7 +10,10 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { useAuth } from "react-oidc-context";
 import {
+	type PageSurfaceIdentity,
+	pageSurfaceQueryKey,
 	readPageSurfaceCache,
 	writePageSurfaceCache,
 } from "../../lib/page-surface-cache";
@@ -31,6 +34,7 @@ import { normalizeBoxes, resolveBoxesField } from "./bbox-utils";
 import { applyMediaSourceUpdate } from "./media-source";
 import { applyStyleUpdate } from "./style-updates";
 import type { A2UIServerMessage, Surface, SurfaceComponent } from "./types";
+import { handleWidgetQueryMessage } from "./widget-query-handler";
 
 interface DialogState {
 	id: string;
@@ -161,6 +165,8 @@ function RouteDialogRenderer({
 }: RouteDialogRendererProps) {
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
+	const auth = useAuth();
+	const currentUserKey = auth?.user?.profile?.sub ?? "anonymous";
 	const [isLoading, setIsLoading] = useState(true);
 	const [isLoadEventRunning, setIsLoadEventRunning] = useState(false);
 	const [isCacheLoading, setIsCacheLoading] = useState(false);
@@ -182,17 +188,37 @@ function RouteDialogRenderer({
 		[routeEvent?.board_id, routeEvent?.board_version, pageExecutionBoardId],
 	);
 
+	// A dialog is addressed by its own parameters, not the host page's, so those are what its
+	// cached surface is keyed by.
+	const dialogQueryKey = useMemo(
+		() =>
+			pageSurfaceQueryKey(
+				new URLSearchParams(dialog.queryParams ?? {}).toString(),
+			),
+		[dialog.queryParams],
+	);
+	const surfaceIdentity = useMemo((): PageSurfaceIdentity | null => {
+		if (!appId || !page?.id || !page.updatedAt) return null;
+		return {
+			appId,
+			pageId: page.id,
+			pageUpdatedAt: page.updatedAt,
+			queryKey: dialogQueryKey,
+			userKey: currentUserKey,
+		};
+	}, [appId, page?.id, page?.updatedAt, dialogQueryKey, currentUserKey]);
+
 	useEffect(() => {
 		let cancelled = false;
 
-		if (!page?.cache || !appId || !page.id) {
+		if (!surfaceIdentity || !page?.onLoadEventId) {
 			setCachedSurface(null);
 			setIsCacheLoading(false);
 			return;
 		}
 
 		setIsCacheLoading(true);
-		void readPageSurfaceCache(appId, page)
+		void readPageSurfaceCache(surfaceIdentity)
 			.then((surface) => {
 				if (cancelled) return;
 				setCachedSurface(surface);
@@ -205,7 +231,7 @@ function RouteDialogRenderer({
 		return () => {
 			cancelled = true;
 		};
-	}, [appId, page?.cache, page?.id, page?.updatedAt]);
+	}, [surfaceIdentity, page?.onLoadEventId]);
 
 	// Load the route content when dialog opens
 	useEffect(() => {
@@ -541,6 +567,22 @@ function RouteDialogRenderer({
 						...(alt !== undefined ? { alt: { literalString: alt } } : {}),
 					} as unknown as SurfaceComponent["component"],
 				};
+			} else {
+				// Same default as applyElementUpdate: property-shaped updates
+				// (setGraphNodes, setGeoMapMarkers, ...) land verbatim on the
+				// component. Without it a dialog silently drops them.
+				const { type: _type, ...rest } = updateValue;
+				const componentData = component.component as unknown as Record<
+					string,
+					unknown
+				>;
+				updatedComponent = {
+					...component,
+					component: {
+						...componentData,
+						...rest,
+					} as unknown as SurfaceComponent["component"],
+				};
 			}
 
 			return {
@@ -579,10 +621,10 @@ function RouteDialogRenderer({
 
 	// Save surface to cache after onLoad completes
 	useEffect(() => {
-		if (!page?.cache || !appId || !page.id || !surface || isLoadEventRunning)
-			return;
-		void writePageSurfaceCache(appId, page, surface);
-	}, [page?.cache, page?.id, appId, surface, isLoadEventRunning]);
+		if (!surfaceIdentity || !surface || isLoadEventRunning) return;
+		if (!page?.onLoadEventId) return;
+		void writePageSurfaceCache(surfaceIdentity, surface);
+	}, [surfaceIdentity, page?.onLoadEventId, surface, isLoadEventRunning]);
 
 	// Execute onLoad event for dialog page
 	useEffect(() => {
@@ -625,6 +667,9 @@ function RouteDialogRenderer({
 				await execFn(appId, boardId, payload, false, undefined, (events) => {
 					for (const event of events) {
 						if (event.event_type === "a2ui") {
+							if (handleWidgetQueryMessage(event.payload)) {
+								continue;
+							}
 							handleServerMessage(event.payload as A2UIServerMessage);
 						}
 					}
@@ -653,13 +698,13 @@ function RouteDialogRenderer({
 	]);
 
 	const activeSurface =
-		page?.cache && cachedSurface && isLoadEventRunning
+		cachedSurface && isLoadEventRunning
 			? cachedSurface
 			: (surface ?? cachedSurface);
-	const canRenderFromCache = Boolean(page?.cache && cachedSurface);
+	const canRenderFromCache = Boolean(cachedSurface);
 	const showLoading =
 		(isLoading && !canRenderFromCache) ||
-		(Boolean(page?.cache) && isCacheLoading) ||
+		isCacheLoading ||
 		(isLoadEventRunning && !canRenderFromCache);
 
 	return (

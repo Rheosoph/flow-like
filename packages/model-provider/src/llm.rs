@@ -22,8 +22,8 @@ use super::{
     response_chunk::ResponseChunk,
 };
 
-// pub mod bedrock;
 pub mod anthropic;
+pub mod bedrock;
 pub mod cohere;
 pub mod deepseek;
 pub mod galadriel;
@@ -35,6 +35,7 @@ pub mod llamacpp;
 pub mod lmstudio;
 pub mod mira;
 pub mod mistral;
+pub mod mlx;
 pub mod moonshot;
 pub mod mozilla;
 pub mod ollama;
@@ -450,7 +451,7 @@ pub struct DynamicStreamingResponse {
 
 impl GetTokenUsage for DynamicStreamingResponse {
     fn token_usage(&self) -> Option<RigUsage> {
-        self.usage.clone()
+        self.usage
     }
 }
 

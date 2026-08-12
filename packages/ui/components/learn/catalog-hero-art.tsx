@@ -44,7 +44,11 @@ export function CatalogHeroArt({
 					fill="url(#card-violet)"
 					initial={{ opacity: 0.2 }}
 					animate={{ opacity: [0.2, 0.4, 0.2], y: [0, -8, 0] }}
-					transition={{ duration: 7, repeat: Infinity, ease: "easeInOut" }}
+					transition={{
+						duration: 7,
+						repeat: Number.POSITIVE_INFINITY,
+						ease: "easeInOut",
+					}}
 					style={{ filter: "blur(28px)" }}
 				/>
 				<motion.circle
@@ -54,7 +58,11 @@ export function CatalogHeroArt({
 					fill="url(#card-cyan)"
 					initial={{ opacity: 0.15 }}
 					animate={{ opacity: [0.15, 0.35, 0.15], y: [0, 10, 0] }}
-					transition={{ duration: 9, repeat: Infinity, ease: "easeInOut" }}
+					transition={{
+						duration: 9,
+						repeat: Number.POSITIVE_INFINITY,
+						ease: "easeInOut",
+					}}
 					style={{ filter: "blur(32px)" }}
 				/>
 
@@ -62,7 +70,11 @@ export function CatalogHeroArt({
 				<motion.g
 					initial={{ y: 0 }}
 					animate={{ y: [0, -4, 0] }}
-					transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
+					transition={{
+						duration: 6,
+						repeat: Number.POSITIVE_INFINITY,
+						ease: "easeInOut",
+					}}
 				>
 					<g transform="translate(60 110) rotate(-12)">
 						<rect
@@ -74,8 +86,24 @@ export function CatalogHeroArt({
 							fill="url(#card-cyan)"
 							opacity="0.85"
 						/>
-						<rect x="14" y="46" width="58" height="6" rx="3" fill="white" opacity="0.5" />
-						<rect x="14" y="58" width="38" height="6" rx="3" fill="white" opacity="0.3" />
+						<rect
+							x="14"
+							y="46"
+							width="58"
+							height="6"
+							rx="3"
+							fill="white"
+							opacity="0.5"
+						/>
+						<rect
+							x="14"
+							y="58"
+							width="38"
+							height="6"
+							rx="3"
+							fill="white"
+							opacity="0.3"
+						/>
 						<circle cx="98" cy="22" r="10" fill="white" opacity="0.6" />
 					</g>
 				</motion.g>
@@ -85,7 +113,7 @@ export function CatalogHeroArt({
 					animate={{ y: [0, -7, 0] }}
 					transition={{
 						duration: 7,
-						repeat: Infinity,
+						repeat: Number.POSITIVE_INFINITY,
 						ease: "easeInOut",
 						delay: 0.5,
 					}}
@@ -99,14 +127,26 @@ export function CatalogHeroArt({
 							rx="16"
 							fill="url(#card-violet)"
 						/>
-						<rect x="16" y="50" width="64" height="6" rx="3" fill="white" opacity="0.55" />
-						<rect x="16" y="62" width="42" height="6" rx="3" fill="white" opacity="0.35" />
+						<rect
+							x="16"
+							y="50"
+							width="64"
+							height="6"
+							rx="3"
+							fill="white"
+							opacity="0.55"
+						/>
+						<rect
+							x="16"
+							y="62"
+							width="42"
+							height="6"
+							rx="3"
+							fill="white"
+							opacity="0.35"
+						/>
 						<g transform="translate(96 18)">
-							<path
-								d="M0 8 L8 0 L16 8 L8 16 Z"
-								fill="white"
-								opacity="0.7"
-							/>
+							<path d="M0 8 L8 0 L16 8 L8 16 Z" fill="white" opacity="0.7" />
 						</g>
 					</g>
 				</motion.g>
@@ -116,7 +156,7 @@ export function CatalogHeroArt({
 					animate={{ y: [0, -5, 0] }}
 					transition={{
 						duration: 8,
-						repeat: Infinity,
+						repeat: Number.POSITIVE_INFINITY,
 						ease: "easeInOut",
 						delay: 1,
 					}}
@@ -130,8 +170,24 @@ export function CatalogHeroArt({
 							rx="12"
 							fill="url(#card-amber)"
 						/>
-						<rect x="12" y="42" width="50" height="5" rx="2.5" fill="white" opacity="0.6" />
-						<rect x="12" y="52" width="32" height="5" rx="2.5" fill="white" opacity="0.4" />
+						<rect
+							x="12"
+							y="42"
+							width="50"
+							height="5"
+							rx="2.5"
+							fill="white"
+							opacity="0.6"
+						/>
+						<rect
+							x="12"
+							y="52"
+							width="32"
+							height="5"
+							rx="2.5"
+							fill="white"
+							opacity="0.4"
+						/>
 						<circle cx="78" cy="20" r="9" fill="white" opacity="0.7" />
 					</g>
 				</motion.g>
@@ -154,7 +210,7 @@ export function CatalogHeroArt({
 						animate={{ opacity: [0, 1, 0], scale: [0.8, 1.4, 0.8] }}
 						transition={{
 							duration: 2.4,
-							repeat: Infinity,
+							repeat: Number.POSITIVE_INFINITY,
 							delay: s.d,
 							ease: "easeInOut",
 						}}

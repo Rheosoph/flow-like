@@ -16,6 +16,7 @@ import {
 } from "../../../lib/category-meta";
 import { IAppSearchSort } from "../../../lib/schema/app/app-search-query";
 import { type IBackendState, useBackend } from "../../../state/backend-state";
+import { sortAppPairsByRecency } from "../../library/library-types";
 import {
 	Alert,
 	AlertDescription,
@@ -126,14 +127,7 @@ export function HomeSwimlanes() {
 		[apps.data],
 	);
 	const recentLibraryApps = useMemo(
-		() =>
-			(apps.data ?? [])
-				.toSorted(
-					([leftApp], [rightApp]) =>
-						(rightApp.updated_at?.secs_since_epoch ?? 0) -
-						(leftApp.updated_at?.secs_since_epoch ?? 0),
-				)
-				.slice(0, 6),
+		() => sortAppPairsByRecency(apps.data ?? []).slice(0, 6),
 		[apps.data],
 	);
 

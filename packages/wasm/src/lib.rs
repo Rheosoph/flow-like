@@ -58,6 +58,10 @@ pub mod module;
 pub mod node;
 pub mod registry;
 pub mod unified;
+pub mod wasi;
+pub mod widget;
+pub mod widget_bundle;
+pub mod widget_source;
 
 pub use abi::{WasmAbi, WASM_ABI_VERSION};
 pub use aot_cache::AotCache;
@@ -67,7 +71,8 @@ pub use error::{WasmError, WasmResult};
 pub use instance::WasmInstance;
 pub use limits::{WasmCapabilities, WasmLimits, WasmSecurityConfig};
 pub use manifest::{
-    MemoryTier, OAuthScopeRequirement, PackageManifest, PackagePermissions, TimeoutTier,
+    MemoryTier, OAuthScopeRequirement, PackageManifest, PackagePermissions, PackageWidgetEntry,
+    TimeoutTier,
 };
 pub use memory::WasmMemory;
 pub use module::WasmModule;
@@ -78,3 +83,13 @@ pub use registry::{
     SearchResults, SortField,
 };
 pub use unified::{LoadedWasm, UnifiedInstance};
+pub use wasi::{isolated_wasi_ctx_builder, IsolatedWasiCtxBuilder};
+pub use widget::{
+    ContractEvent, ContractInput, ContractInputType, ContractQuery, WidgetContract, WidgetSizing,
+    CONTRACT_VERSION, WIDGET_PROTOCOL,
+};
+pub use widget_bundle::{
+    entry_hash, sha256_hex, widget_store_dir, BuilderWidget, BundleSharedEntry, BundleSizeHint,
+    BundleWidgetEntry, WidgetBundleBuilder, WidgetBundleManifest, WidgetBundleReader,
+    BUNDLE_FORMAT_VERSION, BUNDLE_MANIFEST_PATH, WIDGET_BUNDLE_EXTENSION, WIDGET_BUNDLE_MEDIA_TYPE,
+};

@@ -70,8 +70,8 @@ pub struct PresignDataAccessResponse {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/data/presign",
-    skip(state, user),
-    fields(app_id = %app_id, mode = %payload.access_mode)
+    skip(state, user, payload),
+    fields(app_id = %app_id)
 )]
 pub async fn presign_data_access(
     State(state): State<AppState>,
@@ -147,8 +147,8 @@ pub async fn presign_data_access(
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/data/user/presign",
-    skip(state, user),
-    fields(app_id = %app_id, mode = %payload.access_mode)
+    skip(state, user, payload),
+    fields(app_id = %app_id)
 )]
 pub async fn presign_user_data_access(
     State(state): State<AppState>,

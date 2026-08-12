@@ -91,10 +91,13 @@ export class RolePermissions {
 	);
 
 	/**
-	 * Permission set a member's (default) role must grant for the
-	 * Fork-an-app feature to actually work. Forking copies boards, events,
-	 * files, templates, widgets and roles, so the caller must be able to
-	 * read each of those resource types.
+	 * Maximal fork read set — what a fully permissive fork policy requires.
+	 * Forking copies boards, events, files, templates, widgets and roles, so
+	 * the caller must be able to read each of those resource types.
+	 *
+	 * Prefer {@link forkRequiredPermissions}: an owner who excludes a
+	 * category means it is never copied, so demanding read access to it
+	 * locks people out for no reason.
 	 *
 	 * Must stay in sync with `FORK_REQUIRED_PERMISSIONS` in
 	 * packages/api/src/permission/fork_permission.rs.

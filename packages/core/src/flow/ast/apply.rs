@@ -46,6 +46,11 @@ const DEFAULT_OUTPUT_PIN_ALIASES: &[&str] = &["result", "value", "output", "out"
 pub struct ApplyFlowScriptResult {
     pub commands: Vec<GenericCommand>,
     pub board_commands: Vec<BoardCommand>,
+    /// Non-blocking deterministic source repairs (for example a stale anchor rebound to the one
+    /// compatible live entry). Clients should reload canonical FlowScript when this is non-empty,
+    /// even if the repaired document required no board mutation.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<String>,
     pub diagnostics: Vec<String>,
 }
 
@@ -178,6 +183,8 @@ pub async fn apply_flowscript_to_board(
         None => super::reconcile_text_with_catalog(board, flowscript, &catalog_metadata),
     };
 
+    let corrections = std::mem::take(&mut reconcile.corrections);
+
     // FlowScript is a program, not a bag of best-effort mutations. Every reconcile diagnostic means
     // some requested call, pin, connection, execution edge or boundary could not be represented.
     // Applying the remaining setup commands is how empty function layers and disconnected nodes were
@@ -186,6 +193,7 @@ pub async fn apply_flowscript_to_board(
         return Ok(ApplyFlowScriptResult {
             commands: Vec::new(),
             board_commands: reconcile.commands,
+            corrections,
             diagnostics: reconcile.diagnostics,
         });
     }
@@ -198,19 +206,22 @@ pub async fn apply_flowscript_to_board(
             return Ok(ApplyFlowScriptResult {
                 commands: Vec::new(),
                 board_commands: reconcile.commands,
+                corrections,
                 diagnostics,
             });
         }
     }
 
-    apply_board_commands_to_board(
+    let mut applied = apply_board_commands_to_board(
         board,
         reconcile.commands,
         catalog_nodes,
         state,
         current_layer,
     )
-    .await
+    .await?;
+    applied.corrections = corrections;
+    Ok(applied)
 }
 
 /// Apply an exact, already-validated [`BoardCommand`] batch without reconciling FlowScript again.
@@ -231,6 +242,8 @@ pub async fn apply_board_commands_to_board(
     let setup_commands = planner.build_setup_commands(board, &board_commands)?;
     let mut applied_commands = Vec::new();
 
+    // `execute_commands` appends the node state `on_update` derived during this phase, so the
+    // flattened batch stays replayable on a machine that has never run it.
     if !setup_commands.is_empty() {
         match board.execute_commands(setup_commands, state.clone()).await {
             Ok(mut executed) => applied_commands.append(&mut executed),
@@ -245,6 +258,7 @@ pub async fn apply_board_commands_to_board(
             return Ok(ApplyFlowScriptResult {
                 commands: Vec::new(),
                 board_commands,
+                corrections: Vec::new(),
                 diagnostics: vec!["FlowScript apply failed and was rolled back".to_string()],
             });
         }
@@ -269,6 +283,7 @@ pub async fn apply_board_commands_to_board(
     Ok(ApplyFlowScriptResult {
         commands: applied_commands,
         board_commands,
+        corrections: Vec::new(),
         diagnostics: Vec::new(),
     })
 }
@@ -352,6 +367,9 @@ impl FlowScriptApplyPlanner {
             );
         }
         for (name, node_id) in &board.refs {
+            if crate::flow::board::is_internal_board_ref(name) {
+                continue;
+            }
             planner.register_node_aliases(&[Some(name.as_str())], node_id);
         }
 
@@ -484,22 +502,29 @@ impl FlowScriptApplyPlanner {
                     position,
                     color,
                     target_layer,
+                    cache,
                     ..
                 } if node_ids.is_empty() || ref_id.is_some() || pins.is_some() => {
                     let layer_id = create_id();
-                    let mut layer = Layer::new(
-                        layer_id.clone(),
-                        name.clone(),
-                        layer_type_from_str(layer_type),
-                    );
+                    let resolved_layer_type = layer_type_from_str(layer_type);
+                    if cache.is_some() && !matches!(&resolved_layer_type, LayerType::Function) {
+                        return Err(flow_like_types::anyhow!(
+                            "Layer `{name}` is not a Function layer and cannot be cached"
+                        ));
+                    }
+                    let mut layer = Layer::new(layer_id.clone(), name.clone(), resolved_layer_type);
                     layer.coordinates = self.position_or_base(position.as_ref());
                     layer.color = color.clone();
                     layer.pins = layer_pins(pins.as_deref());
+                    layer.cache = cache.clone();
 
                     let mut command = UpsertLayerCommand::new(layer.clone());
                     command.current_layer =
                         self.target_layer_or_current(board, target_layer.as_deref())?;
 
+                    // Keep the staged view identical to what UpsertLayer will persist so later
+                    // setup commands can safely target this layer in the same batch.
+                    layer.parent_id = command.current_layer.clone();
                     self.staged_layers.insert(layer_id.clone(), layer);
                     let index_alias = format!("${}", self.next_node_index);
                     self.next_node_index += 1;
@@ -516,6 +541,32 @@ impl FlowScriptApplyPlanner {
                         &layer_id,
                     );
 
+                    generic_commands.push(GenericCommand::UpsertLayer(command));
+                }
+                BoardCommand::UpdateLayerCache {
+                    layer_id, cache, ..
+                } => {
+                    let layer_id = self.resolve_node_id(board, layer_id)?;
+                    let Some(existing_layer) = self
+                        .staged_layers
+                        .get(&layer_id)
+                        .or_else(|| board.layers.get(&layer_id))
+                    else {
+                        return Err(flow_like_types::anyhow!("Layer `{layer_id}` not found"));
+                    };
+                    if !matches!(&existing_layer.r#type, LayerType::Function) {
+                        return Err(flow_like_types::anyhow!(
+                            "Layer `{layer_id}` is not a Function layer and cannot be cached"
+                        ));
+                    }
+                    let mut layer = existing_layer.clone();
+                    layer.cache = cache.clone();
+
+                    let mut command = UpsertLayerCommand::new(layer.clone());
+                    // UpsertLayer assigns parent_id from current_layer during execute. Preserve the
+                    // existing hierarchy while changing only cache metadata.
+                    command.current_layer = layer.parent_id.clone();
+                    self.staged_layers.insert(layer_id, layer);
                     generic_commands.push(GenericCommand::UpsertLayer(command));
                 }
                 BoardCommand::CreateVariable {
@@ -747,7 +798,8 @@ impl FlowScriptApplyPlanner {
                 | BoardCommand::CreateVariable { .. }
                 | BoardCommand::UpdateVariable { .. }
                 | BoardCommand::UpdateNodePin { .. }
-                | BoardCommand::RenameNode { .. } => {}
+                | BoardCommand::RenameNode { .. }
+                | BoardCommand::UpdateLayerCache { .. } => {}
                 BoardCommand::RemoveNode { node_id, .. } => {
                     let node_id = self.resolve_node_id(board, node_id)?;
                     let node = self.resolve_node(board, &node_id)?.clone();
@@ -867,16 +919,23 @@ impl FlowScriptApplyPlanner {
                     position,
                     color,
                     target_layer,
+                    cache,
                     ..
                 } => {
                     if node_ids.is_empty() || ref_id.is_some() || pins.is_some() {
                         continue;
                     }
-                    let mut layer =
-                        Layer::new(create_id(), name.clone(), layer_type_from_str(layer_type));
+                    let resolved_layer_type = layer_type_from_str(layer_type);
+                    if cache.is_some() && !matches!(&resolved_layer_type, LayerType::Function) {
+                        return Err(flow_like_types::anyhow!(
+                            "Layer `{name}` is not a Function layer and cannot be cached"
+                        ));
+                    }
+                    let mut layer = Layer::new(create_id(), name.clone(), resolved_layer_type);
                     layer.coordinates = self.position_or_base(position.as_ref());
                     layer.color = color.clone();
                     layer.pins = layer_pins(pins.as_deref());
+                    layer.cache = cache.clone();
                     let node_ids = self.resolve_node_ids(board, node_ids)?;
                     let mut command = UpsertLayerCommand::new(layer);
                     command.node_ids = node_ids;
@@ -1462,10 +1521,10 @@ fn resolve_pin_id_in_pins(
     pin_ref: &str,
     expected: Option<PinType>,
 ) -> flow_like_types::Result<String> {
-    if let Some(pin) = pins.get(pin_ref) {
-        if pin_matches_direction(pin, expected.as_ref()) {
-            return Ok(pin_ref.to_string());
-        }
+    if let Some(pin) = pins.get(pin_ref)
+        && pin_matches_direction(pin, expected.as_ref())
+    {
+        return Ok(pin_ref.to_string());
     }
 
     if let Some((name, occurrence)) = super::reconcile::parse_pin_occurrence_ref(pin_ref) {
@@ -1510,10 +1569,9 @@ fn resolve_pin_id_in_pins(
         && DEFAULT_OUTPUT_PIN_ALIASES
             .iter()
             .any(|alias| alias.eq_ignore_ascii_case(pin_ref))
+        && let Some(default_pin) = default_data_output_pin(pins)
     {
-        if let Some(default_pin) = default_data_output_pin(pins) {
-            return Ok(default_pin.id.clone());
-        }
+        return Ok(default_pin.id.clone());
     }
 
     Err(flow_like_types::anyhow!(
@@ -1595,7 +1653,7 @@ fn pin_type_from_str(value: &str) -> PinType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::board::{ExecutionMode, ExecutionStage};
+    use crate::flow::board::{ExecutionMode, ExecutionStage, LayerCache, LayerCacheScope};
     use crate::flow::execution::{LogLevel, context::ExecutionContext};
     use crate::flow::variable::VariableType;
     use crate::state::FlowLikeConfig;
@@ -1619,6 +1677,7 @@ mod tests {
             log_level: LogLevel::Info,
             execution_mode: ExecutionMode::Hybrid,
             refs: HashMap::new(),
+            internal_refs: HashMap::new(),
             layers: HashMap::new(),
             page_ids: Vec::new(),
             hash: None,
@@ -2089,6 +2148,7 @@ mod tests {
                 position: None,
                 color: None,
                 target_layer: None,
+                cache: None,
                 summary: None,
             },
             BoardCommand::AddNode {
@@ -2134,6 +2194,206 @@ mod tests {
             Some(layer_id.as_str()),
             "pin-update staging must not clear function-layer membership"
         );
+    }
+
+    #[test]
+    fn setup_applies_cache_to_new_function_layer() {
+        let board = empty_board();
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let cache = LayerCache {
+            enabled: true,
+            prefix: "pricing".to_string(),
+            ttl_seconds: Some(300),
+            scope: LayerCacheScope::User,
+        };
+        let commands = vec![BoardCommand::CreateLayer {
+            name: "cachedLookup".to_string(),
+            ref_id: Some("$0".to_string()),
+            layer_type: Some("Function".to_string()),
+            node_ids: Vec::new(),
+            pins: Some(Vec::new()),
+            position: None,
+            color: None,
+            target_layer: None,
+            cache: Some(cache.clone()),
+            summary: None,
+        }];
+
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("cached layer should plan");
+        let [GenericCommand::UpsertLayer(command)] = setup.as_slice() else {
+            panic!("expected one layer upsert, got {} commands", setup.len());
+        };
+        assert_eq!(command.layer.cache.as_ref(), Some(&cache));
+    }
+
+    #[test]
+    fn setup_can_update_a_function_layer_created_earlier_in_the_batch() {
+        let mut board = empty_board();
+        let parent = Layer::new(
+            "parent-layer".to_string(),
+            "Functions".to_string(),
+            LayerType::Collapsed,
+        );
+        board.layers.insert(parent.id.clone(), parent);
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let cache = LayerCache {
+            enabled: true,
+            prefix: "pricing".to_string(),
+            ttl_seconds: Some(300),
+            scope: LayerCacheScope::User,
+        };
+        let commands = vec![
+            BoardCommand::CreateLayer {
+                name: "cachedLookup".to_string(),
+                ref_id: Some("$0".to_string()),
+                layer_type: Some("Function".to_string()),
+                node_ids: Vec::new(),
+                pins: Some(Vec::new()),
+                position: None,
+                color: None,
+                target_layer: Some("parent-layer".to_string()),
+                cache: None,
+                summary: None,
+            },
+            BoardCommand::UpdateLayerCache {
+                layer_id: "$0".to_string(),
+                cache: Some(cache.clone()),
+                summary: None,
+            },
+        ];
+
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("a newly created layer should accept a same-batch cache update");
+        let [
+            GenericCommand::UpsertLayer(created),
+            GenericCommand::UpsertLayer(updated),
+        ] = setup.as_slice()
+        else {
+            panic!("expected two layer upserts, got {} commands", setup.len());
+        };
+        assert_eq!(updated.layer.id, created.layer.id);
+        assert_eq!(updated.layer.cache.as_ref(), Some(&cache));
+        assert_eq!(updated.current_layer.as_deref(), Some("parent-layer"));
+    }
+
+    #[test]
+    fn setup_updates_existing_layer_cache_without_changing_parent() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "cached-function".to_string(),
+            "Cached Lookup".to_string(),
+            LayerType::Function,
+        );
+        layer.parent_id = Some("parent-layer".to_string());
+        layer.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "old".to_string(),
+            ttl_seconds: Some(60),
+            scope: LayerCacheScope::App,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let cache = LayerCache {
+            enabled: true,
+            prefix: "pricing".to_string(),
+            ttl_seconds: Some(300),
+            scope: LayerCacheScope::User,
+        };
+        let commands = vec![BoardCommand::UpdateLayerCache {
+            layer_id: "cached-function".to_string(),
+            cache: Some(cache.clone()),
+            summary: None,
+        }];
+
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("cache update should plan");
+        let [GenericCommand::UpsertLayer(command)] = setup.as_slice() else {
+            panic!("expected one layer upsert, got {} commands", setup.len());
+        };
+        assert_eq!(command.layer.cache.as_ref(), Some(&cache));
+        assert_eq!(command.current_layer.as_deref(), Some("parent-layer"));
+    }
+
+    #[test]
+    fn setup_removes_existing_layer_cache() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "cached-function".to_string(),
+            "Cached Lookup".to_string(),
+            LayerType::Function,
+        );
+        layer.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "pricing".to_string(),
+            ttl_seconds: Some(300),
+            scope: LayerCacheScope::User,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let commands = vec![BoardCommand::UpdateLayerCache {
+            layer_id: "cached-function".to_string(),
+            cache: None,
+            summary: None,
+        }];
+
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("cache removal should plan");
+        let [GenericCommand::UpsertLayer(command)] = setup.as_slice() else {
+            panic!("expected one layer upsert, got {} commands", setup.len());
+        };
+        assert!(command.layer.cache.is_none());
+    }
+
+    #[test]
+    fn setup_rejects_cache_updates_for_non_function_layers() {
+        let mut board = empty_board();
+        let layer = Layer::new(
+            "group-layer".to_string(),
+            "Group".to_string(),
+            LayerType::Collapsed,
+        );
+        board.layers.insert(layer.id.clone(), layer);
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let commands = vec![BoardCommand::UpdateLayerCache {
+            layer_id: "group-layer".to_string(),
+            cache: Some(LayerCache::default()),
+            summary: None,
+        }];
+
+        let error = match planner.build_setup_commands(&board, &commands) {
+            Ok(_) => panic!("only Function layers may carry result-cache settings"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("not a Function layer"));
+    }
+
+    #[test]
+    fn setup_rejects_cached_non_function_layer_creation() {
+        let board = empty_board();
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let commands = vec![BoardCommand::CreateLayer {
+            name: "Group".to_string(),
+            ref_id: Some("$0".to_string()),
+            layer_type: Some("Collapsed".to_string()),
+            node_ids: Vec::new(),
+            pins: Some(Vec::new()),
+            position: None,
+            color: None,
+            target_layer: None,
+            cache: Some(LayerCache::default()),
+            summary: None,
+        }];
+
+        let error = match planner.build_setup_commands(&board, &commands) {
+            Ok(_) => panic!("only Function layers may be created with cache settings"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("not a Function layer"));
     }
 
     #[test]
@@ -2204,6 +2464,7 @@ mod tests {
                 position: None,
                 color: None,
                 target_layer: None,
+                cache: None,
                 summary: None,
             },
             BoardCommand::AddNode {
@@ -2401,6 +2662,7 @@ mod tests {
                 position: None,
                 color: None,
                 target_layer: None,
+                cache: None,
                 summary: None,
             },
             BoardCommand::AddNode {
@@ -3171,5 +3433,150 @@ eventsChat() {
             decode_default(total),
             flow_like_types::Value::String("9".to_string())
         );
+    }
+
+    struct TestDynamicFormatLogic;
+
+    #[flow_like_types::async_trait]
+    impl NodeLogic for TestDynamicFormatLogic {
+        fn get_node(&self) -> Node {
+            dynamic_format_catalog_node()
+        }
+
+        async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+
+        /// Mirrors `string_format` and `control_call_function`: placeholder pins are minted with
+        /// fresh ids and reconciled by NAME, so a replay that re-derives them allocates a second,
+        /// different set of ids.
+        async fn on_update(&self, node: &mut Node, _board: &Board) {
+            let format_string = node
+                .get_pin_by_name("format_string")
+                .and_then(|pin| pin.default_value.clone())
+                .and_then(|bytes| {
+                    flow_like_types::json::from_slice::<flow_like_types::Value>(&bytes).ok()
+                })
+                .and_then(|value| value.as_str().map(ToOwned::to_owned))
+                .unwrap_or_default();
+
+            let placeholders: Vec<String> = format_string
+                .split('{')
+                .skip(1)
+                .filter_map(|part| part.split('}').next())
+                .map(ToOwned::to_owned)
+                .collect();
+
+            let stale: Vec<String> = node
+                .pins
+                .values()
+                .filter(|pin| {
+                    pin.pin_type == PinType::Input
+                        && pin.name != "format_string"
+                        && !placeholders.contains(&pin.name)
+                })
+                .map(|pin| pin.id.clone())
+                .collect();
+            for id in stale {
+                node.pins.remove(&id);
+            }
+
+            for placeholder in placeholders {
+                if node
+                    .pins
+                    .values()
+                    .any(|pin| pin.pin_type == PinType::Input && pin.name == placeholder)
+                {
+                    continue;
+                }
+                node.add_input_pin(&placeholder, &placeholder, "", VariableType::Generic);
+            }
+        }
+    }
+
+    /// The desktop ships the applied batch to the Hub, which replays it as ONE command list against
+    /// a board that has never run this node's `on_update`. Before the batch carried the derived node
+    /// state, the trailing `ConnectPin` referenced a placeholder pin id that existed on no other
+    /// machine, so every remote apply failed with "To Pin (...) not found in container" and the
+    /// desktop outbox wedged permanently.
+    #[tokio::test]
+    async fn applied_batch_replays_dynamic_pins_on_a_fresh_board() {
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        {
+            let registry = state.node_registry();
+            let mut registry = registry.write().await;
+            registry.push_node(Arc::new(TestDynamicFormatLogic));
+        }
+
+        let catalog = vec![dynamic_format_catalog_node()];
+        let commands = vec![
+            BoardCommand::AddNode {
+                node_type: "dynamic_format".to_string(),
+                ref_id: Some("$source".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            },
+            BoardCommand::AddNode {
+                node_type: "dynamic_format".to_string(),
+                ref_id: Some("$target".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            },
+            BoardCommand::UpdateNodePin {
+                node_id: "$target".to_string(),
+                pin_id: "format_string".to_string(),
+                value: json!("Hi {idx}"),
+                summary: None,
+            },
+            BoardCommand::ConnectPins {
+                from_node: "$source".to_string(),
+                from_pin: "value".to_string(),
+                to_node: "$target".to_string(),
+                to_pin: "idx".to_string(),
+                summary: None,
+            },
+        ];
+
+        let mut board = empty_board();
+        let applied =
+            apply_board_commands_to_board(&mut board, commands, &catalog, state.clone(), None)
+                .await
+                .expect("the local apply mints the placeholder pin and connects it");
+        assert!(
+            !applied.commands.is_empty(),
+            "the apply must produce a command batch"
+        );
+        assert!(
+            connected_placeholder(&board).is_some(),
+            "the local board must carry the connected placeholder pin"
+        );
+
+        let mut replay_board = empty_board();
+        replay_board
+            .execute_commands(applied.commands.clone(), state)
+            .await
+            .expect("the applied batch must replay verbatim on a board that never ran on_update");
+
+        assert!(
+            connected_placeholder(&replay_board).is_some(),
+            "the replayed board must carry the same connected placeholder pin"
+        );
+    }
+
+    fn connected_placeholder(board: &Board) -> Option<&Pin> {
+        board.nodes.values().find_map(|node| {
+            node.pins
+                .values()
+                .find(|pin| pin.name == "idx" && !pin.depends_on.is_empty())
+        })
     }
 }

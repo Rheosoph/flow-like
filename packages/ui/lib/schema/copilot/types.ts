@@ -1,8 +1,17 @@
 import type { SurfaceComponent } from "../../../components/a2ui/types";
+import type { IGenericCommand } from "../flow/board/commands/generic-command";
 import type { BoardCommand } from "../flow/copilot";
 
 /** The scope of what the copilot agent can modify */
-export type CopilotScope = "Board" | "Frontend" | "Both" | "DataStudio";
+export type CopilotScope =
+	| "Board"
+	| "Frontend"
+	| "Both"
+	| "DataStudio"
+	/** Read-only prior-art research; returns a foundation plan, mutates nothing. */
+	| "Scout"
+	/** Read-only public-web research; holds the only search/page-read tools. */
+	| "Research";
 
 /** Role in the chat conversation */
 export type ChatRole = "User" | "Assistant";
@@ -52,7 +61,12 @@ export interface UIActionContext {
 
 /** Frontend-owned scope injected into runtime tools used by a nested board/UI specialist. */
 export interface CopilotToolContext {
-	appId: string;
+	/**
+	 * Optional to match the Rust `FrontendToolContext.app_id`. A delegated run can
+	 * legitimately have no app in scope — the Scout starts by searching across
+	 * every app the user can see, before any single one is chosen.
+	 */
+	appId?: string;
 	boardId?: string;
 	/**
 	 * The overlay/ontology the current Data Studio page has selected. Injected as a DEFAULT into
@@ -62,6 +76,12 @@ export interface CopilotToolContext {
 	/** Correlates tools called inside a delegated run with its outer frontend request. */
 	parentRequestId?: string;
 	/**
+	 * Top-level chat run that owns the delegated specialist. Travels down so the specialist's own
+	 * frontend tool calls come back tagged with the reply they belong to — with several turns
+	 * streaming at once the bridge cannot infer it.
+	 */
+	runId?: string;
+	/**
 	 * Stable id of the chat conversation that owns the delegated run. Scopes retained-draft and
 	 * acceptance-contract identity so identical prompt text from another conversation can never
 	 * resume this conversation's drafts.
@@ -69,6 +89,11 @@ export interface CopilotToolContext {
 	conversationId?: string;
 	/** Immutable top-level user request that owns a delegated specialist run. */
 	sourceUserPrompt?: string;
+	/**
+	 * Bounded frontend-owned database/UI/storage context gathered once before a board run. Every
+	 * backend receives the same payload; board agents must not repeat this inventory pre-draft.
+	 */
+	boardContextManifest?: unknown;
 }
 
 /** Unified context passed to the copilot */
@@ -140,6 +165,75 @@ export interface FlowIrCommitDispositionResult {
 	status: "current" | "applied" | "dismissed" | "error";
 	code?: string;
 	message: string;
+}
+
+export type BoardEditJobPhase =
+	| "preparing"
+	| "awaiting_approval"
+	| "applying"
+	| "applied_pending_delivery"
+	| "applied"
+	| "denied"
+	| "stale"
+	| "failed"
+	| "cancelled";
+
+export interface BoardEditJobReview {
+	commandCount: number;
+	commandCounts: Record<string, number>;
+	commandSummaries: string[];
+	replacementMode: boolean;
+	destructiveEffects: string[];
+}
+
+export interface BoardEditJobApproval {
+	kind: "none" | "mutating" | "execute";
+	title: string;
+	description: string;
+	sessionKey: string;
+	timing?: "before_execution" | "before_apply";
+}
+
+/** Native, provider-neutral lifecycle for one exact retained compiler batch. */
+export interface BoardEditJob {
+	schemaVersion: "flowpilot.board-edit-job/v1";
+	jobId: string;
+	appId: string;
+	boardId: string;
+	requestId?: string;
+	remoteProfileId?: string;
+	remotePrincipalId?: string;
+	remoteHub?: string;
+	phase: BoardEditJobPhase;
+	createdAtMs: number;
+	updatedAtMs: number;
+	expiresAtMs: number;
+	token: FlowIrCommitToken;
+	approval: BoardEditJobApproval;
+	review: BoardEditJobReview;
+	result?: {
+		status: "applied" | "stale" | "error";
+		code?: string;
+		message: string;
+		/** Native mutation already happened during an earlier apply attempt. */
+		replayed?: boolean;
+		commands: IGenericCommand[];
+		board_commands: BoardCommand[];
+		diagnostics: string[];
+		final_board_node_count?: number;
+	};
+	error?: string;
+}
+
+export interface BoardEditJobResolution {
+	job: BoardEditJob;
+	transitioned: boolean;
+}
+
+export interface BoardEditJobDeliveryClaim {
+	job: BoardEditJob;
+	claimed: boolean;
+	deliveryLeaseId?: string;
 }
 
 /** Status of a plan step */

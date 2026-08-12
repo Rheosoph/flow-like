@@ -1,5 +1,5 @@
 [tools]
-rust = "latest"
+rust = "1.97.1"
 
 [tasks.setup]
 description = "Install wasm32-wasip2 target"

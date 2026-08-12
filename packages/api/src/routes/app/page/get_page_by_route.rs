@@ -35,7 +35,7 @@ pub struct PageWithBoardId {
         (status = 401, description = "Unauthorized")
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/pages/by-route", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/pages/by-route", skip(state, user, params))]
 pub async fn get_page_by_route(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -49,8 +49,16 @@ pub async fn get_page_by_route(
     for board_id in app.boards.iter() {
         if let Ok(board) = app.open_board(board_id.to_string(), None, None).await {
             let board_guard = board.lock().await;
-            if let Ok(pages) = board_guard.load_all_pages(None).await {
-                for page in pages {
+            if let Ok(loaded) = board_guard.load_all_pages(None).await {
+                for unreadable in &loaded.unreadable {
+                    tracing::warn!(
+                        "Board {} lists page {} but its payload is unreadable: {}",
+                        board_id,
+                        unreadable.page_id,
+                        unreadable.reason
+                    );
+                }
+                for page in loaded.pages {
                     if page.route == params.route {
                         return Ok(Json(Some(PageWithBoardId {
                             page,

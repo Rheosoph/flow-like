@@ -10,12 +10,10 @@ use crate::{
     routes::user::ensure_user_exists,
     state::AppState,
 };
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use base64::Engine;
 use flow_like_types::create_id;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
@@ -266,7 +264,7 @@ pub async fn register_push_target(
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "GET /user/push-targets/{device_id}", skip(state, user))]
+#[tracing::instrument(name = "GET /user/push-targets/{device_id}", skip_all)]
 pub async fn get_push_target_status(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -301,7 +299,7 @@ pub async fn get_push_target_status(
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "PATCH /user/push-targets/{device_id}", skip(state, user, body))]
+#[tracing::instrument(name = "PATCH /user/push-targets/{device_id}", skip_all)]
 pub async fn update_push_target_status(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -390,7 +388,7 @@ pub async fn update_push_target_status(
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "DELETE /user/push-targets/{device_id}", skip(state, user))]
+#[tracing::instrument(name = "DELETE /user/push-targets/{device_id}", skip_all)]
 pub async fn unregister_push_target(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -584,17 +582,7 @@ where
 }
 
 fn encrypt_token(token: &str, key: &[u8; 32]) -> String {
-    let cipher = Aes256Gcm::new_from_slice(key).expect("Invalid key length");
-    let mut nonce_bytes = [0u8; 12];
-    getrandom::fill(&mut nonce_bytes).expect("Failed to generate random nonce");
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let ciphertext = cipher
-        .encrypt(nonce, token.as_bytes())
-        .expect("Encryption failed");
-
-    let mut combined = nonce_bytes.to_vec();
-    combined.extend(ciphertext);
-    base64::engine::general_purpose::STANDARD.encode(combined)
+    crate::utils::crypto::encrypt_secret(token, key)
 }
 
 #[cfg(test)]

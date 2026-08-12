@@ -1,0 +1,939 @@
+---
+/**
+ * A reusable, light-mode WebGL background for the v4 website hero.
+ *
+ * Basic use:
+ *   import HeroShaders from "../components/hero-shaders-v4.astro";
+ *   <section class="relative isolate overflow-hidden"><HeroShaders />...</section>
+ *
+ * Selection precedence is `?heroShader=...`, localStorage, then `variant`.
+ * The compact chooser is visible in dev, with `chooser`, or with
+ * `?heroShaderChooser=1`. Set `data-hero-shader` on the rendered root to
+ * switch variants programmatically.
+ */
+type ShaderVariant =
+	| "contour-atlas"
+	| "signal-loom"
+	| "governed-grid"
+	| "orbital-ledger"
+	| "quiet-network"
+	| "sovereign-strata";
+
+interface Props {
+	/** Initial variant. Query string and a saved chooser value take priority. */
+	variant?: ShaderVariant;
+	/** Show the compact selector. Defaults to true during local development. */
+	chooser?: boolean;
+	/** Disable the pointer lens/field response without disabling animation. */
+	interactive?: boolean;
+	id?: string;
+	class?: string;
+}
+
+const variants = [
+	{ value: "contour-atlas", label: "Contour atlas" },
+	{ value: "signal-loom", label: "Signal loom" },
+	{ value: "governed-grid", label: "Governed grid" },
+	{ value: "orbital-ledger", label: "Orbital ledger" },
+	{ value: "quiet-network", label: "Quiet network" },
+	{ value: "sovereign-strata", label: "Sovereign strata" },
+] as const;
+
+const {
+	variant = "contour-atlas",
+	chooser = import.meta.env.DEV,
+	interactive = true,
+	id,
+	class: className,
+} = Astro.props;
+
+const initialVariant = variants.some((item) => item.value === variant)
+	? variant
+	: "contour-atlas";
+---
+
+<div
+	id={id}
+	class:list={["fl-hero-shaders", className]}
+	data-hero-shader={initialVariant}
+	data-default-shader={initialVariant}
+	data-interactive={interactive ? "true" : "false"}
+	data-show-chooser={chooser ? "true" : "false"}
+	data-webgl-status="pending"
+>
+	<div class="fl-hero-shaders__fallback" aria-hidden="true"></div>
+	<canvas class="fl-hero-shaders__canvas" aria-hidden="true"></canvas>
+
+	<label class="fl-hero-shaders__chooser">
+		<span>Hero field</span>
+		<select data-hero-shader-select aria-label="Choose hero background">
+			{variants.map((item) => (
+				<option value={item.value} selected={item.value === initialVariant}>
+					{item.label}
+				</option>
+			))}
+		</select>
+	</label>
+</div>
+
+<style>
+	.fl-hero-shaders {
+			--shader-paper: #fbf8f1;
+			--shader-ink: #243247;
+			--shader-coral: #ed5638;
+			--shader-emerald: #087866;
+		position: absolute;
+		inset: 0;
+		overflow: hidden;
+		pointer-events: none;
+	}
+
+	.fl-hero-shaders__canvas,
+	.fl-hero-shaders__fallback {
+		position: absolute;
+		inset: 0;
+		z-index: -15;
+		width: 100%;
+		height: 100%;
+	}
+
+	.fl-hero-shaders__canvas {
+		display: block;
+		opacity: 0;
+		transition: opacity 240ms ease;
+	}
+
+	.fl-hero-shaders[data-webgl-status="ready"] .fl-hero-shaders__canvas {
+		opacity: 1;
+	}
+
+	.fl-hero-shaders__fallback {
+		background:
+			radial-gradient(ellipse 46% 38% at 50% 46%, transparent 42%, color-mix(in oklab, var(--shader-coral) 7%, transparent) 72%, transparent),
+			radial-gradient(ellipse 72% 66% at 12% 100%, color-mix(in oklab, var(--shader-emerald) 10%, transparent), transparent 72%),
+			linear-gradient(155deg, color-mix(in oklab, var(--shader-paper) 94%, var(--shader-ink)), var(--shader-paper));
+	}
+
+	.fl-hero-shaders[data-hero-shader="signal-loom"] .fl-hero-shaders__fallback {
+		background:
+			repeating-radial-gradient(ellipse 130% 78% at 50% -12%, transparent 0 42px, color-mix(in oklab, var(--shader-coral) 8%, transparent) 44px 45px, transparent 47px 82px),
+			linear-gradient(160deg, var(--shader-paper), color-mix(in oklab, var(--shader-paper) 92%, var(--shader-emerald)));
+	}
+
+	.fl-hero-shaders[data-hero-shader="governed-grid"] .fl-hero-shaders__fallback {
+		background:
+			linear-gradient(color-mix(in oklab, var(--shader-ink) 5%, transparent) 1px, transparent 1px),
+			linear-gradient(90deg, color-mix(in oklab, var(--shader-ink) 5%, transparent) 1px, transparent 1px),
+			radial-gradient(ellipse 50% 42% at 50% 46%, var(--shader-paper) 20%, transparent 76%),
+			var(--shader-paper);
+		background-size: 56px 56px, 56px 56px, auto, auto;
+	}
+
+	.fl-hero-shaders[data-hero-shader="orbital-ledger"] .fl-hero-shaders__fallback {
+		background:
+			radial-gradient(circle at 4% 104%, transparent 0 23%, color-mix(in oklab, var(--shader-coral) 13%, transparent) 23.2% 23.45%, transparent 23.7% 35%, color-mix(in oklab, var(--shader-ink) 8%, transparent) 35.2% 35.4%, transparent 35.7% 50%, color-mix(in oklab, var(--shader-emerald) 10%, transparent) 50.2% 50.4%, transparent 50.7%),
+			var(--shader-paper);
+	}
+
+	.fl-hero-shaders[data-hero-shader="quiet-network"] .fl-hero-shaders__fallback {
+		background:
+			radial-gradient(circle at 14% 25%, color-mix(in oklab, var(--shader-coral) 22%, transparent) 0 1px, transparent 2px),
+			radial-gradient(circle at 81% 76%, color-mix(in oklab, var(--shader-emerald) 24%, transparent) 0 1px, transparent 2px),
+			radial-gradient(ellipse 46% 38% at 50% 46%, transparent, var(--shader-paper) 76%),
+			var(--shader-paper);
+		background-size: 84px 72px, 106px 92px, auto, auto;
+	}
+
+	.fl-hero-shaders[data-hero-shader="sovereign-strata"] .fl-hero-shaders__fallback {
+		background:
+			linear-gradient(168deg, transparent 18%, color-mix(in oklab, var(--shader-emerald) 8%, transparent) 18.5% 26%, transparent 26.5% 41%, color-mix(in oklab, var(--shader-coral) 8%, transparent) 41.5% 48%, transparent 48.5%),
+			linear-gradient(160deg, var(--shader-paper), color-mix(in oklab, var(--shader-paper) 94%, var(--shader-ink)));
+	}
+
+	.fl-hero-shaders__chooser {
+		position: absolute;
+		z-index: 20;
+		right: clamp(0.65rem, 1.8vw, 1.25rem);
+		bottom: clamp(0.65rem, 1.8vw, 1.25rem);
+		display: none;
+		align-items: center;
+		gap: 0.55rem;
+		min-height: 2.25rem;
+		padding: 0.25rem 0.3rem 0.25rem 0.7rem;
+		border: 1px solid color-mix(in oklab, var(--shader-ink) 15%, transparent);
+		border-radius: 999px;
+		background: color-mix(in oklab, var(--shader-paper) 78%, transparent);
+		box-shadow: 0 10px 32px color-mix(in oklab, black 10%, transparent);
+		color: color-mix(in oklab, var(--shader-ink) 72%, transparent);
+		font: 600 0.68rem/1 system-ui, sans-serif;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		pointer-events: auto;
+		backdrop-filter: blur(16px) saturate(120%);
+	}
+
+	.fl-hero-shaders[data-chooser-visible] .fl-hero-shaders__chooser {
+		display: flex;
+	}
+
+	.fl-hero-shaders__chooser select {
+		max-width: 10rem;
+		height: 1.75rem;
+		padding: 0 1.7rem 0 0.65rem;
+		border: 0;
+		border-radius: 999px;
+		outline: 1px solid color-mix(in oklab, var(--shader-ink) 12%, transparent);
+		background-color: color-mix(in oklab, var(--shader-paper) 90%, transparent);
+		color: var(--shader-ink);
+		font: 650 0.72rem/1 system-ui, sans-serif;
+		letter-spacing: normal;
+		text-transform: none;
+		cursor: pointer;
+	}
+
+	.fl-hero-shaders__chooser select:focus-visible {
+		outline: 2px solid var(--shader-coral);
+		outline-offset: 2px;
+	}
+
+	@media (max-width: 560px) {
+		.fl-hero-shaders__chooser > span {
+			display: none;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.fl-hero-shaders__canvas {
+			transition: none;
+		}
+	}
+
+	/* The lab already has full-size choice cards. Keep its compact chooser away
+	   from the bottom theme control, and let the cards own smaller viewports. */
+	@media (min-width: 1024px) {
+		:global([data-shader-lab]) .fl-hero-shaders[data-chooser-visible] .fl-hero-shaders__chooser {
+			top: clamp(0.65rem, 1.8vw, 1.25rem);
+			bottom: auto;
+		}
+	}
+
+	@media (max-width: 1023px) {
+		:global([data-shader-lab]) .fl-hero-shaders[data-chooser-visible] .fl-hero-shaders__chooser {
+			display: none;
+		}
+	}
+</style>
+
+<script>
+	const HERO_SHADER_VARIANTS = [
+		"contour-atlas",
+		"signal-loom",
+		"governed-grid",
+		"orbital-ledger",
+		"quiet-network",
+		"sovereign-strata",
+	] as const;
+	type HeroShaderVariant = (typeof HERO_SHADER_VARIANTS)[number];
+	type ShaderRoot = HTMLElement & { __heroShaderCleanup?: () => void };
+	type NavigatorWithConnection = Navigator & {
+		connection?: { saveData?: boolean };
+		mozConnection?: { saveData?: boolean };
+		webkitConnection?: { saveData?: boolean };
+	};
+
+	const STORAGE_KEY = "flow-like:hero-shader";
+	const QUERY_KEY = "heroShader";
+	const CHOOSER_QUERY_KEY = "heroShaderChooser";
+	const VARIANT_INDEX: Record<HeroShaderVariant, number> = {
+		"contour-atlas": 0,
+		"signal-loom": 1,
+		"governed-grid": 2,
+		"orbital-ledger": 3,
+		"quiet-network": 4,
+		"sovereign-strata": 5,
+	};
+
+	const VERTEX_SOURCE = `
+attribute vec2 a_position;
+void main() {
+	gl_Position = vec4(a_position, 0.0, 1.0);
+}`;
+
+	const FRAGMENT_SOURCE = `
+#extension GL_OES_standard_derivatives : enable
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+
+uniform vec2 u_resolution;
+uniform float u_time;
+uniform vec2 u_pointer;
+uniform float u_pointer_strength;
+uniform float u_variant;
+uniform float u_theme;
+
+const float TAU = 6.28318530718;
+
+float hash12(vec2 p) {
+	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.x + p3.y) * p3.z);
+}
+
+vec2 hash22(vec2 p) {
+	float n = sin(dot(p, vec2(41.0, 289.0)));
+	return fract(vec2(262144.0, 32768.0) * n);
+}
+
+float noise2(vec2 p, float phase) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	float a = sin(TAU * hash12(i) + phase);
+	float b = sin(TAU * hash12(i + vec2(1.0, 0.0)) + phase);
+	float c = sin(TAU * hash12(i + vec2(0.0, 1.0)) + phase);
+	float d = sin(TAU * hash12(i + vec2(1.0, 1.0)) + phase);
+	return 0.5 + 0.5 * mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+const mat2 ROT = mat2(0.80, 0.60, -0.60, 0.80);
+
+float fbm3(vec2 p, float phase) {
+	float sum = 0.0;
+	float amp = 0.5;
+	for (int i = 0; i < 3; i++) {
+		sum += amp * noise2(p, phase);
+		p = ROT * p * 2.02 + vec2(9.2, 3.1);
+		amp *= 0.52;
+		phase *= 1.17;
+	}
+	return sum * 1.117;
+}
+
+float fbm5(vec2 p, float phase) {
+	float sum = 0.0;
+	float amp = 0.5;
+	for (int i = 0; i < 5; i++) {
+		sum += amp * noise2(p, phase);
+		p = ROT * p * 2.02 + vec2(9.2, 3.1);
+		amp *= 0.52;
+		phase *= 1.17;
+	}
+	return sum;
+}
+
+float bump(vec2 p, vec2 center, float radius) {
+	vec2 delta = p - center;
+	return exp(-dot(delta, delta) / radius);
+}
+
+float lineAA(float value, float width) {
+	float fw = max(fwidth(value), 0.0001);
+	float distanceToLine = abs(fract(value + 0.5) - 0.5) / fw;
+	return 1.0 - smoothstep(width, width + 1.0, distanceToLine);
+}
+
+float quietCenter(vec2 p, float aspect) {
+	float shelfX = min(0.72, aspect * 0.72);
+	vec2 centered = (p - vec2(0.0, 0.055)) / vec2(shelfX, 0.38);
+	return 1.0 - smoothstep(0.58, 1.28, length(centered));
+}
+
+vec3 layerColor(vec3 base, vec3 feature, float amount, float darkTheme) {
+		float strength = mix(0.58, 0.72, darkTheme);
+	return mix(base, feature, clamp(amount * strength, 0.0, 0.86));
+}
+
+void main() {
+	vec2 frag = gl_FragCoord.xy;
+	vec2 uv = frag / u_resolution.xy;
+	float aspect = u_resolution.x / u_resolution.y;
+	vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
+	float t = u_time;
+
+		vec3 paper = mix(vec3(0.985, 0.976, 0.949), vec3(0.035, 0.041, 0.064), u_theme);
+		vec3 paperDeep = mix(vec3(0.944, 0.925, 0.884), vec3(0.020, 0.024, 0.042), u_theme);
+	vec3 ink = mix(vec3(0.125, 0.170, 0.235), vec3(0.965, 0.900, 0.770), u_theme);
+		vec3 coral = mix(vec3(0.905, 0.245, 0.115), vec3(1.000, 0.365, 0.205), u_theme);
+	vec3 amber = mix(vec3(0.690, 0.390, 0.075), vec3(1.000, 0.690, 0.245), u_theme);
+	vec3 emerald = mix(vec3(0.020, 0.365, 0.310), vec3(0.080, 0.745, 0.555), u_theme);
+	vec3 blue = mix(vec3(0.075, 0.285, 0.490), vec3(0.280, 0.570, 0.880), u_theme);
+	vec3 col = paper;
+
+	vec2 lensPosition = (u_pointer - 0.5) * vec2(aspect, 1.0);
+	vec2 lensDelta = p - lensPosition;
+	float lens = exp(-dot(lensDelta, lensDelta) / 0.052) * u_pointer_strength;
+	float centerQuiet = quietCenter(p, aspect);
+
+	// 01 — Contour Atlas: an evolved version of the docs terrain field.
+	if (u_variant < 0.5) {
+		float phase = t * 0.045;
+		vec2 drift = vec2(t * 0.0045, t * -0.0028);
+		vec2 pw = p + drift;
+		vec2 warp = vec2(
+			fbm3(pw * 0.74 + vec2(2.4, -1.3), phase * 0.8),
+			fbm3(pw * 0.74 + vec2(-3.6, 4.2), phase * 0.9)
+		);
+		vec2 terrainPosition = pw * 1.20 + 1.12 * (warp - 0.5);
+		float height = fbm5(terrainPosition, phase);
+		float smoothHeight = fbm3(terrainPosition, phase);
+		float anchors = 0.105 * bump(p, vec2(-0.64, 0.30), 0.060)
+			+ 0.095 * bump(p, vec2(0.69, -0.18), 0.080)
+			- 0.090 * bump(p, vec2(-0.52, -0.35), 0.095);
+
+		height = 1.11 * height - 0.055 + anchors + lens * 0.12;
+		smoothHeight = 1.11 * smoothHeight - 0.055 + anchors + lens * 0.12;
+			height = mix(height, 0.503, centerQuiet * 0.38);
+			smoothHeight = mix(smoothHeight, 0.503, centerQuiet * 0.38);
+		float hn = clamp(height, 0.0, 1.0);
+		float hs = clamp(smoothHeight, 0.0, 1.0);
+
+		float levels = 14.0;
+		float elevation = height * levels;
+		float minor = lineAA(elevation, 0.34);
+		float index = lineAA(elevation / 4.0, 0.92);
+		float derivative = max(fwidth(elevation), 0.0001);
+		float slope = derivative * u_resolution.y / levels;
+		float flatFade = smoothstep(0.052, 0.145, slope);
+		float sweepLevel = mix(0.18, 0.86, fract(t * 0.011));
+		float sweep = exp(-pow((hn - sweepLevel) / 0.040, 2.0));
+		sweep *= smoothstep(0.0, 0.13, fract(t * 0.011)) * (1.0 - smoothstep(0.84, 1.0, fract(t * 0.011)));
+		float lineStrength = max(minor * 0.28, index * 0.78) * flatFade;
+			lineStrength *= (1.0 - 0.46 * centerQuiet) * (0.72 + 0.54 * smoothstep(0.45, 0.86, hn));
+		lineStrength *= 1.0 + lens * 0.55 + sweep * 0.38;
+
+		vec3 terrainTint = mix(emerald, coral, smoothstep(0.33, 0.83, hs));
+		col = mix(paper, paperDeep, mix(0.08, 0.34, u_theme) * smoothstep(0.48, 0.05, hs));
+			col = layerColor(col, terrainTint, 0.060 * (1.0 - 0.58 * centerQuiet) * smoothstep(0.42, 0.92, hs), u_theme);
+		col = layerColor(col, mix(ink, terrainTint, 0.56), lineStrength, u_theme);
+		col = layerColor(col, amber, sweep * lineStrength * 0.34, u_theme);
+	}
+
+	// 02 — Signal Loom: quiet, parallel data paths with a tactile field lens.
+	else if (u_variant < 1.5) {
+		vec2 q = p;
+		float fieldNoise = fbm3(vec2(q.x * 0.72 + t * 0.006, q.y * 0.48), t * 0.018) - 0.5;
+		float field = q.y + 0.105 * sin(q.x * 2.7 + t * 0.070) + 0.16 * fieldNoise;
+		field += lens * 0.060 * sign(q.y - lensPosition.y + 0.001);
+		float threads = lineAA(field * 11.0, 0.34);
+		float cords = lineAA(field * 2.20 + 0.18, 0.86);
+		float crossField = q.x + 0.10 * sin(q.y * 3.0 - t * 0.045) + 0.08 * fieldNoise;
+		float cross = lineAA(crossField * 5.5, 0.28);
+		float dash = smoothstep(0.48, 0.88, 0.5 + 0.5 * sin(q.x * 13.0 - t * 0.22 + field * 7.0));
+			float calm = 1.0 - 0.52 * centerQuiet;
+		float weave = max(threads * 0.30, cords * (0.62 + 0.22 * dash)) * calm;
+		weave += cross * 0.10 * calm;
+		float halo = exp(-pow((field - 0.22) / 0.10, 2.0)) + exp(-pow((field + 0.28) / 0.13, 2.0));
+
+		col = mix(paper, paperDeep, 0.12 * u_theme * (0.5 + 0.5 * fieldNoise));
+		col = layerColor(col, mix(blue, emerald, uv.x), halo * 0.065 * calm, u_theme);
+		col = layerColor(col, mix(ink, coral, 0.38 + 0.28 * dash), weave * (1.0 + lens * 0.42), u_theme);
+	}
+
+	// 03 — Governed Grid: an orderly field that bends without losing structure.
+	else if (u_variant < 2.5) {
+		vec2 q = p;
+		float lensDistance = max(length(lensDelta), 0.001);
+		q += (lensDelta / lensDistance) * lens * 0.040;
+		vec2 grid = q * vec2(6.3, 6.8);
+		grid.x += 0.20 * sin(grid.y * 0.54 + t * 0.035);
+		grid.y += 0.14 * sin(grid.x * 0.46 - t * 0.028);
+		float fineX = lineAA(grid.x, 0.34);
+		float fineY = lineAA(grid.y, 0.34);
+		float majorX = lineAA(grid.x / 5.0, 0.88);
+		float majorY = lineAA(grid.y / 5.0, 0.88);
+		vec2 inCell = abs(fract(grid + 0.5) - 0.5);
+		float node = 1.0 - smoothstep(0.035, 0.115, length(inCell));
+		float sparse = step(0.76, hash12(floor(grid + 0.5)));
+			float calm = 1.0 - 0.54 * centerQuiet;
+		float lattice = max(max(fineX, fineY) * 0.18, max(majorX, majorY) * 0.57) * calm;
+		float nodes = node * sparse * calm * (0.30 + 0.70 * lens);
+		float coordinateWash = 0.5 + 0.5 * sin((grid.x + grid.y) * 0.22);
+
+		col = mix(paper, paperDeep, u_theme * 0.10 * coordinateWash);
+		col = layerColor(col, mix(blue, emerald, 0.34), lattice, u_theme);
+		col = layerColor(col, coral, nodes * 0.78, u_theme);
+	}
+
+	// 04 — Orbital Ledger: instrument arcs, ticks, and a very slow survey sweep.
+	else if (u_variant < 3.5) {
+		vec2 origin = vec2(-0.54 * aspect, -0.46);
+		origin += (lensPosition - origin) * lens * 0.055;
+		vec2 q = p - origin;
+		float radius = length(q);
+		float angle = atan(q.y, q.x);
+		float rings = lineAA(radius * 7.0, 0.38);
+		float indexRings = lineAA(radius * 2.0, 0.95);
+		float spokes = lineAA(angle / TAU * 28.0, 0.32) * smoothstep(0.20, 0.48, radius);
+		float ticks = lineAA(angle / TAU * 96.0, 0.42) * lineAA(radius * 2.0, 1.15);
+		float sweepAngle = t * 0.018;
+		float sweep = 0.5 + 0.5 * cos(angle - sweepAngle);
+		sweep = pow(sweep, 48.0) * smoothstep(0.20, 1.0, radius);
+			float calm = 1.0 - 0.50 * centerQuiet;
+		float instrument = max(rings * 0.24, indexRings * 0.56) * calm;
+		instrument += spokes * 0.09 * calm + ticks * 0.22 * calm;
+
+		col = mix(paper, paperDeep, u_theme * 0.15 * smoothstep(0.45, 1.75, radius));
+		col = layerColor(col, mix(ink, amber, 0.28), instrument * (1.0 + lens * 0.32), u_theme);
+		col = layerColor(col, coral, sweep * 0.24 * calm, u_theme);
+	}
+
+	// 05 — Quiet Network: sparse Voronoi boundaries and inspectable nodes.
+	else if (u_variant < 4.5) {
+		vec2 q = p * 4.7 + vec2(t * 0.004, t * -0.002);
+		vec2 cell = floor(q);
+		vec2 local = fract(q);
+		float nearest = 8.0;
+		float secondNearest = 8.0;
+		float nearestId = 0.0;
+		for (int y = -1; y <= 1; y++) {
+			for (int x = -1; x <= 1; x++) {
+				vec2 neighbor = vec2(float(x), float(y));
+				vec2 seed = hash22(cell + neighbor);
+				seed = 0.5 + 0.34 * sin(t * 0.025 + TAU * seed);
+				vec2 delta = neighbor + seed - local;
+				float distanceToSeed = dot(delta, delta);
+				if (distanceToSeed < nearest) {
+					secondNearest = nearest;
+					nearest = distanceToSeed;
+					nearestId = hash12(cell + neighbor);
+				} else if (distanceToSeed < secondNearest) {
+					secondNearest = distanceToSeed;
+				}
+			}
+		}
+		float edgeDistance = sqrt(secondNearest) - sqrt(nearest);
+		float edge = 1.0 - smoothstep(0.018, 0.060, edgeDistance);
+		float node = 1.0 - smoothstep(0.020, 0.105, sqrt(nearest));
+		float approved = step(0.74, nearestId);
+			float calm = 1.0 - 0.58 * centerQuiet;
+		float network = edge * 0.20 * calm;
+		float nodes = node * (0.20 + approved * 0.52) * calm * (0.62 + lens * 0.80);
+
+		col = mix(paper, paperDeep, u_theme * 0.10 * nearestId);
+		col = layerColor(col, mix(blue, ink, 0.55), network, u_theme);
+		col = layerColor(col, mix(emerald, coral, approved), nodes, u_theme);
+	}
+
+	// 06 — Sovereign Strata: broad, geological layers with a restrained pulse.
+	else {
+		float drift = t * 0.012;
+		float lowNoise = fbm3(vec2(p.x * 0.68 + drift, p.y * 0.30), t * 0.012) - 0.5;
+		float strataField = p.y + 0.18 * lowNoise + 0.055 * sin(p.x * 2.2 - t * 0.032);
+		strataField += lens * 0.052 * sign(p.y - lensPosition.y + 0.001);
+		float fine = lineAA(strataField * 8.5, 0.34);
+		float datum = lineAA(strataField * 2.0 + 0.24, 0.94);
+		float upperRibbon = exp(-pow((strataField - 0.30) / 0.090, 2.0));
+		float lowerRibbon = exp(-pow((strataField + 0.33) / 0.120, 2.0));
+		float warmRibbon = exp(-pow((strataField + 0.02) / 0.055, 2.0));
+			float calm = 1.0 - 0.56 * centerQuiet;
+		float strata = max(fine * 0.23, datum * 0.56) * calm;
+
+		col = mix(paper, paperDeep, u_theme * 0.12 * smoothstep(-0.4, 0.5, strataField));
+		col = layerColor(col, emerald, upperRibbon * 0.090 * calm, u_theme);
+		col = layerColor(col, blue, lowerRibbon * 0.075 * calm, u_theme);
+		col = layerColor(col, coral, warmRibbon * 0.070 * calm, u_theme);
+		col = layerColor(col, mix(ink, amber, 0.22), strata * (1.0 + lens * 0.44), u_theme);
+	}
+
+	float vignette = smoothstep(0.68, 1.32, length(p));
+	col = mix(col, paperDeep, vignette * mix(0.10, 0.22, u_theme));
+	float dither = fract(52.9829189 * fract(dot(frag, vec2(0.06711056, 0.00583715))));
+	col += (dither - 0.5) * (1.4 / 255.0);
+	gl_FragColor = vec4(col, 1.0);
+}`;
+
+	function isVariant(value: string | null | undefined): value is HeroShaderVariant {
+		return Boolean(value && (HERO_SHADER_VARIANTS as readonly string[]).includes(value));
+	}
+
+	function safeStorageRead(): string | null {
+		try {
+			return window.localStorage.getItem(STORAGE_KEY);
+		} catch {
+			return null;
+		}
+	}
+
+	function safeStorageWrite(value: HeroShaderVariant): void {
+		try {
+			window.localStorage.setItem(STORAGE_KEY, value);
+		} catch {
+			// Storage can be unavailable in privacy modes; the selection still works.
+		}
+	}
+
+	function initHeroShader(root: ShaderRoot): void {
+		if (root.dataset.shaderInitialized === "true") return;
+		root.dataset.shaderInitialized = "true";
+
+		const canvasCandidate = root.querySelector(".fl-hero-shaders__canvas");
+		const selectCandidate = root.querySelector("[data-hero-shader-select]");
+		if (!(canvasCandidate instanceof HTMLCanvasElement) || !(selectCandidate instanceof HTMLSelectElement)) return;
+		const canvas = canvasCandidate;
+		const select = selectCandidate;
+
+		const query = new URLSearchParams(window.location.search);
+		const queryVariant = query.get(QUERY_KEY);
+		const storedVariant = safeStorageRead();
+		const defaultVariant = root.dataset.defaultShader;
+		let currentVariant: HeroShaderVariant = isVariant(queryVariant)
+			? queryVariant
+			: isVariant(storedVariant)
+				? storedVariant
+				: isVariant(defaultVariant)
+					? defaultVariant
+					: "contour-atlas";
+
+		root.dataset.heroShader = currentVariant;
+		select.value = currentVariant;
+		const chooserOverride = query.get(CHOOSER_QUERY_KEY);
+		const chooserVisible = chooserOverride === "0" || chooserOverride === "false"
+			? false
+			: chooserOverride === "1" || chooserOverride === "true" || root.dataset.showChooser === "true";
+		root.toggleAttribute("data-chooser-visible", chooserVisible);
+		let onVariantApplied: ((variant: HeroShaderVariant) => void) | undefined;
+
+		function applyVariant(next: HeroShaderVariant, persist = false, updateUrl = false): void {
+			currentVariant = next;
+			if (root.dataset.heroShader !== next) root.dataset.heroShader = next;
+			select.value = next;
+			if (persist) safeStorageWrite(next);
+			if (updateUrl) {
+				const url = new URL(window.location.href);
+				url.searchParams.set(QUERY_KEY, next);
+				window.history.replaceState(window.history.state, "", url);
+			}
+			onVariantApplied?.(next);
+		}
+
+		function onFallbackSelectChange(): void {
+			if (!isVariant(select.value)) return;
+			applyVariant(select.value, true, true);
+		}
+
+		// Variant state is independent of WebGL so the preview controls and compact
+		// chooser stay synchronized even when the CSS fallback is active.
+		select.addEventListener("change", onFallbackSelectChange);
+		const variantObserver = new MutationObserver(() => {
+			const requested = root.dataset.heroShader;
+			if (isVariant(requested)) {
+				if (requested !== currentVariant) applyVariant(requested);
+			} else {
+				root.dataset.heroShader = currentVariant;
+			}
+		});
+		variantObserver.observe(root, { attributes: true, attributeFilter: ["data-hero-shader"] });
+
+		function cleanupSharedState(): void {
+			select.removeEventListener("change", onFallbackSelectChange);
+			variantObserver.disconnect();
+			onVariantApplied = undefined;
+			delete root.dataset.shaderInitialized;
+		}
+
+		root.__heroShaderCleanup = () => {
+			cleanupSharedState();
+			delete root.__heroShaderCleanup;
+		};
+
+		const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+		const connectionNavigator = navigator as NavigatorWithConnection;
+		const connection = connectionNavigator.connection
+			?? connectionNavigator.mozConnection
+			?? connectionNavigator.webkitConnection;
+		const saveData = Boolean(connection?.saveData);
+		let reduceMotion = motionQuery.matches;
+		let variantIndex = VARIANT_INDEX[currentVariant];
+
+		const context = canvas.getContext("webgl", {
+			alpha: false,
+			antialias: false,
+			depth: false,
+			stencil: false,
+			preserveDrawingBuffer: false,
+			powerPreference: "low-power",
+		});
+
+		if (!context || !context.getExtension("OES_standard_derivatives")) {
+			root.dataset.webglStatus = "fallback";
+			return;
+		}
+		const gl = context;
+
+		function compile(type: number, source: string): WebGLShader | null {
+			const shader = gl.createShader(type);
+			if (!shader) return null;
+			gl.shaderSource(shader, source);
+			gl.compileShader(shader);
+			if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+				console.warn("Hero shader compile failed:", gl.getShaderInfoLog(shader));
+				gl.deleteShader(shader);
+				return null;
+			}
+			return shader;
+		}
+
+		const vertexShader = compile(gl.VERTEX_SHADER, VERTEX_SOURCE);
+		const fragmentShader = compile(gl.FRAGMENT_SHADER, FRAGMENT_SOURCE);
+		if (!vertexShader || !fragmentShader) {
+			if (vertexShader) gl.deleteShader(vertexShader);
+			if (fragmentShader) gl.deleteShader(fragmentShader);
+			root.dataset.webglStatus = "fallback";
+			return;
+		}
+
+		const program = gl.createProgram();
+		if (!program) {
+			gl.deleteShader(vertexShader);
+			gl.deleteShader(fragmentShader);
+			root.dataset.webglStatus = "fallback";
+			return;
+		}
+
+		gl.attachShader(program, vertexShader);
+		gl.attachShader(program, fragmentShader);
+		gl.linkProgram(program);
+		gl.deleteShader(vertexShader);
+		gl.deleteShader(fragmentShader);
+		if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+			console.warn("Hero shader link failed:", gl.getProgramInfoLog(program));
+			gl.deleteProgram(program);
+			root.dataset.webglStatus = "fallback";
+			return;
+		}
+
+		const buffer = gl.createBuffer();
+		if (!buffer) {
+			gl.deleteProgram(program);
+			root.dataset.webglStatus = "fallback";
+			return;
+		}
+		gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+		gl.bufferData(
+			gl.ARRAY_BUFFER,
+			new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
+			gl.STATIC_DRAW,
+		);
+
+		const position = gl.getAttribLocation(program, "a_position");
+		const uniforms = {
+			resolution: gl.getUniformLocation(program, "u_resolution"),
+			time: gl.getUniformLocation(program, "u_time"),
+			pointer: gl.getUniformLocation(program, "u_pointer"),
+			pointerStrength: gl.getUniformLocation(program, "u_pointer_strength"),
+			variant: gl.getUniformLocation(program, "u_variant"),
+			theme: gl.getUniformLocation(program, "u_theme"),
+		};
+		if (
+			position < 0
+			|| Object.values(uniforms).some((location) => location === null)
+		) {
+			gl.deleteBuffer(buffer);
+			gl.deleteProgram(program);
+			root.dataset.webglStatus = "fallback";
+			return;
+		}
+
+		gl.useProgram(program);
+		gl.enableVertexAttribArray(position);
+		gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+		root.dataset.webglStatus = "ready";
+
+		const interactionHost = root.parentElement ?? root;
+		const finePointer = window.matchMedia("(pointer: fine)").matches;
+		const interactive = root.dataset.interactive === "true" && finePointer;
+		const staticTime = 31.0;
+		const timeOffset = 23.0;
+		const startedAt = performance.now();
+		let animationFrame = 0;
+		let lastFrame = 0;
+		let frameInterval = 1000 / 42;
+		let needsResize = true;
+		let inViewport = true;
+		let pageVisible = document.visibilityState === "visible";
+		let contextLost = false;
+		let disposed = false;
+		let pointerX = 0.5;
+		let pointerY = 0.5;
+		let targetPointerX = 0.5;
+		let targetPointerY = 0.5;
+		let pointerStrength = 0;
+		let targetPointerStrength = 0;
+
+		function resizeCanvas(): void {
+			const cssWidth = Math.max(1, Math.round(canvas.clientWidth));
+			const cssHeight = Math.max(1, Math.round(canvas.clientHeight));
+			const compact = cssWidth < 720;
+			const ratioCap = compact ? 1 : 1.35;
+			const requestedRatio = Math.min(window.devicePixelRatio || 1, ratioCap);
+			const pixelBudget = compact ? 620_000 : 1_450_000;
+			const requestedPixels = cssWidth * cssHeight * requestedRatio * requestedRatio;
+			const budgetScale = Math.min(1, Math.sqrt(pixelBudget / requestedPixels));
+			const ratio = requestedRatio * budgetScale;
+			const width = Math.max(1, Math.round(cssWidth * ratio));
+			const height = Math.max(1, Math.round(cssHeight * ratio));
+			frameInterval = 1000 / (compact ? 28 : 42);
+			if (canvas.width !== width || canvas.height !== height) {
+				canvas.width = width;
+				canvas.height = height;
+				gl.viewport(0, 0, width, height);
+			}
+			needsResize = false;
+		}
+
+		function draw(now: number): void {
+			if (disposed || contextLost) return;
+			if (needsResize) resizeCanvas();
+			if (!reduceMotion && !saveData && interactive) {
+				pointerX += (targetPointerX - pointerX) * 0.075;
+				pointerY += (targetPointerY - pointerY) * 0.075;
+				pointerStrength += (targetPointerStrength - pointerStrength) * 0.060;
+			}
+
+			gl.useProgram(program);
+			gl.uniform2f(uniforms.resolution, canvas.width, canvas.height);
+			gl.uniform1f(uniforms.time, reduceMotion || saveData ? staticTime : timeOffset + (now - startedAt) / 1000);
+			gl.uniform2f(uniforms.pointer, pointerX, pointerY);
+			gl.uniform1f(uniforms.pointerStrength, pointerStrength);
+			gl.uniform1f(uniforms.variant, variantIndex);
+			gl.uniform1f(uniforms.theme, 0.0);
+			gl.drawArrays(gl.TRIANGLES, 0, 6);
+		}
+
+		function canDraw(): boolean {
+			return !disposed && !contextLost && inViewport && pageVisible;
+		}
+
+		function shouldAnimate(): boolean {
+			return canDraw() && !reduceMotion && !saveData;
+		}
+
+		function render(now: number): void {
+			animationFrame = 0;
+			if (!shouldAnimate()) return;
+			if (now - lastFrame >= frameInterval) {
+				draw(now);
+				lastFrame = now;
+			}
+			animationFrame = window.requestAnimationFrame(render);
+		}
+
+		function startLoop(): void {
+			if (shouldAnimate()) {
+				if (!animationFrame) animationFrame = window.requestAnimationFrame(render);
+			} else if (canDraw()) {
+				draw(performance.now());
+			}
+		}
+
+		function stopLoop(): void {
+			if (animationFrame) window.cancelAnimationFrame(animationFrame);
+			animationFrame = 0;
+		}
+
+		onVariantApplied = (next) => {
+			variantIndex = VARIANT_INDEX[next];
+			if (canDraw() && !shouldAnimate()) draw(performance.now());
+		};
+
+		function onPointerMove(event: PointerEvent): void {
+			if (!interactive || reduceMotion || saveData) return;
+			const bounds = canvas.getBoundingClientRect();
+			if (!bounds.width || !bounds.height) return;
+			targetPointerX = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
+			targetPointerY = 1 - Math.min(1, Math.max(0, (event.clientY - bounds.top) / bounds.height));
+			targetPointerStrength = 1;
+		}
+
+		function onPointerLeave(): void {
+			targetPointerStrength = 0;
+		}
+
+		function onResize(): void {
+			needsResize = true;
+			if (canDraw() && !shouldAnimate()) draw(performance.now());
+		}
+
+		function onVisibilityChange(): void {
+			pageVisible = document.visibilityState === "visible";
+			if (pageVisible) startLoop();
+			else stopLoop();
+		}
+
+		function onMotionChange(event: MediaQueryListEvent): void {
+			reduceMotion = event.matches;
+			if (reduceMotion) {
+				pointerX = 0.5;
+				pointerY = 0.5;
+				targetPointerX = 0.5;
+				targetPointerY = 0.5;
+				pointerStrength = 0;
+				targetPointerStrength = 0;
+				stopLoop();
+				if (canDraw()) draw(performance.now());
+			} else {
+				startLoop();
+			}
+		}
+
+		function onContextLost(event: Event): void {
+			event.preventDefault();
+			contextLost = true;
+			stopLoop();
+			root.dataset.webglStatus = "fallback";
+		}
+
+		const viewportObserver = "IntersectionObserver" in window
+			? new IntersectionObserver((entries) => {
+				inViewport = entries.some((entry) => entry.isIntersecting && entry.intersectionRatio > 0);
+				if (inViewport) startLoop();
+				else stopLoop();
+			}, { rootMargin: "100px 0px" })
+			: null;
+		const resizeObserver = "ResizeObserver" in window ? new ResizeObserver(onResize) : null;
+
+		window.addEventListener("resize", onResize, { passive: true });
+		document.addEventListener("visibilitychange", onVisibilityChange);
+		canvas.addEventListener("webglcontextlost", onContextLost);
+		if (interactive) {
+			interactionHost.addEventListener("pointermove", onPointerMove, { passive: true });
+			interactionHost.addEventListener("pointerleave", onPointerLeave, { passive: true });
+		}
+		motionQuery.addEventListener("change", onMotionChange);
+		viewportObserver?.observe(root);
+		resizeObserver?.observe(root);
+
+		draw(startedAt);
+		startLoop();
+
+		root.__heroShaderCleanup = () => {
+			disposed = true;
+			stopLoop();
+			cleanupSharedState();
+			window.removeEventListener("resize", onResize);
+			document.removeEventListener("visibilitychange", onVisibilityChange);
+			canvas.removeEventListener("webglcontextlost", onContextLost);
+			interactionHost.removeEventListener("pointermove", onPointerMove);
+			interactionHost.removeEventListener("pointerleave", onPointerLeave);
+			motionQuery.removeEventListener("change", onMotionChange);
+			viewportObserver?.disconnect();
+			resizeObserver?.disconnect();
+			gl.deleteBuffer(buffer);
+			gl.deleteProgram(program);
+			delete root.__heroShaderCleanup;
+		};
+	}
+
+	function initializeHeroShaders(): void {
+		document.querySelectorAll<ShaderRoot>(".fl-hero-shaders").forEach(initHeroShader);
+	}
+
+	initializeHeroShaders();
+	document.addEventListener("astro:page-load", initializeHeroShaders);
+	document.addEventListener("astro:before-swap", () => {
+		document.querySelectorAll<ShaderRoot>(".fl-hero-shaders").forEach((root) => root.__heroShaderCleanup?.());
+	});
+</script>

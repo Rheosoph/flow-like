@@ -49,7 +49,7 @@ pub struct UpsertResult {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/graph/{overlay_id}/nodes",
-    skip(state, user, payload)
+    skip(state, user, scope, payload)
 )]
 pub async fn upsert_nodes(
     State(state): State<AppState>,

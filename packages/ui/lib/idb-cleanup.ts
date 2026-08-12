@@ -12,6 +12,7 @@ interface CleanupOptions {
 	tempFilesMaxAgeDays?: number;
 	viewportMaxAgeDays?: number;
 	offlineSyncMaxAgeDays?: number;
+	offlineSyncArchiveMaxAgeDays?: number;
 }
 
 const DEFAULTS: Required<CleanupOptions> = {
@@ -20,12 +21,20 @@ const DEFAULTS: Required<CleanupOptions> = {
 	tempFilesMaxAgeDays: 7,
 	viewportMaxAgeDays: 30,
 	offlineSyncMaxAgeDays: 7,
+	offlineSyncArchiveMaxAgeDays: 30,
 };
 
 async function pruneOldChatMessages(maxAgeDays: number): Promise<number> {
 	const cutoff = Date.now() - maxAgeDays * DAY_MS;
+	// A pinned conversation is an explicit "keep this" from the user, so neither its messages nor
+	// its session row may be aged out — otherwise pinning quietly guarantees deletion instead.
+	const pinnedSessionIds = new Set(
+		(await chatDb.sessions.where("pinnedAt").above(0).primaryKeys()).map(
+			String,
+		),
+	);
 	const old = await chatDb.messages
-		.filter((m) => m.timestamp < cutoff)
+		.filter((m) => m.timestamp < cutoff && !pinnedSessionIds.has(m.sessionId))
 		.primaryKeys();
 	if (old.length > 0) await chatDb.messages.bulkDelete(old);
 
@@ -33,6 +42,7 @@ async function pruneOldChatMessages(maxAgeDays: number): Promise<number> {
 	const allSessions = await chatDb.sessions.toArray();
 	const orphanIds: string[] = [];
 	for (const session of allSessions) {
+		if (session.pinnedAt) continue;
 		const count = await chatDb.messages
 			.where("sessionId")
 			.equals(session.id)
@@ -47,7 +57,7 @@ async function pruneOldChatMessages(maxAgeDays: number): Promise<number> {
 async function pruneOldFlowpilotHistory(maxAgeDays: number): Promise<number> {
 	const cutoff = new Date(Date.now() - maxAgeDays * DAY_MS).toISOString();
 	const oldConversations = await flowpilotDB.conversations
-		.filter((c) => c.updatedAt < cutoff)
+		.filter((c) => c.updatedAt < cutoff && !c.pinnedAt)
 		.primaryKeys();
 
 	let deletedMessages = 0;
@@ -86,9 +96,28 @@ async function pruneOldViewports(maxAgeDays: number): Promise<number> {
 async function pruneOldOfflineSync(maxAgeDays: number): Promise<number> {
 	const cutoff = new Date(Date.now() - maxAgeDays * DAY_MS);
 	const old = await offlineSyncDB.commands
-		.filter((c) => c.createdAt < cutoff)
+		.filter(
+			(c) =>
+				c.createdAt < cutoff &&
+				(c.commands?.length ?? 0) === 0 &&
+				(c.chunks?.length ?? 0) === 0 &&
+				!c.pendingReceiptAck &&
+				(c.deferredReceiptAcks?.length ?? 0) === 0 &&
+				!c.blockedReason &&
+				!c.idempotencyKey?.startsWith("flowpilot-board-edit:"),
+		)
 		.primaryKeys();
 	if (old.length > 0) await offlineSyncDB.commands.bulkDelete(old);
+	return old.length;
+}
+
+/** Discarded batches keep their full payload, so the archive needs its own ceiling. */
+async function pruneOldOfflineSyncArchive(maxAgeDays: number): Promise<number> {
+	const cutoff = new Date(Date.now() - maxAgeDays * DAY_MS);
+	const old = await offlineSyncDB.discarded
+		.filter((entry) => entry.archivedAt < cutoff)
+		.primaryKeys();
+	if (old.length > 0) await offlineSyncDB.discarded.bulkDelete(old);
 	return old.length;
 }
 
@@ -108,6 +137,7 @@ export async function runIDBCleanup(
 		pruneOldTempFiles(opts.tempFilesMaxAgeDays),
 		pruneOldViewports(opts.viewportMaxAgeDays),
 		pruneOldOfflineSync(opts.offlineSyncMaxAgeDays),
+		pruneOldOfflineSyncArchive(opts.offlineSyncArchiveMaxAgeDays),
 	]);
 
 	for (const result of results) {

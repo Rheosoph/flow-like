@@ -26,12 +26,19 @@ const securityHeaders: Record<string, string> = {
 
 export const onRequest = defineMiddleware(async (_context, next) => {
 	const response = await next();
+	const headers = new Headers(response.headers);
 
-	for (const [key, value] of Object.entries(securityHeaders)) {
-		response.headers.set(key, value);
+	if (!import.meta.env.DEV) {
+		for (const [key, value] of Object.entries(securityHeaders)) {
+			headers.set(key, value);
+		}
 	}
 
-	response.headers.delete("X-Powered-By");
+	headers.delete("X-Powered-By");
 
-	return response;
+	return new Response(response.body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers,
+	});
 });

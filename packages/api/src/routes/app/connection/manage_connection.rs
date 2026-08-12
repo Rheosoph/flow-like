@@ -45,7 +45,7 @@ pub struct AcceptConnectionRequest {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/connections/queue/{connection_id}",
-    skip(state, user)
+    skip(state, user, payload)
 )]
 pub async fn accept_connection_request(
     State(state): State<AppState>,

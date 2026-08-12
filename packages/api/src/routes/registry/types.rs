@@ -53,7 +53,10 @@ impl MetaSummary {
             && !icon.starts_with("https://")
         {
             let path = prefix.child(format!("{icon}.webp"));
-            if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await {
+            if let Ok(url) = store
+                .sign_cached("GET", &path, Duration::from_secs(86400))
+                .await
+            {
                 self.icon = Some(url.to_string());
             }
         }
@@ -62,7 +65,10 @@ impl MetaSummary {
             && !thumb.starts_with("https://")
         {
             let path = prefix.child(format!("{thumb}.webp"));
-            if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await {
+            if let Ok(url) = store
+                .sign_cached("GET", &path, Duration::from_secs(86400))
+                .await
+            {
                 self.thumbnail = Some(url.to_string());
             }
         }
@@ -115,6 +121,12 @@ pub struct PackageVersion {
     pub release_notes: Option<String>,
     #[serde(default)]
     pub yanked: bool,
+    /// Widget bundle (`.flwb`) sha256 hash, when this version ships widgets
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget_bundle_hash: Option<String>,
+    /// Widget bundle size in bytes, when this version ships widgets
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget_bundle_size: Option<u64>,
 }
 
 /// Full registry entry for a package
@@ -307,6 +319,9 @@ pub struct DownloadResponse {
     /// Blake3 checksum of the `.cwasm` artifact (when target_platform was provided)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwasm_checksum: Option<String>,
+    /// Presigned URL for the widget bundle (`.flwb`) when the version ships widgets
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget_bundle_download_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

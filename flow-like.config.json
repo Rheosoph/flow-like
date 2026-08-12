@@ -33,7 +33,8 @@
 		"unauthorized_read": true,
 		"admin_interface": true,
 		"premium": true,
-		"wasm_registry": true
+		"wasm_registry": true,
+		"telemetry": true
 	},
 	"wasm_registry_config": {
 		"on_member_leave": "stale"
@@ -152,6 +153,67 @@
 			"max_llm_calls": -1,
 			"llm_tiers": ["PRO", "PREMIUM", "ENTERPRISE", "FREE"],
 			"product_id": "prod_SMcT3OZthxvLk0"
+		}
+	},
+	"conversion": {
+		"enabled": true,
+		"mode": "consumer",
+		"headline": "Unlock the full power of Flow-Like",
+		"subheadline": "More projects, premium AI models and faster cloud executions — upgrade in seconds, cancel anytime.",
+		"contact": {
+			"name": "Enterprise Sales",
+			"email": "enterprise@flow-like.com",
+			"url": "https://flow-like.com"
+		},
+		"tier_display": {
+			"FREE": {
+				"display_name": "Starter",
+				"tagline": "Everything you need to start automating",
+				"features": [
+					"10 online projects",
+					"Unlimited local projects",
+					"25 cloud runs per month",
+					"Free AI models included",
+					"Community support"
+				]
+			},
+			"PREMIUM": {
+				"display_name": "Premium",
+				"tagline": "For builders who ship every week",
+				"highlight": true,
+				"badge": "Most popular",
+				"features": [
+					"200 online projects",
+					"500 cloud runs per month",
+					"1 GB cloud storage",
+					"Premium AI models included",
+					"Faster cloud executions"
+				]
+			},
+			"PRO": {
+				"display_name": "Pro",
+				"tagline": "Scale your automations without limits",
+				"features": [
+					"Unlimited online projects",
+					"5,000 cloud runs per month",
+					"10 GB cloud storage",
+					"Pro-grade AI models included",
+					"High-performance executions",
+					"Priority support"
+				]
+			},
+			"ENTERPRISE": {
+				"display_name": "Enterprise",
+				"tagline": "Security, control and scale for your organization",
+				"features": [
+					"Unlimited projects, runs and storage",
+					"Maximum execution performance",
+					"All AI models included",
+					"Governance & AI Act tooling",
+					"Dedicated support & SLAs",
+					"Custom agreements & invoicing"
+				]
+			}
 		}
 	},
 	"environment": "Staging",

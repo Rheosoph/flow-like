@@ -15,6 +15,9 @@ pub enum Tok {
     Str(String),
     /// Integer literal.
     Int(i64),
+    /// Positive integer outside the signed literal range. FlowScript values remain `i64`, but
+    /// metadata such as a cache TTL uses the full `u64` range.
+    UInt(u64),
     /// Floating-point literal.
     Float(f64),
     /// `@` — decorator marker.
@@ -249,12 +252,22 @@ impl Lexer {
                             self.col,
                         ));
                     };
+                    // JSON's escape set plus `'`. `b`/`f` are required because a `Literal::Json`
+                    // span is re-emitted verbatim after serde_json validates it — and the lexer
+                    // runs over the whole file first, so without them a JSON default that would
+                    // round-trip byte-exactly fails to lex. `'` and `/` denote characters that
+                    // need no escape, so they normalize away, as `\uXXXX` already does.
+                    // Unknown escapes stay a HARD ERROR: passing them through would silently turn
+                    // a regex `"\d+"` into `"d+"`, which applies cleanly and fails at run time.
                     match esc {
                         '"' => value.push('"'),
+                        '\'' => value.push('\''),
                         '\\' => value.push('\\'),
                         'n' => value.push('\n'),
                         'r' => value.push('\r'),
                         't' => value.push('\t'),
+                        'b' => value.push('\u{8}'),
+                        'f' => value.push('\u{c}'),
                         '/' => value.push('/'),
                         'u' => {
                             let code = self.unicode_escape()?;
@@ -331,10 +344,14 @@ impl Lexer {
                     .map_err(|_| self.err(format!("invalid float `{text}`")))?,
             )
         } else {
-            Tok::Int(
-                text.parse()
-                    .map_err(|_| self.err(format!("invalid integer `{text}`")))?,
-            )
+            match text.parse::<i64>() {
+                Ok(value) => Tok::Int(value),
+                Err(_) if !text.starts_with('-') => Tok::UInt(
+                    text.parse()
+                        .map_err(|_| self.err(format!("invalid integer `{text}`")))?,
+                ),
+                Err(_) => return Err(self.err(format!("invalid integer `{text}`"))),
+            }
         };
         Ok(Token {
             tok,
@@ -403,7 +420,13 @@ fn signed_number_can_start_after(previous: Option<&Token>) -> bool {
     match previous.map(|token| &token.tok) {
         None => true,
         Some(
-            Tok::Str(_) | Tok::Int(_) | Tok::Float(_) | Tok::RParen | Tok::RBracket | Tok::RBrace,
+            Tok::Str(_)
+            | Tok::Int(_)
+            | Tok::UInt(_)
+            | Tok::Float(_)
+            | Tok::RParen
+            | Tok::RBracket
+            | Tok::RBrace,
         ) => false,
         Some(Tok::Ident(name)) => name == "return",
         Some(_) => true,

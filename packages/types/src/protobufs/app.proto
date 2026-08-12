@@ -31,6 +31,18 @@ enum AppCategory {
   ANIME = 20;
 }
 
+// What kind of thing the app is, structurally. Orthogonal to AppCategory,
+// which describes the topic the app is about.
+enum AppType {
+  APP_TYPE_UNSPECIFIED = 0;
+  AGENT = 1;
+  CUSTOM_INTERFACE = 2;
+  DATA_FOCUS = 3;
+  DATA_PIPELINE = 4;
+  ANALYTICS = 5;
+  FORM = 6;
+}
+
 enum AppStatus {
   ACTIVE = 0;
   INACTIVE = 1;
@@ -98,4 +110,8 @@ message App {
 
   // For forked apps: when the fork happened.
   optional google.protobuf.Timestamp forked_at = 29;
+
+  // What kind of app this is. Unset means "not yet classified" — the UI
+  // derives a suggestion from the app's contents until the owner picks one.
+  optional AppType app_type = 30;
 }

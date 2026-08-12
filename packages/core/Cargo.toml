@@ -35,6 +35,7 @@ tempfile = "3.20.0"
 lz4_flex = "0.11.6"
 url = {version = "2.5.4", features = ["serde"]}
 json5 = "0.4.1"
+htmd = "0.5.0"
 ahash.workspace = true
 schemars.workspace = true
 jsonschema.workspace = true
@@ -42,6 +43,7 @@ chrono.workspace = true
 futures.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 once_cell = "1.21.3"
+parking_lot = "0.12"
 tracing.workspace = true
 highway = "1.3.0"
 canonical_json = "0.5.0"
@@ -61,6 +63,8 @@ any-speech-to-text = { git = "https://github.com/Rheosoph/any-speech-to-text", r
 
 [dev-dependencies]
 proptest = "1"
+ahash.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
 tauri = ["flow-like-storage/tauri"]
@@ -99,6 +103,10 @@ app = ["bit", "model", "hub"]
 openapi = ["utoipa"]
 full = ["schema-gen", "flow-runtime", "flow", "hub", "bit", "model", "app"]
 default = ["schema-gen", "flow-runtime", "flow", "hub", "bit", "model", "app"]
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+axum.workspace = true
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

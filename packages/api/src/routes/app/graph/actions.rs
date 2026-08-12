@@ -620,7 +620,7 @@ async fn materialize_action_events_with_mode(
         }
         if let Some(event) = existing.as_ref()
             && managed_event_binding_is_current(
-                &event,
+                event,
                 ontology_id,
                 ontology_exposed,
                 objects,

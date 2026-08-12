@@ -24,6 +24,17 @@ function quoteIdentifier(name: string): string {
 	return `"${name.replace(/"/g, '""')}"`;
 }
 
+function databaseUrlForPush(databaseUrl: string): string {
+	const url = new URL(databaseUrl);
+	const options = url.searchParams.get("options");
+	const disableNewTableLocks = "-c create_table_with_schema_locked=off";
+	url.searchParams.set(
+		"options",
+		options ? `${options} ${disableNewTableLocks}` : disableNewTableLocks,
+	);
+	return url.toString();
+}
+
 async function connect(): Promise<Client | null> {
 	const url = process.env.DATABASE_URL;
 	if (!url) {
@@ -90,7 +101,16 @@ const push = spawnSync(
 		"prisma/schema",
 		...process.argv.slice(2),
 	],
-	{ stdio: "inherit" },
+	{
+		stdio: "inherit",
+		env: {
+			...process.env,
+			// CockroachDB 26.1+ locks newly created tables by default. Prisma may
+			// create a table and add its indexes as separate schema changes, so a
+			// new lock would make the same push fail midway through.
+			DATABASE_URL: databaseUrlForPush(process.env.DATABASE_URL!),
+		},
+	},
 );
 
 if (client) {

@@ -1,241 +1,93 @@
 ---
 title: Discord Sink
-description: Handle Discord bot interactions to trigger workflow executions
+description: Trigger workflows from Discord messages or interactions
 sidebar:
   order: 4
 ---
 
-The Discord sink allows your workflows to be triggered by Discord bot interactions including slash commands, button clicks, and message components.
+The Discord sink supports two distinct delivery styles: message events received through the Discord Gateway and interactions delivered to a hosted HTTP endpoint.
 
-## How It Works
+## Choose a delivery style
 
-### Local Mode (Gateway)
+| Style | Receives | Required configuration |
+|---|---|---|
+| **Gateway** | Bot messages from guild channels and direct messages | Bot token, enabled Gateway intents, and a running desktop app or sink worker |
+| **Interactions webhook** | PING verification, slash commands, components, autocomplete, and modal submissions | Public HTTPS URL and the application's public key |
 
-When running the desktop app, Flow-Like connects to Discord via the [Gateway API](https://discord.com/developers/docs/events/gateway) (WebSocket):
+Gateway mode is used by the desktop adapter and is also available to the Docker Compose sink service. The hosted API exposes the interactions webhook when Discord is enabled in the hub.
 
-```
-┌──────────────┐    WebSocket (Gateway)    ┌──────────────┐
-│   Flow-Like  │◄─────────────────────────►│   Discord    │
-│   Desktop    │                           │   Servers    │
-└──────────────┘                           └──────────────┘
-```
+## Configure the event
 
-**Advantages:**
-- Works behind firewalls/NAT
-- No public URL required
-- Receives all gateway events (messages, presence, etc.)
+| Field | Applies to | Meaning |
+|---|---|---|
+| `token` | Gateway | Discord bot token |
+| `webhook_secret` | Webhook | Discord application public key, despite the legacy field name |
+| `intents` | Gateway | Requested Gateway intents |
+| `channel_whitelist` | Desktop Gateway | Process only listed channel IDs when non-empty |
+| `channel_blacklist` | Desktop Gateway | Ignore listed channel IDs |
+| `respond_to_mentions` | Gateway | In guilds, require a mention when enabled |
+| `respond_to_dms` | Gateway | Accept direct messages |
+| `command_prefix` | Gateway | Treat prefixed messages as targeted commands |
+| `bot_name`, `bot_description` | UI metadata | Display information for the event configuration |
 
-**Limitations:**
-- Requires persistent connection
-- Must keep the app running
+The default desktop intents are `Guilds`, `GuildMessages`, and `MessageContent`. `MessageContent`, `GuildMembers`, and `GuildPresences` are privileged intents and must also be enabled in the Discord Developer Portal if selected.
 
-### Remote Mode (Interactions Webhook)
+## Gateway setup
 
-When deployed to a server, Discord sends interactions directly via HTTP:
+1. Create an application and bot in the Discord Developer Portal.
+2. Copy the bot token into the event configuration.
+3. Enable only the Gateway intents the event needs.
+4. Add the bot to the relevant server and activate the event.
 
-```
-┌──────────────┐                           ┌──────────────┐
-│   Flow-Like  │◄──────────────────────────│   Discord    │
-│    Server    │   (Interactions Webhook)   │   Servers    │
-└──────────────┘                           └──────────────┘
-```
+The adapter ignores messages authored by bots. It then applies direct-message, channel, prefix, and mention rules before dispatching the event.
 
-**Advantages:**
-- Instant interaction handling
-- Works 24/7
-- More efficient for slash commands
-
-**Limitations:**
-- Requires public HTTPS endpoint
-- Only receives interactions, not gateway events
-
-## Endpoint Format (Remote)
-
-```
-POST /sink/trigger/discord/{event_id}
-```
-
-## Configuration Options
-
-| Field | Type | Description | Required |
-|-------|------|-------------|----------|
-| `token` | string | Bot token from Developer Portal | Yes |
-| `webhook_secret` | string | Application public key (for signature verification) | Recommended |
-| `bot_name` | string | Display name for the bot | No |
-| `intents` | string[] | Gateway intents (for local mode) | No |
-| `respond_to_mentions` | boolean | Respond to @mentions | No |
-| `respond_to_dms` | boolean | Respond to DMs | No |
-| `command_prefix` | string | Command prefix for text commands | No |
-| `channel_whitelist` | string[] | Only process from these channels | No |
-| `channel_blacklist` | string[] | Ignore these channels | No |
-
-## Creating a Discord Bot
-
-1. Go to the [Discord Developer Portal](https://discord.com/developers/applications)
-2. Click "New Application" and give it a name
-3. Go to the "Bot" section and click "Add Bot"
-4. Copy the bot token (click "Reset Token" if needed)
-5. Enable the required intents under "Privileged Gateway Intents"
-
-## Webhook Setup (Remote Mode)
-
-### 1. Get Your Application's Public Key
-
-1. Go to the [Discord Developer Portal](https://discord.com/developers/applications)
-2. Select your application
-3. Copy the **Public Key** from the General Information page
-
-### 2. Configure Flow-Like
-
-Save the public key in the `webhook_secret` field of your event configuration.
-
-### 3. Get Your Interactions Endpoint URL
-
-The URL format is:
-```
-https://your-domain.com/sink/trigger/discord/{event_id}
-```
-
-### 4. Register with Discord
-
-1. Go to your application in the Developer Portal
-2. Under General Information, find "Interactions Endpoint URL"
-3. Paste your webhook URL
-4. Discord will verify the endpoint automatically
-
-:::note
-Make sure your sink is active before setting the endpoint - Discord will send a verification request immediately.
+:::caution
+A Discord bot token is a credential. Rotate it if it appears in source control, logs, screenshots, or copied support material.
 :::
+
+## Interactions webhook setup
+
+1. Copy the application's **Public Key** from Discord's General Information page into the event's application-public-key field.
+2. Activate the event.
+3. Copy the generated Interactions Endpoint URL from Flow-Like. Its route ends in `/sink/trigger/discord/{event_id}`; the deployment may add an API prefix at the proxy layer.
+4. Paste that URL into Discord's **Interactions Endpoint URL** field.
+
+Discord sends a PING while validating the URL. Flow-Like verifies the Ed25519 signature and returns PONG for a valid PING.
+
+For other interaction types, Flow-Like creates a run asynchronously and returns a deferred interaction response (`type: 5`) so Discord receives an acknowledgement within its response window.
 
 ## Security
 
-### Ed25519 Signature Verification
+The webhook verifies:
 
-Discord signs all webhook requests using Ed25519. Flow-Like verifies these signatures using:
+- `X-Signature-Ed25519`
+- `X-Signature-Timestamp`
+- the exact request body
+- the public key stored for the active event sink
 
-- Header: `X-Signature-Ed25519` (the signature)
-- Header: `X-Signature-Timestamp` (the timestamp)
-- Your application's public key
+The public key is safe to share with the endpoint configuration; the bot token and any workflow credentials are not.
 
-The message verified is: `timestamp + request_body`
+## Workflow payloads
 
-### Development Mode
+The payload depends on the delivery style:
 
-In development (when `API_BASE_URL` contains `localhost`), signature verification is disabled for easier testing.
+- A Gateway adapter constructs message-oriented context, including the author, channel, content, and available conversation context.
+- The interactions endpoint forwards the Discord interaction JSON, including fields such as `type`, `data`, `token`, `guild_id`, and `channel_id`.
 
-## Interaction Types
+Model the event input for the selected style. If one event can be delivered through both styles, branch on the payload shape before accessing nested fields.
 
-Discord sends different interaction types:
+## Responses
 
-| Type | Value | Description |
-|------|-------|-------------|
-| PING | 1 | Verification request from Discord |
-| APPLICATION_COMMAND | 2 | Slash command invoked |
-| MESSAGE_COMPONENT | 3 | Button/select menu used |
-| APPLICATION_COMMAND_AUTOCOMPLETE | 4 | Autocomplete request |
-| MODAL_SUBMIT | 5 | Modal form submitted |
+An interactions webhook only acknowledges receipt; it does not wait for the workflow to finish. A workflow that needs to answer a slash command must use the interaction token with Discord's follow-up API.
 
-### PING Handling
+Gateway message workflows can respond through the Discord context supplied by the desktop adapter. That context is not present on a webhook-triggered run.
 
-Flow-Like automatically responds to PING requests with PONG - this is required for Discord to verify your endpoint:
+## Troubleshooting
 
-```json
-// Request
-{"type": 1}
-
-// Response
-{"type": 1}
-```
-
-### Command/Component Handling
-
-For actual interactions, Flow-Like:
-1. Acknowledges with a deferred response (type 5)
-2. Dispatches the workflow execution asynchronously
-3. Your workflow can then follow up with a response
-
-## Payload Format
-
-Discord sends interactions like this:
-
-```json
-{
-  "type": 2,
-  "id": "123456789",
-  "application_id": "987654321",
-  "token": "interaction_token",
-  "guild_id": "111222333",
-  "channel_id": "444555666",
-  "member": {
-    "user": {
-      "id": "777888999",
-      "username": "johndoe"
-    }
-  },
-  "data": {
-    "id": "command_id",
-    "name": "mycommand",
-    "options": [
-      {"name": "option1", "value": "hello"}
-    ]
-  }
-}
-```
-
-## Response Format
-
-The sink returns a deferred response immediately:
-
-```json
-{
-  "type": 5
-}
-```
-
-This tells Discord "we received it and will respond later". Your workflow must then use the interaction token to send a follow-up response via Discord's API.
-
-## Gateway Intents
-
-For local mode, you may need to enable gateway intents:
-
-| Intent | Purpose | Privileged |
-|--------|---------|------------|
-| Guilds | Server information | No |
-| GuildMessages | Messages in servers | No |
-| MessageContent | Read message content | Yes |
-| GuildMembers | Member information | Yes |
-| GuildPresences | User presence | Yes |
-
-Privileged intents must be enabled in the Developer Portal.
-
-## Registering Commands
-
-To use slash commands, you must register them with Discord:
-
-```bash
-curl -X POST "https://discord.com/api/v10/applications/{app_id}/commands" \
-  -H "Authorization: Bot {bot_token}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "hello",
-    "description": "Says hello",
-    "type": 1
-  }'
-```
-
-## Error Handling
-
-| Status Code | Description |
-|-------------|-------------|
-| `200 OK` | Interaction handled |
-| `401 Unauthorized` | Invalid signature |
-| `404 Not Found` | No matching sink found |
-
-## Best Practices
-
-1. **Always verify signatures** in production
-2. **Respond within 3 seconds** - Discord requires fast acknowledgement
-3. **Use deferred responses** for workflows that take time
-4. **Register commands** before using slash commands
-5. **Keep the bot token secure** - use environment variables
-6. **Enable only needed intents** for gateway mode
+| Symptom | Check |
+|---|---|
+| Discord rejects the endpoint URL | Event is active, URL is publicly reachable, public key is correct |
+| Gateway connects but sees no content | `MessageContent` is selected and enabled in the Developer Portal |
+| Guild messages are ignored | Mention, prefix, and channel filters |
+| DMs are ignored | `respond_to_dms` |
+| Webhook returns `401` | Signature headers, request body integrity, and application public key |

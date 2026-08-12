@@ -6,15 +6,55 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    hash::{DefaultHasher, Hash, Hasher},
+    io::Write,
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock, Mutex},
+    sync::{Arc, LazyLock, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
+/// Durably replace a recovery snapshot without ever exposing a partially written destination.
+/// `std::fs::rename` maps to replace-existing semantics for files on supported desktop targets;
+/// a unique sibling temp file also prevents two process generations from sharing scratch state.
+pub(super) fn persist_recovery_snapshot(path: &Path, encoded: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "snapshot path has no parent",
+        )
+    })?;
+    std::fs::create_dir_all(parent)?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("flowpilot-snapshot");
+    let temp = parent.join(format!(
+        ".{file_name}.{}.tmp",
+        uuid::Uuid::new_v4().simple()
+    ));
+
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp)?;
+        file.write_all(encoded)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temp, path)?;
+        #[cfg(unix)]
+        std::fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
 use super::frontend_tool_bridge::{FrontendToolApproval, FrontendToolBridge};
-use super::internet_search::run_internet_search;
 pub use copilot_sdk::ToolHandler;
-use copilot_sdk::{Tool, ToolResultObject};
+use copilot_sdk::{Tool, ToolBinaryResult, ToolResultObject};
 use flow_like::copilot::FlowIrCommitToken;
 use flow_like::flow::ast::{
     RenderOptions, blocked_destructive_flowscript_message, board_to_flowscript,
@@ -22,11 +62,17 @@ use flow_like::flow::ast::{
 };
 use flow_like::flow::board::Board;
 use flow_like::flow::copilot::memory::AssistantMemory;
-use flow_like::flow::copilot::platform::run_memory_tool;
+use flow_like::flow::copilot::platform::{
+    PlatformToolImageUrl, run_internet_search, run_memory_tool, take_platform_tool_image_urls,
+};
+use flow_like::flow::copilot::public_web::{
+    WebResearchSession, run_archive_lookup_for_session, run_open_url_for_session,
+};
 use flow_like::flow::copilot::tool_spec::{
-    INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, PlatformToolSpec,
-    data_studio_tool_specs, find_global_tool_spec, global_assistant_tool_specs,
-    missing_required_args, resolve_tool_approval, runtime_execution_tool_specs,
+    ARCHIVE_LOOKUP_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL,
+    OPEN_URL_TOOL, PlatformToolSpec, cross_board_source_tool_specs, data_studio_tool_specs,
+    find_global_tool_spec, global_assistant_tool_specs, missing_required_args,
+    public_web_tool_specs, resolve_tool_approval, runtime_execution_tool_specs, scout_tool_specs,
 };
 #[cfg(test)]
 use flow_like::flow::copilot::typed_ir_schema_hint;
@@ -34,19 +80,20 @@ use flow_like::flow::copilot::{
     BeginFlowIrDraftArgs, BeginFlowIrDraftTool, BoardCommand, BoundBeginFlowIrDraftTool,
     CatalogProvider, CheckFlowScriptArgs, CheckFlowScriptTool, CommitFlowIrDraftArgs,
     CommitFlowIrDraftTool, CommitFlowScriptArgs, CommitFlowScriptTool, EmitCommandsArgs,
-    FlowCapabilityPlanRequest, FlowIrAcceptanceBinding, FlowIrDraftStore,
+    ExtendTimeBudgetTool, FlowCapabilityPlanRequest, FlowIrAcceptanceBinding, FlowIrDraftStore,
     FlowIrRetainedDraftSnapshot, GetCurrentFlowScriptTool, GetDeclarationsArgs,
     GetDeclarationsTool, GetNodeDetailsTool, GetUnconfiguredNodesTool, GraphContext,
     ListBoardNodesTool, ModelFacingEmitCommandsTool, NodeMetadata, PatchFlowScriptArgs,
-    PatchFlowScriptTool, PlanFlowIrTool, UpdateFlowIrDraftArgs, UpdateFlowIrDraftTool,
-    UpsertFlowIrModuleArgs, UpsertFlowIrModuleTool, ValidateFlowIrDraftArgs,
-    ValidateFlowIrDraftTool, ValidationIssue, WriteFlowScriptArgs, WriteFlowScriptTool,
-    board_has_no_nodes, build_list_board_nodes_output, build_node_details_output,
-    build_unconfigured_nodes_output, emit_validation_requires_flowscript,
-    flowscript_has_executable_node_call, flowscript_missing_function_helpers,
-    is_blocking_flowscript_diagnostic, parse_typed_ir_arguments, plan_flow_capabilities,
-    render_catalog_search_results, run_declaration_queries, tool_definition_parts,
-    validate_model_facing_emit_commands, validate_model_facing_emit_commands_scope,
+    PatchFlowScriptTool, PlanBoardScopeArgs, PlanBoardScopeTool, PlanFlowIrTool,
+    UpdateFlowIrDraftArgs, UpdateFlowIrDraftTool, UpsertFlowIrModuleArgs, UpsertFlowIrModuleTool,
+    ValidateFlowIrDraftArgs, ValidateFlowIrDraftTool, ValidationIssue, WriteFlowScriptArgs,
+    WriteFlowScriptTool, board_has_no_nodes, build_list_board_nodes_output,
+    build_node_details_output, build_unconfigured_nodes_output,
+    emit_validation_requires_flowscript, flowscript_has_executable_node_call,
+    flowscript_missing_function_helpers, is_blocking_flowscript_diagnostic,
+    parse_typed_ir_arguments, plan_flow_capabilities, render_catalog_search_results,
+    run_declaration_queries, tool_definition_parts, validate_model_facing_emit_commands,
+    validate_model_facing_emit_commands_scope,
 };
 use flow_like_types::sync::Mutex as AsyncMutex;
 use serde::de::DeserializeOwned;
@@ -55,7 +102,7 @@ use serde_json::{Value, json};
 /// Read-only page/widget inspection walks every page of the app in the frontend; on large
 /// generated boards (hundreds of nodes, dozens of pages) that legitimately exceeds the default
 /// 120-second bridge bound and a lost response stalls the whole agent audit.
-const UI_INSPECT_TOOL_TIMEOUT: Duration = Duration::from_secs(300);
+pub(super) const UI_INSPECT_TOOL_TIMEOUT: Duration = Duration::from_secs(300);
 const FLOW_IR_DRAFT_STORE_TTL: Duration = Duration::from_secs(45 * 60);
 const FLOW_IR_PENDING_REVIEW_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const MAX_PERSISTED_FLOW_IR_DRAFT_STORES: usize = 64;
@@ -438,7 +485,7 @@ static FLOW_IR_DRAFT_SNAPSHOT_GENERATIONS: LazyLock<Mutex<HashMap<String, u64>>>
 /// to `{data_dir}/flow-like/projects`; snapshots mirror that root instead of a shared temp or
 /// cache directory and never a location that syncs off-device. `FLOW_LIKE_FLOWPILOT_DRAFT_DIR`
 /// overrides the root for tests.
-fn flow_ir_draft_snapshot_dir() -> Option<PathBuf> {
+pub(crate) fn flow_ir_draft_snapshot_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("FLOW_LIKE_FLOWPILOT_DRAFT_DIR") {
         let dir = PathBuf::from(dir);
         return (!dir.as_os_str().is_empty()).then_some(dir);
@@ -491,7 +538,7 @@ fn flow_ir_draft_snapshot_path(board_key: &str) -> Option<PathBuf> {
 
 /// Debounced crash-durability write for a board's retained drafts. Every draft-mutating tool call
 /// schedules one; only the newest generation writes, so a burst of tool calls produces one file.
-fn schedule_flow_ir_draft_snapshot(board_key: &str, store: &Arc<FlowIrDraftStore>) {
+pub(super) fn schedule_flow_ir_draft_snapshot(board_key: &str, store: &Arc<FlowIrDraftStore>) {
     let board_key = board_key.trim().to_string();
     let Some(path) = flow_ir_draft_snapshot_path(&board_key) else {
         return;
@@ -528,16 +575,7 @@ fn persist_flow_ir_draft_snapshot(path: &Path, store: &FlowIrDraftStore) {
     let Ok(encoded) = serde_json::to_vec(&snapshot) else {
         return;
     };
-    let Some(parent) = path.parent() else {
-        return;
-    };
-    if std::fs::create_dir_all(parent).is_err() {
-        return;
-    }
-    let temp = path.with_extension("json.tmp");
-    if std::fs::write(&temp, encoded).is_ok() {
-        let _ = std::fs::rename(&temp, path);
-    }
+    let _ = persist_recovery_snapshot(path, &encoded);
 }
 
 /// Restore crash-durable drafts into a freshly created board store. The core import is fail-safe:
@@ -616,6 +654,8 @@ pub(super) fn create_board_tools(
             board.clone(),
             live_board.clone(),
         ));
+        tools.push(create_plan_board_scope_tool());
+        tools.push(create_extend_time_budget_tool());
         if let (Some(provider), Some(acceptance_binding)) =
             (catalog_provider.clone(), acceptance_binding)
         {
@@ -692,43 +732,55 @@ fn typed_draft_request_access_denied(
         })
 }
 
-/// Create runtime tools that execute through the frontend bridge.
+/// Read-only app context plus board-owned runtime verification for the workflow specialist.
 ///
-/// These tools need browser/app context such as the active backend state, storage provider,
-/// approval dialogs, and execution service. The Rust SDK tool blocks until the frontend replies.
-pub fn create_runtime_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandler)> {
+/// Cross-domain context is deliberately inspection-only: database/storage mutations belong to the
+/// Data Studio specialist, while UI mutation belongs to the frontend specialist. Runtime execution
+/// remains board-owned and is removed again for `flowpilot_board(mode="explain")` sessions.
+pub fn create_board_support_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandler)> {
     let mut tools = vec![
-        create_database_tool(bridge.clone()),
-        create_storage_tool(bridge.clone()),
+        create_database_tool(bridge.clone(), SpecialistDataAccess::ReadOnly),
+        create_storage_tool(bridge.clone(), SpecialistDataAccess::ReadOnly),
         create_ui_inspect_tool(bridge.clone()),
     ];
     tools.extend(
         runtime_execution_tool_specs()
             .iter()
-            .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None)),
+            .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None)),
     );
-    for name in [INTERNET_SEARCH_TOOL, "ask_user"] {
-        if let Some(spec) = find_global_tool_spec(name) {
-            tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None));
-        }
-    }
+    // Lets a board specialist fetch the FlowScript a Scout plan referenced, keeping fragment text
+    // out of the orchestrator's context.
+    tools.extend(
+        cross_board_source_tool_specs()
+            .iter()
+            .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None)),
+    );
     tools
 }
 
 /// Adapt one shared platform tool spec to the Copilot SDK tool type.
 ///
 /// Execution funnels through the frontend bridge with the spec's approval + timeout, except the
-/// host-local tools: `internet_search` runs in-process and the `_memory_*` tools run against the
-/// profile's `AssistantMemory`.
+/// host-local tools: `internet_search` runs in-process, `open_url` and `archive_lookup` use the
+/// shared safe public-web readers, and the `_memory_*` tools run against the profile's
+/// `AssistantMemory`.
+fn frontend_tool_result_closes_public_web_phase(_tool_name: &str) -> bool {
+    true
+}
+
 pub fn sdk_tool_from_spec(
     spec: &PlatformToolSpec,
     bridge: FrontendToolBridge,
     memory: Option<Arc<AssistantMemory>>,
+    web_research_session: Option<Arc<WebResearchSession>>,
 ) -> (Tool, ToolHandler) {
     let tool = Tool::new(spec.name)
         .description(spec.description)
         .schema((spec.schema)());
     let spec = *spec;
+    // Budgets are NOT per-tool-instance: they live on the shared `WebResearchSession` so that
+    // several research agents running concurrently in one turn draw from one allowance instead of
+    // each receiving a full one.
     let handler: ToolHandler = Arc::new(move |_name, args| {
         if let Some(error) = missing_required_args(&spec, args) {
             return ToolResultObject::text(
@@ -736,23 +788,101 @@ pub fn sdk_tool_from_spec(
             );
         }
         match spec.name {
-            INTERNET_SEARCH_TOOL => ToolResultObject::text(
-                serde_json::to_string_pretty(&run_blocking_tool(|| run_internet_search(args)))
-                    .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
-            ),
-            MEMORY_STORE_TOOL | MEMORY_SEARCH_TOOL => ToolResultObject::text(block_on_tool(
-                run_memory_tool(spec.name, args, memory.as_deref()),
-            )),
-            _ => frontend_tool_result_with_timeout(
-                &bridge,
-                spec.name,
-                args.clone(),
-                approval_from_spec(&spec, args),
-                Duration::from_secs(spec.timeout_secs),
-            ),
+            INTERNET_SEARCH_TOOL => {
+                let session = web_research_session
+                    .as_ref()
+                    .expect("internet_search handler has a provenance session");
+                if let Some(error) = session.public_web_phase_error(INTERNET_SEARCH_TOOL) {
+                    return ToolResultObject::text(error.to_string());
+                }
+                if !session.reserve_search_call() {
+                    return ToolResultObject::text(local_web_call_budget_error(
+                        INTERNET_SEARCH_TOOL,
+                        "search_session_call_budget_exceeded",
+                        "This assistant run reached its search-query budget. Synthesize the strongest verified evidence already collected and disclose remaining gaps.",
+                    ));
+                }
+                let mut result = block_on_tool(run_internet_search(args));
+                session.register_and_decorate_tool_result(INTERNET_SEARCH_TOOL, &mut result);
+                ToolResultObject::text(result.to_string())
+            }
+            OPEN_URL_TOOL => {
+                let session = web_research_session
+                    .as_ref()
+                    .expect("open_url handler has a provenance session");
+                if let Some(error) = session.public_web_phase_error(OPEN_URL_TOOL) {
+                    return ToolResultObject::text(error.to_string());
+                }
+                let prepared = session.prepare_open_url_call(args.clone());
+                match prepared {
+                    Ok(arguments) => {
+                        let mut result =
+                            block_on_tool(run_open_url_for_session(&arguments, session));
+                        session.register_and_decorate_tool_result(OPEN_URL_TOOL, &mut result);
+                        ToolResultObject::text(result.to_string())
+                    }
+                    Err(output) => ToolResultObject::text(output),
+                }
+            }
+            ARCHIVE_LOOKUP_TOOL => {
+                let session = web_research_session
+                    .as_ref()
+                    .expect("archive_lookup handler has a provenance session");
+                if let Some(error) = session.public_web_phase_error(ARCHIVE_LOOKUP_TOOL) {
+                    return ToolResultObject::text(error.to_string());
+                }
+                if !session.reserve_archive_call() {
+                    return ToolResultObject::text(local_web_call_budget_error(
+                        ARCHIVE_LOOKUP_TOOL,
+                        "archive_session_call_budget_exceeded",
+                        "This assistant run reached its archive-lookup budget. Use the captures already found or disclose that the historical record remains incomplete.",
+                    ));
+                }
+                let mut result = block_on_tool(run_archive_lookup_for_session(args, session));
+                session.register_and_decorate_tool_result(ARCHIVE_LOOKUP_TOOL, &mut result);
+                ToolResultObject::text(result.to_string())
+            }
+            MEMORY_STORE_TOOL | MEMORY_SEARCH_TOOL => {
+                let result = block_on_tool(run_memory_tool(spec.name, args, memory.as_deref()));
+                if let Some(session) = &web_research_session {
+                    session.close_public_web_phase();
+                }
+                ToolResultObject::text(result)
+            }
+            _ => {
+                if frontend_tool_result_closes_public_web_phase(spec.name)
+                    && let Some(session) = &web_research_session
+                {
+                    // Close before dispatch so a concurrent/same-round research request cannot
+                    // start after this private frontend operation has begun.
+                    session.close_public_web_phase();
+                }
+                let result = frontend_tool_result_with_timeout(
+                    &bridge,
+                    spec.name,
+                    args.clone(),
+                    approval_from_spec(&spec, args),
+                    Duration::from_secs(spec.timeout_secs),
+                );
+                // Close the parent's raw-web authorization before any frontend dispatch. The
+                // local-app-first fallback does not reopen it: `research_agent` receives a fresh
+                // sealed child view bound only to the immutable source request.
+                result
+            }
         }
     });
     (tool, handler)
+}
+
+fn local_web_call_budget_error(tool: &str, code: &str, message: &str) -> String {
+    json!({
+        "status": "error",
+        "tool": tool,
+        "code": code,
+        "retryable": false,
+        "error": message,
+    })
+    .to_string()
 }
 
 pub fn approval_from_spec(spec: &PlatformToolSpec, args: &Value) -> FrontendToolApproval {
@@ -798,28 +928,131 @@ fn run_blocking_tool<T>(f: impl FnOnce() -> T) -> T {
 pub fn create_global_assistant_tools(
     bridge: FrontendToolBridge,
     memory: Option<Arc<AssistantMemory>>,
+    user_prompt: &str,
+    run_id: Option<&str>,
 ) -> Vec<(Tool, ToolHandler)> {
+    // The orchestrator no longer holds raw public-web tools. Keep a parent session so any
+    // accidentally surfaced raw handler still fails closed after local/private work. The sealed
+    // `research_agent` child uses a separate authorization view bound only to the immutable source
+    // request, so it can safely be the last fallback after a local research app returned no answer.
+    let web_research_session = web_research_session_for_turn(user_prompt, run_id);
     global_assistant_tool_specs(memory.is_some())
         .iter()
-        .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), memory.clone()))
+        .map(|spec| {
+            sdk_tool_from_spec(
+                spec,
+                bridge.clone(),
+                memory.clone(),
+                Some(web_research_session.clone()),
+            )
+        })
         .collect()
 }
 
+/// Live web-research sessions, keyed per turn.
+///
+/// A turn may run the orchestrator plus several `research_agent` delegations concurrently, and all
+/// of them must share one provenance ledger and one spend budget. Entries are pruned whenever the
+/// map is consulted: a session whose only remaining owner is the map itself belongs to a finished
+/// turn, so it is dropped rather than leaking a spent budget into a later identical question. Same
+/// bounded-by-liveness pattern as the nested-run gate map.
+static WEB_RESEARCH_SESSIONS: LazyLock<Mutex<HashMap<String, Arc<WebResearchSession>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Resolve the shared session for one turn.
+///
+/// The key is the owning run plus the immutable top-level user message. Both sides can compute it
+/// without new plumbing: the orchestrator has its own run id and prompt, and a delegated researcher
+/// receives the same `runId` and `sourceUserPrompt` in its tool context — so they share a budget
+/// and a provenance ledger, which is the point.
+///
+/// The run id is what keeps that sharing *bounded*. Several chat turns can now generate at once,
+/// and keying on the prompt alone made two turns asking the same question share one spend budget
+/// and one citation allowlist — so one turn could exhaust the other's budget, and worse, one turn
+/// reading private app data would close the other's public-web phase.
+///
+/// Seeding from the prompt is also required for correctness: [`WebResearchSession::new`] authorizes
+/// any URLs the user themselves pasted.
+pub fn web_research_session_for_turn(
+    user_prompt: &str,
+    run_id: Option<&str>,
+) -> Arc<WebResearchSession> {
+    let mut sessions = WEB_RESEARCH_SESSIONS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    sessions.retain(|_, session| Arc::strong_count(session) > 1);
+    sessions
+        .entry(web_research_session_key(user_prompt, run_id))
+        .or_insert_with(|| Arc::new(WebResearchSession::new(user_prompt)))
+        .clone()
+}
+
+/// Hash rather than store the prompt: the map is process-global and a raw user message is the last
+/// thing that should sit in a long-lived static.
+fn web_research_session_key(user_prompt: &str, run_id: Option<&str>) -> String {
+    let mut hasher = DefaultHasher::new();
+    user_prompt.trim().hash(&mut hasher);
+    run_id.unwrap_or_default().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
 /// Tool set for the nested Data Studio specialist. It reuses the shipped `database_tool` (table/DB
-/// setup) and the cross-app discovery tools (`list_apps`/`describe_app_interface`), then adds the
-/// graph/ontology/action tools generated from the shared Data Studio specs — so every backend
-/// (Bits/rig, GitHub Copilot, Codex, Claude Code) advertises the same data tools. Every call routes
-/// through the frontend bridge to `backend.graphState` / `backend.dbState`.
+/// setup) and cross-app discovery tools (`list_apps`/`describe_app_interface`), then adds the
+/// graph/ontology/action tools generated from the shared Data Studio specs. Public-web research is
+/// intentionally available only to the top-level FlowPilot orchestrator.
+const DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES: [&str; 2] = ["list_apps", "describe_app_interface"];
+
 pub fn create_data_studio_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandler)> {
-    let mut tools = vec![create_database_tool(bridge.clone())];
+    let mut tools = vec![create_database_tool(
+        bridge.clone(),
+        SpecialistDataAccess::ReadWrite,
+    )];
     tools.extend(
         data_studio_tool_specs()
             .iter()
-            .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None)),
+            .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None)),
     );
-    for name in ["list_apps", "describe_app_interface"] {
+    for name in DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES {
         if let Some(spec) = find_global_tool_spec(name) {
-            tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None));
+            tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None, None));
+        }
+    }
+    tools
+}
+
+/// Tool set for the nested Research specialist: the public-web tools, and nothing else.
+///
+/// This is the only scope that holds them. The isolation is the security story as much as the
+/// context story — a researcher that cannot read app databases, storage or memory has no private
+/// data to leak into an outbound query, and the orchestrator that does hold that data cannot make
+/// outbound requests itself.
+///
+/// `user_prompt` must be the immutable top-level user message so the researcher joins the turn's
+/// shared session rather than opening a private one with a fresh budget.
+pub fn create_research_tools(
+    bridge: FrontendToolBridge,
+    user_prompt: &str,
+    run_id: Option<&str>,
+) -> Vec<(Tool, ToolHandler)> {
+    let session = web_research_session_for_turn(user_prompt, run_id);
+    public_web_tool_specs()
+        .iter()
+        .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, Some(session.clone())))
+        .collect()
+}
+
+/// Tool set for the nested Scout specialist: the discovery/inspection specs plus the same cross-app
+/// discovery tools the Data Studio specialist reuses. Entirely read-only — the mutating tools it
+/// recommends (`fork_app`, `acquire_app`, `create_app`) belong to the global orchestrator, so their
+/// approval prompts surface at the top level. Public-web research is orchestrator-only too.
+pub fn create_scout_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandler)> {
+    let mut tools: Vec<(Tool, ToolHandler)> = scout_tool_specs()
+        .iter()
+        .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None))
+        .collect();
+    for name in DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES {
+        if let Some(spec) = find_global_tool_spec(name) {
+            tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None, None));
         }
     }
     tools
@@ -841,11 +1074,119 @@ fn frontend_tool_result_with_timeout(
     approval: FrontendToolApproval,
     timeout: Duration,
 ) -> ToolResultObject {
-    let result = run_blocking_tool(|| bridge.call_with_timeout(tool_name, args, approval, timeout));
-    ToolResultObject::text(
+    let mut result =
+        run_blocking_tool(|| bridge.call_with_timeout(tool_name, args, approval, timeout));
+    let image_urls = take_platform_tool_image_urls(&mut result);
+    let expected_image_count = image_urls.len();
+    let images = if image_urls.is_empty() {
+        Vec::new()
+    } else {
+        block_on_tool(download_platform_tool_images(image_urls))
+    };
+    if expected_image_count > 0
+        && let Some(object) = result.as_object_mut()
+    {
+        object.insert("screenshot_count".to_string(), json!(images.len()));
+        let was_complete = object
+            .get("screenshot_complete")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        object.insert(
+            "screenshot_complete".to_string(),
+            json!(was_complete && images.len() == expected_image_count),
+        );
+        if images.is_empty() {
+            object.insert(
+                    "message".to_string(),
+                    json!("The page was embedded inline, but its temporary visual captures could not be loaded by this agent. Do not claim to have read the page visually."),
+                );
+        }
+    }
+    let mut output = ToolResultObject::text(
         serde_json::to_string_pretty(&result)
             .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
-    )
+    );
+    if !images.is_empty() {
+        output.binary_results_for_llm = Some(images);
+    }
+    output
+}
+
+const MAX_PLATFORM_TOOL_IMAGE_BYTES: u64 = 35 * 1024 * 1024;
+// Unlike LazyLock, OnceLock remains uninitialized after an unwinding initializer. The outer SDK
+// handler converts an unexpected panic into a tool error, and a later capture can retry cleanly.
+static PLATFORM_TOOL_IMAGE_CLIENT: OnceLock<Result<reqwest::Client, reqwest::Error>> =
+    OnceLock::new();
+
+fn platform_tool_image_client() -> &'static Result<reqwest::Client, reqwest::Error> {
+    PLATFORM_TOOL_IMAGE_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(60))
+            .build()
+    })
+}
+
+/// Copilot SDK/MCP image blocks require inline bytes. Resolve temporary URLs only at this final
+/// provider boundary so screenshots never travel as base64 through the frontend bridge or backend.
+async fn download_platform_tool_images(images: Vec<PlatformToolImageUrl>) -> Vec<ToolBinaryResult> {
+    use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    // Nearly every frontend tool result has no visual captures. In particular, do not initialize
+    // an HTTP client while finalizing ordinary results such as `ask_user` or `database_tool`.
+    if images.is_empty() {
+        return Vec::new();
+    }
+
+    let client = match platform_tool_image_client() {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(%error, "failed to initialize temporary capture download client");
+            return Vec::new();
+        }
+    };
+    let mut results = Vec::with_capacity(images.len());
+    for (index, image) in images.into_iter().enumerate() {
+        let response = match client.get(&image.url).send().await {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(%error, "failed to download temporary app page capture");
+                continue;
+            }
+        };
+        if !response.status().is_success()
+            || response
+                .content_length()
+                .is_some_and(|length| length > MAX_PLATFORM_TOOL_IMAGE_BYTES)
+        {
+            tracing::warn!(
+                status = %response.status(),
+                "temporary app page capture was unavailable or too large"
+            );
+            continue;
+        }
+        let bytes = match response.bytes().await {
+            Ok(bytes) if bytes.len() as u64 <= MAX_PLATFORM_TOOL_IMAGE_BYTES => bytes,
+            Ok(_) => {
+                tracing::warn!("temporary app page capture exceeded the size limit");
+                continue;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to read temporary app page capture");
+                continue;
+            }
+        };
+        results.push(ToolBinaryResult {
+            data: STANDARD.encode(bytes),
+            mime_type: image.media_type,
+            result_type: "image".to_string(),
+            description: Some(format!(
+                "Rendered app page capture {} (top to bottom)",
+                index + 1
+            )),
+        });
+    }
+    results
 }
 
 fn arg_string(args: &Value, snake: &str, camel: &str) -> String {
@@ -854,6 +1195,69 @@ fn arg_string(args: &Value, snake: &str, camel: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpecialistDataAccess {
+    ReadOnly,
+    ReadWrite,
+}
+
+const READ_ONLY_DATABASE_OPERATIONS: &[&str] = &["list_tables", "describe_table", "query"];
+const READ_WRITE_DATABASE_OPERATIONS: &[&str] = &[
+    "list_tables",
+    "create_table",
+    "describe_table",
+    "query",
+    "insert",
+    "add_items",
+    "delete",
+    "remove_items",
+    "update",
+    "build_index",
+    "drop_index",
+    "optimize",
+    "add_column",
+    "drop_columns",
+    "alter_column",
+    "delete_table",
+];
+const CREATE_TABLE_FIELD_TYPES: &[&str] = &[
+    "string",
+    "boolean",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "uint8",
+    "uint16",
+    "uint32",
+    "uint64",
+    "float32",
+    "float64",
+    "binary",
+    "date32",
+    "timestamp:ms:UTC",
+    "vector",
+    // Accepted for existing/replayed tool calls. New FlowPilot calls use the canonical type above.
+    "timestamp",
+    "datetime",
+    "timestamp_ms",
+];
+const READ_ONLY_STORAGE_OPERATIONS: &[&str] = &["list_files", "read_file"];
+const READ_WRITE_STORAGE_OPERATIONS: &[&str] =
+    &["list_files", "read_file", "create_file", "delete_files"];
+
+fn specialist_operation_allowed(
+    access: SpecialistDataAccess,
+    operation: &str,
+    read_only_operations: &[&str],
+    read_write_operations: &[&str],
+) -> bool {
+    match access {
+        SpecialistDataAccess::ReadOnly => read_only_operations.contains(&operation),
+        SpecialistDataAccess::ReadWrite => read_write_operations.contains(&operation),
+    }
 }
 
 fn database_operation_requires_approval(operation: &str) -> bool {
@@ -871,7 +1275,62 @@ fn database_operation_requires_approval(operation: &str) -> bool {
             | "add_column"
             | "drop_columns"
             | "alter_column"
+            | "delete_table"
     )
+}
+
+/// `delete_table` destroys one specific table, so its "don't ask again" memory must not authorize
+/// dropping every other table for the rest of the session.
+fn database_approval_session_key(operation: &str, table_name: &str) -> String {
+    if operation == "delete_table" {
+        return format!("database:{operation}:{table_name}");
+    }
+    format!("database:{operation}")
+}
+
+fn database_approval_message(operation: &str, table_name: &str) -> String {
+    if operation == "delete_table" {
+        return format!(
+            "FlowPilot wants to PERMANENTLY DROP table '{table_name}', including every row and the table schema. This cannot be undone, and ontology overlays referencing the table are pruned."
+        );
+    }
+    format!(
+        "FlowPilot wants to run database operation '{}'{}.",
+        operation,
+        if table_name.is_empty() {
+            String::new()
+        } else {
+            format!(" on table '{table_name}'")
+        }
+    )
+}
+
+fn database_approval_title(operation: &str) -> &'static str {
+    if operation == "delete_table" {
+        "Approve permanent table drop"
+    } else {
+        "Approve database change"
+    }
+}
+
+/// Guards against a malformed or confused call, not against a deliberate wrong drop: the model
+/// supplies both names. It forces the destructive target to be stated twice, so a truncated or
+/// mis-templated argument fails instead of dropping a table nobody named.
+fn delete_table_confirmation_error(table_name: &str, confirm_table_name: &str) -> Option<String> {
+    if table_name.trim().is_empty() {
+        return Some("delete_table requires table_name.".to_string());
+    }
+    if confirm_table_name.trim().is_empty() {
+        return Some(
+            "delete_table requires confirm_table_name repeating table_name exactly.".to_string(),
+        );
+    }
+    if table_name.trim() != confirm_table_name.trim() {
+        return Some(format!(
+            "delete_table confirmation mismatch: confirm_table_name '{confirm_table_name}' does not match table_name '{table_name}'. Nothing was deleted. Repeat the exact table name to drop it."
+        ));
+    }
+    None
 }
 
 fn flowscript_validation_message(flowscript: &str, diagnostics: &[String]) -> String {
@@ -933,9 +1392,74 @@ fn flowscript_summary(flowscript: &str) -> Value {
     })
 }
 
-fn create_database_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
-    let tool = Tool::new("database_tool")
-        .description(
+fn database_tool_schema(operations: &[&str]) -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "operation": {
+                "type": "string",
+                "enum": operations
+            },
+            "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
+            "table_name": { "type": "string", "description": "Table name for table operations." },
+            "user_scoped": { "type": "boolean", "description": "Use user-scoped storage/database tables." },
+            "include_sample": { "type": "boolean", "description": "For describe_table, include sample rows. Defaults to true. Use false for bounded schema-only discovery." },
+            "fields": {
+                "type": "array",
+                "description": "Explicit fields for create_table. Supported types: string, boolean, int8/int16/int32/int64, uint8/uint16/uint32/uint64, float32/float64, binary, date32 (calendar-only), timestamp:ms:UTC (FlowLike Date/date-time instant), vector. Legacy timestamp/datetime/timestamp_ms spellings remain accepted for replay compatibility but MUST NOT be used in new calls. Vector fields require vector_size.",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "name": { "type": "string" },
+                        "type": {
+                            "type": "string",
+                            "enum": CREATE_TABLE_FIELD_TYPES,
+                            "description": "Use timestamp:ms:UTC for a FlowLike Date or any real date-time instant. Legacy timestamp/datetime/timestamp_ms spellings are accepted only for replay compatibility. Use date32 only for a calendar-only value without a time or timezone."
+                        },
+                        "nullable": { "type": "boolean", "description": "Defaults to true." },
+                        "vector_size": { "type": "integer", "minimum": 1 }
+                    },
+                    "required": ["name", "type"]
+                }
+            },
+            "if_not_exists": { "type": "boolean", "description": "For create_table, succeed if the table already exists. Defaults to true." },
+            "confirm_table_name": { "type": "string", "description": "Required for delete_table: repeat table_name exactly. A mismatch rejects the call and deletes nothing." },
+            "query": { "type": "object", "description": "Query payload: {sql, filter, fts_term, vector_query, rerank}." },
+            "offset": { "type": "integer" },
+            "limit": { "type": "integer" },
+            "items": { "type": "array", "items": { "type": "object" } },
+            "filter": { "type": "string", "description": "Delete/update filter expression." },
+            "updates": { "type": "object" },
+            "column": { "type": "string" },
+            "columns": { "type": "array", "items": { "type": "string" } },
+            "index_type": {
+                "type": "string",
+                "enum": ["FullText", "BTree", "Bitmap", "LabelList", "Auto", "full_text", "btree", "bitmap", "label_list", "auto"]
+            },
+            "index_name": { "type": "string" },
+            "optimize": { "type": "boolean" },
+            "keep_versions": { "type": "boolean" },
+            "nullable": { "type": "boolean" },
+            "column_definition": { "type": "object", "description": "For add_column: {name, sql_expression}." }
+        },
+        "required": ["operation"]
+    })
+}
+
+fn create_database_tool(
+    bridge: FrontendToolBridge,
+    access: SpecialistDataAccess,
+) -> (Tool, ToolHandler) {
+    let shared_read_only_spec =
+        flow_like::flow::copilot::tool_spec::find_workflow_context_tool_spec("database_tool")
+            .expect("shared database context spec must exist");
+    let (description, operations) = match access {
+        SpecialistDataAccess::ReadOnly => (
+            shared_read_only_spec.description,
+            READ_ONLY_DATABASE_OPERATIONS,
+        ),
+        SpecialistDataAccess::ReadWrite => (
             r#"Inspect or modify the app's built-in LanceDB/Open Database tables through the frontend backend state.
 
 Use this to understand existing local/user databases before generating DataFusion, Lance, vector,
@@ -947,82 +1471,89 @@ Read operations do not ask for approval. Mutating operations show an approval di
 Operations:
 - list_tables: return project and user-scoped tables.
 - create_table: create an empty table from explicit fields [{name,type,nullable?,vector_size?}].
+  Physical names allow letters, numbers, `_`, `-`, and `.`. Human-facing labels with spaces or
+  punctuation are normalized to stable snake_case identifiers (for example `Library Files` becomes
+  `library_files`); the result returns both `requested_table_name` and the authoritative
+  `table_name`. Continue with the returned `table_name` instead of probing for a separate alias.
+  For a real instant/date-time field, use the exact type `timestamp:ms:UTC`; it is the native
+  Lance/Arrow counterpart of a FlowLike `Date` and its RFC3339 UTC value. `date32` is only for
+  standalone calendar data that is intentionally not exchanged as a board `Date`. Existing table
+  schemas are not implicitly migrated.
   `if_not_exists` defaults to true; no seed row is inserted. A `partial` result with
   `explicit_schema_create_not_deployed` means the remote API is older than this client: retain the
   schema request and continue the workflow build instead of switching to a smoke test.
-- describe_table: schema, indices, row count, and sample rows.
+  Any failure of a setup operation here (create_table, build_index, optimize) is best effort, never
+  a blocker: report the pending setup and keep building. The workflow creates the table on its first
+  write — for embedding tables that write derives the true vector width, which create_table can only
+  guess — and builds its own indices with the Build Index node after that write.
+- describe_table: schema, indices, and row count. Set `include_sample: false` for bounded schema
+  discovery that an immutable FlowPilot manifest can satisfy; omitted/true also reads sample rows.
 - query: SQL/filter/vector/FTS query via the existing database query API.
 - insert/add_items, delete/remove_items, update.
-- build_index, drop_index, optimize, add_column, drop_columns, alter_column."#,
-        )
-        .schema(json!({
-            "type": "object",
-            "properties": {
-                "operation": {
-                    "type": "string",
-                    "enum": [
-                        "list_tables", "create_table", "describe_table", "query",
-                        "insert", "add_items", "delete", "remove_items", "update",
-                        "build_index", "drop_index", "optimize",
-                        "add_column", "drop_columns", "alter_column"
-                    ]
-                },
-                "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
-                "table_name": { "type": "string", "description": "Table name for table operations." },
-                "user_scoped": { "type": "boolean", "description": "Use user-scoped storage/database tables." },
-                "fields": {
-                    "type": "array",
-                    "description": "Explicit fields for create_table. Supported types: string, boolean, int8/int16/int32/int64, uint8/uint16/uint32/uint64, float32/float64, binary, date32, timestamp, vector. Vector fields require vector_size.",
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "properties": {
-                            "name": { "type": "string" },
-                            "type": { "type": "string" },
-                            "nullable": { "type": "boolean", "description": "Defaults to true." },
-                            "vector_size": { "type": "integer", "minimum": 1 }
-                        },
-                        "required": ["name", "type"]
-                    }
-                },
-                "if_not_exists": { "type": "boolean", "description": "For create_table, succeed if the table already exists. Defaults to true." },
-                "query": { "type": "object", "description": "Query payload: {sql, filter, fts_term, vector_query, rerank}." },
-                "offset": { "type": "integer" },
-                "limit": { "type": "integer" },
-                "items": { "type": "array", "items": { "type": "object" } },
-                "filter": { "type": "string", "description": "Delete/update filter expression." },
-                "updates": { "type": "object" },
-                "column": { "type": "string" },
-                "columns": { "type": "array", "items": { "type": "string" } },
-                "index_type": {
-                    "type": "string",
-                    "enum": ["FullText", "BTree", "Bitmap", "LabelList", "Auto", "full_text", "btree", "bitmap", "label_list", "auto"]
-                },
-                "index_name": { "type": "string" },
-                "optimize": { "type": "boolean" },
-                "keep_versions": { "type": "boolean" },
-                "nullable": { "type": "boolean" },
-                "column_definition": { "type": "object", "description": "For add_column: {name, sql_expression}." }
-            },
-            "required": ["operation"]
-        }));
+- build_index, drop_index, optimize, add_column, drop_columns, alter_column.
+- delete_table: PERMANENTLY drop a whole table — every row AND the table schema are destroyed.
+  This is IRREVERSIBLE: there is no undo, no restore, and no version history to roll back to.
+  Requires `confirm_table_name` to repeat `table_name` exactly; a mismatch rejects the call.
+  Never drop a table to "reset", "clear", "truncate", "re-seed", or "fix" it — use
+  `delete`/`remove_items` with a filter to remove rows while keeping the schema, indices and every
+  ontology/workflow reference intact. Only drop a table the user explicitly asked to delete, and ask
+  first. The result reports the cascade: `ontologies_pruned` (graph overlays whose node/edge
+  mappings referenced the table and were pruned), `saved_queries_referencing` (stored queries whose
+  SQL still names the table — they are NOT deleted and will fail until edited), and `warnings`.
+  Always relay that cascade to the user."#,
+            READ_WRITE_DATABASE_OPERATIONS,
+        ),
+    };
+    let schema = database_tool_schema(operations);
+    let schema = if access == SpecialistDataAccess::ReadOnly {
+        (shared_read_only_spec.schema)()
+    } else {
+        schema
+    };
+    let tool = Tool::new("database_tool")
+        .description(description)
+        .schema(schema);
 
     let handler: ToolHandler = Arc::new(move |_name, args| {
         let operation = arg_string(args, "operation", "operation");
+        if !specialist_operation_allowed(
+            access,
+            &operation,
+            READ_ONLY_DATABASE_OPERATIONS,
+            READ_WRITE_DATABASE_OPERATIONS,
+        ) {
+            return ToolResultObject::text(
+                json!({
+                    "status": "scope_violation",
+                    "tool": "database_tool",
+                    "operation": operation,
+                    "message": "The board specialist may inspect database context only. Delegate database mutations to the Data Studio specialist."
+                })
+                .to_string(),
+            );
+        }
+        let table_name = arg_string(args, "table_name", "tableName");
+        if operation == "delete_table" {
+            let confirm_table_name = arg_string(args, "confirm_table_name", "confirmTableName");
+            if let Some(message) = delete_table_confirmation_error(&table_name, &confirm_table_name)
+            {
+                return ToolResultObject::text(
+                    json!({
+                        "status": "error",
+                        "tool": "database_tool",
+                        "operation": operation,
+                        "dropped": false,
+                        "message": message
+                    })
+                    .to_string(),
+                );
+            }
+        }
         let approval = if database_operation_requires_approval(&operation) {
-            let table_name = arg_string(args, "table_name", "tableName");
             FrontendToolApproval::mutating(
-                "Approve database change",
-                format!(
-                    "FlowPilot wants to run database operation '{}'{}.",
-                    operation,
-                    if table_name.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" on table '{table_name}'")
-                    }
-                ),
-                format!("database:{operation}"),
+                database_approval_title(&operation),
+                database_approval_message(&operation, &table_name),
+                database_approval_session_key(&operation, &table_name),
             )
         } else {
             FrontendToolApproval::none()
@@ -1033,33 +1564,69 @@ Operations:
     (tool, handler)
 }
 
-fn create_storage_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
-    let tool = Tool::new("storage_tool")
-        .description(
+fn create_storage_tool(
+    bridge: FrontendToolBridge,
+    access: SpecialistDataAccess,
+) -> (Tool, ToolHandler) {
+    let shared_read_only_spec =
+        flow_like::flow::copilot::tool_spec::find_workflow_context_tool_spec("storage_tool")
+            .expect("shared storage context spec must exist");
+    let (description, operations) = match access {
+        SpecialistDataAccess::ReadOnly => (
+            shared_read_only_spec.description,
+            READ_ONLY_STORAGE_OPERATIONS,
+        ),
+        SpecialistDataAccess::ReadWrite => (
             r#"List, read, create, or delete app storage files through the frontend storage state.
 
 Read/list operations are silent. create_file and delete_files show an approval dialog with a
 "don't ask again this session" option. Use this when a workflow needs to reference existing files
 or create a small helper/config artifact in app/user storage."#,
-        )
-        .schema(json!({
-            "type": "object",
-            "properties": {
-                "operation": { "type": "string", "enum": ["list_files", "read_file", "create_file", "delete_files"] },
-                "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
-                "prefix": { "type": "string", "description": "Folder/prefix to list." },
-                "path": { "type": "string", "description": "File path for read/create." },
-                "paths": { "type": "array", "items": { "type": "string" }, "description": "File paths/prefixes for deletion." },
-                "content": { "type": "string", "description": "Text content for create_file." },
-                "mime_type": { "type": "string", "description": "Content type for create_file, default text/plain." },
-                "user_scoped": { "type": "boolean", "description": "Use user storage instead of app storage." },
-                "max_chars": { "type": "integer", "description": "Maximum characters to return for read_file." }
-            },
-            "required": ["operation"]
-        }));
+            READ_WRITE_STORAGE_OPERATIONS,
+        ),
+    };
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "operation": { "type": "string", "enum": operations },
+            "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
+            "prefix": { "type": "string", "description": "Folder/prefix to list." },
+            "path": { "type": "string", "description": "File path for read/create." },
+            "paths": { "type": "array", "items": { "type": "string" }, "description": "File paths/prefixes for deletion." },
+            "content": { "type": "string", "description": "Text content for create_file." },
+            "mime_type": { "type": "string", "description": "Content type for create_file, default text/plain." },
+            "user_scoped": { "type": "boolean", "description": "Use user storage instead of app storage." },
+            "max_chars": { "type": "integer", "description": "Maximum characters to return for read_file." }
+        },
+        "required": ["operation"]
+    });
+    let schema = if access == SpecialistDataAccess::ReadOnly {
+        (shared_read_only_spec.schema)()
+    } else {
+        schema
+    };
+    let tool = Tool::new("storage_tool")
+        .description(description)
+        .schema(schema);
 
     let handler: ToolHandler = Arc::new(move |_name, args| {
         let operation = arg_string(args, "operation", "operation");
+        if !specialist_operation_allowed(
+            access,
+            &operation,
+            READ_ONLY_STORAGE_OPERATIONS,
+            READ_WRITE_STORAGE_OPERATIONS,
+        ) {
+            return ToolResultObject::text(
+                json!({
+                    "status": "scope_violation",
+                    "tool": "storage_tool",
+                    "operation": operation,
+                    "message": "The board specialist may inspect storage context only. Delegate storage mutations to the Data Studio specialist."
+                })
+                .to_string(),
+            );
+        }
         let approval = if matches!(operation.as_str(), "create_file" | "delete_files") {
             FrontendToolApproval::mutating(
                 "Approve storage change",
@@ -1076,34 +1643,12 @@ or create a small helper/config artifact in app/user storage."#,
 }
 
 fn create_ui_inspect_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
+    let shared_spec =
+        flow_like::flow::copilot::tool_spec::find_workflow_context_tool_spec("ui_inspect")
+            .expect("shared UI context spec must exist");
     let tool = Tool::new("ui_inspect")
-        .description(
-            r#"Inspect the app's A2UI pages and widgets so `a2ui*` workflow calls target real elements.
-
-This is a READ-ONLY tool and never asks for approval. Call it BEFORE writing or editing any
-`a2ui*` call (set/get element, instantiate widget, push/clear container, navigate) so element
-references and widget selectors are never guessed.
-
-Operations:
-- list (default): every page (id, name, route, onLoad event) and every widget (selector, description).
-- page: full element reference list for one page. An `elementRef` used by `a2uiSetElementText`,
-  `a2uiGetElement`, `a2uiGetElementValue`, `a2uiPushToContainer`, etc. is `"<page_id>/<component_id>"`.
-- widgets: instantiation surface for ALL widgets in ONE call — prefer this over per-widget lookups
-  when a dashboard uses more than one widget.
-- widget: instantiation surface for one widget — the `widgetSelector` plus the `dynPath*`/`dynProp*`
-  (camelCase) input pins `a2uiInstantiateWidget` exposes for its bound data paths and exposed props,
-  and the action names usable for `fnRefs`."#,
-        )
-        .schema(json!({
-            "type": "object",
-            "properties": {
-                "operation": { "type": "string", "enum": ["list", "page", "widgets", "widget"] },
-                "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
-                "board_id": { "type": "string", "description": "Restrict pages to this board. Optional." },
-                "page_id": { "type": "string", "description": "Page id for operation 'page'." },
-                "widget_selector": { "type": "string", "description": "Widget id or name for operation 'widget'." }
-            }
-        }));
+        .description(shared_spec.description)
+        .schema((shared_spec.schema)());
 
     let handler: ToolHandler = Arc::new(move |_name, args| {
         frontend_tool_result_with_timeout(
@@ -1370,9 +1915,9 @@ fn create_emit_commands_tool(
         let queued_count = parsed_commands.len();
         if let Some(store) = &side_effect_commands
             && let Ok(mut queued) = store.lock()
+            && !queued.extend(parsed_commands)
         {
-            if !queued.extend(parsed_commands) {
-                return ToolResultObject::text(
+            return ToolResultObject::text(
                     json!({
                         "status": "error",
                         "code": "COMMAND_DELIVERY_CONFLICT",
@@ -1382,7 +1927,6 @@ fn create_emit_commands_tool(
                     })
                     .to_string(),
                 );
-            }
         }
 
         // The queued batch travels through the side-effect store (the chat loop drains it into a
@@ -1432,6 +1976,49 @@ fn create_get_declarations_tool(provider: Arc<dyn CatalogProvider>) -> (Tool, To
         };
         let declarations = block_on_tool(run_declaration_queries(&provider, &declaration_args));
         ToolResultObject::text(declarations)
+    });
+
+    (tool, handler)
+}
+
+/// The time budget lives entirely in the host run loop, which intercepts this call in preflight and
+/// answers from its progress ledger. This body is only reached on a surface with no such loop.
+fn create_extend_time_budget_tool() -> (Tool, ToolHandler) {
+    let tool = tool_from_rig_definition(&ExtendTimeBudgetTool);
+
+    let handler: ToolHandler = Arc::new(move |_name, _args| {
+        ToolResultObject::text(
+            json!({
+                "status": "time_budget_unavailable",
+                "retryable": false,
+                "next_action": "continue_building",
+                "message": "This run has no extendable host time budget; continue within the budget you have.",
+            })
+            .to_string(),
+        )
+    });
+
+    (tool, handler)
+}
+
+/// The accepted plan itself is owned by the host loop state, which mirrors this exact validation in
+/// preflight. This handler only renders the acceptance the model reads back.
+fn create_plan_board_scope_tool() -> (Tool, ToolHandler) {
+    let tool = tool_from_rig_definition(&PlanBoardScopeTool);
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let parsed: PlanBoardScopeArgs =
+            match parse_flowscript_arguments(args.clone(), "plan_board_scope") {
+                Ok(parsed) => parsed,
+                Err(result) => return result,
+            };
+        let payload = match flow_like::flow::copilot::accept_scope_plan(parsed) {
+            Ok(plan) => plan.acceptance_payload(),
+            Err(rejection) => rejection.payload(),
+        };
+        ToolResultObject::text(
+            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string()),
+        )
     });
 
     (tool, handler)
@@ -2287,6 +2874,12 @@ and submit the FULL edited FlowScript source. Reconcile compares it to the live 
   resolvable FlowScript references/nested calls.
 - A new unanchored `function name(...) { ... }` declaration → creates a Function layer, places
   body nodes inside it, creates boundary pins from params/returns, and wires `return` values.
+- `@cache({ namespace: "...", ttlSeconds: 3600, scope: "user" })` immediately above a function
+  configures result caching; bare `@cache` defaults to the `global` namespace, a 300-second
+  lifetime, and app scope. Set `ttlSeconds: 0` explicitly for a permanent entry. A hit skips the
+  complete function body and all of its side effects, so preserve the decorator on unrelated edits
+  and use it only for functions whose outputs are determined by their inputs. Existing context may
+  report `ttl_seconds: null` for a permanent cache; preserve it as explicit `ttlSeconds: 0`.
 
 VALIDATION: This tool validates before queueing. If it reports parse errors or diagnostics,
 nothing was queued — revise the SAME submitted draft and call edit_flowscript again immediately.
@@ -2507,9 +3100,9 @@ RULES:
         let queued_count = result.commands.len();
         if let Some(store) = &side_effect_commands
             && let Ok(mut commands) = store.lock()
+            && !commands.extend(result.commands)
         {
-            if !commands.extend(result.commands) {
-                return ToolResultObject::text(
+            return ToolResultObject::text(
                     json!({
                         "status": "error",
                         "code": "COMMAND_DELIVERY_CONFLICT",
@@ -2520,7 +3113,6 @@ RULES:
                     })
                     .to_string(),
                 );
-            }
         }
         if let Some(store) = &queued_flowscript
             && let Ok(mut workspace) = store.lock()
@@ -2655,28 +3247,36 @@ BOUNDVALUE FORMAT (ALL props use this):
 CHILDREN FORMAT:
 "children": {"explicitList": ["child-id-1", "child-id-2"]}
 
-AVAILABLE COMPONENTS:
-Layout: column, row, grid, stack, scrollArea, box, center, spacer
-Display: text, image, icon, badge, avatar, progress, spinner, divider, markdown, diffView
-Interactive: button, textField, select, slider, checkbox, switch, link
-Container: card, modal, tabs, accordion, drawer, tooltip
+AVAILABLE COMPONENTS (full docs + selection table in your system prompt):
+Layout: column, row, grid, stack, scrollArea, absolute, aspectRatio, overlay, box, center, spacer
+Display: text, image, icon, video, lottie, badge, avatar, userProfile, progress, spinner, skeleton, divider, markdown, diffView, filePreview, geoMap
+Interactive: button, textField (multiline for textarea), select, slider, checkbox, switch, radioGroup, dateTimeInput, fileInput, imageInput, voiceInput (audio recording/dictation), feedback (thumbs rating), appLink, link
+Container: card, modal, tabs, accordion, drawer, tooltip, popover
+Data: table, plotlyChart, nivoChart, calendar, gantt, graph (own nodes/edges), ontologyGraph (this project's ontology, loads itself)
+Vision: boundingBoxOverlay, imageLabeler, imageHotspot
+Game: canvas2d, sprite, shape, scene3d, model3d, dialogue, characterPortrait, choiceMenu, inventoryGrid, healthBar, miniMap
+Embeds: iframe
+Widgets: widgetInstance
+Pick the purpose-built component for the intent (audio recording -> voiceInput, never a button+fileInput imitation); consult the "Choosing the Right Component" table in your system prompt.
 
 THEME COLORS (use these, not hardcoded):
 bg-background, bg-muted, bg-card, bg-primary, bg-secondary
 text-foreground, text-muted-foreground, text-primary-foreground
 border-border
 
-CUSTOM CSS (for advanced effects):
-Use canvasSettings.customCss for animations/effects not achievable with Tailwind:
+STYLING TRUTH:
+- className renders STANDARD Tailwind utilities only — there is no runtime Tailwind engine, arbitrary values like w-[437px] or bg-[#ff00aa] silently render nothing.
+- Typed style fields (background gradients, border, shadow, exact sizes, transform, filter, backdropFilter, animation, typography, responsiveOverrides) always render — use them for custom values.
+- canvasSettings.customCss (scoped to the surface) covers keyframes, hover/focus, pseudo-elements:
 {"canvasSettings": {"backgroundColor": "bg-background", "customCss": ".animated { animation: fade 1s; } @keyframes fade { from{opacity:0} to{opacity:1} }"}}
 
 EXAMPLE - Simple card:
 {
-  "rootComponentId": "card-1",
+  "rootComponentId": "root",
   "canvasSettings": {"backgroundColor": "bg-background"},
   "components": [
     {
-      "id": "card-1",
+      "id": "root",
       "style": {"className": "p-4"},
       "component": {
         "type": "card",
@@ -3066,6 +3666,21 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "rows",
             "maxLength",
             "required",
+            "debounceMs",
+        ]),
+        "richText" => Some(&[
+            "value",
+            "label",
+            "helperText",
+            "placeholder",
+            "error",
+            "disabled",
+            "readOnly",
+            "uploadPrefix",
+            "uploadScope",
+            "minHeight",
+            "maxHeight",
+            "debounceMs",
         ]),
         "select" => Some(&[
             "value",
@@ -3084,6 +3699,7 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "disabled",
             "showValue",
             "label",
+            "debounceMs",
         ]),
         "checkbox" => Some(&["checked", "label", "disabled", "indeterminate"]),
         "switch" => Some(&["checked", "label", "disabled"]),
@@ -3167,6 +3783,31 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "clusterMarkers",
             "clusterRadius",
             "clusterMaxZoom",
+        ]),
+        "graph" => Some(&[
+            "nodes",
+            "edges",
+            "labelStyles",
+            "showToolbar",
+            "showSearch",
+            "showLegend",
+            "showInspector",
+            "height",
+        ]),
+        "ontologyGraph" => Some(&[
+            "ontologyId",
+            "appId",
+            "limit",
+            "allowExpand",
+            "allowSearch",
+            "allowPaths",
+            "allowActions",
+            "allowCypher",
+            "allowStyleEdit",
+            "allowLimitChange",
+            "showToolbar",
+            "showLegend",
+            "height",
         ]),
         "link" => Some(&[
             "href",
@@ -3375,6 +4016,7 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
 /// Required props per component type
 fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
     match component_type {
+        "overlay" => &["baseComponentId", "overlays"],
         "text" => &["content"],
         "image" => &["src"],
         "icon" => &["name"],
@@ -3387,6 +4029,7 @@ fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
         "progress" => &["value"],
         "button" => &["label"],
         "textField" => &["value"],
+        "richText" => &["value"],
         "select" => &["value", "options"],
         "slider" => &["value"],
         "checkbox" => &["checked"],
@@ -3395,28 +4038,70 @@ fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
         "dateTimeInput" => &["value"],
         "fileInput" => &["value"],
         "imageInput" => &["value"],
+        "voiceInput" => &["value"],
         "link" => &["href"],
         "modal" => &["open"],
-        "tabs" => &["value"],
+        "tabs" => &["value", "tabs"],
+        "accordion" => &["items"],
+        "drawer" => &["open"],
+        "tooltip" => &["content"],
+        "popover" => &["contentComponentId"],
+        "table" => &["columns", "data"],
+        "tableRow" => &["cells"],
+        "tableCell" => &["content"],
         "canvas2d" => &["width", "height"],
         "sprite" => &["src", "x", "y"],
         "shape" => &["shapeType", "x", "y"],
         "scene3d" => &["width", "height"],
         "model3d" => &["src"],
+        "dialogue" => &["text"],
+        "characterPortrait" => &["image"],
+        "choiceMenu" => &["choices"],
+        "inventoryGrid" => &["items"],
+        "healthBar" => &["value", "maxValue"],
+        "miniMap" => &["width", "height"],
         "aspectRatio" => &["ratio"],
-        "boundingBoxOverlay" => &["src"],
+        "nivoChart" => &["chartType"],
+        "boundingBoxOverlay" => &["src", "boxes"],
+        "imageLabeler" => &["src", "labels"],
+        "imageHotspot" => &["src", "hotspots"],
+        "widgetInstance" => &["instanceId", "widgetId"],
         "calendar" => &["events"],
         "gantt" => &["tasks"],
+        "graph" => &["nodes"],
+        "ontologyGraph" => &["ontologyId"],
         _ => &[],
     }
 }
 
-const BASE_PROPS: &[&str] = &["type", "id", "style", "children", "actions", "hidden"];
+const BASE_PROPS: &[&str] = &[
+    "type",
+    "id",
+    "style",
+    "children",
+    "actions",
+    "eventHandlers",
+    "hidden",
+];
 const MAX_UI_COMPONENTS: usize = 120;
 const MAX_UI_COMPONENT_ID_CHARS: usize = 120;
 const MAX_UI_CUSTOM_CSS_CHARS: usize = 12_000;
 const MAX_UI_STYLE_STRING_CHARS: usize = 1_000;
 const MAX_UI_ACTIONS: usize = 20;
+/// The action names `ActionHandler.tsx` dispatches. Anything else falls through its `default`
+/// branch into a no-op `userAction`, so the control renders but never runs — keep in sync with
+/// `executeAction` there and with `BUILTIN_ACTION_NAMES` in `validateComponents.ts`.
+const BUILTIN_ACTION_NAMES: &[&str] = &[
+    "workflow_event",
+    "widget_event",
+    "navigate_page",
+    "external_link",
+    "navigate_app_config",
+    "navigate_app_overview",
+    "submit_feedback",
+];
+const MAX_UI_EVENT_HANDLERS: usize = 64;
+const MAX_UI_EVENT_NAME_CHARS: usize = 128;
 
 /// Validate an array of components and return (validated_components, errors)
 fn validate_ui_components(
@@ -3615,7 +4300,10 @@ fn validate_ui_components(
             validate_style_value(id, "component.style", style, &mut errors);
         }
         if let Some(actions) = component.get("actions") {
-            validate_actions_value(id, actions, &mut errors);
+            validate_actions_value(id, "actions", actions, &mut errors);
+        }
+        if let Some(event_handlers) = component.get("eventHandlers") {
+            validate_event_handlers_value(id, event_handlers, &mut errors);
         }
 
         let mut component_refs = Vec::new();
@@ -3746,6 +4434,7 @@ fn is_known_style_prop(key: &str) -> bool {
             | "position"
             | "transform"
             | "overflow"
+            | "responsive"
             | "responsiveOverrides"
             | "margin"
             | "padding"
@@ -3847,15 +4536,62 @@ fn validate_style_strings(component_id: &str, path: &str, value: &Value, errors:
     }
 }
 
-fn validate_actions_value(component_id: &str, actions: &Value, errors: &mut Vec<String>) {
+fn validate_event_handlers_value(
+    component_id: &str,
+    event_handlers: &Value,
+    errors: &mut Vec<String>,
+) {
+    let Some(event_handlers) = event_handlers.as_object() else {
+        errors.push(format!("{}: eventHandlers must be an object", component_id));
+        return;
+    };
+
+    if event_handlers.len() > MAX_UI_EVENT_HANDLERS {
+        errors.push(format!(
+            "{}: eventHandlers is limited to {MAX_UI_EVENT_HANDLERS} entries",
+            component_id
+        ));
+    }
+
+    for (event_name, actions) in event_handlers {
+        if event_name.trim().is_empty() {
+            errors.push(format!(
+                "{}: eventHandlers keys must be non-empty strings",
+                component_id
+            ));
+            continue;
+        }
+        if event_name.chars().count() > MAX_UI_EVENT_NAME_CHARS {
+            errors.push(format!(
+                "{}: eventHandlers key '{}' is too long; maximum is {MAX_UI_EVENT_NAME_CHARS} characters",
+                component_id, event_name
+            ));
+            continue;
+        }
+
+        validate_actions_value(
+            component_id,
+            &format!("eventHandlers.{event_name}"),
+            actions,
+            errors,
+        );
+    }
+}
+
+fn validate_actions_value(
+    component_id: &str,
+    path: &str,
+    actions: &Value,
+    errors: &mut Vec<String>,
+) {
     let Some(actions) = actions.as_array() else {
-        errors.push(format!("{}: actions must be an array", component_id));
+        errors.push(format!("{}: {path} must be an array", component_id));
         return;
     };
 
     if actions.len() > MAX_UI_ACTIONS {
         errors.push(format!(
-            "{}: actions is limited to {MAX_UI_ACTIONS} entries",
+            "{}: {path} is limited to {MAX_UI_ACTIONS} entries",
             component_id
         ));
     }
@@ -3863,8 +4599,8 @@ fn validate_actions_value(component_id: &str, actions: &Value, errors: &mut Vec<
     for (index, action) in actions.iter().enumerate() {
         let Some(action_obj) = action.as_object() else {
             errors.push(format!(
-                "{}: actions[{index}] must be an object",
-                component_id
+                "{}: {path}[{index}] must be an object",
+                component_id,
             ));
             continue;
         };
@@ -3872,30 +4608,72 @@ fn validate_actions_value(component_id: &str, actions: &Value, errors: &mut Vec<
         for key in action_obj.keys() {
             if !matches!(key.as_str(), "name" | "context") {
                 errors.push(format!(
-                    "{}: unknown action prop 'actions[{index}].{}'",
-                    component_id, key
+                    "{}: unknown action prop '{path}[{index}].{}'",
+                    component_id, key,
                 ));
             }
         }
 
-        match action_obj.get("name").and_then(Value::as_str) {
-            Some(name) if !name.trim().is_empty() => {}
-            _ => errors.push(format!(
-                "{}: actions[{index}].name must be a non-empty string",
-                component_id
-            )),
+        let name = match action_obj.get("name").and_then(Value::as_str) {
+            Some(name) if !name.trim().is_empty() => Some(name.trim()),
+            _ => {
+                errors.push(format!(
+                    "{}: {path}[{index}].name must be a non-empty string",
+                    component_id,
+                ));
+                None
+            }
+        };
+
+        let context = match action_obj.get("context") {
+            Some(Value::Object(context)) => Some(context),
+            Some(_) => {
+                errors.push(format!(
+                    "{}: {path}[{index}].context must be an object",
+                    component_id,
+                ));
+                None
+            }
+            None => {
+                errors.push(format!(
+                    "{}: {path}[{index}].context is required",
+                    component_id,
+                ));
+                None
+            }
+        };
+
+        let Some(name) = name else { continue };
+
+        if !BUILTIN_ACTION_NAMES.contains(&name) {
+            errors.push(format!(
+                "{}: {path}[{index}].name '{}' is not a built-in action. The name is a fixed verb, never a board node / event / widget action id — put that id in the context instead. Valid: {}. To run a board event use {{\"name\": \"workflow_event\", \"context\": {{\"nodeId\": \"<event node id>\"}}}}; to run a widget action use {{\"name\": \"widget_event\", \"context\": {{\"actionId\": \"<widget action id>\"}}}}",
+                component_id,
+                name,
+                BUILTIN_ACTION_NAMES.join(", "),
+            ));
+            continue;
         }
 
-        match action_obj.get("context") {
-            Some(Value::Object(_)) => {}
-            Some(_) => errors.push(format!(
-                "{}: actions[{index}].context must be an object",
-                component_id
-            )),
-            None => errors.push(format!(
-                "{}: actions[{index}].context is required",
-                component_id
-            )),
+        let Some(context) = context else { continue };
+
+        // A routing action without its target id renders a control that does nothing, which is
+        // indistinguishable from a wired one until a user clicks it.
+        let required_key = match name {
+            "workflow_event" => Some(("nodeId", "the id of an event entry node on the board")),
+            "widget_event" => Some(("actionId", "the id of an action declared on the widget")),
+            _ => None,
+        };
+        if let Some((key, meaning)) = required_key
+            && !context
+                .get(key)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+        {
+            errors.push(format!(
+                "{}: {path}[{index}] is a '{name}' action but its context has no '{key}' — it would render a control that does nothing. Set context.{key} to {meaning}.",
+                component_id,
+            ));
         }
     }
 }
@@ -4100,30 +4878,198 @@ mod tests {
     use flow_like::flow_like_storage::Path;
     use std::time::SystemTime;
 
-    fn empty_board(id: &str) -> Board {
-        Board {
-            id: id.to_string(),
-            name: "Captured".to_string(),
-            description: String::new(),
-            nodes: HashMap::new(),
-            variables: HashMap::new(),
-            comments: HashMap::new(),
-            viewport: (0.0, 0.0, 1.0),
-            version: (0, 0, 1),
-            stage: ExecutionStage::Dev,
-            log_level: LogLevel::Info,
-            execution_mode: ExecutionMode::Hybrid,
-            refs: HashMap::new(),
-            layers: HashMap::new(),
-            page_ids: Vec::new(),
-            hash: None,
-            created_at: SystemTime::now(),
-            updated_at: SystemTime::now(),
-            parent: None,
-            board_dir: Path::from("/test"),
-            logic_nodes: HashMap::new(),
-            app_state: None,
+    #[test]
+    fn specialist_direct_surfaces_exclude_global_public_web_research() {
+        for global_only_tool in [INTERNET_SEARCH_TOOL, OPEN_URL_TOOL, ARCHIVE_LOOKUP_TOOL] {
+            assert!(!DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES.contains(&global_only_tool));
         }
+
+        let mut direct_specialist_tools =
+            create_board_tools(None, None, None, None, None, None, None);
+        direct_specialist_tools.extend(create_frontend_tools(None));
+        for (tool, _) in direct_specialist_tools {
+            assert_ne!(tool.name, INTERNET_SEARCH_TOOL);
+            assert_ne!(tool.name, OPEN_URL_TOOL);
+            assert_ne!(tool.name, ARCHIVE_LOOKUP_TOOL);
+        }
+        assert!(DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES.contains(&"list_apps"));
+        assert!(DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES.contains(&"describe_app_interface"));
+    }
+
+    #[test]
+    fn every_frontend_tool_closes_the_parent_raw_web_phase() {
+        for private_tool in [
+            "list_apps",
+            "describe_app_interface",
+            "call_app_chat",
+            "call_app_event",
+            "data_studio_agent",
+            MEMORY_SEARCH_TOOL,
+        ] {
+            assert!(
+                frontend_tool_result_closes_public_web_phase(private_tool),
+                "{private_tool} must close outbound public research"
+            );
+        }
+    }
+
+    #[test]
+    fn web_call_budgets_are_shared_across_agents_via_the_session() {
+        // Budgets used to be per-tool-instance, so two concurrent research runs
+        // each got a full allowance. They now live on the shared session: the
+        // second agent sees the first agent's spend.
+        let session = WebResearchSession::new("");
+        let mut granted = 0;
+        while session.reserve_search_call() {
+            granted += 1;
+            assert!(granted <= 64, "search budget must be bounded");
+        }
+        assert!(granted > 0, "a fresh session must allow some searching");
+
+        // Same ledger from a second handle, as a parallel agent would hold.
+        let shared = std::sync::Arc::new(session);
+        let second_agent = shared.clone();
+        assert!(
+            !second_agent.reserve_search_call(),
+            "a second agent must not get a fresh search allowance"
+        );
+
+        let summary = shared.spend_summary();
+        assert_eq!(summary["search_calls_used"], granted);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn platform_tool_image_download_is_safe_on_the_sdk_runtime() {
+        let no_images = block_on_tool(download_platform_tool_images(Vec::new()));
+        assert!(no_images.is_empty());
+
+        // A malformed temporary URL exercises client initialization and request failure without
+        // depending on an external server. Result enrichment is best-effort and must not unwind.
+        let unavailable =
+            block_on_tool(download_platform_tool_images(vec![PlatformToolImageUrl {
+                url: "not-a-valid-capture-url".to_string(),
+                media_type: "image/png".to_string(),
+            }]));
+        assert!(unavailable.is_empty());
+    }
+
+    #[test]
+    fn board_context_data_operations_are_read_only() {
+        for operation in READ_ONLY_DATABASE_OPERATIONS {
+            assert!(specialist_operation_allowed(
+                SpecialistDataAccess::ReadOnly,
+                operation,
+                READ_ONLY_DATABASE_OPERATIONS,
+                READ_WRITE_DATABASE_OPERATIONS,
+            ));
+        }
+        for operation in [
+            "create_table",
+            "insert",
+            "update",
+            "delete",
+            "delete_table",
+            "build_index",
+            "drop_columns",
+        ] {
+            assert!(!specialist_operation_allowed(
+                SpecialistDataAccess::ReadOnly,
+                operation,
+                READ_ONLY_DATABASE_OPERATIONS,
+                READ_WRITE_DATABASE_OPERATIONS,
+            ));
+        }
+
+        for operation in READ_ONLY_STORAGE_OPERATIONS {
+            assert!(specialist_operation_allowed(
+                SpecialistDataAccess::ReadOnly,
+                operation,
+                READ_ONLY_STORAGE_OPERATIONS,
+                READ_WRITE_STORAGE_OPERATIONS,
+            ));
+        }
+        for operation in ["create_file", "delete_files"] {
+            assert!(!specialist_operation_allowed(
+                SpecialistDataAccess::ReadOnly,
+                operation,
+                READ_ONLY_STORAGE_OPERATIONS,
+                READ_WRITE_STORAGE_OPERATIONS,
+            ));
+        }
+    }
+
+    #[test]
+    fn delete_table_is_read_write_only_and_approval_gated_per_table() {
+        assert!(READ_WRITE_DATABASE_OPERATIONS.contains(&"delete_table"));
+        assert!(!READ_ONLY_DATABASE_OPERATIONS.contains(&"delete_table"));
+        assert!(database_operation_requires_approval("delete_table"));
+
+        assert_eq!(
+            database_approval_session_key("delete_table", "orders"),
+            "database:delete_table:orders"
+        );
+        assert_ne!(
+            database_approval_session_key("delete_table", "orders"),
+            database_approval_session_key("delete_table", "customers")
+        );
+        assert_eq!(
+            database_approval_session_key("insert", "orders"),
+            "database:insert"
+        );
+
+        let schema = database_tool_schema(READ_WRITE_DATABASE_OPERATIONS);
+        assert!(
+            schema
+                .pointer("/properties/confirm_table_name")
+                .is_some_and(Value::is_object)
+        );
+    }
+
+    #[test]
+    fn delete_table_requires_an_exact_table_name_confirmation() {
+        assert!(delete_table_confirmation_error("orders", "orders").is_none());
+        assert!(delete_table_confirmation_error("orders", "").is_some());
+        assert!(delete_table_confirmation_error("", "orders").is_some());
+        assert!(delete_table_confirmation_error("orders", "orders_archive").is_some());
+        assert!(delete_table_confirmation_error("orders", "Orders").is_some());
+    }
+
+    #[test]
+    fn database_tool_schema_prefers_utc_timestamps_without_rejecting_legacy_calls() {
+        let schema = database_tool_schema(READ_WRITE_DATABASE_OPERATIONS);
+        let field_types = schema
+            .pointer("/properties/fields/items/properties/type/enum")
+            .and_then(Value::as_array)
+            .expect("create_table field type enum");
+        let field_types = field_types
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+
+        assert!(field_types.contains(&"timestamp:ms:UTC"));
+        assert!(field_types.contains(&"date32"));
+        for legacy in ["timestamp", "datetime", "timestamp_ms"] {
+            assert!(
+                field_types.contains(&legacy),
+                "legacy tool calls using {legacy} must remain schema-valid"
+            );
+        }
+
+        let type_description = schema
+            .pointer("/properties/fields/items/properties/type/description")
+            .and_then(Value::as_str)
+            .expect("field type guidance");
+        assert!(type_description.contains("Use timestamp:ms:UTC"));
+        assert!(type_description.contains("only for replay compatibility"));
+    }
+
+    fn empty_board(id: &str) -> Board {
+        let mut board = Board::new_detached(Some(id.to_string()), Path::from("/test"));
+        board.name = "Captured".to_string();
+        board.description.clear();
+        board.viewport = (0.0, 0.0, 1.0);
+        board.hash = None;
+        board
     }
 
     fn pin(name: &str, data_type: &str) -> PinMetadata {
@@ -5155,6 +6101,32 @@ mod tests {
     }
 
     #[test]
+    fn recovery_snapshot_durably_replaces_an_existing_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "flow-like-recovery-replace-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let path = dir.join("state.json");
+
+        persist_recovery_snapshot(&path, br#"{"revision":1}"#).expect("initial snapshot");
+        persist_recovery_snapshot(&path, br#"{"revision":2}"#).expect("replacement snapshot");
+
+        assert_eq!(
+            std::fs::read(&path).expect("read snapshot"),
+            br#"{"revision":2}"#
+        );
+        assert_eq!(
+            std::fs::read_dir(&dir)
+                .expect("read snapshot directory")
+                .count(),
+            1,
+            "a committed replacement must not leave sibling temp files"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn draft_snapshot_persist_and_hydrate_roundtrip() {
         let board = empty_board("snapshot-board");
         let catalog = typed_catalog();
@@ -5229,8 +6201,20 @@ mod tests {
     /// catalog embedded in the system prompt plus the detailed schema pages).
     fn documented_component_types() -> Vec<String> {
         let mut types = Vec::new();
+        // Only the "Quick Reference" section lists component TYPES. Later sections use the same
+        // bullet shape for component PROPS (voiceInput's `- \`value\` - binding path …`), which
+        // must not be mistaken for a type.
+        let mut in_type_list = false;
         for line in flow_like::a2ui::copilot::COMPONENT_CATALOG.lines() {
-            if let Some(rest) = line.trim().strip_prefix("- `")
+            let trimmed = line.trim();
+            if let Some(heading) = trimmed.strip_prefix("## ") {
+                in_type_list = heading.starts_with("Quick Reference");
+                continue;
+            }
+            if !in_type_list {
+                continue;
+            }
+            if let Some(rest) = trimmed.strip_prefix("- `")
                 && let Some(end) = rest.find('`')
             {
                 types.push(rest[..end].to_string());
@@ -5276,7 +6260,17 @@ mod tests {
                 component.insert(required.to_string(), representative_prop_value(required));
             }
 
-            let components = json!([{ "id": "root", "component": Value::Object(component) }]);
+            // Reference-typed required props (e.g. overlay's baseComponentId) use the generic
+            // "x" representative value; give them a real component to resolve against.
+            let mut referenced = serde_json::Map::new();
+            referenced.insert("type".to_string(), json!("text"));
+            for required in required_props_for_type("text") {
+                referenced.insert(required.to_string(), representative_prop_value(required));
+            }
+            let components = json!([
+                { "id": "root", "component": Value::Object(component) },
+                { "id": "x", "component": Value::Object(referenced) },
+            ]);
             let (_, errors) = validate_ui_components("root", &json!({}), &components);
             assert!(
                 errors.is_empty(),
@@ -5316,5 +6310,169 @@ mod tests {
                 "'{comp_type}' rejects props it declares as known: {unknown_prop_errors:?}"
             );
         }
+    }
+
+    #[test]
+    fn emit_ui_accepts_named_event_handlers_and_preserves_legacy_actions() {
+        let components = json!([{
+            "id": "root",
+            "component": {
+                "type": "button",
+                "label": { "literalString": "Open" },
+                "actions": [
+                    { "name": "workflow_event", "context": { "nodeId": "legacy" } }
+                ],
+                "eventHandlers": {
+                    "click": [
+                        { "name": "workflow_event", "context": { "nodeId": "new" } },
+                        { "name": "navigate_page", "context": { "route": "/details" } }
+                    ],
+                    "disabled": []
+                }
+            }
+        }]);
+
+        let (validated, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors.is_empty(),
+            "unexpected validation errors: {errors:?}"
+        );
+        assert_eq!(
+            validated[0]["component"]["actions"],
+            components[0]["component"]["actions"]
+        );
+        assert_eq!(
+            validated[0]["component"]["eventHandlers"],
+            components[0]["component"]["eventHandlers"]
+        );
+    }
+
+    #[test]
+    fn emit_ui_rejects_action_names_that_are_not_built_in() {
+        // The reported failure: the model names the action after the board event node (or after a
+        // widget action id) instead of using the fixed `workflow_event`/`widget_event` verbs.
+        // ActionHandler.tsx drops those, so the button renders and silently does nothing.
+        let components = json!([{
+            "id": "root",
+            "component": {
+                "type": "button",
+                "label": { "literalString": "Approve" },
+                "actions": [{ "name": "approve_request", "context": {} }],
+                "eventHandlers": {
+                    "click": [{ "name": "custom:refresh_dashboard", "context": {} }]
+                }
+            }
+        }]);
+
+        let (_, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("actions[0].name 'approve_request'")),
+            "legacy action with an invented name must be rejected: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("eventHandlers.click[0].name 'custom:refresh_dashboard'")
+            }),
+            "named handler with an invented name must be rejected: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("workflow_event") && error.contains("widget_event")),
+            "the rejection must teach the correct contract: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn emit_ui_rejects_routing_actions_without_their_target_id() {
+        let components = json!([{
+            "id": "root",
+            "component": {
+                "type": "button",
+                "label": { "literalString": "Run" },
+                "actions": [{ "name": "workflow_event", "context": {} }],
+                "eventHandlers": {
+                    "click": [{ "name": "widget_event", "context": { "actionId": "  " } }]
+                }
+            }
+        }]);
+
+        let (_, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("actions[0]") && error.contains("'nodeId'")),
+            "workflow_event without nodeId must be rejected: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("eventHandlers.click[0]")
+                    && error.contains("'actionId'")),
+            "widget_event without actionId must be rejected: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn emit_ui_accepts_the_widget_action_contract() {
+        let components = json!([{
+            "id": "root",
+            "component": {
+                "type": "button",
+                "label": { "literalString": "Approve" },
+                "actions": [
+                    { "name": "widget_event", "context": { "actionId": "approve" } }
+                ]
+            }
+        }]);
+
+        let (_, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors.is_empty(),
+            "the documented widget action shape must validate: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn emit_ui_rejects_malformed_named_event_handlers() {
+        let components = json!([{
+            "id": "root",
+            "component": {
+                "type": "button",
+                "label": { "literalString": "Open" },
+                "eventHandlers": {
+                    "": [],
+                    "open": { "name": "workflow_event", "context": {} },
+                    "move": [
+                        { "name": "", "context": {} },
+                        { "name": "workflow_event" }
+                    ]
+                }
+            }
+        }]);
+
+        let (_, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("eventHandlers keys must be non-empty"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("eventHandlers.open must be an array"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("eventHandlers.move[0].name"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("eventHandlers.move[1].context"))
+        );
     }
 }

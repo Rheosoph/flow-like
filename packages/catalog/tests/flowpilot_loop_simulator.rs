@@ -58,29 +58,14 @@ static FIXTURE: LazyLock<CatalogFixture> = LazyLock::new(|| {
 });
 
 fn empty_board(id: &str) -> Board {
-    Board {
-        id: id.to_string(),
-        name: format!("Simulator Board {id}"),
-        description: String::new(),
-        nodes: HashMap::new(),
-        variables: HashMap::new(),
-        comments: HashMap::new(),
-        viewport: (0.0, 0.0, 1.0),
-        version: (0, 0, 1),
-        stage: ExecutionStage::Dev,
-        log_level: LogLevel::Info,
-        execution_mode: ExecutionMode::Hybrid,
-        refs: HashMap::new(),
-        layers: HashMap::new(),
-        page_ids: Vec::new(),
-        hash: None,
-        created_at: SystemTime::UNIX_EPOCH,
-        updated_at: SystemTime::UNIX_EPOCH,
-        parent: None,
-        board_dir: Path::default(),
-        logic_nodes: HashMap::new(),
-        app_state: None,
-    }
+    let mut board = Board::new_detached(Some(id.to_string()), Path::default());
+    board.name = format!("Simulator Board {id}");
+    board.description.clear();
+    board.viewport = (0.0, 0.0, 1.0);
+    board.hash = None;
+    board.created_at = SystemTime::UNIX_EPOCH;
+    board.updated_at = SystemTime::UNIX_EPOCH;
+    board
 }
 
 /// A state whose node registry carries the real catalog logic, so apply-side
@@ -99,6 +84,20 @@ async fn catalog_state() -> Arc<FlowLikeState> {
 /// a mutable local and a literal return, an approval-style branch in the event,
 /// and a `string_format` call whose `{sender}` placeholder exercises dynamic
 /// on_update pins end to end.
+/// Segment 1 of the staged plan whose full shape is [`GOLDEN_SCRIPT`]. Every node it adds is fully
+/// wired, which is what makes a segment committable on its own rather than a stub.
+const STAGED_SEGMENT_ONE: &str = r#"function buildReply(subject: string): (reply: string) {
+    let reply = stringTrim({ string: subject })
+    return reply
+}
+
+eventsSimple() {
+    const summary = stringFormat({ formatString: "Support mail from {sender}", sender: "customer@example.com" })
+    const replyResult = buildReply({ subject: summary.formattedString })
+    logInfo({ message: replyResult.reply })
+}
+"#;
+
 const GOLDEN_SCRIPT: &str = r#"function buildReply(subject: string): (reply: string) {
     let reply = stringTrim({ string: subject })
     if (stringContains({ string: subject, substring: "URGENT" }).contains) {
@@ -137,6 +136,11 @@ fn simple_log_script(first: &str, second: &str) -> String {
 /// revisions for failure scenarios.
 enum Step {
     Write {
+        source: String,
+    },
+    /// Grow the SAME retained draft with the next planned segment appended. This is the staged
+    /// scope-plan lifecycle: one draft id, one commit, several segments.
+    GrowWith {
         source: String,
     },
     Patch {
@@ -216,9 +220,13 @@ impl<'a> ScriptedAgent<'a> {
     }
 
     fn write(&mut self, source: String) {
+        self.write_with_replace(source, false);
+    }
+
+    fn write_with_replace(&mut self, source: String, replace_existing: bool) {
         let args = WriteFlowScriptArgs {
             draft_id: self.draft_id.clone(),
-            replace_existing: false,
+            replace_existing,
             mode: FlowIrDraftMode::Additive,
             source,
             allow_scope_reduction: false,
@@ -326,6 +334,7 @@ impl<'a> ScriptedAgent<'a> {
         for step in steps {
             match step {
                 Step::Write { source } => self.write(source),
+                Step::GrowWith { source } => self.write_with_replace(source, true),
                 Step::Patch { old, new } => self.patch_at(self.revision, old, new),
                 Step::PatchAt { revision, old, new } => self.patch_at(revision, old, new),
                 Step::Check => self.check(),
@@ -432,15 +441,15 @@ async fn golden_path() {
 /// through member-access chains. The write must check valid, the queued batch
 /// must feed every declared boundary return pin, and the applied board must
 /// lower back to a no-op — protecting multi-value return wiring end to end.
-const MULTI_OUTPUT_RETURN_SCRIPT: &str = r#"function getOwnerIdentity(): (ownerSub: string, ownerKey: string, hasUser: bool) {
+const MULTI_OUTPUT_RETURN_SCRIPT: &str = r#"function getOwnerIdentity(salt: string): (ownerSub: string, ownerKey: string, hasUser: bool, echoedSalt: string) {
     const user = utilsUserGetExecutingUser()
     const asText = valToString({ value: user.userContext.sub, pretty: false })
     const hashed = utilsHashSha256({ input: asText.string })
-    return hashed.hash, asText.string, user.hasUser
+    return hashed.hash, asText.string, user.hasUser, salt
 }
 
 eventsSimple() {
-    const identity = getOwnerIdentity()
+    const identity = getOwnerIdentity({ salt: "seed" })
     if (identity.hasUser) {
         logInfo({ message: identity.ownerKey })
     } else {
@@ -502,7 +511,10 @@ async fn multi_output_return_golden_path() {
         .values()
         .find(|layer| layer.name == "getOwnerIdentity")
         .expect("function layer exists on the applied board");
-    for return_pin in ["ownerSub", "ownerKey", "hasUser"] {
+    // `echoedSalt` returns a bare function PARAMETER. That value both enters and leaves the same
+    // layer, so it must route through a spliced `reroute` inside the layer — a direct boundary
+    // self-edge is rejected by `connect_pins` and rolls the whole apply batch back.
+    for return_pin in ["ownerSub", "ownerKey", "hasUser", "echoedSalt"] {
         let boundary = layer
             .pins
             .values()
@@ -515,6 +527,56 @@ async fn multi_output_return_golden_path() {
     }
 
     assert_noop_roundtrip(&board, "multi_output_return_golden_path");
+}
+
+/// Commit runs the required check inline: write → commit with no explicit check queues the
+/// exact derived batch, saving the model round that used to bounce with
+/// FLOWSCRIPT_CHECK_REQUIRED. An invalid source still returns validation_errors and queues
+/// nothing.
+#[test]
+fn commit_runs_check_inline() {
+    let fixture = &*FIXTURE;
+    let store = FlowIrDraftStore::new();
+    let mut agent = ScriptedAgent::new(
+        &store,
+        empty_board("sim-inline-check"),
+        &fixture.metadata,
+        "inline-check-draft",
+    );
+    agent.run(vec![
+        Step::Write {
+            source: simple_log_script("triage the mail", "notify the reviewer"),
+        },
+        Step::ExpectStatus {
+            status: "draft_started",
+            code: None,
+        },
+        Step::Commit,
+        Step::ExpectStatus {
+            status: "queued",
+            code: None,
+        },
+    ]);
+    assert!(!agent.last().commands.is_empty());
+
+    let mut invalid = ScriptedAgent::new(
+        &store,
+        empty_board("sim-inline-check-invalid"),
+        &fixture.metadata,
+        "inline-check-invalid",
+    );
+    invalid.run(vec![
+        Step::Write {
+            source: "eventsSimple() {\n    definitelyNotACatalogNode({ value: 1 })\n}\n"
+                .to_string(),
+        },
+        Step::Commit,
+        Step::ExpectStatus {
+            status: "validation_errors",
+            code: None,
+        },
+    ]);
+    assert!(invalid.last().commands.is_empty());
 }
 
 /// A source with an unknown node name yields actionable structured
@@ -1041,6 +1103,112 @@ fn concurrent_same_draft() {
     assert_eq!(final_check.source.as_deref(), Some(source.as_str()));
 }
 
+/// A whole-document rewrite that renames an event and drops its anchor must claim the live entry
+/// node (which already drives the body) instead of minting a duplicate. The duplicate stranded
+/// the old entry with its data edges (e.g. `history` feeding body nodes), which re-reconciled to
+/// a spurious ConnectPins on every readback — the exact non-idempotent board the simple-agent
+/// e2e produced.
+#[tokio::test]
+async fn unanchored_event_rewrite_claims_live_entry() {
+    let fixture = &*FIXTURE;
+    let state = catalog_state().await;
+    let mut board = empty_board("sim-event-rewrite");
+
+    let authored = "eventsChat chatEvent(history: History, localSession: Struct, globalSession: Struct, tools: string[], actions: Struct[], attachments: Struct[], user: User) {\n    logInfo({ message: valToString({ value: history, pretty: true }).string })\n}\n";
+    let applied = apply_flowscript_to_board(
+        &mut board,
+        authored,
+        &fixture.nodes,
+        state.clone(),
+        None,
+        false,
+    )
+    .await
+    .expect("authored chat event applies");
+    assert!(
+        applied.diagnostics.is_empty(),
+        "apply diagnostics: {:#?}",
+        applied.diagnostics
+    );
+    let chat_entries = board
+        .nodes
+        .values()
+        .filter(|node| node.name == "events_chat")
+        .count();
+    assert_eq!(chat_entries, 1, "one chat entry after the first apply");
+
+    // The rewrite: same body anchors, renamed event, anchor dropped.
+    let anchored = board_to_flowscript(
+        &board,
+        &RenderOptions {
+            anchors: true,
+            ..RenderOptions::default()
+        },
+    );
+    let rewritten = anchored
+        .lines()
+        .map(|line| {
+            if line.contains("eventsChat") && line.contains("//@n:") {
+                let without_anchor = line.split("//@n:").next().unwrap_or(line).trim_end();
+                without_anchor.replace("chatEvent", "researchAgent")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(
+        rewritten, anchored,
+        "the rewrite must actually change the event line"
+    );
+
+    let result = reconcile_text_with_catalog(&board, &rewritten, &FIXTURE.metadata);
+    assert!(
+        result.diagnostics.is_empty(),
+        "rewrite reconcile diagnostics: {:#?}\nsource:\n{rewritten}",
+        result.diagnostics
+    );
+    let added_entries: Vec<_> = result
+        .commands
+        .iter()
+        .filter(|command| {
+            matches!(command, BoardCommand::AddNode { node_type, .. } if node_type == "events_chat")
+        })
+        .collect();
+    assert!(
+        added_entries.is_empty(),
+        "the rewrite must claim the live entry, not add a duplicate: {added_entries:#?}"
+    );
+
+    let applied_rewrite =
+        apply_board_commands_to_board(&mut board, result.commands, &fixture.nodes, state, None)
+            .await
+            .expect("rewrite commands apply");
+    assert!(
+        applied_rewrite.diagnostics.is_empty(),
+        "rewrite apply diagnostics: {:#?}",
+        applied_rewrite.diagnostics
+    );
+    let chat_entries_after = board
+        .nodes
+        .values()
+        .filter(|node| node.name == "events_chat")
+        .count();
+    assert_eq!(
+        chat_entries_after, 1,
+        "still exactly one chat entry after the rewrite"
+    );
+    assert!(
+        board
+            .nodes
+            .values()
+            .any(|node| node.name == "events_chat" && node.friendly_name == "researchAgent"),
+        "the claimed entry carries the authored name"
+    );
+
+    assert_noop_roundtrip(&board, "unanchored_event_rewrite_claims_live_entry");
+}
+
 /// Applying the golden program, lowering the applied board, and re-applying
 /// the lowered text must derive zero new commands — the idempotency contract
 /// that keeps FlowPilot from looping on its own successful output.
@@ -1090,6 +1258,94 @@ async fn idempotent_reapply() {
         reapplied.board_commands
     );
     assert!(reapplied.commands.is_empty());
+}
+
+/// The staged scope-plan lifecycle end to end: one draft id grows segment by segment and commits
+/// once. This is what makes the FIRST source write small enough to land inside the host's pre-draft
+/// checkpoint, without giving up the atomicity of a single apply.
+///
+/// Two properties matter and neither had end-to-end coverage before: each segment must validate on
+/// its own (so the run is never holding an uncommittable document), and growing a retained draft
+/// must never be mistaken for a scope regression.
+#[tokio::test]
+async fn staged_segments_grow_one_draft_into_a_single_commit() {
+    let fixture = &*FIXTURE;
+    let store = FlowIrDraftStore::new();
+    let mut agent = ScriptedAgent::new(
+        &store,
+        empty_board("sim-staged"),
+        &fixture.metadata,
+        "staged-draft",
+    );
+    agent.bind("Trim the incoming support mail subject, then log the reply and the reviewer approval notice.");
+
+    agent.run(vec![
+        Step::Write {
+            source: STAGED_SEGMENT_ONE.to_string(),
+        },
+        Step::ExpectStatus {
+            status: "draft_started",
+            code: None,
+        },
+        Step::Check,
+        Step::ExpectStatus {
+            status: "valid",
+            code: None,
+        },
+    ]);
+    let first_revision = agent.revision;
+
+    agent.run(vec![
+        Step::GrowWith {
+            source: GOLDEN_SCRIPT.to_string(),
+        },
+        Step::Check,
+        Step::ExpectStatus {
+            status: "valid",
+            code: None,
+        },
+    ]);
+    assert!(
+        agent.revision > first_revision,
+        "growing the draft advances the same revision chain instead of starting a new one"
+    );
+
+    agent.run(vec![
+        Step::Commit,
+        Step::ExpectStatus {
+            status: "queued",
+            code: None,
+        },
+    ]);
+    let queued = agent.last();
+    assert!(
+        queued.diagnostics.is_empty(),
+        "the staged commit must carry no blocking diagnostics: {queued:#?}"
+    );
+    let commands: Vec<BoardCommand> = queued.commands.clone();
+    assert!(!commands.is_empty(), "the staged commit queues real work");
+
+    let state = catalog_state().await;
+    let mut board = agent.board.clone();
+    apply_board_commands_to_board(&mut board, commands, &fixture.nodes, state, None)
+        .await
+        .expect("the staged batch applies");
+
+    let applied = board_to_flowscript(
+        &board,
+        &RenderOptions {
+            anchors: true,
+            ..RenderOptions::default()
+        },
+    );
+    assert!(
+        applied.contains("approvalNotice"),
+        "the final segment's helper reached the board: {applied}"
+    );
+    assert!(
+        applied.contains("buildReply"),
+        "the first segment survived the growth: {applied}"
+    );
 }
 
 // ── Real-agent skeleton (opt-in only, never wired up implicitly) ───────

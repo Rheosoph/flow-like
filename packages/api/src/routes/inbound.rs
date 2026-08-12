@@ -101,7 +101,7 @@ pub fn mcp_routes() -> Router<AppState> {
         .route("/{slug_or_id}/{*path}", any(inbound_mcp))
 }
 
-#[tracing::instrument(name = "INBOUND /r/{slug}", skip(state, headers, body))]
+#[tracing::instrument(name = "INBOUND /r/{slug}", skip(state, raw_query, headers, body))]
 async fn inbound_rest_root(
     State(state): State<AppState>,
     Path(slug_or_id): Path<String>,
@@ -126,7 +126,10 @@ async fn inbound_rest_root(
     }
 }
 
-#[tracing::instrument(name = "INBOUND /r/{slug}/{path}", skip(state, headers, body))]
+#[tracing::instrument(
+    name = "INBOUND /r/{slug}/{path}",
+    skip(state, path, raw_query, headers, body)
+)]
 async fn inbound_rest(
     State(state): State<AppState>,
     Path((slug_or_id, path)): Path<(String, String)>,
@@ -151,7 +154,7 @@ async fn inbound_rest(
     }
 }
 
-#[tracing::instrument(name = "INBOUND /m/{slug}", skip(state, headers, body))]
+#[tracing::instrument(name = "INBOUND /m/{slug}", skip(state, raw_query, headers, body))]
 async fn inbound_mcp_root(
     State(state): State<AppState>,
     Path(slug_or_id): Path<String>,
@@ -176,7 +179,10 @@ async fn inbound_mcp_root(
     }
 }
 
-#[tracing::instrument(name = "INBOUND /m/{slug}/{path}", skip(state, headers, body))]
+#[tracing::instrument(
+    name = "INBOUND /m/{slug}/{path}",
+    skip(state, path, raw_query, headers, body)
+)]
 async fn inbound_mcp(
     State(state): State<AppState>,
     Path((slug_or_id, path)): Path<(String, String)>,
@@ -303,7 +309,7 @@ pub(crate) async fn dispatch_rest_for_event(
         return Err(ApiError::not_found("REST event not found or inactive"));
     }
 
-    if let Err(response) = enforce_exposure(&event_row, is_public_surface) {
+    if let Err(response) = enforce_exposure(event_row, is_public_surface) {
         return Ok(response);
     }
 
@@ -483,7 +489,7 @@ pub(crate) async fn dispatch_mcp_for_event(
         return Err(ApiError::not_found("MCP event not found or inactive"));
     }
 
-    if let Err(response) = enforce_exposure(&event_row, is_public_surface) {
+    if let Err(response) = enforce_exposure(event_row, is_public_surface) {
         return Ok(response);
     }
 
@@ -1261,10 +1267,10 @@ const JWKS_TTL: Duration = Duration::from_secs(300);
 async fn get_jwks(jwks_url: &str) -> Result<jsonwebtoken::jwk::JwkSet, ApiError> {
     {
         let cache = JWKS_CACHE.lock().await;
-        if let Some((fetched_at, jwks)) = cache.get(jwks_url) {
-            if fetched_at.elapsed() < JWKS_TTL {
-                return Ok(jwks.clone());
-            }
+        if let Some((fetched_at, jwks)) = cache.get(jwks_url)
+            && fetched_at.elapsed() < JWKS_TTL
+        {
+            return Ok(jwks.clone());
         }
     }
     let resp = reqwest::Client::new()
@@ -1713,7 +1719,7 @@ async fn dispatch_event_collect(
 ) -> Result<Value, ApiError> {
     if !is_jwt_configured() {
         return Err(ApiError::internal_error(flow_like_types::anyhow!(
-            "Execution JWT signing not configured (missing EXECUTION_KEY/EXECUTION_PUB env vars)"
+            "Execution JWT signing not configured (missing BACKEND_KEY/BACKEND_PUB)"
         )));
     }
 
@@ -1842,7 +1848,13 @@ async fn dispatch_event_collect(
         execution_mode: Some(flow_like::flow::execution::ExecutionMode::Event),
         runtime_variables: None,
         user_context: None,
-        profile: sink.as_ref().and_then(|sink| sink.profile_json.clone()),
+        profile: {
+            let mut profile = sink.as_ref().and_then(|sink| sink.profile_json.clone());
+            if let Some(profile_json) = profile.as_mut() {
+                crate::execution::hydrate_profile_custom_bit_secrets(state, profile_json).await;
+            }
+            profile
+        },
         wasm_packages,
     };
 
@@ -1887,11 +1899,13 @@ async fn dispatch_event_collect(
                 .dispatch_streaming(request)
                 .await
                 .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
-            Ok(
-                collect_generic_result_bytes(byte_stream, run_id, db, INBOUND_RESULT_TIMEOUT)
-                    .await
-                    .unwrap_or(Value::Null),
-            )
+            collect_generic_result_bytes(byte_stream, run_id, db, INBOUND_RESULT_TIMEOUT)
+                .await
+                .ok_or_else(|| {
+                    ApiError::gateway_timeout(
+                        "flow did not return a result within the allotted time",
+                    )
+                })
         }
         _ => {
             let (_dispatch_response, executor_response) = state
@@ -1899,11 +1913,13 @@ async fn dispatch_event_collect(
                 .dispatch_http_sse(request)
                 .await
                 .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
-            Ok(
-                collect_generic_result(executor_response, run_id, db, INBOUND_RESULT_TIMEOUT)
-                    .await
-                    .unwrap_or(Value::Null),
-            )
+            collect_generic_result(executor_response, run_id, db, INBOUND_RESULT_TIMEOUT)
+                .await
+                .ok_or_else(|| {
+                    ApiError::gateway_timeout(
+                        "flow did not return a result within the allotted time",
+                    )
+                })
         }
     }
 }
@@ -2415,10 +2431,10 @@ async fn mcp_handle_post(
         }
 
         if method_name == "notifications/initialized" {
-            if let Some(session_id) = assigned_session_id.as_ref() {
-                if let Some(session) = MCP_SESSIONS.lock().await.get_mut(session_id) {
-                    session.initialized = true;
-                }
+            if let Some(session_id) = assigned_session_id.as_ref()
+                && let Some(session) = MCP_SESSIONS.lock().await.get_mut(session_id)
+            {
+                session.initialized = true;
             }
             continue;
         }
@@ -2438,25 +2454,23 @@ async fn mcp_handle_post(
         ));
     }
 
-    if is_legacy_sse_post {
-        if let Some(session_id) = assigned_session_id.as_ref() {
-            let tx = {
-                let sessions = MCP_SESSIONS.lock().await;
-                sessions
-                    .get(session_id)
-                    .map(|session| session.sse_tx.clone())
-            };
-            if let Some(tx) = tx {
-                for response in &responses {
-                    let data = serde_json::to_string(response).unwrap_or_else(|_| "{}".to_string());
-                    let _ = tx.send(data);
-                }
-                return Ok(mcp_empty_response(
-                    StatusCode::ACCEPTED,
-                    assigned_session_id,
-                    headers,
-                ));
+    if is_legacy_sse_post && let Some(session_id) = assigned_session_id.as_ref() {
+        let tx = {
+            let sessions = MCP_SESSIONS.lock().await;
+            sessions
+                .get(session_id)
+                .map(|session| session.sse_tx.clone())
+        };
+        if let Some(tx) = tx {
+            for response in &responses {
+                let data = serde_json::to_string(response).unwrap_or_else(|_| "{}".to_string());
+                let _ = tx.send(data);
             }
+            return Ok(mcp_empty_response(
+                StatusCode::ACCEPTED,
+                assigned_session_id,
+                headers,
+            ));
         }
     }
 
@@ -3316,10 +3330,10 @@ fn mcp_json_response(
 ) -> Response {
     let mut resp = Json(body).into_response();
     *resp.status_mut() = status;
-    if let Some(session_id) = session_id {
-        if let Ok(value) = axum::http::HeaderValue::from_str(&session_id) {
-            resp.headers_mut().insert("mcp-session-id", value);
-        }
+    if let Some(session_id) = session_id
+        && let Ok(value) = axum::http::HeaderValue::from_str(&session_id)
+    {
+        resp.headers_mut().insert("mcp-session-id", value);
     }
     apply_mcp_cors(resp.headers_mut(), request_headers);
     resp
@@ -3349,10 +3363,10 @@ fn mcp_sse_response(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-cache, no-transform"),
     );
-    if let Some(session_id) = session_id {
-        if let Ok(value) = axum::http::HeaderValue::from_str(&session_id) {
-            resp.headers_mut().insert("mcp-session-id", value);
-        }
+    if let Some(session_id) = session_id
+        && let Ok(value) = axum::http::HeaderValue::from_str(&session_id)
+    {
+        resp.headers_mut().insert("mcp-session-id", value);
     }
     apply_mcp_cors(resp.headers_mut(), request_headers);
     resp
@@ -3365,10 +3379,10 @@ fn mcp_empty_response(
 ) -> Response {
     let mut resp = Response::new(axum::body::Body::empty());
     *resp.status_mut() = status;
-    if let Some(session_id) = session_id {
-        if let Ok(value) = axum::http::HeaderValue::from_str(&session_id) {
-            resp.headers_mut().insert("mcp-session-id", value);
-        }
+    if let Some(session_id) = session_id
+        && let Ok(value) = axum::http::HeaderValue::from_str(&session_id)
+    {
+        resp.headers_mut().insert("mcp-session-id", value);
     }
     apply_mcp_cors(resp.headers_mut(), request_headers);
     resp

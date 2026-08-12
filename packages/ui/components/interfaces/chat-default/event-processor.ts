@@ -2,11 +2,12 @@ import { createId } from "@paralleldrive/cuid2";
 import { Response } from "../../../lib/llm/response";
 import type { IInteractionRequest } from "../../../lib/schema/interaction";
 import {
-	IContentType,
 	type IContent,
+	IContentType,
 	IRole,
 } from "../../../lib/schema/llm/history";
 import type { IResponseMessage } from "../../../lib/schema/llm/response";
+import { handleWidgetQueryMessage } from "../../a2ui/widget-query-handler";
 import type {
 	IAttachment,
 	IChatUsageStat,
@@ -375,6 +376,9 @@ export function processChatEvents(
 
 	for (const ev of events) {
 		if (ev.event_type === "a2ui") {
+			if (handleWidgetQueryMessage(ev.payload)) {
+				continue;
+			}
 			if (attachA2UIUpdate(ev.payload as Record<string, unknown>)) {
 				shouldUpdate = true;
 			}

@@ -37,6 +37,8 @@ import {
 	useInvoke,
 	useQuery,
 	useQueryClient,
+	userDisplayName,
+	userInitials,
 } from "@flow-like/flow-like-ui";
 import { useDebounce } from "@uidotdev/usehooks";
 import { formatDistanceToNow } from "date-fns";
@@ -190,7 +192,7 @@ function PermissionDialog({
 					<DialogHeader>
 						<DialogTitle>Edit Permissions</DialogTitle>
 						<DialogDescription>
-							{user.name ?? user.preferred_username ?? user.email ?? user.id}
+							{userDisplayName(user, user.id)}
 						</DialogDescription>
 					</DialogHeader>
 					<div className="grid grid-cols-2 gap-3 py-2">
@@ -234,9 +236,8 @@ function UserRow({
 }) {
 	const [statusLoading, setStatusLoading] = useState(false);
 
-	const displayName =
-		user.name ?? user.preferred_username ?? user.username ?? "—";
-	const initials = displayName.slice(0, 2).toUpperCase();
+	const displayName = userDisplayName(user, "—");
+	const initials = userInitials(user, "—");
 	const relativeDate = user.created_at
 		? formatDistanceToNow(new Date(user.created_at), { addSuffix: true })
 		: "—";

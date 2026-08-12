@@ -1,4 +1,8 @@
-import type { IApiState } from "@flow-like/flow-like-ui";
+import {
+	type IApiState,
+	getActiveTraceContext,
+	getTelemetryTraceparent,
+} from "@flow-like/flow-like-ui";
 import { apiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import type { IProfile } from "@flow-like/flow-like-ui/types";
@@ -7,6 +11,21 @@ import {
 	ensureProtectedAppRouteAuth,
 	requestSilentRenew,
 } from "./api-utils";
+
+/**
+ * W3C trace propagation for outgoing API calls. Empty when no trace is active
+ * or the active trace was not sampled, so tracing stays free when it is off.
+ */
+function traceHeaders(): Record<string, string> {
+	try {
+		const context = getActiveTraceContext();
+		if (!context?.sampled) return {};
+		const traceparent = getTelemetryTraceparent(context);
+		return traceparent ? { traceparent } : {};
+	} catch {
+		return {};
+	}
+}
 
 export class WebApiState implements IApiState {
 	constructor(private readonly backend: WebBackendRef) {}
@@ -123,6 +142,7 @@ export class WebApiState implements IApiState {
 			...options,
 			headers: {
 				...this.getHeaders(),
+				...traceHeaders(),
 				...options?.headers,
 			},
 		});
@@ -134,6 +154,8 @@ export class WebApiState implements IApiState {
 			const errorText = await response.text();
 			throw apiResponseError(response, errorText, path);
 		}
+
+		if (response.status === 204) return undefined as T;
 
 		return response.json();
 	}

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	type WorkflowBoardLike,
+	buildWorkflowBoardResultEnvelope,
 	collectRunnableWorkflowEventEntries,
 	isRunnableWorkflowEventEntry,
 	shouldApplyFlowScriptWorkspace,
@@ -38,6 +39,64 @@ function targetNode(id: string) {
 }
 
 describe("FlowPilot workflow Event entries", () => {
+	test("host persistence evidence overrides a stale queued specialist message", () => {
+		const eventNodes = [
+			{
+				id: "load-entry",
+				board_id: "board-1",
+				name: "opsDashboardLoad",
+				node_type: "events_simple",
+				supported_event_types: ["quick_action"],
+				created_this_run: true,
+			},
+			{
+				id: "filter-entry",
+				board_id: "board-1",
+				name: "refreshDashboard",
+				node_type: "events_simple",
+				supported_event_types: ["quick_action"],
+				created_this_run: true,
+			},
+		];
+
+		const result = buildWorkflowBoardResultEnvelope({
+			specialistMessage:
+				"Queued 162 validated board changes, so canonical read-back is unavailable and nothing is persisted.",
+			appliedCommands: 162,
+			persistedReadbackVerified: true,
+			eventNodes,
+		});
+
+		expect(result).toMatchObject({
+			applied_commands: 162,
+			board_persisted: true,
+			persisted_readback_verified: true,
+			event_nodes: eventNodes,
+			event_registration_required: true,
+		});
+		expect(result.message).toContain("Applied and persisted 162");
+		expect(result.message).toContain("readback");
+		expect(result.message).toContain("registration is still outstanding");
+		expect(result.message).not.toContain("unavailable");
+		expect(result.specialist_message).toContain(
+			"canonical read-back is unavailable",
+		);
+	});
+
+	test("non-persisted board results preserve the specialist status", () => {
+		const result = buildWorkflowBoardResultEnvelope({
+			specialistMessage: "The FlowScript draft could not be applied.",
+			appliedCommands: 0,
+			persistedReadbackVerified: false,
+			eventNodes: [],
+		});
+
+		expect(result).toEqual({
+			message: "The FlowScript draft could not be applied.",
+			applied_commands: 0,
+		});
+	});
+
 	test("only queued workspaces can be applied", () => {
 		expect(shouldApplyFlowScriptWorkspace("queued")).toBe(true);
 		for (const status of [

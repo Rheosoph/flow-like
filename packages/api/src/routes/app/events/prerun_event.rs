@@ -114,7 +114,7 @@ fn build_response(
 )]
 #[tracing::instrument(
     name = "GET /apps/{app_id}/events/{event_id}/prerun",
-    skip(state, user)
+    skip(state, user, query)
 )]
 pub async fn prerun_event(
     State(state): State<AppState>,

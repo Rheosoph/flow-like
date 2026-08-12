@@ -91,7 +91,6 @@ axum = { version = "0.8.6", features = ["multipart"] }
 tower = "0.5.2"
 chrono-tz.workspace = true
 mimalloc.workspace = true
-sysinfo = "0.37.2"
 
 blake3.workspace = true
 tauri-plugin-flow-like-dexie-blob-offload.workspace = true
@@ -104,9 +103,9 @@ rayon = "1.11.0"
 tauri-plugin-remote-push = { git = "https://github.com/Rheosoph/tauri-plugin-remote-push.git", branch = "main" }
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
-tauri-plugin-single-instance = { version = "2.3.7", features = ["deep-link"] }
+tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
 tauri-plugin-window-state = "2.4.1"
-tauri-plugin-updater = "2.9.0"
+tauri-plugin-updater = "2.10.1"
 xcap = "0.8.1"
 arboard = "3.6.1"
 enigo = "0.6.1"

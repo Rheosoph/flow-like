@@ -2,7 +2,7 @@ use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
-    pin::PinType,
+    pin::{Pin, PinType},
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
@@ -19,6 +19,20 @@ impl FormatStringNode {
         FormatStringNode {
             regex: Regex::new(r"\{([a-zA-Z0-9_]+)\}").unwrap(),
         }
+    }
+
+    /// Return placeholder names once, in the order of their first appearance.
+    ///
+    /// Pins are keyed by placeholder name, not by placeholder occurrence. Keeping that contract
+    /// here prevents repeated tokens such as `{query}` from being interpreted as new pins on
+    /// subsequent `on_update` passes.
+    fn placeholders(&self, format_string: &str) -> Vec<String> {
+        let mut seen = HashSet::new();
+        self.regex
+            .captures_iter(format_string)
+            .filter_map(|capture| capture.get(1).map(|value| value.as_str().to_string()))
+            .filter(|placeholder| seen.insert(placeholder.clone()))
+            .collect()
     }
 }
 
@@ -59,13 +73,7 @@ impl NodeLogic for FormatStringNode {
         let format_string: String = context.evaluate_pin("format_string").await?;
         let mut formatted_string = format_string.clone();
 
-        let placeholders: std::collections::HashSet<String> = self
-            .regex
-            .captures_iter(&format_string)
-            .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
-            .collect();
-
-        for placeholder in placeholders {
+        for placeholder in self.placeholders(&format_string) {
             let value: flow_like_types::Value = context.evaluate_pin(&placeholder).await?;
             // If the JSON value is a string, use it directly; otherwise serialize it.
             let replacement = match value {
@@ -96,28 +104,38 @@ impl NodeLogic for FormatStringNode {
             .and_then(|json| json.as_str().map(ToOwned::to_owned))
             .unwrap_or_default();
 
-        let mut current_placeholders = pins
-            .iter()
-            .map(|p| (p.name.clone(), *p))
-            .collect::<HashMap<_, _>>();
+        // Group by name: earlier updates could have leaked several pins for one placeholder.
+        let mut current_placeholders: HashMap<String, Vec<&Pin>> = HashMap::new();
+        for pin in &pins {
+            current_placeholders
+                .entry(pin.name.clone())
+                .or_default()
+                .push(pin);
+        }
 
-        let mut all_placeholders = HashSet::new();
-        let mut missing_placeholders = HashSet::new();
+        let placeholders = self.placeholders(&format_string);
+        let mut missing_placeholders = Vec::new();
+        let mut stale_ids = Vec::new();
 
-        for cap in self.regex.captures_iter(&format_string) {
-            if let Some(placeholder) = cap.get(1).map(|m| m.as_str().to_string()) {
-                all_placeholders.insert(placeholder.clone());
-                if current_placeholders.remove(&placeholder).is_none() {
-                    missing_placeholders.insert(placeholder);
+        for placeholder in &placeholders {
+            match current_placeholders.remove(placeholder) {
+                Some(mut matched) => {
+                    matched.sort_by_key(|pin| (pin.index, pin.id.clone()));
+                    stale_ids.extend(matched.iter().skip(1).map(|pin| pin.id.clone()));
+                }
+                None => {
+                    missing_placeholders.push(placeholder.clone());
                 }
             }
         }
 
-        let ids_to_remove = current_placeholders
-            .values()
-            .map(|p| p.id.clone())
-            .collect::<Vec<_>>();
-        ids_to_remove.iter().for_each(|id| {
+        stale_ids.extend(
+            current_placeholders
+                .values()
+                .flatten()
+                .map(|pin| pin.id.clone()),
+        );
+        stale_ids.iter().for_each(|id| {
             node.pins.remove(id);
         });
 
@@ -125,7 +143,7 @@ impl NodeLogic for FormatStringNode {
             node.add_input_pin(&placeholder, &placeholder, "", VariableType::Generic);
         }
 
-        all_placeholders.iter().for_each(|placeholder| {
+        placeholders.iter().for_each(|placeholder| {
             let _ = node.match_type(placeholder, board, None, None);
         })
     }

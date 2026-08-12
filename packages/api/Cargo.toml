@@ -23,6 +23,7 @@ uuid.workspace = true
 flow-like-sinks.workspace = true
 flow-like-secrets.workspace = true
 flow-like-wasm = { workspace = true, features = ["openapi"] }
+tempfile = "3"
 serde_json.workspace = true
 base64.workspace = true
 jsonwebtoken.workspace = true
@@ -54,6 +55,7 @@ image.workspace = true
 webp.workspace = true
 ipnetwork = "0.21.1"
 ed25519-dalek = "2.2"
+sourcemap.workspace = true
 
 # ---- AWS dependencies ----
 aws-config = {workspace = true, optional=true}
@@ -122,7 +124,7 @@ lambda = ["aws-config", "aws-sdk-lambda", "aws_lambda_events"]
 sqs = ["aws-config", "aws-sdk-sqs"]
 # State store backends
 redis = ["dep:redis", "dep:tokio"]
-dynamodb = ["aws-config", "aws-sdk-dynamodb"]  # Uses FlowLikeStore (object_store) for large payloads
+dynamodb = ["aws-config", "aws-sdk-dynamodb", "dep:tokio"]  # Uses FlowLikeStore (object_store) for large payloads
 s3 = ["aws-config", "aws-sdk-s3"]
 sentry = ["dep:sentry"]
 full=[

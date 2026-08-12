@@ -6,7 +6,7 @@ use flow_like::flow::{
 };
 use flow_like_catalog_core::{CachedDBRefreshHook, CachedDBRefresher};
 use flow_like_storage::databases::vector::{
-    VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
+    buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
 };
 use flow_like_types::{Cacheable, Value, async_trait, json::json, sync::RwLock};
 use std::sync::Arc;
@@ -290,20 +290,30 @@ impl NodeLogic for OpenRemoteDatabaseNode {
             // the callback cannot retain itself through the cloned context.
             let mut refresh_context = context.clone();
             refresh_context.completion_callbacks = Arc::new(RwLock::new(Vec::new()));
-            let db_ref = cached.db.clone();
+            let completion_db = cached.clone();
+            let fallback_origin = CachedDB::write_origin(context);
             let completion_refresher = refresher.clone();
             context
-                .hook_completion_event(Arc::new(move |_run| {
-                    let db = db_ref.clone();
+                .hook_completion_event(Arc::new(move |run| {
+                    let db = completion_db.clone();
+                    let fallback_origin = fallback_origin.clone();
                     let refresher = completion_refresher.clone();
                     let context = refresh_context.clone();
                     Box::pin(async move {
-                        refresher.refresh(&context).await?;
-                        let mut guard = db.write().await;
-                        if guard.is_dirty() {
-                            guard.flush().await?;
+                        if db.has_buffered_writes().await
+                            && let Err(error) = refresher.refresh(&context).await
+                        {
+                            db.log_pending_write_error(
+                                run,
+                                &fallback_origin,
+                                &format!(
+                                    "Database write failed before completion flush: buffered rows were not persisted because credentials could not be refreshed: {error:#}"
+                                ),
+                            )
+                            .await;
+                            return Err(error);
                         }
-                        Ok(())
+                        db.flush_on_completion(run, &fallback_origin).await
                     })
                 }))
                 .await;

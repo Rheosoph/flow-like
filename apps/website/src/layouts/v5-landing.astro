@@ -1,0 +1,165 @@
+---
+import "@flow-like/flow-like-ui/global.css";
+import "../styles/website-base.css";
+import { Header } from "../components/header";
+
+import V5Hero from "../sections/v5-hero.astro";
+import V5Apps from "../sections/v5-apps.astro";
+import V5Platform from "../sections/v5-platform.astro";
+import V5Flowpilot from "../sections/v5-flowpilot.astro";
+import V5Control from "../sections/v5-control.astro";
+import NotesFooterV4 from "../sections/notes-footer-v4.astro";
+
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const localized = translations[lang] as Record<string, string>;
+  const english = translations.en as Record<string, string>;
+  return localized?.[key] ?? english[key] ?? key;
+};
+
+const site = "https://flow-like.com";
+const langPaths: Record<string, string> = {
+  en: "", de: "/de", es: "/es", fr: "/fr", zh: "/zh",
+  ja: "/ja", ko: "/ko", pt: "/pt", it: "/it", nl: "/nl", sv: "/sv",
+};
+const ogLocales: Record<string, string> = {
+  en: "en_US", de: "de_DE", es: "es_ES", fr: "fr_FR", zh: "zh_CN",
+  ja: "ja_JP", ko: "ko_KR", pt: "pt_PT", it: "it_IT", nl: "nl_NL", sv: "sv_SE",
+};
+
+const path = langPaths[lang] ?? "";
+const canonical = `${site}${path}`;
+const ogLocale = ogLocales[lang] ?? "en_US";
+
+const title = t("v5.meta.title");
+const description = t("v5.meta.description");
+const keywords = t("v5.meta.keywords");
+const ogAlt = t("v5.meta.ogAlt");
+
+const github = "https://github.com/Rheosoph/flow-like";
+const docs = "https://docs.flow-like.com";
+const download = `${github}/releases`;
+const ogImage = `${site}/og.png`;
+
+const alternates: [string, string][] = [
+  ["en", ""], ["de", "/de"], ["es", "/es"], ["fr", "/fr"], ["zh", "/zh"],
+  ["ja", "/ja"], ["ko", "/ko"], ["pt", "/pt"], ["it", "/it"], ["nl", "/nl"], ["sv", "/sv"],
+];
+
+const organizationLd = {
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  name: "Rheosoph GmbH",
+  url: site,
+  logo: `${site}/favicon.svg`,
+  sameAs: [github, docs],
+};
+const softwareLd = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "Flow-Like",
+  applicationCategory: "BusinessApplication",
+  applicationSubCategory: "Data, AI and workflow operating system",
+  operatingSystem: "macOS, Windows, Linux",
+  url: site,
+  downloadUrl: download,
+  image: ogImage,
+  description,
+  license: `${github}/blob/main/LICENSE`,
+  offers: { "@type": "Offer", price: "0", priceCurrency: "EUR", category: "Individual" },
+};
+const websiteLd = {
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  name: "Flow-Like",
+  url: site,
+  description,
+  inLanguage: lang,
+  publisher: { "@type": "Organization", name: "Rheosoph GmbH" },
+};
+---
+
+<!doctype html>
+<html lang={lang} class="scroll-smooth light" style="color-scheme: light;">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="keywords" content={keywords} />
+    <meta name="application-name" content="Flow-Like" />
+    <meta name="apple-mobile-web-app-title" content="Flow-Like" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="color-scheme" content="light" />
+    <meta name="format-detection" content="telephone=no, address=no, email=no, url=no" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
+    <meta name="generator" content={Astro.generator} />
+    <link rel="canonical" href={canonical} />
+    {alternates.map(([language, altPath]) => <link rel="alternate" hreflang={language} href={`${site}${altPath}`} />)}
+    <link rel="alternate" hreflang="x-default" href={site} />
+    <link rel="alternate" type="application/rss+xml" title="Flow-Like Blog" href="/rss.xml" />
+
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <link rel="mask-icon" href="/safari-pinned-tab.svg" color="#ef5b42" />
+    <meta name="msapplication-TileColor" content="#ef5b42" />
+    <meta name="theme-color" content="#ffffff" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Flow-Like" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:alt" content={ogAlt} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:locale" content={ogLocale} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
+
+    <link rel="preconnect" href="https://docs.flow-like.com" crossorigin />
+    <link rel="preconnect" href="https://api.github.com" crossorigin />
+    <script type="application/ld+json" is:inline set:html={JSON.stringify(organizationLd)} />
+    <script type="application/ld+json" is:inline set:html={JSON.stringify(softwareLd)} />
+    <script type="application/ld+json" is:inline set:html={JSON.stringify(websiteLd)} />
+    <style is:global>
+      body {
+        background-image: radial-gradient(color-mix(in srgb, var(--muted) 18%, transparent) 1px, transparent 1px) !important;
+        background-size: 18px 18px !important;
+        background-attachment: scroll !important;
+      }
+      section { scroll-margin-top: 5rem; }
+      @media (hover: none) and (pointer: coarse) {
+        html { scroll-behavior: auto !important; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html { scroll-behavior: auto !important; }
+      }
+    </style>
+  </head>
+  <body class="bg-background text-foreground antialiased selection:bg-primary/25 selection:text-foreground">
+    <a href="#content" class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-background focus:px-4 focus:py-2 focus:text-sm focus:shadow-xl">Skip to content</a>
+    <Header client:only="react" />
+    <main id="content" class="w-full max-w-full overflow-x-clip">
+      <V5Hero lang={lang} />
+      <V5Apps lang={lang} />
+      <V5Platform lang={lang} />
+      <V5Flowpilot lang={lang} />
+      <V5Control lang={lang} />
+    </main>
+    <NotesFooterV4 lang={lang} />
+  </body>
+</html>

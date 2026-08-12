@@ -139,6 +139,139 @@ fn rejects_missing_arg_on_valued_decorator() {
 }
 
 #[test]
+fn roundtrip_bare_function_cache_decorator() {
+    let text = "@cache\nfunction lookup(key: string): (value: string) {\n    return key\n}\n";
+    let ast = parse(text).expect("bare cache decorator should parse");
+    let cache = ast.functions[0]
+        .cache
+        .as_ref()
+        .expect("bare decorator should enable caching");
+    assert_eq!(cache.namespace, "global");
+    assert_eq!(cache.ttl_seconds, Some(300));
+    assert_eq!(cache.scope, flow_like_ast::FunctionCacheScope::App);
+    assert_eq!(render(&ast, &RenderOptions::default()), text);
+}
+
+#[test]
+fn empty_function_cache_settings_use_and_render_as_semantic_defaults() {
+    let ast =
+        parse("@cache({})\nfunction lookup() {\n}\n").expect("empty cache settings should parse");
+    assert_eq!(
+        ast.functions[0].cache,
+        Some(flow_like_ast::FunctionCache::default())
+    );
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "@cache\nfunction lookup() {\n}\n"
+    );
+}
+
+#[test]
+fn function_cache_fields_parse_in_any_order_and_render_canonically() {
+    use flow_like_ast::FunctionCacheScope;
+
+    let source = "@cache({ scope: \"user\", ttlSeconds: 3600, namespace: \"pricing\" })\nfunction quote() {\n}\n";
+    let expected = "@cache({ namespace: \"pricing\", ttlSeconds: 3600, scope: \"user\" })\nfunction quote() {\n}\n";
+    let ast = parse(source).expect("structured cache decorator should parse");
+    let cache = ast.functions[0]
+        .cache
+        .as_ref()
+        .expect("function should carry cache settings");
+    assert_eq!(cache.namespace, "pricing");
+    assert_eq!(cache.ttl_seconds, Some(3600));
+    assert_eq!(cache.scope, FunctionCacheScope::User);
+    assert_eq!(render(&ast, &RenderOptions::default()), expected);
+}
+
+#[test]
+fn explicit_function_cache_defaults_render_as_bare_decorator() {
+    let source = "@cache({ namespace: \"global\", ttlSeconds: 300, scope: \"app\" })\nfunction lookup() {\n}\n";
+    let ast = parse(source).expect("explicit defaults should parse");
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "@cache\nfunction lookup() {\n}\n"
+    );
+}
+
+#[test]
+fn explicit_zero_function_cache_ttl_remains_permanent() {
+    let source = "@cache({ ttlSeconds: 0 })\nfunction lookup() {\n}\n";
+    let ast = parse(source).expect("zero cache TTL should parse");
+    assert_eq!(
+        ast.functions[0].cache.as_ref().unwrap().ttl_seconds,
+        Some(0)
+    );
+    assert_eq!(render(&ast, &RenderOptions::default()), source);
+}
+
+#[test]
+fn deserialized_function_cache_uses_flowscript_semantic_defaults() {
+    let cache: flow_like_ast::FunctionCache =
+        serde_json::from_value(serde_json::json!({})).expect("cache JSON should deserialize");
+    assert_eq!(cache, flow_like_ast::FunctionCache::default());
+    assert_eq!(cache.namespace, "global");
+    assert_eq!(cache.ttl_seconds, Some(300));
+}
+
+#[test]
+fn function_cache_ttl_supports_the_full_persisted_u64_range() {
+    let source = format!(
+        "@cache({{ ttlSeconds: {} }})\nfunction lookup() {{\n}}\n",
+        u64::MAX
+    );
+    let ast = parse(&source).expect("the largest persisted cache TTL should parse");
+    assert_eq!(
+        ast.functions[0].cache.as_ref().unwrap().ttl_seconds,
+        Some(u64::MAX)
+    );
+    assert_eq!(render(&ast, &RenderOptions::default()), source);
+}
+
+#[test]
+fn rejects_duplicate_or_unknown_function_cache_fields() {
+    let duplicate =
+        parse("@cache({ namespace: \"a\", namespace: \"b\" })\nfunction lookup() {\n}\n")
+            .unwrap_err();
+    assert!(duplicate.message.contains("duplicate field `namespace`"));
+
+    let unknown = parse("@cache({ prefix: \"a\" })\nfunction lookup() {\n}\n").unwrap_err();
+    assert!(unknown.message.contains("unknown field `prefix`"));
+}
+
+#[test]
+fn rejects_invalid_function_cache_values_and_arguments() {
+    for (source, expected) in [
+        (
+            "@cache({ ttlSeconds: -1 })\nfunction lookup() {\n}\n",
+            "non-negative integer",
+        ),
+        (
+            "@cache({ ttlSeconds: 1.5 })\nfunction lookup() {\n}\n",
+            "non-negative integer",
+        ),
+        (
+            "@cache({ namespace: 7 })\nfunction lookup() {\n}\n",
+            "namespace` must be a string",
+        ),
+        (
+            "@cache({ scope: \"team\" })\nfunction lookup() {\n}\n",
+            "must be \"app\" or \"user\"",
+        ),
+        (
+            "@cache(\"pricing\")\nfunction lookup() {\n}\n",
+            "takes a settings object",
+        ),
+    ] {
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.message.contains(expected),
+            "expected {expected:?} in {:?}",
+            err.message
+        );
+    }
+}
+
+#[test]
 fn roundtrip_json_default_vs_struct_literal() {
     // Canonical compact JSON stays a JSON literal; spaced struct literal stays an Object.
     let text = "onStart() {\n    structSet({ structIn: {}, payload: {\"a\":1} })\n}\n";
@@ -225,6 +358,32 @@ fn roundtrip_member_vs_field() {
     // `.rows` (camel, pin-like) and `.report_id` (snake, data field) must both survive verbatim.
     let text = "onStart() {\n    const row = read({ id: query.rows[0].report_id })\n}\n";
     assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
+fn bracketed_string_is_a_member_while_numeric_bracket_is_an_index() {
+    let text = "onStart() {\n    consume({ reason: inputValues[\"row-rejection-reason\"], first: rows[0] })\n}\n";
+    let ast = parse(text).expect("bracket access should parse");
+    let flow_like_ast::Stmt::Call { call, .. } = &ast.events[0].body.stmts[0] else {
+        panic!("expected call statement")
+    };
+
+    assert!(matches!(
+        &call.args[0].value,
+        flow_like_ast::Expr::Member { base, field }
+            if field == "row-rejection-reason"
+                && matches!(base.as_ref(), flow_like_ast::Expr::Ref(name) if name == "inputValues")
+    ));
+    assert!(matches!(
+        &call.args[1].value,
+        flow_like_ast::Expr::Index { base, index }
+            if matches!(base.as_ref(), flow_like_ast::Expr::Ref(name) if name == "rows")
+                && matches!(
+                    index.as_ref(),
+                    flow_like_ast::Expr::Literal(flow_like_ast::Literal::Int(0))
+                )
+    ));
+    assert_eq!(render(&ast, &RenderOptions::default()), text);
 }
 
 #[test]
@@ -451,6 +610,115 @@ fn roundtrip_quoted_interface_field_names() {
 }
 
 #[test]
+fn interface_date_fields_generate_date_time_schema_without_a_date_definition() {
+    let text = "interface AuditRow {\n    checkpoints?: Date[];\n    created_at: Date;\n    updated_at?: Date | null = null;\n}\n\nconst auditRow: AuditRow = {}\n";
+    let ast = parse(text).expect("Date fields should parse in FlowScript interfaces");
+    let schema: serde_json::Value = serde_json::from_str(
+        ast.variables[0]
+            .schema
+            .as_deref()
+            .expect("interface variable should carry generated schema"),
+    )
+    .expect("generated interface schema should be JSON");
+
+    assert_eq!(
+        schema.pointer("/properties/created_at/format"),
+        Some(&serde_json::Value::String("date-time".to_string()))
+    );
+    assert_eq!(
+        schema.pointer("/properties/checkpoints/items/format"),
+        Some(&serde_json::Value::String("date-time".to_string()))
+    );
+    assert!(
+        schema["properties"]["updated_at"]["anyOf"]
+            .as_array()
+            .is_some_and(|variants| variants.iter().any(|variant| {
+                variant.get("format").and_then(serde_json::Value::as_str) == Some("date-time")
+            })),
+        "nullable Date should retain a date-time variant: {schema}"
+    );
+    assert!(
+        schema
+            .get("$defs")
+            .and_then(serde_json::Value::as_object)
+            .is_none_or(|defs| !defs.contains_key("Date")),
+        "the built-in Date type must not become an unresolved schema ref: {schema}"
+    );
+    assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
+fn date_formatted_json_schema_fields_render_as_date_and_survive_reparse() {
+    let source_schema = serde_json::json!({
+        "title": "AuditRow",
+        "type": "object",
+        "properties": {
+            "checkpoints": {
+                "type": "array",
+                "items": { "type": "string", "format": "date-time" }
+            },
+            "created_at": { "type": "string", "format": "date" },
+            "observed_at": { "$ref": "#/$defs/UtcInstant" },
+            "updated_at": { "type": ["string", "null"], "format": "date-time" }
+        },
+        "required": ["created_at", "observed_at"],
+        "$defs": {
+            "UtcInstant": { "type": "string", "format": "date-time" }
+        }
+    });
+    let source = format!(
+        "@schema({})\nconst auditRow: Struct = {{}}\n",
+        quote_string(&source_schema.to_string())
+    );
+    let mut ast = parse(&source).expect("legacy schema-decorated variable should parse");
+    ast.interfaces = flow_like_ast::interfaces_for_variables(&ast.variables);
+    let rendered = render(&ast, &RenderOptions::default());
+
+    for expected_field in [
+        "checkpoints?: Date[];",
+        "created_at: Date;",
+        "observed_at: Date;",
+        "updated_at?: Date | null;",
+    ] {
+        assert!(
+            rendered.contains(expected_field),
+            "rendered interface omitted `{expected_field}`:\n{rendered}"
+        );
+    }
+
+    let reparsed = parse(&rendered).expect("rendered Date interface should reparse");
+    let reparsed_schema: serde_json::Value = serde_json::from_str(
+        reparsed.variables[0]
+            .schema
+            .as_deref()
+            .expect("reparsed interface should regenerate its schema"),
+    )
+    .expect("reparsed interface schema should be JSON");
+
+    for pointer in [
+        "/properties/checkpoints/items/format",
+        "/properties/created_at/format",
+        "/properties/observed_at/format",
+    ] {
+        assert_eq!(
+            reparsed_schema
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str),
+            Some("date-time"),
+            "Date schema was not retained at {pointer}: {reparsed_schema}"
+        );
+    }
+    assert!(
+        reparsed_schema["properties"]["updated_at"]["anyOf"]
+            .as_array()
+            .is_some_and(|variants| variants.iter().any(|variant| {
+                variant.get("format").and_then(serde_json::Value::as_str) == Some("date-time")
+            })),
+        "nullable Date should survive schema -> FlowScript -> schema: {reparsed_schema}"
+    );
+}
+
+#[test]
 fn interface_dedup_renames_references_too() {
     use flow_like_ast::{Container, TypeRef, VarDecl, interfaces_for_variables};
 
@@ -670,6 +938,7 @@ fn field_assign_renders_from_hand_built_ast() {
             params: Vec::new(),
             returns: Vec::new(),
             body: Block { stmts: vec![stmt] },
+            cache: None,
             anchor: None,
         }],
         ..BoardAst::default()
@@ -730,4 +999,161 @@ fn fixture_dashboard_idempotent() {
 #[test]
 fn fixture_dashboard_anchored_idempotent() {
     assert_idempotent(FIXTURE_DASHBOARD_ANCHORED, &anchored_opts());
+}
+
+// ---- anchors must be trailing (C1) -------------------------------------------------------
+
+/// Anchors (`//@n:` / `//@v:` / `//@l:`) are the ONLY stable identity across a round-trip.
+/// `take_anchor` used to grab the next anchor comment regardless of position, so a statement
+/// swallowed the anchor authored on the FOLLOWING line: reconcile then rewrote that node with the
+/// wrong statement's content, created a duplicate for the statement whose anchor was taken, and
+/// reported the original as deleted.
+#[test]
+fn own_line_anchor_is_not_stolen_by_the_previous_statement() {
+    let ast = parse(
+        "eventsSimple() {\n    const a = foo({ x: 1 })\n    //@n:NODE_B\n    const b = bar({ y: 2 })\n}\n",
+    )
+    .expect("parses");
+    let rendered = render(&ast, &anchored_opts());
+    assert!(
+        !rendered.contains("foo({ x: 1 })   //@n:NODE_B"),
+        "the anchor on the next line must not attach to the previous statement:\n{rendered}"
+    );
+}
+
+/// The renderer emits a board comment whose text happens to look like an anchor as
+/// `// @n:X` (space after `//`). Parsing that must not consume it as an anchor, or the line is
+/// silently converted into identity metadata and the comment disappears.
+#[test]
+fn renderer_emitted_comment_containing_anchor_text_round_trips() {
+    assert_idempotent(
+        "eventsSimple() {\n    // @n:X\n    logInfo({ message: \"hi\" })\n}\n",
+        &anchored_opts(),
+    );
+}
+
+/// A fan-out body contains nothing but labelled arms, and `BranchArm` has no anchor field, so an
+/// anchor before the first arm is unambiguously the branch's. It stays accepted on its own line
+/// and is re-rendered trailing — without this exemption, currently-parsing documents would fail
+/// with `expected identifier, found Comment(...)`.
+#[test]
+fn branch_fanout_keeps_an_anchor_on_the_line_after_the_brace() {
+    for source in [
+        "eventsSimple() {\n    httpFetch({ request: r }) {\n//@n:F\n        execSuccess: {\n            logInfo({ message: \"ok\" })\n        }\n    }\n}\n",
+        "eventsSimple() {\n    const h = httpFetch({ request: r })\n    h {\n//@n:B\n        execSuccess: {\n            logInfo({ message: \"ok\" })\n        }\n    }\n}\n",
+    ] {
+        let ast = parse(source).expect("fan-out parses");
+        let rendered = render(&ast, &anchored_opts());
+        assert!(
+            rendered.contains("//@n:F") || rendered.contains("//@n:B"),
+            "the branch anchor must survive:\n{rendered}"
+        );
+    }
+}
+
+/// The positional check is byte-based, not `Token::line`-based: a multi-line string literal
+/// records its START line, so a line comparison would wrongly reject a genuinely trailing anchor
+/// after one. Guards against a "simplification" back to `Token::line`.
+#[test]
+fn trailing_anchor_after_a_multiline_string_is_still_taken() {
+    let ast = parse("eventsSimple() {\n    const a = foo({ x: \"one\ntwo\" })   //@n:KEEP\n}\n")
+        .expect("parses");
+    let rendered = render(&ast, &anchored_opts());
+    assert!(
+        rendered.contains("//@n:KEEP"),
+        "a trailing anchor after a multi-line string must still be taken:\n{rendered}"
+    );
+}
+
+// ---- escapes, unary `!`, `else if` (D-series) --------------------------------------------
+
+/// `\b`/`\f` must lex: a `Literal::Json` span is re-emitted verbatim after serde_json validates
+/// it, and the lexer runs over the whole file first — so without them a JSON default that would
+/// round-trip byte-exactly failed at lex time.
+#[test]
+fn accepts_json_escape_set_and_single_quote() {
+    for text in ["\"a\\bb\"", "\"a\\fb\"", "\"it\\'s\"", "\"a\\/b\""] {
+        let source = format!("eventsSimple() {{\n    logInfo({{ message: {text} }})\n}}\n");
+        parse(&source).unwrap_or_else(|e| panic!("{text} must lex: {e:?}"));
+    }
+}
+
+/// `\'` denotes a character that needs no escape, so it normalizes away — same as `\/` and
+/// `\uXXXX` already do. Pinned so the normalization is contractual, not accidental.
+#[test]
+fn escaped_single_quote_normalizes_to_a_bare_apostrophe() {
+    let ast = parse("eventsSimple() {\n    logInfo({ message: \"it\\'s\" })\n}\n").expect("parses");
+    let rendered = render(&ast, &RenderOptions::default());
+    assert!(rendered.contains("\"it's\""), "{rendered}");
+}
+
+/// Unknown escapes stay a HARD error. Passing them through would silently turn a regex `"\d+"`
+/// into `"d+"`, which applies cleanly and fails at run time.
+#[test]
+fn rejects_unknown_escape_so_regex_backslashes_stay_loud() {
+    for text in ["\"\\d+\"", "\"a\\zb\""] {
+        let source = format!("eventsSimple() {{\n    logInfo({{ message: {text} }})\n}}\n");
+        assert!(parse(&source).is_err(), "{text} must stay a hard error");
+    }
+}
+
+/// `if (!(cond)) { … }` is the renderer's own single-arm form and must be byte-stable.
+#[test]
+fn renderer_negated_single_arm_form_is_a_fixpoint() {
+    assert_idempotent(
+        "eventsSimple() {\n    if (!(flag)) {\n        logInfo({ message: \"no\" })\n    }\n}\n",
+        &RenderOptions::default(),
+    );
+}
+
+/// `if (!c) { } else { }` was a HARD ERROR (`expected Colon, found LParen`). It now parses, with
+/// the negation carried by a real `boolNot` node because both arms exist.
+#[test]
+fn negated_condition_with_else_parses_and_is_a_fixpoint() {
+    let source = "eventsSimple() {\n    if (boolNot({ boolean: flag })) {\n        logInfo({ message: \"a\" })\n    } else {\n        logInfo({ message: \"b\" })\n    }\n}\n";
+    assert_idempotent(source, &RenderOptions::default());
+    let ast = parse("eventsSimple() {\n    if (!flag) {\n        logInfo({ message: \"a\" })\n    } else {\n        logInfo({ message: \"b\" })\n    }\n}\n")
+        .expect("`if (!c) {} else {}` must parse");
+    assert_eq!(render(&ast, &RenderOptions::default()), source);
+}
+
+/// `else if` desugars to the nested ladder the renderer emits.
+#[test]
+fn else_if_desugars_to_the_nested_ladder() {
+    let ast = parse("eventsSimple() {\n    if (a) {\n        logInfo({ message: \"a\" })\n    } else if (b) {\n        logInfo({ message: \"b\" })\n    }\n}\n")
+        .expect("`else if` must parse");
+    let rendered = render(&ast, &RenderOptions::default());
+    assert!(rendered.contains("} else {"), "{rendered}");
+    assert!(!rendered.contains("else if"), "{rendered}");
+    assert_eq!(
+        render(
+            &parse(&rendered).expect("reparse"),
+            &RenderOptions::default()
+        ),
+        rendered
+    );
+}
+
+/// A loop head must be a loop-node call. `boolNot` IS an `Expr::Call` but has zero exec outputs,
+/// so accepting it built a node whose body was never wired, with no diagnostics at all.
+#[test]
+fn boolean_loop_head_is_rejected_with_an_actionable_message() {
+    for source in [
+        "eventsSimple() {\n    while (!done) {\n        logInfo({ message: \"x\" })\n    }\n}\n",
+        "eventsSimple() {\n    for (const v of !items) {\n        logInfo({ message: \"x\" })\n    }\n}\n",
+    ] {
+        let err = parse(source).expect_err("a boolean loop head must be rejected");
+        assert!(err.message.contains("loop-node call"), "{:?}", err.message);
+    }
+}
+
+/// `-x` has no catalog lowering, so it stays an error — but an actionable one instead of a
+/// `Debug`-formatted token dump. A negative literal is unaffected.
+#[test]
+fn unary_minus_is_rejected_with_a_workaround_and_negative_literals_still_parse() {
+    let err = parse("eventsSimple() {\n    const a = intAdd({ integer1: -x, integer2: 1 })\n}\n")
+        .expect_err("unary minus must be rejected");
+    assert!(err.message.contains("0 - x"), "{:?}", err.message);
+    parse("eventsSimple() {\n    const a = intAdd({ integer1: -1, integer2: 1 })\n}\n")
+        .expect("a negative literal must still parse");
 }

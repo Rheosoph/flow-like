@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
+	CHAT_PLACEHOLDER_VISUALS,
 	DEFAULT_CHAT_AI_DISCLOSURE,
+	chatPlaceholderSupportsTypingMotion,
 	createChatBackgroundImage,
 	escapeCssAttributeValue,
 	resolveChatAiDisclosure,
 	resolveChatColorScheme,
+	resolveChatPlaceholderTypingMotion,
+	resolveChatPlaceholderVisual,
 } from "./chat-appearance";
 
 describe("chat appearance helpers", () => {
@@ -38,5 +42,35 @@ describe("chat appearance helpers", () => {
 		expect(escapeCssAttributeValue('chat\\"one\nnext')).toBe(
 			'chat\\\\\\"one\\a next',
 		);
+	});
+});
+
+describe("placeholder typing motion", () => {
+	test("is opt-in — an interface that never set it keeps a still mark", () => {
+		expect(resolveChatPlaceholderTypingMotion(undefined)).toBe(false);
+		expect(resolveChatPlaceholderTypingMotion(null)).toBe(false);
+		expect(resolveChatPlaceholderTypingMotion(false)).toBe(false);
+	});
+
+	test("only a real `true` enables it, so a stray value cannot start the motion", () => {
+		expect(resolveChatPlaceholderTypingMotion(true)).toBe(true);
+		expect(resolveChatPlaceholderTypingMotion("true")).toBe(false);
+		expect(resolveChatPlaceholderTypingMotion(1)).toBe(false);
+	});
+
+	test("offers the setting only for the marks that can animate", () => {
+		expect(chatPlaceholderSupportsTypingMotion("planet")).toBe(true);
+		expect(chatPlaceholderSupportsTypingMotion("bubble")).toBe(true);
+		expect(chatPlaceholderSupportsTypingMotion("image")).toBe(false);
+		expect(chatPlaceholderSupportsTypingMotion("none")).toBe(false);
+	});
+
+	test("classifies every visual the config screen can offer", () => {
+		for (const option of CHAT_PLACEHOLDER_VISUALS) {
+			expect(typeof chatPlaceholderSupportsTypingMotion(option.value)).toBe(
+				"boolean",
+			);
+			expect(resolveChatPlaceholderVisual(option.value)).toBe(option.value);
+		}
 	});
 });

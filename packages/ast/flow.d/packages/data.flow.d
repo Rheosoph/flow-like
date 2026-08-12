@@ -13,6 +13,92 @@
 declare function controlForEachRow({ table: Struct }): { value: Struct, index: int };
 
 
+// === Data Studio/Actions ===
+
+/**
+ * Reads the typed objects and parameters the ontology action was invoked with
+ * @param ontologyId — Saved ontology identifier (types the outputs from the action contract)
+ * @param actionId — Saved ontology action identifier (types the outputs from the action contract)
+ * @returns object — The first (or only) object the action was invoked with
+ * @returns objects — Every object the action was invoked with
+ * @returns parameters — Typed parameters the action was invoked with
+ * @returns objectType — Object type the action targets
+ * @returns objectIds — Identifiers of the targeted objects
+ * @returns idempotencyKey — Client-supplied retry key, if any
+ * @impure has side effects / drives control flow
+ */
+declare function ontologyActionInput({ ontologyId: string, actionId: string }): { object: Struct, objects: Struct[], parameters: Struct, objectType: string, objectIds: string[], idempotencyKey: string };
+
+/**
+ * Builds a validated, typed action request from a Data Studio action binding
+ * @param ontologyId — Saved ontology identifier
+ * @param actionId — Saved ontology action identifier
+ * @param objects — Objects selected for the action
+ * @param parameters (optional) — Typed parameters supplied to the action
+ * @returns errorMessage — Details for a failed action request
+ * @returns actionRequest — Validated action binding, objects, and parameters
+ * @impure has side effects / drives control flow
+ */
+declare function ontologyActionRequest({ ontologyId: string, actionId: string, objects: Struct[], parameters?: Struct }): { errorMessage: string, actionRequest: Struct };
+
+
+// === Data Studio/Objects ===
+
+/**
+ * Reads a bounded object preview through a saved Data Studio ontology
+ * @param ontologyId — Saved ontology identifier
+ * @param objectType — Stable object type label resolved by the ontology
+ * @param limit (optional) — Maximum number of objects to return (capped at 500)
+ * @returns errorMessage — Details for a failed object read
+ * @returns objects — Typed objects from the selected ontology object type
+ * @impure has side effects / drives control flow
+ */
+declare function ontologyQueryObjects({ ontologyId: string, objectType: string, limit?: int }): { errorMessage: string, objects: Struct[] };
+
+
+// === Data Studio/Remote Actions ===
+
+/**
+ * Runs a governed ontology action in a connected project through an installed contract; the producer validates and executes it authoritatively
+ * @param bindingId — Local identifier of the installed remote ontology contract
+ * @param actionId — Action identifier resolved through the installed contract
+ * @param objects — Objects selected for the action
+ * @param parameters (optional) — Typed parameters supplied to the action
+ * @param timeout (optional) — Maximum seconds to wait for the remote action to finish (capped at 1800)
+ * @returns errorMessage — Details for a failed remote action
+ * @returns result — Result payload emitted by the producer's action run
+ * @returns runId — Identifier of the producer-side action run
+ * @impure has side effects / drives control flow
+ */
+declare function ontologyActionRequestRemote({ bindingId: string, actionId: string, objects: Struct[], parameters?: Struct, timeout?: int }): { errorMessage: string, result: Struct, runId: string };
+
+
+// === Data Studio/Remote Objects ===
+
+/**
+ * Expands a parent object's containment children through an installed ontology contract from a connected project
+ * @param bindingId — Local identifier of the installed remote ontology contract
+ * @param objectType — Stable object type identifier of the parent, resolved through the installed contract
+ * @param nodeId — Identifier of the parent object whose children should be loaded
+ * @param limit (optional) — Maximum number of child objects to return (capped at 500)
+ * @returns errorMessage — Details for a failed remote children read
+ * @returns objects — Typed child objects reached through containment edges of the installed contract
+ * @impure has side effects / drives control flow
+ */
+declare function ontologyQueryRemoteChildren({ bindingId: string, objectType: string, nodeId: any, limit?: int }): { errorMessage: string, objects: Struct[] };
+
+/**
+ * Reads a bounded object preview through an installed ontology contract from a connected project
+ * @param bindingId — Local identifier of the installed remote ontology contract
+ * @param objectType — Stable object type identifier resolved through the installed contract
+ * @param limit (optional) — Maximum number of remote objects to return (capped at 500)
+ * @returns errorMessage — Details for a failed remote object read
+ * @returns objects — Typed objects from the installed remote ontology object type
+ * @impure has side effects / drives control flow
+ */
+declare function ontologyQueryRemoteObjects({ bindingId: string, objectType: string, limit?: int }): { errorMessage: string, objects: Struct[] };
+
+
 // === Data/Atlassian ===
 
 /**
@@ -731,6 +817,76 @@ declare function dataAtlassianJiraMoveToSprint({ provider: Struct, sprintId: int
 declare function dataAtlassianJiraUpdateSprint({ provider: Struct, sprintId: int, name: string, goal: string, state: string, startDate: string, endDate: string }): Struct;
 
 
+// === Data/Cache ===
+
+/**
+ * Removes a value from the app's cache.
+ * @param cache — Cache handle from the Open Cache node
+ * @param key — The key to remove
+ * @returns deleted — True when an entry was actually removed
+ * @impure has side effects / drives control flow
+ */
+declare function cacheDelete({ cache: Struct, key: string }): bool;
+
+/**
+ * Returns the cached value, or stores the fallback and returns that. Exactly one caller gets Written = true, even when several runs reach this node at the same moment. The cache is for small, hot values (about 1 MB max) — persist large data to the app's storage instead.
+ * @param cache — Cache handle from the Open Cache node
+ * @param key — The key to read or claim
+ * @param fallback — Value to store when the key holds nothing live — any type
+ * @param ttlSeconds (optional) — Seconds until a newly written entry expires. 0 keeps it until it is deleted.
+ * @returns value — The value now held under the key — whatever type was stored
+ * @returns written — True when this run is the one that stored the fallback. Branch on this to do expensive work only once.
+ * @impure has side effects / drives control flow
+ */
+declare function cacheGetOrWrite({ cache: Struct, key: string, fallback: any, ttlSeconds?: int }): { value: any, written: bool };
+
+/**
+ * Checks whether a key holds a live value, without downloading the value. To decide whether to compute something, prefer Get or Write Cache — it has no gap between the check and the write.
+ * @param cache — Cache handle from the Open Cache node
+ * @param key — The key to check
+ * @returns found — True when a live entry exists for this key
+ * @impure has side effects / drives control flow
+ */
+declare function cacheHas({ cache: Struct, key: string }): bool;
+
+/**
+ * Removes every entry in the cache handle's namespace in one call — including entries with no lifetime. The handle must carry a namespace; per-key removal is the Delete Cache node's job.
+ * @param cache — Cache handle from the Open Cache node. Its namespace decides what is removed.
+ * @returns deleted — How many entries were removed
+ * @impure has side effects / drives control flow
+ */
+declare function cacheInvalidateNamespace({ cache: Struct }): int;
+
+/**
+ * Opens the app's key/value cache. Connect the result to Read, Write and Delete Cache nodes.
+ * @param scope (optional) — App shares entries with everyone who can run this app. User keeps them private to whoever triggered the run.
+ * @param namespace (optional) — Optional group name. Entries sharing a namespace can be removed together with the Invalidate Cache Namespace node, and short keys from different flows cannot collide.
+ * @returns cache — Cache handle for the Read, Write and Delete Cache nodes
+ */
+declare function cacheOpen({ scope?: string, namespace?: string }): Struct;
+
+/**
+ * Reads a value from the app's cache. Reports a miss when the key was never written or its lifetime has elapsed.
+ * @param cache — Cache handle from the Open Cache node
+ * @param key — The key to read
+ * @returns found — True when a live entry existed for this key
+ * @returns value — The cached value — whatever type was stored — or null on a miss
+ * @impure has side effects / drives control flow
+ */
+declare function cacheRead({ cache: Struct, key: string }): { found: bool, value: any };
+
+/**
+ * Stores a value in the app's cache, optionally with a lifetime after which it disappears on its own. The cache is for small, hot values (about 1 MB max) — persist large data to the app's storage instead.
+ * @param cache — Cache handle from the Open Cache node
+ * @param key — The key to write
+ * @param value — The value to store — a struct, array, string, number or boolean
+ * @param ttlSeconds (optional) — Seconds until the entry expires. 0 keeps it until it is deleted.
+ * @returns expiresAt — Unix timestamp in milliseconds when the entry expires, or 0 when it never does
+ * @impure has side effects / drives control flow
+ */
+declare function cacheWrite({ cache: Struct, key: string, value: any, ttlSeconds?: int }): int;
+
+
 // === Data/DataFusion ===
 
 /**
@@ -750,7 +906,7 @@ declare function dataAtlassianJiraUpdateSprint({ provider: Struct, sprintId: int
 declare function dfCreateSession({ sessionName?: string, targetPartitions?: int, batchSize?: int, repartitionJoins?: bool, repartitionAggregations?: bool, repartitionSorts?: bool, coalesceBatches?: bool, parquetPruning?: bool, collectStatistics?: bool }): Struct;
 
 /**
- * Mount CSV files from a FlowPath into a DataFusion session as a queryable table
+ * Mount CSV files from a FlowPath into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely.
  * @param session — DataFusion session to mount the table into
  * @param path — FlowPath to CSV files (can be a directory prefix or single file)
  * @param tableName — Name to register the table as in the DataFusion catalog
@@ -762,7 +918,7 @@ declare function dfCreateSession({ sessionName?: string, targetPartitions?: int,
 declare function dfMountCsv({ session: Struct, path: Struct, tableName: string, hasHeader?: bool, delimiter?: string, fileExtension?: string }): void;
 
 /**
- * Mount JSON (newline-delimited) files from a FlowPath into a DataFusion session as a queryable table
+ * Mount JSON (newline-delimited) files from a FlowPath into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely.
  * @param session — DataFusion session to mount the table into
  * @param path — FlowPath to JSON files (can be a directory prefix or single file)
  * @param tableName — Name to register the table as in the DataFusion catalog
@@ -772,7 +928,7 @@ declare function dfMountCsv({ session: Struct, path: Struct, tableName: string, 
 declare function dfMountJson({ session: Struct, path: Struct, tableName: string, fileExtension?: string }): void;
 
 /**
- * Mount Parquet files from a FlowPath prefix into a DataFusion session as a queryable table
+ * Mount Parquet files from a FlowPath prefix into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely.
  * @param session — DataFusion session to mount the table into
  * @param path — FlowPath to Parquet files (can be a directory prefix or single file)
  * @param tableName — Name to register the table as in the DataFusion catalog
@@ -789,6 +945,18 @@ declare function dfMountParquet({ session: Struct, path: Struct, tableName: stri
  * @impure has side effects / drives control flow
  */
 declare function dfRegisterCsvTable({ session: Struct, table: Struct, tableName?: string }): void;
+
+/**
+ * Registers an Excel workbook's sheets as SQL tables in a DataFusion session. Tables are named after their normalized sheet names (e.g. 'Sales Data (2024)' becomes 'sales_data_2024'); additional tables on the same sheet get numeric suffixes. The download and parse are deferred until a query actually uses the session — unless the Table Names output is connected, which requires parsing here.
+ * @param session — DataFusion session to register the tables into
+ * @param file — Excel file
+ * @param sheet (optional) — Worksheet name (optional - if empty, registers all sheets)
+ * @param mode (optional) — 'Sheet as table' registers each sheet's used range as one table; 'Detect tables' finds and registers every table on each sheet
+ * @param prefix (optional) — Optional prefix for the registered table names
+ * @returns tableNames — Names the tables were registered under. Connecting this pin makes the workbook parse eagerly at this node instead of at the first query.
+ * @impure has side effects / drives control flow
+ */
+declare function dfRegisterExcel({ session: Struct, file: Struct, sheet?: string, mode?: string, prefix?: string }): string[];
 
 /**
  * Register a LanceDB table into a DataFusion session for SQL queries. Uses the existing to_datafusion() implementation from the vector store.
@@ -809,6 +977,21 @@ declare function dfRegisterLance({ session: Struct, database: Struct, tableName?
  * @impure has side effects / drives control flow
  */
 declare function dfSqlQuery({ session: Struct, query?: string }): { table: Struct, rows: Struct[], rowCount: int };
+
+/**
+ * Execute a SQL query against a DataFusion session, remembering the result in the app's cache. While a live cached result exists for this node's session and query, the query — and any deferred table mounting — is skipped entirely and the cached rows are returned. Cached results do not notice changes to the underlying data; pick a lifetime that matches how fresh the data must be.
+ * @param session — DataFusion session with registered tables
+ * @param query (optional) — SQL query to execute (e.g., SELECT * FROM mytable WHERE column > 10)
+ * @param scope (optional) — App shares cached results with everyone who can run this app. User keeps them private to whoever triggered the run.
+ * @param namespace (optional) — Group name for the cached results. Invalidating this namespace (Invalidate Cache Namespace node) clears them in one call; it also keeps results from unrelated flows apart.
+ * @param ttlSeconds (optional) — Seconds until a cached result expires and the query runs again. 0 keeps it until it is deleted.
+ * @returns table — Query results as a CSVTable (columnar format, good for analytics)
+ * @returns rows — Query results as array of row structs with Flow-Like-compatible values. Rows derive from the Table representation so cached and fresh runs are identical: date-like strings are normalized to ISO form and unsigned values beyond the signed 64-bit range become strings.
+ * @returns rowCount — Number of rows in the result
+ * @returns fromCache — True when the result was served from the cache and the query never ran
+ * @impure has side effects / drives control flow
+ */
+declare function dfSqlQueryCached({ session: Struct, query?: string, scope?: string, namespace?: string, ttlSeconds?: int }): { table: Struct, rows: Struct[], rowCount: int, fromCache: bool };
 
 
 // === Data/DataFusion/Aggregation ===
@@ -1242,7 +1425,7 @@ declare function dfListTables({ session: Struct }): { tables: Struct[], tableNam
 declare function openLocalDb({ name: string, userScoped?: bool, batchSize?: int }): Struct;
 
 /**
- * Open a shared database of a connected project. The project must have granted this app access with a role that allows reading (and for writes, writing) files or databases. Storage credentials are valid for about an hour — long-running flows with many writes should flush regularly (Flush node).
+ * Open a shared database of a connected project. The project must have granted this app access with a role that allows reading (and for writes, writing) files or databases. The run reuses the connection and refreshes its scoped credentials automatically.
  * @param flowRemoteAppId (optional) — Connected project to open the database from
  * @param flowRemoteDatabase (optional) — Shared database of the selected project
  * @param writeAccess (optional) — Request write access to the remote database. Requires the connection role to allow writing databases (or files).
@@ -1254,6 +1437,15 @@ declare function openRemoteDb({ flowRemoteAppId?: string, flowRemoteDatabase?: s
 
 
 // === Data/Database/Delete ===
+
+/**
+ * Permanently deletes the entire table, both its rows and its schema, so it can be recreated later with a different schema. This is irreversible and cannot be undone. Buffered writes that have not been flushed yet are discarded instead of written back. Graph overlays referencing the table are pruned and reported on References; saved queries are never modified. Known limitation: a DataFusion table provider registered from this table earlier in the same run keeps pointing at the deleted dataset, because mounts are only refreshed when the credential generation changes.
+ * @param database — Database Connection Reference
+ * @returns dropped — True when the table existed and was removed
+ * @returns references — Names of the graph overlays that referenced the table and were pruned
+ * @impure has side effects / drives control flow
+ */
+declare function dropTableLocalDb({ database: Struct }): { dropped: bool, references: string[] };
 
 /**
  * Delete rows from a database table and return the removed rows
@@ -1327,6 +1519,16 @@ declare function listGraphOverlays({ userScoped?: bool }): { overlayIds: string[
 // === Data/Database/Graph/Query ===
 
 /**
+ * Computes degree, PageRank, and connected components over a graph overlay
+ * @param graph — Graph connection reference
+ * @param edgeLimit (optional) — Maximum number of edges sampled for the computation
+ * @returns errorMessage — Error details
+ * @returns payload — Metrics: counts, components, top objects by degree and PageRank
+ * @impure has side effects / drives control flow
+ */
+declare function graphAnalytics({ graph: Struct, edgeLimit?: int }): { errorMessage: string, payload: Struct };
+
+/**
  * Executes a Cypher query against the graph overlay
  * @param graph — Graph connection reference
  * @param query — Cypher query string
@@ -1352,6 +1554,44 @@ declare function graphCypherQuery({ graph: Struct, query: string, params: Struct
  * @impure has side effects / drives control flow
  */
 declare function graphNeighbors({ graph: Struct, label: string, nodeId: string, depth?: int, direction?: string, limit?: int }): { errorMessage: string, resultNodes: Struct[], resultEdges: Struct[] };
+
+/**
+ * Finds the shortest connections between two objects, including alternative routes
+ * @param graph — Graph connection reference
+ * @param fromLabel — Object type of the start object
+ * @param fromId — Identity of the start object
+ * @param toLabel — Object type of the target object
+ * @param toId — Identity of the target object
+ * @param maxDepth (optional) — Maximum number of hops to search (1-5)
+ * @param limit (optional) — Maximum number of objects explored during the search
+ * @returns errorMessage — Error details
+ * @returns payload — Found paths with their nodes and edges
+ * @returns found — Whether a connection exists within the depth limit
+ * @impure has side effects / drives control flow
+ */
+declare function graphPaths({ graph: Struct, fromLabel: string, fromId: string, toLabel: string, toId: string, maxDepth?: int, limit?: int }): { errorMessage: string, payload: Struct, found: bool };
+
+/**
+ * Samples objects of a given label from a graph overlay for previewing
+ * @param graph — Graph connection reference
+ * @param label — Object type (node label) to sample from
+ * @param count (optional) — Number of objects to sample (capped at 500)
+ * @returns errorMessage — Error details
+ * @returns rows — Sampled objects
+ * @impure has side effects / drives control flow
+ */
+declare function graphSample({ graph: Struct, label: string, count?: int }): { errorMessage: string, rows: Struct[] };
+
+/**
+ * Searches objects by caption or identifier across the whole graph overlay
+ * @param graph — Graph connection reference
+ * @param query — Text matched against object captions and identifiers
+ * @param limit (optional) — Maximum number of matches to return
+ * @returns errorMessage — Error details
+ * @returns resultNodes — Matching objects
+ * @impure has side effects / drives control flow
+ */
+declare function graphSearch({ graph: Struct, query: string, limit?: int }): { errorMessage: string, resultNodes: Struct[] };
 
 /**
  * Executes a SQL query against graph overlay tables via DataFusion
@@ -1875,21 +2115,21 @@ declare function dataDatabricksListTables({ provider: Struct, catalogName: strin
 // === Data/Excel ===
 
 /**
- * Extracts tables from an Excel worksheet
+ * Detects and extracts all tables from Excel worksheets, handling titles, multi-row headers, merged cells, footnotes and multiple tables per sheet
  * @param file — Excel file
  * @param sheet (optional) — Worksheet name (optional - if empty, extracts from all sheets)
- * @param extractConfig (optional) — Extract Config
- * @returns tables — Extracted Vec<Table>
+ * @param extractConfig (optional) — Table detection configuration
+ * @returns tables — Extracted tables (name, title, A1 range and typed rows)
  * @impure has side effects / drives control flow
  */
 declare function dataExcelExtractTables({ file: Struct, sheet?: string, extractConfig?: Struct }): Struct[];
 
 /**
- * Uses AI to intelligently extract tables from complex Excel worksheets with unusual layouts
+ * Uses AI to locate tables in complex Excel worksheets (unusual layouts, multiple tables, multi-row headers, styling-based hints); extraction itself stays deterministic
  * @param model — AI model for analysis
  * @param file — Excel file
  * @param sheet (optional) — Worksheet name (optional - if empty, extracts from all sheets)
- * @param userHint (optional) — Optional guidance for the AI (e.g., 'The table starts at row 5', 'Skip rows with TOTAL')
+ * @param userHint (optional) — Optional guidance for the AI (e.g., 'The table starts at row 5', 'Only rows highlighted green matter')
  * @param config (optional) — AI extraction configuration
  * @returns tables — Extracted tables
  * @returns reasoning — AI's explanation of extraction strategy
@@ -2207,8 +2447,8 @@ declare function pathExists({ path: Struct }): void;
 declare function pathGet({ path: Struct }): bytes[];
 
 /**
- * Diffs a folder against a manifest, emitting added, updated and deleted files. Auto mode trusts store ETags (hashing only weak/missing ones); Checksum mode always Blake3-hashes contents
- * @param manifest — FlowPath to the manifest file. May not exist yet — everything is then reported as added
+ * Diffs a folder against a manifest, emitting added, updated and deleted files while ignoring directory manifests. Auto mode trusts store ETags (hashing only weak/missing ones); Checksum mode always Blake3-hashes contents
+ * @param manifest — FlowPath to this workflow's manifest file. It may have any name and need not exist yet; use a distinct name when workflows share a root
  * @param root — Root folder to scan for changes
  * @param recursive (optional) — Scan the root folder recursively
  * @param mode (optional) — Auto: trust store ETags, hashing only files with a missing/weak ETag (fast). Checksum: always Blake3-hash contents, ignoring ETags (correct on backends with mtime-based ETags such as local disk)
@@ -2295,12 +2535,13 @@ declare function pathPut({ path: Struct, bytes: bytes[] }): void;
 declare function pathRename({ from: Struct, to: Struct, overwrite?: bool }): void;
 
 /**
- * Persists the manifest carried by a diff session, so the next diff sees the current state
+ * Commits all or selected paths from a directory diff session to its manifest, so the next diff only reports uncommitted changes
  * @param session — Diff session produced by 'Diff Directory'
+ * @param committedPaths (optional) — Optional changed paths to commit. Leave disconnected to commit the full diff; connect an array to commit only those paths (an empty array commits none)
  * @returns manifest — FlowPath of the written manifest file
  * @impure has side effects / drives control flow
  */
-declare function pathWriteManifest({ session: Struct }): Struct;
+declare function pathWriteManifest({ session: Struct, committedPaths?: Struct[] }): Struct;
 
 /**
  * Generates a signed URL for accessing a file
@@ -2407,7 +2648,7 @@ declare function rawPath({ path: Struct }): string;
 declare function setExtension({ path: Struct, extension: string }): Struct;
 
 /**
- * Gets the filename from a path
+ * Renames a file path, keeping the original extension when the new name has none
  * @param inPath — FlowPath
  * @param filename (optional) — Filename
  * @returns outPath — FlowPath
@@ -5711,13 +5952,63 @@ declare function eventsGenericReturnResult({ response: any }): void;
 // === Events/Remote ===
 
 /**
+ * Call an internal REST API exposed by a connected project and return its status, headers and response body.
+ * @param flowRemoteAppId (optional) — Connected project to invoke the event in
+ * @param flowRemoteEvent (optional) — REST API event of the selected project
+ * @param flowRemoteEventMeta (optional) — Auto-filled by the editor when an event is selected. Drives the typed pins.
+ * @param route — Route of the remote API to call
+ * @param query (optional) — Query parameters as an object
+ * @param body (optional) — Request body (JSON)
+ * @param headers (optional) — Additional request headers as an object
+ * @param timeoutSeconds (optional) — Maximum time to wait for the remote request to finish
+ * @returns status — HTTP status code of the response
+ * @returns responseHeaders — Response headers as an object
+ * @returns response — Response body (JSON when parseable, else text)
+ * @returns file — Response body as a downloaded file when it is binary
+ * @impure has side effects / drives control flow
+ */
+declare function callRemoteApi({ flowRemoteAppId?: string, flowRemoteEvent?: string, flowRemoteEventMeta?: string, route: string, query?: any, body?: any, headers?: any, timeoutSeconds?: int }): { status: int, responseHeaders: any, response: any, file: Struct };
+
+/**
+ * Call a chat event in a connected project. Chunks, complete responses, widgets, attachments and session state are exposed while the remote chat streams.
+ * @param flowRemoteAppId (optional) — Connected project to invoke the event in
+ * @param flowRemoteEvent (optional) — Chat event of the selected project
+ * @param flowRemoteEventMeta (optional) — Auto-filled by the editor when an event is selected. Drives the typed pins.
+ * @param history (optional) — Conversation to send, including the new user message
+ * @param localSession (optional) — State local to this chat session
+ * @param globalSession (optional) — State shared for the remote chat user
+ * @param tools (optional) — Tool ids the remote assistant may use
+ * @param actions (optional) — User actions included with the chat request
+ * @param attachments (optional) — Attachments included with the chat request
+ * @param user (optional) — User information forwarded to the remote chat
+ * @param timeoutSeconds (optional) — Maximum time to wait for the remote request to finish
+ * @returns chunk — Latest streamed response chunk
+ * @returns response — Complete model response
+ * @returns responseText — Text of the complete response
+ * @returns widgets — Widgets emitted by the remote chat
+ * @returns attachmentsOut — Attachments emitted by the remote chat
+ * @returns actionsOut — Actions emitted by the remote chat
+ * @returns localSessionOut — Latest remote local session state
+ * @returns globalSessionOut — Latest remote global session state
+ * @returns modelId — Model reported by the remote chat
+ * @returns runId — Remote run id
+ * @returns status — Final run status
+ * @returns plan — Latest streamed reasoning plan
+ * @returns usageStat — Latest model usage update
+ * @returns eventType — Type of the latest streamed remote event
+ * @returns eventPayload — Raw payload of the latest streamed remote event
+ * @impure has side effects / drives control flow
+ */
+declare function callRemoteChat({ flowRemoteAppId?: string, flowRemoteEvent?: string, flowRemoteEventMeta?: string, history?: Struct, localSession?: Struct, globalSession?: Struct, tools?: string[], actions?: Struct[], attachments?: Struct[], user?: Struct, timeoutSeconds?: int }): { chunk: Struct, response: Struct, responseText: string, widgets: Struct[], attachmentsOut: Struct[], actionsOut: Struct[], localSessionOut: Struct, globalSessionOut: Struct, modelId: string, runId: string, status: string, plan: Struct, usageStat: Struct, eventType: string, eventPayload: any };
+
+/**
  * Invoke a chat, API or MCP event of a connected project. Pins adapt to the selected event. The project must have granted this app a role that allows executing events.
  * @param flowRemoteAppId (optional) — Connected project to invoke the event in
  * @param flowRemoteEvent (optional) — Event of the selected project to invoke
- * @param flowRemoteEventMeta (optional) — Auto-filled by the editor when an event is selected. Drives the input and output pins.
+ * @param flowRemoteEventMeta (optional) — Auto-filled by the editor when an event is selected. Drives the typed pins.
  * @param payload — Input payload passed to the remote event
  * @param waitForResult (optional) — Wait for the remote run to finish and return its result
- * @param timeoutSeconds (optional) — Maximum time to wait for the remote run to finish
+ * @param timeoutSeconds (optional) — Maximum time to wait for the remote request to finish
  * @returns runId — Remote run id
  * @returns status — Final run status
  * @returns result — Result payload of the remote run

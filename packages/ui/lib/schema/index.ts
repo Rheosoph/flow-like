@@ -48,6 +48,8 @@ export {
 	IExecutionStage,
 	IExecutionMode,
 	type ILayer,
+	type ILayerCache,
+	ILayerCacheScope,
 	ILayerType,
 	ILogLevel,
 	type ISystemTime,
@@ -111,6 +113,7 @@ export type {
 export * from "./profile/profile";
 export * from "./app/app";
 export * from "./app/fork";
+export * from "./app/template-search";
 export * from "./solution/solution";
 export * from "./sink";
 

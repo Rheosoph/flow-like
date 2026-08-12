@@ -1,6 +1,5 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/core";
 import {
 	Button,
 	Dialog,
@@ -14,6 +13,7 @@ import {
 	IAppVisibility,
 	Input,
 } from "@flow-like/flow-like-ui";
+import { invoke } from "@tauri-apps/api/core";
 import { EyeIcon, EyeOffIcon, LockIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";

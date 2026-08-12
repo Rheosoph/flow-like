@@ -1,0 +1,118 @@
+---
+import "@flow-like/flow-like-ui/global.css";
+import "../../styles/website-base.css";
+import LiveShowcase from "../../components/showcase/LiveShowcase.astro";
+
+const chatTimeline = [
+	{ kind: "reset" },
+	{ kind: "wait", ms: 900 },
+	{
+		kind: "type",
+		text: "Summarize yesterday's support tickets and draft replies.",
+	},
+	{ kind: "wait", ms: 500 },
+	{ kind: "send" },
+	{ kind: "wait", ms: 700 },
+	{
+		kind: "stream",
+		text: "I went through **24 tickets** from yesterday:\n\n- **18** billing questions\n- **4** integration bugs\n- **2** feature requests\n\nI drafted replies for the billing tickets and flagged the bugs for engineering. Want me to send the drafts, or review them first?",
+	},
+	{ kind: "wait", ms: 5000 },
+];
+
+const chatIntro = [
+	{
+		role: "assistant",
+		content:
+			"Hi — I'm your Flow-Like assistant, wired straight into your apps and workflows. Ask me to run a flow or pull data.",
+	},
+];
+
+const boardTimeline = [
+	{ kind: "wait", ms: 700 },
+	{
+		kind: "focusNodes",
+		ids: ["j7a5erre9fwqhbq1k5f27tma"],
+		padding: 0.5,
+		duration: 900,
+		hold: 300,
+	},
+	{ kind: "callout", text: "Trigger — fires on a new event", ms: 1900 },
+	{
+		kind: "focusNodes",
+		ids: ["hh8j23jlgf45jwqb2iwxzkt5"],
+		padding: 0.5,
+		duration: 900,
+		hold: 300,
+	},
+	{ kind: "callout", text: "LLM node classifies & routes", ms: 1900 },
+	{ kind: "fitAll", duration: 900, hold: 400 },
+	{ kind: "wait", ms: 1600 },
+];
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Live showcase preview</title>
+	</head>
+	<body class="min-h-screen bg-background text-foreground antialiased">
+		<main class="mx-auto max-w-4xl px-4 py-16">
+			<h1 class="mb-2 text-2xl font-semibold">Live chat showcase</h1>
+			<p class="mb-8 text-sm text-muted-foreground">
+				Real <code>ChatBox</code> + <code>MessageComponent</code> from the app,
+				scripted on autoplay. Scroll away or interact to pause. Type your own
+				message — the composer is live.
+			</p>
+			<LiveShowcase
+				variant="chat"
+				poster="/images/product/ChatUI.webp"
+				posterAlt="Flow-Like chat interface"
+				posterWidth={3248}
+				posterHeight={1958}
+				timeline={chatTimeline}
+				intro={chatIntro}
+				caption="Live demo · scripted"
+				class="w-full"
+			/>
+
+			<h2 class="mb-2 mt-16 text-2xl font-semibold">Live board showcase</h2>
+			<p class="mb-8 text-sm text-muted-foreground">
+				The real <code>ReactFlow</code> canvas with actual <code>FlowNode</code>s,
+				guided focus/zoom on autoplay. Drag or scroll the canvas to take over.
+			</p>
+			<LiveShowcase
+				variant="board"
+				poster="/images/product/FlowLikeStudio-hero.webp"
+				posterAlt="Flow-Like visual workflow board"
+				posterWidth={1600}
+				posterHeight={965}
+				data="/board.json"
+				timeline={boardTimeline}
+				caption="Live demo · scripted"
+				class="w-full"
+			/>
+
+			<h2 class="mb-2 mt-16 text-2xl font-semibold">
+				Live a2ui frontend showcase
+			</h2>
+			<p class="mb-8 text-sm text-muted-foreground">
+				A real app frontend rendered live by the actual <code>A2UIRenderer</code>
+				from a static widget definition — the numbers animate as the data model
+				updates.
+			</p>
+			<LiveShowcase
+				variant="a2ui"
+				poster="/images/product/AppBoards.webp"
+				posterAlt="Flow-Like generated app frontend"
+				posterWidth={3248}
+				posterHeight={1958}
+				data="/a2ui-dashboard.json"
+				caption="Live demo · scripted"
+				class="mx-auto w-full max-w-xl"
+			/>
+		</main>
+	</body>
+</html>

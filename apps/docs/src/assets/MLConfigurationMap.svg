@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="720" viewBox="0 0 1440 720" overflow="hidden" role="img" aria-labelledby="ml-config-title ml-config-desc">
+  <title id="ml-config-title">Flow-Like machine learning configuration map</title>
+  <desc id="ml-config-desc">Five grouped decisions for data shape, objective, capacity, control, and diagnostics feed a central model fit, which then flows to validation. A callout recommends changing one family of settings at a time.</desc>
+  <defs>
+    <linearGradient id="ml-config-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#101216"/>
+      <stop offset="1" stop-color="#17191f"/>
+    </linearGradient>
+    <linearGradient id="ml-config-core" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#2b2737"/>
+      <stop offset="1" stop-color="#201e27"/>
+    </linearGradient>
+    <linearGradient id="ml-config-validated" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#20312b"/>
+      <stop offset="1" stop-color="#192521"/>
+    </linearGradient>
+    <pattern id="ml-config-grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/>
+    </pattern>
+    <marker id="ml-config-arrow-coral" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#ff7656"/>
+    </marker>
+    <marker id="ml-config-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#34d399"/>
+    </marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+      .kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.4px}
+      .heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}
+      .sub{fill:#a7adb8;font-size:17px}
+      .group{fill:#f7f8fa;font-size:15px;font-weight:780;letter-spacing:1.25px}
+      .detail{fill:#a7adb8;font-size:13px;font-weight:580}
+      .core-label{fill:#f7f8fa;font-size:22px;font-weight:780;letter-spacing:.7px}
+      .output-label{fill:#e8fff6;font-size:18px;font-weight:800;letter-spacing:1.05px}
+      .callout{fill:#d8dbe1;font-size:18px;font-weight:650}
+    </style>
+  </defs>
+
+  <rect width="1440" height="720" rx="28" fill="#101216"/>
+  <rect width="1440" height="720" rx="28" fill="url(#ml-config-bg)"/>
+  <rect width="1440" height="720" rx="28" fill="url(#ml-config-grid)"/>
+
+  <rect x="64" y="58" width="306" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/>
+  <circle cx="84" cy="75" r="5" fill="#ff7656"/>
+  <text x="99" y="81" class="kicker">ML CONFIGURATION MAP</text>
+  <text x="64" y="136" class="heading">Five decisions. One controlled fit.</text>
+  <text x="64" y="169" class="sub">Organize the knobs by what they change, then validate the result.</text>
+
+  <!-- Decision cards -->
+  <g>
+    <rect x="64" y="224" width="164" height="166" rx="22" fill="#252227" stroke="#5d3c35" stroke-width="2"/>
+    <circle cx="94" cy="254" r="10" fill="#ff7656"/>
+    <path d="M89 254h10M94 249v10" stroke="#15171b" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="84" y="296" class="group">DATA SHAPE</text>
+    <text x="84" y="326" class="detail">scale • encode</text>
+    <text x="84" y="345" class="detail">• order</text>
+    <path d="M84 365h124" stroke="#5d3c35" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="146" cy="390" r="7" fill="#ff7656" stroke="#ffd0c4" stroke-width="3"/>
+  </g>
+
+  <g>
+    <rect x="242" y="224" width="164" height="166" rx="22" fill="#282534" stroke="#574e71" stroke-width="2"/>
+    <circle cx="272" cy="254" r="10" fill="#a78bfa"/>
+    <path d="M267 254h10" stroke="#17151d" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="262" y="296" class="group">OBJECTIVE</text>
+    <text x="262" y="326" class="detail">link • loss</text>
+    <text x="262" y="345" class="detail">• margin</text>
+    <path d="M262 365h124" stroke="#574e71" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="324" cy="390" r="7" fill="#a78bfa" stroke="#e3d9ff" stroke-width="3"/>
+  </g>
+
+  <g>
+    <rect x="420" y="224" width="164" height="166" rx="22" fill="#202b28" stroke="#3e6759" stroke-width="2"/>
+    <circle cx="450" cy="254" r="10" fill="#34d399"/>
+    <path d="M445 257l4-7 6 7" fill="none" stroke="#12201b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="440" y="296" class="group">CAPACITY</text>
+    <text x="440" y="326" class="detail">kernel • depth</text>
+    <text x="440" y="345" class="detail">• hidden layers</text>
+    <path d="M440 365h124" stroke="#3e6759" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="502" cy="390" r="7" fill="#34d399" stroke="#c7f9e6" stroke-width="3"/>
+  </g>
+
+  <g>
+    <rect x="598" y="224" width="164" height="166" rx="22" fill="#282534" stroke="#574e71" stroke-width="2"/>
+    <circle cx="628" cy="254" r="10" fill="#a78bfa"/>
+    <path d="M622 254h12M628 248v12" stroke="#17151d" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="618" y="296" class="group">CONTROL</text>
+    <text x="618" y="326" class="detail">regularization •</text>
+    <text x="618" y="345" class="detail">optimizer</text>
+    <path d="M618 365h124" stroke="#574e71" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="680" cy="390" r="7" fill="#a78bfa" stroke="#e3d9ff" stroke-width="3"/>
+  </g>
+
+  <g>
+    <rect x="776" y="224" width="164" height="166" rx="22" fill="#252227" stroke="#5d3c35" stroke-width="2"/>
+    <circle cx="806" cy="254" r="10" fill="#ff7656"/>
+    <path d="M800 258l4-5 4 3 5-8" fill="none" stroke="#15171b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="796" y="296" class="group">DIAGNOSTICS</text>
+    <text x="796" y="326" class="detail">convergence</text>
+    <text x="796" y="345" class="detail">• crossings • spread</text>
+    <path d="M796 365h124" stroke="#5d3c35" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="858" cy="390" r="7" fill="#ff7656" stroke="#ffd0c4" stroke-width="3"/>
+  </g>
+
+  <!-- Five inputs merge into one model fit -->
+  <path d="M146 397V430M324 397V430M502 397V430M680 397V430M858 397V430" fill="none" stroke="#6e7480" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="146" cy="430" r="5" fill="#ff7656"/>
+  <circle cx="324" cy="430" r="5" fill="#a78bfa"/>
+  <circle cx="502" cy="430" r="5" fill="#34d399"/>
+  <circle cx="680" cy="430" r="5" fill="#a78bfa"/>
+  <circle cx="858" cy="430" r="5" fill="#ff7656"/>
+  <path d="M146 430H934C957 430 962 414 978 414" fill="none" stroke="#ff7656" stroke-opacity=".14" stroke-width="17" stroke-linecap="round"/>
+  <path d="M146 430H934C957 430 962 414 978 414" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#ml-config-arrow-coral)"/>
+
+  <!-- Model core -->
+  <g>
+    <rect x="988" y="224" width="208" height="266" rx="28" fill="url(#ml-config-core)" stroke="#8b6ee8" stroke-width="2"/>
+    <circle cx="988" cy="414" r="9" fill="#ff7656" stroke="#ffd0c4" stroke-width="4"/>
+    <rect x="1028" y="258" width="128" height="112" rx="24" fill="#292635" stroke="#5b5278"/>
+    <path d="M1056 300L1092 282L1128 300M1056 300L1092 326L1128 300M1092 282V326" fill="none" stroke="#a78bfa" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="1056" cy="300" r="9" fill="#ff7656"/>
+    <circle cx="1092" cy="282" r="9" fill="#a78bfa"/>
+    <circle cx="1092" cy="326" r="9" fill="#34d399"/>
+    <circle cx="1128" cy="300" r="9" fill="#ff7656"/>
+    <text x="1092" y="414" text-anchor="middle" class="core-label">MODEL FIT</text>
+    <rect x="1038" y="437" width="108" height="24" rx="12" fill="#ff7656" opacity=".14" stroke="#ff7656" stroke-opacity=".5"/>
+    <circle cx="1054" cy="449" r="4" fill="#ff7656"/>
+    <circle cx="1072" cy="449" r="4" fill="#a78bfa"/>
+    <circle cx="1090" cy="449" r="4" fill="#34d399"/>
+    <path d="M1110 449h18" stroke="#d8dbe1" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="1196" cy="352" r="9" fill="#34d399" stroke="#c7f9e6" stroke-width="4"/>
+  </g>
+
+  <!-- Validated output -->
+  <path d="M1205 352H1226" fill="none" stroke="#34d399" stroke-opacity=".14" stroke-width="15" stroke-linecap="round"/>
+  <path d="M1205 352H1226" fill="none" stroke="#34d399" stroke-width="5" stroke-linecap="round" marker-end="url(#ml-config-arrow-green)"/>
+  <g>
+    <rect x="1236" y="274" width="140" height="158" rx="26" fill="url(#ml-config-validated)" stroke="#34d399" stroke-width="2"/>
+    <circle cx="1306" cy="326" r="38" fill="#34d399" opacity=".1"/>
+    <circle cx="1306" cy="326" r="27" fill="#34d399"/>
+    <path d="M1293 326l9 9 18-22" fill="none" stroke="#12201b" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="1306" y="389" text-anchor="middle" class="output-label">VALIDATE</text>
+  </g>
+
+  <!-- Guidance callout -->
+  <g>
+    <rect x="410" y="572" width="620" height="68" rx="22" fill="#1b1d23" stroke="#414753"/>
+    <circle cx="449" cy="606" r="13" fill="#ff7656" opacity=".15" stroke="#ff7656" stroke-opacity=".65"/>
+    <path d="M449 598v10M449 614v1" stroke="#ff8a68" stroke-width="3" stroke-linecap="round"/>
+    <text x="720" y="613" text-anchor="middle" class="callout">Turn one family of settings at a time.</text>
+  </g>
+</svg>

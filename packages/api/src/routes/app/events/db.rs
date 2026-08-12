@@ -15,8 +15,8 @@ use flow_like::flow::event::{
 };
 use flow_like_types::anyhow;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    EntityTrait, QueryFilter, QueryOrder, TransactionTrait,
 };
 use serde_json::json;
 
@@ -53,8 +53,23 @@ pub fn filter_event_list_execution(mut event: CoreEvent) -> CoreEvent {
 
 const USER_FACING_EVENT_TYPES: &[&str] = &["simple_chat", "generic_form", "quick_action"];
 
+/// Event types backing generated machinery rather than an author-managed event.
+/// They are never part of the listed event set.
+const HIDDEN_EVENT_TYPES: &[&str] = &["ontology_action"];
+
+/// The route list is the same rows as the event list seen through a different
+/// column, so both endpoints must hide the same events. When they disagree, a
+/// caller diffing the two reads the surplus as orphaned and deletes live data.
+pub fn is_listed_event_type(event_type: &str) -> bool {
+    !HIDDEN_EVENT_TYPES.contains(&event_type)
+}
+
+pub fn is_user_facing_event_parts(default_page_id: Option<&str>, event_type: &str) -> bool {
+    default_page_id.is_some() || USER_FACING_EVENT_TYPES.contains(&event_type)
+}
+
 pub fn is_user_facing_event(event: &CoreEvent) -> bool {
-    event.default_page_id.is_some() || USER_FACING_EVENT_TYPES.contains(&event.event_type.as_str())
+    is_user_facing_event_parts(event.default_page_id.as_deref(), &event.event_type)
 }
 
 /// Convert a core Event to database Event model
@@ -238,17 +253,29 @@ pub fn db_model_to_event(model: event::Model) -> flow_like_types::Result<CoreEve
 }
 
 /// Sync an event to the database (upsert)
-pub async fn sync_event_to_db(
-    db: &DatabaseConnection,
+pub async fn sync_event_to_db<C>(
+    db: &C,
     app_id: &str,
     event: &CoreEvent,
-) -> flow_like_types::Result<()> {
+) -> flow_like_types::Result<()>
+where
+    C: ConnectionTrait,
+{
     let model = event_to_db_model(app_id, event);
 
     // Try to find existing
     let existing = event::Entity::find_by_id(&event.id).one(db).await?;
 
-    if existing.is_some() {
+    if let Some(existing) = existing {
+        if existing.app_id != app_id {
+            tracing::error!(
+                event_id = %event.id,
+                requested_app_id = %app_id,
+                existing_app_id = %existing.app_id,
+                "Refusing to reassign an event database row across apps"
+            );
+            return Err(anyhow!("Event ID collision while synchronizing event"));
+        }
         model.update(db).await?;
     } else {
         model.insert(db).await?;
@@ -408,44 +435,13 @@ pub async fn sync_event_with_sink_tokens(
 /// Encrypt a token using AES-256-GCM
 /// Returns base64-encoded ciphertext with prepended nonce
 pub fn encrypt_token(token: &str, key: &[u8; 32]) -> String {
-    use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
-    use base64::Engine;
-
-    let cipher = Aes256Gcm::new_from_slice(key).expect("Invalid key length");
-
-    let mut nonce_bytes = [0u8; 12];
-    getrandom::fill(&mut nonce_bytes).expect("Failed to generate random nonce");
-    let nonce = Nonce::from_slice(&nonce_bytes);
-
-    let ciphertext = cipher
-        .encrypt(nonce, token.as_bytes())
-        .expect("Encryption failed");
-
-    let mut combined = nonce_bytes.to_vec();
-    combined.extend(ciphertext);
-    base64::engine::general_purpose::STANDARD.encode(combined)
+    crate::utils::crypto::encrypt_secret(token, key)
 }
 
 /// Decrypt a token using AES-256-GCM
 /// Expects base64-encoded ciphertext with prepended nonce
 pub fn decrypt_token(encrypted: &str, key: &[u8; 32]) -> Option<String> {
-    use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
-    use base64::Engine;
-
-    let cipher = Aes256Gcm::new_from_slice(key).ok()?;
-
-    let combined = base64::engine::general_purpose::STANDARD
-        .decode(encrypted)
-        .ok()?;
-
-    if combined.len() < 12 {
-        return None;
-    }
-    let (nonce_bytes, ciphertext) = combined.split_at(12);
-    let nonce = Nonce::from_slice(nonce_bytes);
-
-    let plaintext = cipher.decrypt(nonce, ciphertext).ok()?;
-    String::from_utf8(plaintext).ok()
+    crate::utils::crypto::decrypt_secret(encrypted, key)
 }
 
 /// Extract cron expression from event config bytes
@@ -801,20 +797,44 @@ pub async fn get_events_with_fallback(
         return Ok(db_events);
     }
 
-    // DB is empty, load from bucket using event IDs and sync
-    let mut bucket_events = Vec::new();
+    // Load and validate the complete artifact set before changing the mirror.
+    // This prevents one unreadable artifact from leaving a partial DB snapshot
+    // that subsequent reads would incorrectly treat as authoritative.
+    let mut bucket_events = Vec::with_capacity(app.events.len());
     for event_id in &app.events {
-        match app.get_event(event_id, None).await {
-            Ok(event) => {
-                if let Err(e) = sync_event_to_db(db, &app.id, &event).await {
-                    tracing::warn!("Failed to sync event {} to DB: {}", event.id, e);
-                }
-                bucket_events.push(event);
-            }
-            Err(e) => {
-                tracing::warn!("Failed to load event {} from bucket: {}", event_id, e);
-            }
+        let event = app.get_event(event_id, None).await?;
+        if event.id != *event_id {
+            tracing::error!(
+                expected_event_id = %event_id,
+                artifact_event_id = %event.id,
+                app_id = %app.id,
+                "Event artifact ID does not match its manifest entry"
+            );
+            return Err(anyhow!("Event artifact ID mismatch"));
         }
+        bucket_events.push(event);
+    }
+
+    // Commit the mirror backfill atomically. The complete bucket result is
+    // still safe to serve when a transient DB write fails; rollback keeps the
+    // next request eligible to retry the repair.
+    let transaction = db.begin().await?;
+    let mut sync_error = None;
+    for event in &bucket_events {
+        if let Err(error) = sync_event_to_db(&transaction, &app.id, event).await {
+            sync_error = Some(error);
+            break;
+        }
+    }
+    if let Some(error) = sync_error {
+        transaction.rollback().await?;
+        tracing::warn!(
+            app_id = %app.id,
+            %error,
+            "Failed to backfill event database mirror; transaction rolled back"
+        );
+    } else {
+        transaction.commit().await?;
     }
 
     Ok(bucket_events)

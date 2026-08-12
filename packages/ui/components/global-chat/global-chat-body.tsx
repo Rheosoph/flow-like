@@ -15,7 +15,9 @@ import {
 	SettingsIcon,
 	SparklesIcon,
 	Trash2Icon,
+	TriangleAlertIcon,
 	WorkflowIcon,
+	ZapIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
@@ -23,6 +25,8 @@ import { toast } from "sonner";
 import {
 	IBitTypes,
 	IRole,
+	filterHostableLlmModels,
+	isFreeLlmModel,
 	useAssistantSurface,
 	useBackend,
 	useCopilotSDK,
@@ -55,14 +59,14 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../../index";
+import { cn } from "../../lib";
 import { getApiOrigin } from "../../lib/api-url";
+import { resolveChatPlaceholderTypingMotion } from "../../lib/chat-appearance";
+import { createComposerActivity } from "../../lib/composer-activity";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
 import { isTauri } from "../../lib/platform";
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
-import {
-	type IMessage,
-	globalChatDb,
-} from "../../state/global-chat/global-chat-db";
+import type { IMessage } from "../../state/global-chat/global-chat-db";
 import {
 	type MemoryEntry,
 	clearGlobalChatMemory,
@@ -70,37 +74,64 @@ import {
 	globalChatMemoryStatus,
 	listGlobalChatMemories,
 } from "../../state/global-chat/global-chat-memory";
-import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
 import {
+	AGENT_MODEL_KEY,
 	LAST_CONVERSATION_KEY,
+	MAX_CONCURRENT_GLOBAL_CHAT_RUNS,
+	beginGlobalChatTurnSelection,
+	isGlobalChatAtRunCapacity,
+	useGlobalChatStore,
+} from "../../state/global-chat/global-chat-store";
+import {
+	cancelGlobalChatRun,
+	clearGlobalChatQueueDrain,
 	driveGlobalChatStream,
 	makeGlobalChatMessage,
 	persistGlobalChatMessage,
 	persistGlobalChatSession,
-	resumeGlobalChatStream,
+	readActiveRun,
+	restoreGlobalChatConversation,
 	setActiveRun,
+	setGlobalChatQueueDrain,
+	steerGlobalChatRun,
 	tauriStart,
 } from "../../state/global-chat/global-chat-stream";
 import { runGlobalChatTool } from "../../state/global-chat/global-chat-tool-registry";
 import { webGlobalChatStart } from "../../state/global-chat/global-chat-web-transport";
 import { FlowScriptWorkspacePanel } from "../flowpilot/flowscript-workspace-panel";
 import {
+	FreeModelCapabilityNotice,
+	type ProviderModelPickerModel,
+} from "../flowpilot/provider-model-reasoning-picker";
+import {
 	type AIProvider,
 	flowPilotModelIdForProvider,
 	isAgentBackendProvider,
 	normalizeAIProvider,
 } from "../flowpilot/types";
+import { FLOWPILOT_AI_DISCLOSURE } from "../interfaces/chat-default/ai-disclosure";
 import { fileToAttachment } from "../interfaces/chat-default/attachment";
-import { Chat, type IChatRef } from "../interfaces/chat-default/chat";
+import {
+	Chat,
+	type IChatConcurrency,
+	type IChatRef,
+} from "../interfaces/chat-default/chat";
 import { ChatWidgetExecutionProvider } from "../interfaces/chat-default/chat-widget-execution";
 import type { ISendMessageFunction } from "../interfaces/chat-default/chatbox";
 import { submitInteractionResponse } from "../interfaces/chat-default/respond-interaction";
+import {
+	FlowPilotEmptyState,
+	type IEmptyStateSuggestion,
+	useEmptyStateExit,
+} from "./flowpilot-empty-state";
 import { GlobalChatHistory } from "./global-chat-history";
 import { InlineAppChatCard } from "./inline-app-chat-card";
 import { InlineAppPageCard } from "./inline-app-page-card";
 import { InlineAppSurfaceCard } from "./inline-app-surface-card";
 import { InlineToolPrompt } from "./inline-tool-prompt";
+import { resolveModelSelection } from "./model-selection";
 import { PendingComponentsCard } from "./pending-components-card";
+import { useHydrateAgentSelection } from "./use-agent-persistence";
 import { useGlobalChatRunWidgetAction } from "./use-global-widget-action";
 
 // The streaming engine (parse the FlowPilot protocol → message content + plan_steps → store) lives
@@ -120,11 +151,7 @@ const PROVIDERS: Array<{
 ];
 
 // Quick-start prompts on the empty chat; the `prompt` is what actually gets sent.
-const EMPTY_SUGGESTIONS: Array<{
-	label: string;
-	icon: typeof SparklesIcon;
-	prompt: string;
-}> = [
+const EMPTY_SUGGESTIONS: readonly IEmptyStateSuggestion[] = [
 	{ label: "Create an app", icon: PlusIcon, prompt: "Create a new app" },
 	{
 		label: "Browse the store",
@@ -142,8 +169,20 @@ const EMPTY_SUGGESTIONS: Array<{
 const MEMORY_OFF = "__off__";
 const GLOBAL_CHAT_CONFIG = {
 	allow_file_upload: true,
+	ai_disclosure: FLOWPILOT_AI_DISCLOSURE,
 	tools: [] as string[],
+	// FlowPilot has no interface config screen of its own, so this is where its copy of the chat
+	// event's `placeholder_typing_motion` lives. Set it to true to let the mark answer the composer.
+	placeholder_typing_motion: false,
 };
+
+const GLOBAL_CHAT_TYPING_MOTION = resolveChatPlaceholderTypingMotion(
+	GLOBAL_CHAT_CONFIG.placeholder_typing_motion,
+);
+
+// FlowScript itself needs at least 420px. Keep app previews above the split until the remaining
+// conversation column is wide enough for a useful embedded desktop surface.
+const INLINE_ARTIFACT_COLUMN_LAYOUT_MIN_WIDTH = 1280;
 
 interface GlobalChatBodyProps {
 	variant?: "page" | "overlay";
@@ -156,6 +195,9 @@ interface GlobalChatBodyProps {
  */
 export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const chatRef = useRef<IChatRef>(null);
+	// One channel per surface: an app chat can be open beside this one, and typing in it must not
+	// stir this mark. Never state — it changes per keystroke and only the film's loop reads it.
+	const composerActivity = useRef(createComposerActivity()).current;
 
 	const messages = useGlobalChatStore((s) => s.messages);
 	const activeConversationId = useGlobalChatStore(
@@ -168,11 +210,37 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const setProvider = useGlobalChatStore((s) => s.setProvider);
 	const setSelectedModelId = useGlobalChatStore((s) => s.setSelectedModelId);
 	const setReasoningEffort = useGlobalChatStore((s) => s.setReasoningEffort);
+	// Explicit picks persist across sessions; the "keep a valid model" fallbacks
+	// below use the plain setters so a still-loading catalog can never clobber them.
+	const selectProvider = useGlobalChatStore((s) => s.selectProvider);
+	const selectModel = useGlobalChatStore((s) => s.selectModel);
+	const selectReasoningEffort = useGlobalChatStore(
+		(s) => s.selectReasoningEffort,
+	);
 	const embeddingModelId = useGlobalChatStore((s) => s.embeddingModelId);
 	const setEmbeddingModelId = useGlobalChatStore((s) => s.setEmbeddingModelId);
+	const autoMode = useGlobalChatStore((s) => s.autoMode);
+	const setAutoMode = useGlobalChatStore((s) => s.setAutoMode);
+	const enableOverlayAutoOpen = useGlobalChatStore(
+		(s) => s.enableOverlayAutoOpen,
+	);
 	const appendMessage = useGlobalChatStore((s) => s.appendMessage);
-	const setStreaming = useGlobalChatStore((s) => s.setStreaming);
 	const consumeDraft = useGlobalChatStore((s) => s.consumeDraft);
+	const runs = useGlobalChatStore((s) => s.runs);
+	const queue = useGlobalChatStore((s) => s.queue);
+	const removeQueuedMessage = useGlobalChatStore((s) => s.removeQueuedMessage);
+	const activeRuns = useMemo(
+		() =>
+			Object.values(runs)
+				.filter((run) => run.conversationId === activeConversationId)
+				.sort((a, b) => a.startedAt - b.startedAt),
+		[runs, activeConversationId],
+	);
+	const queuedMessages = useMemo(
+		() =>
+			queue.filter((entry) => entry.conversationId === activeConversationId),
+		[queue, activeConversationId],
+	);
 	const inlineAppChats = useGlobalChatStore((s) => s.inlineAppChats);
 	const removeInlineAppChat = useGlobalChatStore((s) => s.removeInlineAppChat);
 	const inlineAppPages = useGlobalChatStore((s) => s.inlineAppPages);
@@ -188,6 +256,16 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	);
 	const flowscriptWorkspace = useGlobalChatStore((s) => s.flowscriptWorkspace);
 	const pendingComponents = useGlobalChatStore((s) => s.pendingComponents);
+	const handlePageInteraction = useCallback(() => {
+		if (variant === "page") enableOverlayAutoOpen();
+	}, [enableOverlayAutoOpen, variant]);
+	// Turning auto mode on mid-run settles approval cards whose promises the bridge captured
+	// before the flip; queued ones drain as each is answered. `ask` prompts are never
+	// auto-answered — auto mode waives permission, not questions.
+	useEffect(() => {
+		if (!autoMode || toolPrompt?.kind !== "approval") return;
+		toolPrompt.respond({ approved: true, remember: false });
+	}, [autoMode, toolPrompt]);
 	// Live board surface (open canvas) the assistant can see and edit — shown as a context chip.
 	const boardSurface = useAssistantSurface((s) => s.boardSurface);
 	const runWidgetAction = useGlobalChatRunWidgetAction();
@@ -206,65 +284,49 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 
 	useEffect(() => {
 		const state = useGlobalChatStore.getState();
-		if (state.messages.length > 0 || state.isStreaming) return;
+		// A pending hero-bar draft owns this mount: restoring the previous conversation underneath
+		// it would land the prompt in the old transcript (racy, depends on IndexedDB latency).
+		if (state.messages.length > 0 || state.isStreaming || state.draft) return;
 		let lastId: string | null = null;
 		try {
 			lastId = sessionStorage.getItem(LAST_CONVERSATION_KEY);
 		} catch {
 			return;
 		}
+		// No restore pointer, but a run is still in flight: the user started a new chat while the
+		// previous turn was generating, then reloaded. Restore THAT conversation instead of leaving
+		// the live Rust run orphaned — an empty new chat has nothing to lose, an unfinalized answer
+		// does. `readActiveRun` survives the reload; only the run's own teardown clears it.
+		if (!lastId) lastId = readActiveRun()?.conversationId ?? null;
 		if (!lastId) return;
-		void (async () => {
-			try {
-				const restored = await globalChatDb.messages
-					.where("sessionId")
-					.equals(lastId)
-					.sortBy("timestamp");
-				const current = useGlobalChatStore.getState();
-				if (
-					restored.length > 0 &&
-					current.messages.length === 0 &&
-					!current.isStreaming
-				) {
-					// Mid-stream checkpoints may carry unsettled steps — settle them so the
-					// restored message doesn't render an eternal spinner.
-					const normalized = restored.map((message) => ({
-						...message,
-						current_step_id: undefined,
-						tools: [],
-						plan_steps: message.plan_steps?.map((step) =>
-							step.status === "progress" || step.status === "planned"
-								? { ...step, status: "done" as const }
-								: step,
-						),
-					}));
-					current.loadConversation(lastId, normalized);
-					// If a response was still streaming when the webview reloaded, the Rust run kept
-					// going into a dead channel — re-attach and continue rendering it live. No-op when
-					// nothing is in flight (the run already finished/GC'd → checkpoint stays as-is).
-					resumeGlobalChatStream();
-				}
-			} catch {
-				// best-effort restore
-			}
-		})();
+		// Shared restore path (also used by the history popover): normalizes stale checkpoints and
+		// re-attaches any run that was still streaming when the webview reloaded. `skipIfBusy`
+		// re-checks after the Dexie read so a conversation/draft that appeared meanwhile wins.
+		restoreGlobalChatConversation(lastId, { skipIfBusy: true }).catch(() => {
+			// best-effort restore
+		});
 	}, []);
 
-	// The streaming bubble lives in the store so the reply keeps rendering when the conversation
-	// morphs between /chat and the overlay mid-response. Mirror it into this surface's <Chat> ref
-	// via a non-reactive subscription — pushCurrentMessageUpdate already throttles via RAF.
+	// Streaming bubbles live in the store so replies keep rendering when the conversation morphs
+	// between /chat and the overlay mid-response. Mirror them into this surface's <Chat> ref via a
+	// non-reactive subscription — pushCurrentMessageUpdate already throttles via RAF. There may be
+	// several at once; <Chat> keys them by message id and renders one live bubble each.
 	useEffect(() => {
-		const push = (message: IMessage | null) => {
-			if (message) chatRef.current?.pushCurrentMessageUpdate(message);
-			else chatRef.current?.clearCurrentMessageUpdate();
+		const push = (messages: IMessage[]) => {
+			chatRef.current?.pushCurrentMessageUpdate(messages);
 		};
-		push(useGlobalChatStore.getState().streamingMessage);
+		push(useGlobalChatStore.getState().streamingMessages);
 		return useGlobalChatStore.subscribe((state, prev) => {
-			if (state.streamingMessage !== prev.streamingMessage) {
-				push(state.streamingMessage);
+			if (state.streamingMessages !== prev.streamingMessages) {
+				push(state.streamingMessages);
 			}
 		});
 	}, []);
+
+	// Restore the last explicit provider/model/effort. /chat is often the first
+	// FlowPilot surface mounted (deep link, mobile bottom nav), so it has to
+	// hydrate the shared store itself rather than relying on the hero.
+	useHydrateAgentSelection();
 
 	// Auth token + identity: profile (Bits) models may need the bearer token, and the assistant's
 	// self-awareness context includes the signed-in user (kept fresh via a ref for the send closure).
@@ -308,12 +370,38 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		!!settingsProfile.data,
 		[settingsProfile.data?.hub_profile.id],
 	);
+	const customBits = useInvoke(
+		backend.bitState.listCustomBits,
+		backend.bitState,
+		[],
+		!!settingsProfile.data,
+		[settingsProfile.data?.hub_profile.id],
+	);
+	const { canHostLlamaCPP, canHostMLX } = backend.capabilities();
 	const bitsModels = useMemo(() => {
 		const profileBits = settingsProfile.data?.hub_profile.bits;
 		if (!llmBits.data || !profileBits) return [];
 		const ids = new Set(profileBits);
-		return llmBits.data.filter((bit) => ids.has(`${bit.hub}:${bit.id}`));
-	}, [llmBits.data, settingsProfile.data?.hub_profile.bits]);
+		const profileModels = llmBits.data.filter((bit) =>
+			ids.has(`${bit.hub}:${bit.id}`),
+		);
+		const seen = new Set(profileModels.map((bit) => bit.id));
+		const ownModels = (customBits.data ?? []).filter(
+			(bit) =>
+				!seen.has(bit.id) &&
+				(bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm),
+		);
+		return filterHostableLlmModels([...ownModels, ...profileModels], {
+			canHostLlamaCPP,
+			canHostMLX,
+		});
+	}, [
+		llmBits.data,
+		customBits.data,
+		settingsProfile.data?.hub_profile.bits,
+		canHostLlamaCPP,
+		canHostMLX,
+	]);
 
 	const normalizedProvider = normalizeAIProvider(provider);
 	const isAgent = isAgentBackendProvider(normalizedProvider);
@@ -334,19 +422,37 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		copilotSDK.start,
 	]);
 
-	// Pick a sensible default model whenever the model list for the active provider changes.
+	// Pick a sensible default model whenever the model list for the active provider
+	// changes — but re-apply the user's remembered pick the moment the catalog that
+	// offers it loads, so a slow/fallback catalog can't strand them on another model.
+	// Uses the plain setter throughout: none of this is a new user choice.
 	useEffect(() => {
+		let remembered: string | null = null;
+		try {
+			remembered = localStorage.getItem(AGENT_MODEL_KEY);
+		} catch {}
 		if (isAgent) {
 			const models = copilotSDK.models;
-			if (models.length === 0) return;
-			if (!selectedModelId || !models.some((m) => m.id === selectedModelId)) {
-				setSelectedModelId(models[0].id);
-			}
+			const nextModelId = resolveModelSelection({
+				models,
+				selectedModelId,
+				rememberedModelId: remembered,
+				canReplaceInvalidSelection: copilotSDK.hasLoadedModelCatalog,
+			});
+			if (nextModelId !== null) setSelectedModelId(nextModelId);
 			return;
 		}
 		if (!llmBits.data) return;
 		if (bitsModels.length === 0) {
 			if (selectedModelId) setSelectedModelId("");
+			return;
+		}
+		if (
+			remembered &&
+			remembered !== selectedModelId &&
+			bitsModels.some((bit) => bit.id === remembered)
+		) {
+			setSelectedModelId(remembered);
 			return;
 		}
 		if (!bitsModels.some((bit) => bit.id === selectedModelId)) {
@@ -358,6 +464,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	}, [
 		isAgent,
 		copilotSDK.models,
+		copilotSDK.hasLoadedModelCatalog,
 		llmBits.data,
 		bitsModels,
 		selectedModelId,
@@ -398,7 +505,22 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		async (content, filesAttached) => {
 			const trimmed = content.trim();
 			const state = useGlobalChatStore.getState();
-			if (state.isStreaming) return;
+			// Concurrency is allowed up to the cap; past it the message is queued rather than
+			// dropped, and drains as soon as a turn finishes.
+			if (isGlobalChatAtRunCapacity(state)) {
+				if (!trimmed && (filesAttached?.length ?? 0) === 0) return;
+				state.enqueueMessage({
+					conversationId: state.activeConversationId,
+					content: trimmed,
+					files: filesAttached,
+				});
+				return;
+			}
+			const agentSelection = Object.freeze({
+				provider: state.provider,
+				selectedModelId: state.selectedModelId,
+				reasoningEffort: state.reasoningEffort,
+			});
 
 			// Any file type is accepted: files become local tmp files (Tauri) or presigned tmp
 			// uploads — only URLs travel through IPC and land in IndexedDB, no blobs. FlowPilot
@@ -436,18 +558,25 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						},
 			);
 			if (!trimmed && attachments.length === 0) return;
-			setStreaming(true);
-			useGlobalChatStore.getState().clearPendingAppRefs();
-			useGlobalChatStore.getState().clearSubPlanSteps();
-			useGlobalChatStore.getState().clearInteractions();
-			useGlobalChatStore.getState().clearSubAttachments();
-			useGlobalChatStore.getState().clearSubUsageStats();
+			// Attachment preparation is asynchronous, so re-check capacity: several sends can be
+			// preparing uploads at the same time.
+			if (isGlobalChatAtRunCapacity(useGlobalChatStore.getState())) {
+				useGlobalChatStore.getState().enqueueMessage({
+					conversationId: state.activeConversationId,
+					content: trimmed,
+					files: filesAttached,
+				});
+				return;
+			}
+			// A real interaction on the full FlowPilot page starts a new visibility cycle. If the
+			// user previously dismissed the dock, later agent/navigation activity may show it again.
+			if (variant === "page") state.enableOverlayAutoOpen();
 
 			const sessionId = state.activeConversationId;
 			const priorMessages = state.messages;
 			const effectiveModelId = flowPilotModelIdForProvider(
-				normalizeAIProvider(state.provider),
-				state.selectedModelId,
+				normalizeAIProvider(agentSelection.provider),
+				agentSelection.selectedModelId,
 			);
 
 			const userMessage = makeGlobalChatMessage(IRole.User, trimmed, sessionId);
@@ -461,9 +590,13 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				"",
 				sessionId,
 			);
-			useGlobalChatStore.getState().setStreamingMessage({ ...responseMessage });
+			const turnSelection = beginGlobalChatTurnSelection(
+				responseMessage.id,
+				agentSelection,
+			);
 			// Register the run so a reload mid-response can re-attach to the live Rust stream.
-			setActiveRun(sessionId, responseMessage.id);
+			// driveGlobalChatStream creates the store record itself.
+			setActiveRun(sessionId, responseMessage.id, turnSelection);
 
 			const historyPayload = priorMessages.map((m) => ({
 				role: m.inner.role === IRole.Assistant ? "Assistant" : "User",
@@ -548,6 +681,9 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			// morph) and survives a hard reload via the Rust run registry (global_chat_resume).
 			await driveGlobalChatStream({
 				responseMessage,
+				agentSelection: turnSelection,
+				label: trimmed,
+				sourceAttachments: [...attachments],
 				inputPreview: {
 					prompt: trimmed,
 					attachments: allFiles.map((file) => ({
@@ -572,7 +708,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							history: historyPayload,
 							currentImages: widgetImages.length > 0 ? widgetImages : undefined,
 							modelId: effectiveModelId,
-							reasoningEffort: state.reasoningEffort || undefined,
+							reasoningEffort: turnSelection.reasoningEffort || undefined,
 							embeddingModelId: state.embeddingModelId || undefined,
 							token: authUser?.access_token ?? undefined,
 							userContext: userContext ?? undefined,
@@ -583,6 +719,9 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					: webGlobalChatStart({
 							baseUrl: getApiOrigin(),
 							token: authUser?.access_token ?? undefined,
+							// The server mints its own run id; the transport needs ours to tag tool
+							// requests and to register this run's cancel/steer control.
+							clientRunId: responseMessage.id,
 							onToolRequest: runGlobalChatTool,
 							onLifecycle: FLOWPILOT_DEBUG_ENABLED
 								? (event) => {
@@ -621,7 +760,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						}),
 			});
 		},
-		[appendMessage, setStreaming, backend],
+		[appendMessage, backend, variant],
 	);
 
 	// Answer an app-chat dialog raised during a call_app_chat run. Responding unblocks the app's
@@ -644,17 +783,87 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		[backend.profile, setInteractionResponded],
 	);
 
+	// Queue drain. Installed as a module-level hook (not just an effect) because the run that frees
+	// capacity may finish long after the surface that started it unmounted — the finishing run
+	// calls this directly. The effect below covers the other direction: capacity that frees up
+	// while this surface is mounted, e.g. after a cancel.
+	const sendRef = useRef(handleSendMessage);
+	useEffect(() => {
+		sendRef.current = handleSendMessage;
+	}, [handleSendMessage]);
+	const drainQueue = useCallback((conversationId: string) => {
+		const state = useGlobalChatStore.getState();
+		if (conversationId !== state.activeConversationId) return;
+		if (isGlobalChatAtRunCapacity(state)) return;
+		const next = state.takeNextQueuedMessage(conversationId);
+		if (!next) return;
+		void sendRef.current(next.content, next.files);
+	}, []);
+	useEffect(() => {
+		setGlobalChatQueueDrain(drainQueue);
+		return () => clearGlobalChatQueueDrain(drainQueue);
+	}, [drainQueue]);
+	useEffect(() => {
+		if (queuedMessages.length === 0) return;
+		if (activeRuns.length >= MAX_CONCURRENT_GLOBAL_CHAT_RUNS) return;
+		drainQueue(activeConversationId);
+	}, [queuedMessages, activeRuns.length, activeConversationId, drainQueue]);
+
+	/** Stop one live turn. The partial reply is kept and committed. */
+	const handleStopRun = useCallback((runId: string) => {
+		void cancelGlobalChatRun(runId);
+	}, []);
+
+	/**
+	 * Send the composer's text into a turn that is already running instead of starting a new one.
+	 * Targets the most recently started run — that is the one the user is watching.
+	 */
+	const handleSteer = useCallback(
+		async (content: string) => {
+			const target = activeRuns
+				.filter((run) => run.status === "streaming")
+				.at(-1);
+			if (!target) return false;
+			const delivered = await steerGlobalChatRun(target.runId, content);
+			if (!delivered) {
+				toast.error(
+					"FlowPilot could not take that mid-run. It was not sent — try again or wait for the turn to finish.",
+				);
+			}
+			return delivered;
+		},
+		[activeRuns],
+	);
+
 	// Auto-send a pending draft exactly once — handed off from the landing hero bar or attached to
 	// a surface's requestOpenAssistant(prompt). Subscribing to the draft (instead of running only on
 	// mount) lets it fire in BOTH variants, including when the overlay body is already mounted;
 	// consumeDraft() clears the store atomically so a concurrently mounted page/overlay pair cannot
-	// double-send. While a response streams the draft stays queued (handleSendMessage would drop it
-	// silently) — the isStreaming dependency re-fires the effect when the stream ends.
+	// double-send. A live turn no longer blocks it — only the concurrency cap does, and the
+	// run-count dependency re-fires the effect when capacity frees up.
 	//
 	// Readiness gate: right after a reload the draft would otherwise fire before auth and the model
 	// list settle — modelId undefined makes the backend pick an arbitrary "best" profile model
 	// (which can stall for minutes hosting a local model) and the auth token would be missing for
 	// hosted ones. The deps re-fire the effect the moment a model is selected.
+	const chatConcurrency = useMemo<IChatConcurrency>(
+		() => ({
+			runs: activeRuns,
+			queued: queuedMessages,
+			atCapacity: activeRuns.length >= MAX_CONCURRENT_GLOBAL_CHAT_RUNS,
+			onStop: handleStopRun,
+			onSteer: handleSteer,
+			onRemoveQueued: removeQueuedMessage,
+		}),
+		[
+			activeRuns,
+			queuedMessages,
+			handleStopRun,
+			handleSteer,
+			removeQueuedMessage,
+		],
+	);
+
 	const pendingDraft = useGlobalChatStore((s) => s.draft);
 	const draftReady =
 		!auth.isLoading &&
@@ -662,15 +871,22 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			? copilotSDK.models.length > 0 && Boolean(selectedModelId)
 			: Boolean(selectedModelId) ||
 				(llmBits.data !== undefined && bitsModels.length === 0));
-	// biome-ignore lint/correctness/useExhaustiveDependencies: send on new drafts / readiness / stream-end only, not on every handleSendMessage identity change.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: send on new drafts / readiness / capacity only, not on every handleSendMessage identity change.
 	useEffect(() => {
 		if (!pendingDraft || !draftReady) return;
-		if (useGlobalChatStore.getState().isStreaming) return;
+		// A draft only waits for actual capacity now — a live turn no longer blocks it.
+		if (isGlobalChatAtRunCapacity(useGlobalChatStore.getState())) return;
 		const draft = consumeDraft();
 		if (!draft) return;
 		if (draft.modelId) setSelectedModelId(draft.modelId);
 		void handleSendMessage(draft.prompt, draft.files);
-	}, [pendingDraft, draftReady, isStreaming, consumeDraft, setSelectedModelId]);
+	}, [
+		pendingDraft,
+		draftReady,
+		activeRuns.length,
+		consumeDraft,
+		setSelectedModelId,
+	]);
 
 	const compact = variant === "overlay";
 
@@ -705,9 +921,20 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const canSideBySide = layoutWidth >= 768;
 	const showWorkspace = hasFlowscript && !flowscriptHidden;
 	const sideBySideWorkspace = showWorkspace && canSideBySide;
+	const hasInlineArtifacts =
+		inlineAppChats.length > 0 ||
+		inlineAppPages.length > 0 ||
+		inlineAppSurfaces.length > 0 ||
+		pendingComponents !== null;
+	const splitWorkspaceBelowInlineArtifacts =
+		sideBySideWorkspace &&
+		hasInlineArtifacts &&
+		layoutWidth < INLINE_ARTIFACT_COLUMN_LAYOUT_MIN_WIDTH;
+	const fullHeightConversationColumn =
+		sideBySideWorkspace && !splitWorkspaceBelowInlineArtifacts;
 
 	// Provider, model, and dynamic reasoning effort share one popover so the toolbar stays compact.
-	const modelOptions = useMemo(
+	const modelOptions = useMemo<ProviderModelPickerModel[]>(
 		() =>
 			isAgent
 				? copilotSDK.models.map((model) => ({
@@ -717,6 +944,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				: bitsModels.map((bit) => ({
 						id: bit.id,
 						label: bit.meta?.en?.name ?? bit.id,
+						isFree: isFreeLlmModel(bit),
 					})),
 		[isAgent, copilotSDK.models, bitsModels],
 	);
@@ -796,7 +1024,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					onValueChange={handleEmbeddingChange}
 				>
 					<SelectTrigger
-						className="h-7 data-[size=default]:h-7 min-w-0 max-w-36 shrink-0 gap-1.5 px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+						className="h-9 md:h-7 data-[size=default]:h-9 md:data-[size=default]:h-7 min-w-0 max-w-36 shrink-0 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs shadow-none outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 						title="Profile memory embedding model"
 					>
 						<BrainIcon className="size-3.5 mr-1 text-muted-foreground shrink-0" />
@@ -836,6 +1064,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		// A queued draft is about to send — don't flash the empty state under it.
 		!pendingDraft;
 
+	// The mark collapses into the live orb on send, so it has to outlive the condition itself.
+	const { mounted: emptyStateMounted, exiting: emptyStateExiting } =
+		useEmptyStateExit(showEmptyState);
+
 	// Agent-SDK backends (Copilot / Codex / Claude Code) are local CLIs — desktop only. On web only
 	// profile Bits are offered, matching the `/ai/global-chat/backends` capability.
 	const availableProviders = useMemo(
@@ -859,6 +1091,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const currentModelLabel = modelOptions.find(
 		(option) => option.id === selectedModelId,
 	)?.label;
+	const selectedModelIsFree =
+		normalizedProvider === "bits" &&
+		modelOptions.find((option) => option.id === selectedModelId)?.isFree ===
+			true;
 
 	// Provider, model, and model-specific reasoning effort live in one compact picker. A model with
 	// configurable reasoning keeps the popover open so the next section can be selected immediately;
@@ -867,10 +1103,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		<Popover open={pickerOpen} onOpenChange={setPickerOpen}>
 			<PopoverTrigger asChild>
 				<Button
-					variant="outline"
+					variant="ghost"
 					size="sm"
-					title={`${currentProvider.label} · ${currentModelLabel ?? "Select a model"}${reasoningEffortOptions.length > 0 ? ` · ${currentReasoningEffortName}` : ""}`}
-					className="h-7 shrink-0 gap-1.5 px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+					title={`${currentProvider.label} · ${currentModelLabel ?? "Select a model"}${reasoningEffortOptions.length > 0 ? ` · ${currentReasoningEffortName}` : ""}${selectedModelIsFree ? " · Free model may be too limited for complete app creation" : ""}`}
+					className="h-9 md:h-7 shrink-0 gap-1.5 rounded-lg px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 				>
 					<CurrentProviderIcon className="size-3.5 shrink-0 text-primary" />
 					<span className="max-w-28 truncate">
@@ -887,6 +1123,12 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							</span>
 						</>
 					)}
+					{selectedModelIsFree && (
+						<TriangleAlertIcon
+							aria-hidden="true"
+							className="size-3.5 shrink-0 text-amber-500"
+						/>
+					)}
 					<ChevronDownIcon className="size-3 shrink-0 opacity-50" />
 				</Button>
 			</PopoverTrigger>
@@ -902,7 +1144,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								key={id}
 								type="button"
 								title={label}
-								onClick={() => setProvider(id)}
+								onClick={() => selectProvider(id)}
 								className={`flex h-7 flex-1 items-center justify-center rounded-md outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${active ? "bg-linear-to-br from-primary to-purple-600 text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
 							>
 								<Icon className="size-4" />
@@ -926,7 +1168,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 									key={option.id}
 									type="button"
 									onClick={() => {
-										setSelectedModelId(option.id);
+										selectModel(option.id);
 										const nextModel = copilotSDK.models.find(
 											(model) => model.id === option.id,
 										);
@@ -946,6 +1188,13 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						})
 					)}
 				</div>
+				{selectedModelIsFree && (
+					<FreeModelCapabilityNotice
+						agentBackendsAvailable={availableProviders.some((option) =>
+							isAgentBackendProvider(option.id),
+						)}
+					/>
+				)}
 				{reasoningEffortOptions.length > 0 && (
 					<>
 						<p className="px-1 pb-1.5 pt-2.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -955,7 +1204,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							<button
 								type="button"
 								onClick={() => {
-									setReasoningEffort("");
+									selectReasoningEffort("");
 									setPickerOpen(false);
 								}}
 								className={`col-span-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${!reasoningEffort ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
@@ -976,7 +1225,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 										type="button"
 										title={option.description}
 										onClick={() => {
-											setReasoningEffort(option.id);
+											selectReasoningEffort(option.id);
 											setPickerOpen(false);
 										}}
 										className={`flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${active ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
@@ -994,169 +1243,220 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	);
 
 	return (
-		<div className="flex flex-col flex-1 min-h-0 w-full h-full">
-			<header className="flex items-center gap-1.5 px-3 py-2 border-b border-border/50 shrink-0 overflow-x-auto">
-				{providerModelPicker}
-				{memoryPicker}
-				{memoryModels.length > 0 && profileId && (
+		<div
+			onPointerDownCapture={handlePageInteraction}
+			onKeyDownCapture={handlePageInteraction}
+			className="flex flex-col flex-1 min-h-0 w-full h-full"
+		>
+			<header
+				className="fl-chat-chrome flex shrink-0 items-center gap-1.5 px-3 py-2"
+				data-chrome-pinned={isStreaming ? "true" : "false"}
+			>
+				<div className="flex flex-1 min-w-0 items-center gap-1.5 overflow-x-auto no-scrollbar">
+					{providerModelPicker}
+					{memoryPicker}
+					{memoryModels.length > 0 && profileId && (
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							onClick={() => setMemoryManagerOpen(true)}
+							title="Review & manage saved memories"
+							className="size-9 md:size-7 shrink-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+						>
+							<SettingsIcon className="size-3.5 shrink-0 text-muted-foreground" />
+						</Button>
+					)}
 					<Button
 						type="button"
-						variant="outline"
-						size="icon"
-						onClick={() => setMemoryManagerOpen(true)}
-						title="Review & manage saved memories"
-						className="size-7 shrink-0 outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-					>
-						<SettingsIcon className="size-3.5 shrink-0 text-muted-foreground" />
-					</Button>
-				)}
-				{boardSurface && (
-					<div
-						className="flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-2.5 text-xs text-foreground/80"
-						title="The assistant can see and edit this board"
-					>
-						<WorkflowIcon className="size-3.5 shrink-0 text-primary" />
-						<span className="truncate max-w-32">
-							{boardSurface.board?.name || "Board"}
-						</span>
-						{boardSurface.selectedNodeIds.length > 0 && (
-							<span className="shrink-0 text-muted-foreground">
-								· {boardSurface.selectedNodeIds.length} selected
-							</span>
-						)}
-					</div>
-				)}
-				{flowscriptWorkspace && (
-					<Button
-						type="button"
-						variant={showWorkspace ? "default" : "outline"}
+						variant="ghost"
 						size="sm"
-						aria-pressed={showWorkspace}
-						onClick={() => setFlowscriptHidden((hidden) => !hidden)}
+						aria-pressed={autoMode}
+						onClick={() => setAutoMode(!autoMode)}
 						title={
-							showWorkspace
-								? "Hide the FlowScript workspace"
-								: "Show the FlowScript workspace"
+							autoMode
+								? "Auto mode on — tools run and changes apply without asking, including deletions and full-board replacements."
+								: "Auto mode off — the assistant asks before acting"
 						}
-						className="h-7 shrink-0 gap-1.5 px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-					>
-						<FileCode2Icon className="size-3.5 shrink-0" />
-						FlowScript
-						{flowscriptWorkspace.status === "validation_errors" && (
-							<span
-								className="size-1.5 shrink-0 rounded-full bg-red-500"
-								aria-hidden
-							/>
+						className={cn(
+							"h-9 md:h-7 shrink-0 gap-1.5 rounded-lg px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0",
+							autoMode && "bg-primary/12 text-primary hover:bg-primary/18",
 						)}
+					>
+						<ZapIcon className="size-3.5 shrink-0" />
+						Auto
 					</Button>
-				)}
-				<GlobalChatHistory />
-			</header>
-
-			{(inlineAppChats.length > 0 ||
-				inlineAppPages.length > 0 ||
-				inlineAppSurfaces.length > 0 ||
-				pendingComponents !== null) && (
-				<div className="shrink-0 max-h-[60vh] overflow-y-auto pt-2">
-					<PendingComponentsCard />
-					{inlineAppPages.map((page) => (
-						<InlineAppPageCard
-							key={page.id}
-							page={page}
-							onClose={removeInlineAppPage}
-							compact={compact}
-						/>
-					))}
-					{inlineAppSurfaces.map((surface) => (
-						<InlineAppSurfaceCard
-							key={surface.id}
-							surface={surface}
-							onClose={removeInlineAppSurface}
-							compact={compact}
-						/>
-					))}
-					{inlineAppChats.map((chat) => (
-						<InlineAppChatCard
-							key={chat.id}
-							chat={chat}
-							onClose={removeInlineAppChat}
-							compact={compact}
-						/>
-					))}
+					{boardSurface && (
+						<div
+							className="flex h-9 md:h-7 shrink-0 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-2.5 text-xs text-foreground/80"
+							title="The assistant can see and edit this board"
+						>
+							<WorkflowIcon className="size-3.5 shrink-0 text-primary" />
+							<span className="truncate max-w-32">
+								{boardSurface.board?.name || "Board"}
+							</span>
+							{boardSurface.selectedNodeIds.length > 0 && (
+								<span className="shrink-0 text-muted-foreground">
+									· {boardSurface.selectedNodeIds.length} selected
+								</span>
+							)}
+						</div>
+					)}
+					{flowscriptWorkspace && (
+						<Button
+							type="button"
+							variant={showWorkspace ? "default" : "outline"}
+							size="sm"
+							aria-pressed={showWorkspace}
+							onClick={() => setFlowscriptHidden((hidden) => !hidden)}
+							title={
+								showWorkspace
+									? "Hide the FlowScript workspace"
+									: "Show the FlowScript workspace"
+							}
+							className="h-9 md:h-7 shrink-0 gap-1.5 px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+						>
+							<FileCode2Icon className="size-3.5 shrink-0" />
+							FlowScript
+							{flowscriptWorkspace.status === "validation_errors" && (
+								<span
+									className="size-1.5 shrink-0 rounded-full bg-red-500"
+									aria-hidden
+								/>
+							)}
+						</Button>
+					)}
 				</div>
-			)}
+				<GlobalChatHistory className="ml-auto" />
+			</header>
 
 			<div
 				ref={layoutRef}
-				className={`flex min-h-0 flex-1 ${sideBySideWorkspace ? "flex-row" : "flex-col"}`}
+				className={`min-h-0 min-w-0 flex-1 overflow-hidden ${
+					fullHeightConversationColumn
+						? "flex flex-row"
+						: splitWorkspaceBelowInlineArtifacts
+							? "grid grid-cols-[minmax(0,1fr)_clamp(420px,48%,660px)] grid-rows-[auto_minmax(0,1fr)]"
+							: "flex flex-col"
+				}`}
 			>
-				{/* Must be a flex column: <Chat>'s root sizes itself with flex-1/min-h-0, and without a
-				    flex parent its height collapses to content size, breaking the internal scroll area.
-				    In a narrow dock the workspace replaces the chat rather than squeezing beside it, so
-				    hide (don't unmount) the chat to keep its scroll/stream state alive underneath. */}
 				<div
-					className={`relative flex flex-col flex-1 min-h-0 ${
-						showWorkspace && !canSideBySide ? "hidden" : ""
-					}`}
+					// On a roomy desktop surface, app previews belong to the conversation column so
+					// FlowScript can use the full height beside them. `contents` lets narrower split
+					// and stacked layouts position the same mounted children without losing app state.
+					className={
+						fullHeightConversationColumn
+							? "relative flex min-h-0 min-w-0 flex-1 flex-col"
+							: "contents"
+					}
 				>
-					{showEmptyState && (
-						<div className="pointer-events-none absolute inset-x-0 top-0 bottom-28 z-10 flex flex-col items-center justify-center gap-5 px-6 text-center">
-							<span className="flex size-16 items-center justify-center rounded-[1.25rem] bg-linear-to-br from-primary/25 via-primary/10 to-purple-600/20 text-primary shadow-xl shadow-primary/25 ring-1 ring-primary/15">
-								<SparklesIcon className="size-8" />
-							</span>
-							<div className="space-y-1.5">
-								<h2 className="text-xl font-semibold tracking-tight">
-									Chat with FlowPilot
-								</h2>
-								<p className="mx-auto max-w-xs text-sm text-muted-foreground">
-									Ask anything — or let it create apps, open the store, and talk
-									to your apps for you.
-								</p>
-							</div>
-							<div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2">
-								{EMPTY_SUGGESTIONS.map(({ label, icon: Icon, prompt }) => (
-									<Button
-										key={label}
-										variant="outline"
-										size="sm"
-										className="h-8 gap-1.5 rounded-full border-border/60 bg-background/80 text-xs text-foreground/80 outline-none transition-all hover:border-primary/40 hover:bg-primary/10 hover:text-primary hover:shadow-sm focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0 motion-safe:hover:-translate-y-px"
-										onClick={() => void handleSendMessage(prompt)}
-									>
-										<Icon className="size-3.5" />
-										{label}
-									</Button>
-								))}
-							</div>
+					{hasInlineArtifacts && (
+						<div
+							className={`min-w-0 shrink-0 max-h-[60vh] overflow-y-auto pt-2 ${
+								splitWorkspaceBelowInlineArtifacts
+									? "col-span-2 row-start-1"
+									: ""
+							}`}
+						>
+							<PendingComponentsCard />
+							{inlineAppPages.map((page) => (
+								<InlineAppPageCard
+									key={page.id}
+									page={page}
+									onClose={removeInlineAppPage}
+									compact={compact}
+								/>
+							))}
+							{inlineAppSurfaces.map((surface) => (
+								<InlineAppSurfaceCard
+									key={surface.id}
+									surface={surface}
+									onClose={removeInlineAppSurface}
+									compact={compact}
+								/>
+							))}
+							{inlineAppChats.map((chat) => (
+								<InlineAppChatCard
+									key={chat.id}
+									chat={chat}
+									onClose={removeInlineAppChat}
+									compact={compact}
+								/>
+							))}
 						</div>
 					)}
-					{/* Embedded-widget actions (ActionHandler's widget_event) route through
-					    runWidgetAction to the widget's originating use-case board. */}
-					<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
-						<Chat
-							ref={chatRef}
-							sessionId={activeConversationId}
-							messages={messages}
-							onSendMessage={handleSendMessage}
-							isStreamActive={isStreaming}
-							config={GLOBAL_CHAT_CONFIG}
-							activeInteractions={activeInteractions}
-							onRespondToInteraction={handleRespondToInteraction}
-							inlinePrompt={
-								toolPrompt ? (
-									<InlineToolPrompt key={toolPrompt.id} prompt={toolPrompt} />
-								) : undefined
-							}
-						/>
-					</ChatWidgetExecutionProvider>
+
+					{/* Must be a flex column: <Chat>'s root sizes itself with flex-1/min-h-0, and
+					    without a flex parent its height collapses to content size, breaking the
+					    internal scroll area. In a narrow dock the workspace replaces the chat rather
+					    than squeezing beside it, so hide (don't unmount) the chat to keep its
+					    scroll/stream state alive underneath. */}
+					<div
+						className={`relative flex min-h-0 min-w-0 flex-1 flex-col ${
+							splitWorkspaceBelowInlineArtifacts
+								? "col-start-1 row-start-2"
+								: ""
+						} ${showWorkspace && !canSideBySide ? "hidden" : ""}`}
+					>
+						{emptyStateMounted && (
+							<div className="pointer-events-none absolute inset-x-0 top-0 bottom-28 z-10 flex flex-col items-center justify-center overflow-hidden px-6">
+								{/* The dock is too narrow for the orb to frame the composer rather than
+								    crowd it, so there it is the suggestions alone. */}
+								<FlowPilotEmptyState
+									suggestions={EMPTY_SUGGESTIONS}
+									onSelect={(prompt) => void handleSendMessage(prompt)}
+									suggestionsOnly={compact}
+									exiting={emptyStateExiting}
+									activity={composerActivity}
+									typingMotion={GLOBAL_CHAT_TYPING_MOTION}
+								/>
+							</div>
+						)}
+						{/* Embedded-widget actions (ActionHandler's widget_event) route through
+						    runWidgetAction to the widget's originating use-case board. */}
+						<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
+							<Chat
+								ref={chatRef}
+								sessionId={activeConversationId}
+								messages={messages}
+								onSendMessage={handleSendMessage}
+								onDraftChange={composerActivity.report}
+								isStreamActive={isStreaming}
+								// Supplying this is what unlocks the composer: sends are never
+								// blocked; they start another turn, queue, or steer the running one.
+								concurrency={chatConcurrency}
+								config={GLOBAL_CHAT_CONFIG}
+								activeInteractions={activeInteractions}
+								onRespondToInteraction={handleRespondToInteraction}
+								showAiDisclosure
+								inlinePrompt={
+									toolPrompt ? (
+										<InlineToolPrompt key={toolPrompt.id} prompt={toolPrompt} />
+									) : undefined
+								}
+							/>
+						</ChatWidgetExecutionProvider>
+					</div>
 				</div>
-				{showWorkspace && flowscriptWorkspace && (
-					<FlowScriptWorkspacePanel
-						source={flowscriptWorkspace.source}
-						status={flowscriptWorkspace.status}
-						fill={!canSideBySide}
-						onClose={() => setFlowscriptHidden(true)}
-					/>
-				)}
+				{showWorkspace &&
+					flowscriptWorkspace &&
+					(splitWorkspaceBelowInlineArtifacts ? (
+						<div className="col-start-2 row-start-2 flex min-h-0 min-w-0 overflow-hidden border-l border-border/30">
+							<FlowScriptWorkspacePanel
+								source={flowscriptWorkspace.source}
+								status={flowscriptWorkspace.status}
+								fill
+								onClose={() => setFlowscriptHidden(true)}
+							/>
+						</div>
+					) : (
+						<FlowScriptWorkspacePanel
+							source={flowscriptWorkspace.source}
+							status={flowscriptWorkspace.status}
+							fill={!canSideBySide}
+							onClose={() => setFlowscriptHidden(true)}
+						/>
+					))}
 			</div>
 
 			{profileId && (

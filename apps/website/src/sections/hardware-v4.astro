@@ -1,0 +1,295 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+import LiveShowcase from "../components/showcase/LiveShowcase.astro";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+const icons = {
+  laptop: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg>`,
+  chip: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M10 7V4M14 7V4M10 20v-3M14 20v-3M7 10H4M7 14H4M20 10h-3M20 14h-3"/></svg>`,
+  server: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="13" width="16" height="7" rx="1.5"/><path d="M8 7.5h.01M8 16.5h.01"/></svg>`,
+  cluster: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1"/><rect x="13.5" y="3.5" width="7" height="7" rx="1"/><rect x="3.5" y="13.5" width="7" height="7" rx="1"/><rect x="13.5" y="13.5" width="7" height="7" rx="1"/></svg>`,
+  cloud: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18.5a4.5 4.5 0 1 1 .9-8.91A6 6 0 0 1 19.4 11.5a3.5 3.5 0 0 1-1.4 7Z"/></svg>`,
+  wifiOff: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="2" y1="2" x2="22" y2="22"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 4.17-2.65"/><path d="M10.66 5c4.01-.36 8.14.9 11.34 3.76"/><path d="M16.85 11.25a10 10 0 0 1 2.22 1.68"/><path d="M5 13a10 10 0 0 1 5.24-2.76"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>`,
+};
+
+const targets = [
+  { name: t("v4.hw.target1.name"), sub: t("v4.hw.target1.sub"), icon: icons.laptop, airGapped: false },
+  { name: t("v4.hw.target2.name"), sub: t("v4.hw.target2.sub"), icon: icons.chip, airGapped: false },
+  { name: t("v4.hw.target3.name"), sub: t("v4.hw.target3.sub"), icon: icons.server, airGapped: false },
+  { name: t("v4.hw.target4.name"), sub: t("v4.hw.target4.sub"), icon: icons.cluster, airGapped: false },
+  { name: t("v4.hw.target5.name"), sub: t("v4.hw.target5.sub"), icon: icons.cloud, airGapped: false },
+  { name: t("v4.hw.target6.name"), sub: t("v4.hw.target6.sub"), icon: icons.wifiOff, airGapped: true },
+];
+
+const stages = [
+  {
+    num: "1",
+    title: t("v4.hw.stage1.title"),
+    desc: t("v4.hw.stage1.desc"),
+    variant: "workflow" as const,
+    tone: "amber" as const,
+  },
+  {
+    num: "2",
+    title: t("v4.hw.stage2.title"),
+    desc: t("v4.hw.stage2.desc"),
+    variant: "data" as const,
+    tone: "indigo" as const,
+  },
+  {
+    num: "3",
+    title: t("v4.hw.stage3.title"),
+    desc: t("v4.hw.stage3.desc"),
+    variant: "runs" as const,
+    tone: "emerald" as const,
+  },
+];
+
+const toneClasses = {
+  amber: {
+    bar: "bg-amber-500/5",
+    badge: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+    title: "text-amber-600 dark:text-amber-400",
+  },
+  indigo: {
+    bar: "bg-indigo-500/5",
+    badge: "bg-indigo-500/10 text-indigo-500 dark:text-indigo-400",
+    title: "text-indigo-500 dark:text-indigo-400",
+  },
+  emerald: {
+    bar: "bg-emerald-500/5",
+    badge: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+    title: "text-emerald-600 dark:text-emerald-400",
+  },
+};
+---
+
+<section id="hardware" class="hw-section relative isolate overflow-hidden py-24 md:py-32">
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="hw-orb hw-orb--primary"></div>
+    <div class="hw-orb hw-orb--green"></div>
+  </div>
+
+  <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="hw-reveal mx-auto max-w-3xl text-center mb-12 md:mb-16">
+      <span class="inline-flex items-center rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-primary mb-6">
+        {t("v4.hw.kicker")}
+      </span>
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight mb-5">
+        {t("v4.hw.headline")}
+      </h2>
+      <p class="text-base sm:text-lg text-muted-foreground leading-relaxed">
+        {t("v4.hw.body")}
+      </p>
+    </div>
+
+    <!-- Film strip -->
+    <div class="hw-reveal relative">
+      <div class="hw-strip flex gap-6 md:gap-0 md:items-stretch overflow-x-auto pb-4 md:pb-0 snap-x snap-mandatory md:snap-none md:overflow-visible md:grid md:grid-cols-[1fr_auto_1fr_auto_1fr]" tabindex="0" role="region" aria-label="Deployment stages. Scroll horizontally to explore all three.">
+        {stages.map((stage, i) => (
+          <>
+            {i > 0 && (
+              <div class="hidden md:flex items-center justify-center px-2" aria-hidden="true">
+                <div class="relative w-12 h-12 flex items-center justify-center">
+                  <svg class="w-8 h-3" viewBox="0 0 32 12" fill="none">
+                    <path d="M0 6 L24 6" stroke="color-mix(in oklch, var(--foreground) 15%, transparent)" stroke-width="1.5"/>
+                    <path d="M20 2 L28 6 L20 10" stroke="color-mix(in oklch, var(--foreground) 15%, transparent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                  </svg>
+                  <div class={`hw-arrow__dot absolute w-2 h-2 rounded-full bg-primary/60 ${i === 2 ? "hw-arrow__dot--delayed" : ""}`}></div>
+                </div>
+              </div>
+            )}
+            <div class="snap-center min-w-[280px] md:min-w-0 flex flex-col rounded-xl border border-border/40 bg-background/80 backdrop-blur-sm shadow-lg overflow-hidden">
+              <div class={`flex items-center gap-2 px-4 py-3 border-b border-border/30 ${toneClasses[stage.tone].bar}`}>
+                <span class={`flex items-center justify-center w-6 h-6 rounded-md text-xs font-bold ${toneClasses[stage.tone].badge}`}>{stage.num}</span>
+                <span class={`text-xs font-bold uppercase tracking-wider ${toneClasses[stage.tone].title}`}>{stage.title}</span>
+                {stage.tone === "emerald" && (
+                  <span class="ml-auto inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/25 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-500">
+                    <span class="relative flex h-1.5 w-1.5">
+                      <span class="hw-live-ping absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                      <span class="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                    </span>
+                    {t("v4.hw.live")}
+                  </span>
+                )}
+              </div>
+              <div class="h-72 min-h-72 shrink-0 p-2">
+                <div class="h-full overflow-hidden rounded-lg border border-border/35">
+                  <LiveShowcase
+                    bare
+                    presentation="compact"
+                    variant={stage.variant}
+                    posterAlt={`${stage.title} — interactive Flow-Like product demo`}
+                  />
+                </div>
+              </div>
+              <div class="px-4 py-3 border-t border-border/20">
+                <p class="text-xs text-muted-foreground">{stage.desc}</p>
+              </div>
+            </div>
+          </>
+        ))}
+      </div>
+
+      <!-- Mobile scroll hint -->
+      <div class="flex md:hidden items-center justify-center gap-1.5 mt-3 text-xs text-muted-foreground/60">
+        <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+          <path d="M3 8 L13 8 M10 5 L13 8 L10 11"/>
+        </svg>
+        <span>{t("v4.hw.scrollHint")}</span>
+      </div>
+    </div>
+
+    <!-- Deploy-target chips -->
+    <div class="hw-reveal mx-auto max-w-4xl mt-14 md:mt-16">
+      <p class="text-center font-mono text-[0.65rem] font-medium uppercase tracking-[0.18em] text-muted-foreground/60 mb-5">
+        {t("v4.hw.targetsLabel")}
+      </p>
+      <ul class="flex flex-wrap justify-center gap-3">
+        {targets.map((target) => (
+          <li
+            class={`hw-chip flex items-center gap-3 rounded-xl bg-background/60 px-4 py-2.5 ${
+              target.airGapped
+                ? "border border-dashed border-foreground/30"
+                : "border border-border/50"
+            }`}
+          >
+            <span class={target.airGapped ? "text-foreground/70" : "text-muted-foreground/70"} set:html={target.icon} />
+            <span class="flex flex-col">
+              <span class="text-sm font-medium leading-tight">{target.name}</span>
+              <span class="font-mono text-[0.65rem] uppercase tracking-wider text-muted-foreground/50">{target.sub}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  </div>
+
+  <!-- Under the hood -->
+  <p class="mx-auto mt-12 max-w-3xl px-4 text-center text-xs leading-relaxed text-muted-foreground/70"><span class="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-muted-foreground/60">{t("v4.common.underTheHood")}</span> — {t("v4.hw.uth")}</p>
+</section>
+
+<style>
+  .hw-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(100px);
+    opacity: 0.35;
+  }
+  .hw-orb--primary {
+    width: 450px;
+    height: 450px;
+    top: -80px;
+    left: -100px;
+    background: radial-gradient(circle, color-mix(in oklch, var(--primary) 10%, transparent), transparent 70%);
+  }
+  .hw-orb--green {
+    width: 400px;
+    height: 400px;
+    bottom: -60px;
+    right: -80px;
+    background: radial-gradient(circle, color-mix(in oklch, var(--foreground) 6%, transparent), transparent 70%);
+  }
+
+  .hw-reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .hw-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .hw-arrow__dot {
+    animation: hw-dot-travel 2.8s ease-in-out infinite;
+    box-shadow: 0 0 8px color-mix(in oklch, var(--primary) 40%, transparent);
+  }
+  .hw-arrow__dot--delayed {
+    animation-delay: 0.6s;
+  }
+
+  @keyframes hw-dot-travel {
+    0%, 100% {
+      opacity: 0;
+      transform: translateX(-14px);
+    }
+    15% {
+      opacity: 1;
+    }
+    85% {
+      opacity: 1;
+    }
+    95% {
+      opacity: 0;
+      transform: translateX(14px);
+    }
+  }
+
+  .hw-chip {
+    transition: border-color 0.2s ease, background-color 0.2s ease;
+  }
+  .hw-chip:hover {
+    border-color: color-mix(in oklch, var(--primary) 35%, transparent);
+    background-color: color-mix(in oklch, var(--primary) 4%, transparent);
+  }
+
+  .hw-strip {
+    -webkit-overflow-scrolling: touch;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .hw-strip::-webkit-scrollbar {
+    display: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hw-reveal {
+      transition: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+    }
+    .hw-arrow__dot,
+    .hw-arrow__dot--delayed {
+      animation: none !important;
+      opacity: 0 !important;
+    }
+    .hw-live-ping {
+      animation: none !important;
+      opacity: 0 !important;
+    }
+  }
+</style>
+
+<script>
+  function initHardwareReveal() {
+    const els = document.querySelectorAll("#hardware .hw-reveal");
+    if (!("IntersectionObserver" in window)) {
+      els.forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -10% 0px", threshold: 0.1 },
+    );
+    els.forEach((el) => io.observe(el));
+  }
+
+  initHardwareReveal();
+</script>

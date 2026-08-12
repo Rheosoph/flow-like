@@ -15,6 +15,9 @@ use utoipa::ToSchema;
 pub struct CreateInviteLinkPayload {
     pub name: Option<String>,
     pub max_uses: Option<i64>,
+    /// Hours until the link expires. Omit or pass a non-positive value for a
+    /// link that never expires.
+    pub expires_in_hours: Option<i64>,
 }
 
 #[utoipa::path(
@@ -37,7 +40,7 @@ pub struct CreateInviteLinkPayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PUT /apps/{app_id}/team/link", skip(state, user))]
+#[tracing::instrument(name = "PUT /apps/{app_id}/team/link", skip(state, user, payload))]
 pub async fn create_invite_link(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -47,16 +50,28 @@ pub async fn create_invite_link(
     ensure_permission!(user, &app_id, &state, RolePermissions::Admin);
 
     let nonce = create_id();
+    let link_id = create_id();
+
+    // Normalize so 0 can never mean "unlimited" — only the explicit -1 does.
+    let max_uses = match payload.max_uses {
+        Some(uses) if uses > 0 => uses,
+        _ => -1,
+    };
+    let expires_at = payload
+        .expires_in_hours
+        .filter(|hours| *hours > 0)
+        .map(|hours| chrono::Utc::now().naive_utc() + chrono::Duration::hours(hours));
 
     let new_link = invite_link::Model {
-        id: create_id(),
+        id: link_id.clone(),
         app_id: app_id.clone(),
         name: payload.name,
         count_joined: 0,
-        max_uses: payload.max_uses.unwrap_or(-1), // -1 means unlimited uses
+        max_uses,
+        expires_at,
         created_at: chrono::Utc::now().naive_utc(),
         updated_at: chrono::Utc::now().naive_utc(),
-        token: nonce.clone(),
+        token: nonce,
     };
 
     let new_link: invite_link::ActiveModel = new_link.into();
@@ -68,7 +83,7 @@ pub async fn create_invite_link(
         app_id,
         "invite.create",
         "InviteLink",
-        nonce,
+        link_id,
         "Invite link created"
     );
     Ok(Json(()))

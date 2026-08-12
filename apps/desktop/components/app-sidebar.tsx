@@ -1,10 +1,4 @@
 "use client";
-import { createId } from "@paralleldrive/cuid2";
-import * as Sentry from "@sentry/nextjs";
-import { invoke } from "@tauri-apps/api/core";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -74,11 +68,20 @@ import {
 	SidebarRail,
 	Textarea,
 	useBackend,
+	useDeveloperMode,
 	useInvalidateInvoke,
 	useInvoke,
 	useSidebar,
+	userDisplayName,
+	userInitials,
 } from "@flow-like/flow-like-ui";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
+import { createId } from "@paralleldrive/cuid2";
+import * as Sentry from "@sentry/nextjs";
+import { invoke } from "@tauri-apps/api/core";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { motion } from "framer-motion";
 import {
 	BadgeCheck,
@@ -115,6 +118,7 @@ import { fetcher } from "../lib/api";
 import { appsDB } from "../lib/apps-db";
 import { isIosTauriRuntime } from "../lib/platform";
 import { CreateProfileDialog } from "./add-profile";
+import { MobileBottomNav } from "./mobile-bottom-nav";
 import { Shortcuts } from "./shortcuts";
 import { useTauriInvoke } from "./useInvoke";
 
@@ -150,6 +154,7 @@ const data = {
 			icon: AnimatedBrainIcon,
 			isActive: false,
 			permission: false,
+			devOnly: true,
 			items: [],
 		},
 		{
@@ -214,14 +219,9 @@ export function AppSidebar({
 	return (
 		<SidebarProvider defaultOpen={defaultOpen}>
 			<InnerSidebar />
-			<main
-				className="w-full h-dvh flex flex-col overflow-hidden"
-				style={{
-					paddingTop: "var(--fl-safe-top, env(safe-area-inset-top, 0px))",
-				}}
-			>
+			<main className="w-full h-vvh flex flex-col overflow-hidden pt-safe">
 				<MobileHeaderProvider>
-					<MobileHeader />
+					<MobileHeader showSidebarTrigger={false} />
 					<SidebarInset className="relative flex flex-col flex-1 min-h-0 h-full overflow-hidden">
 						<FlowBackground
 							intensity="subtle"
@@ -231,6 +231,7 @@ export function AppSidebar({
 							{children}
 						</FlowBackground>
 					</SidebarInset>
+					<MobileBottomNav />
 				</MobileHeaderProvider>
 			</main>
 		</SidebarProvider>
@@ -347,8 +348,8 @@ function InnerSidebar() {
 								</DialogDescription>
 							</DialogHeader>
 							<div className="grid gap-4 py-4">
-								<div className="grid grid-cols-4 items-center gap-4">
-									<Label htmlFor="name" className="text-right">
+								<div className="grid grid-cols-1 gap-1.5 sm:grid-cols-4 sm:items-center sm:gap-4">
+									<Label htmlFor="name" className="text-left sm:text-right">
 										{"Name (optional)"}
 									</Label>
 									<Input
@@ -357,11 +358,11 @@ function InnerSidebar() {
 										onChange={(e) =>
 											setFeedback({ ...feedback, name: e.target.value })
 										}
-										className="col-span-3"
+										className="sm:col-span-3"
 									/>
 								</div>
-								<div className="grid grid-cols-4 items-center gap-4">
-									<Label htmlFor="username" className="text-right">
+								<div className="grid grid-cols-1 gap-1.5 sm:grid-cols-4 sm:items-center sm:gap-4">
+									<Label htmlFor="username" className="text-left sm:text-right">
 										{"Email (optional)"}
 									</Label>
 									<Input
@@ -370,11 +371,11 @@ function InnerSidebar() {
 										onChange={(e) =>
 											setFeedback({ ...feedback, email: e.target.value })
 										}
-										className="col-span-3"
+										className="sm:col-span-3"
 									/>
 								</div>
-								<div className="grid grid-cols-4 items-center gap-4">
-									<Label htmlFor="message" className="text-right">
+								<div className="grid grid-cols-1 gap-1.5 sm:grid-cols-4 sm:items-center sm:gap-4">
+									<Label htmlFor="message" className="text-left sm:text-right">
 										{"Message"}
 									</Label>
 									<Textarea
@@ -383,7 +384,7 @@ function InnerSidebar() {
 										onChange={(e) =>
 											setFeedback({ ...feedback, message: e.target.value })
 										}
-										className="col-span-3"
+										className="sm:col-span-3"
 									/>
 								</div>
 							</div>
@@ -699,7 +700,8 @@ function Profiles() {
 											Object.keys(profiles.data ?? {}).length > 1 && (
 												<button
 													type="button"
-													className="text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors p-1 rounded shrink-0"
+													aria-label={`Delete ${profile.hub_profile.name ?? "profile"}`}
+													className="text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors p-2 rounded shrink-0 extend-touch-target"
 													onClick={(e) =>
 														handleDeleteProfile(
 															profile.hub_profile.id ?? "",
@@ -786,6 +788,7 @@ interface INavItem {
 	icon?: NavIcon;
 	isActive?: boolean;
 	permission?: boolean;
+	devOnly?: boolean;
 	items?: {
 		title: string;
 		url: string;
@@ -964,6 +967,7 @@ function NavMain({
 	const router = useRouter();
 	const pathname = usePathname();
 	const { open } = useSidebar();
+	const { developerMode } = useDeveloperMode();
 	const hasAccessToken = Boolean(auth?.user?.access_token);
 	const info = useInvoke(
 		backend.userState.getInfo,
@@ -980,6 +984,7 @@ function NavMain({
 				<SidebarMenu>
 					{items
 						.filter((item) => !item.permission)
+						.filter((item) => !item.devOnly || developerMode)
 						.map((item) =>
 							item.items && item.items.length > 0 ? (
 								<NavCollapsible
@@ -995,24 +1000,26 @@ function NavMain({
 						)}
 				</SidebarMenu>
 			</SidebarGroup>
-			<SidebarGroup>
-				<SidebarGroupLabel>Development</SidebarGroupLabel>
-				<SidebarMenu>
-					{devItems.map((item) =>
-						item.items && item.items.length > 0 ? (
-							<NavCollapsible
-								key={item.url}
-								item={item}
-								pathname={pathname}
-								sidebarOpen={open}
-								onNavigate={router.push}
-							/>
-						) : (
-							<NavFlatItem key={item.url} item={item} pathname={pathname} />
-						),
-					)}
-				</SidebarMenu>
-			</SidebarGroup>
+			{developerMode && (
+				<SidebarGroup>
+					<SidebarGroupLabel>Development</SidebarGroupLabel>
+					<SidebarMenu>
+						{devItems.map((item) =>
+							item.items && item.items.length > 0 ? (
+								<NavCollapsible
+									key={item.url}
+									item={item}
+									pathname={pathname}
+									sidebarOpen={open}
+									onNavigate={router.push}
+								/>
+							) : (
+								<NavFlatItem key={item.url} item={item} pathname={pathname} />
+							),
+						)}
+					</SidebarMenu>
+				</SidebarGroup>
+			)}
 			{(info.data?.permission ?? 0) > 0 && (
 				<SidebarGroup>
 					<SidebarGroupLabel>Admin Area</SidebarGroupLabel>
@@ -1086,6 +1093,7 @@ export function NavUser({
 	const { isMobile } = useSidebar();
 	const auth = useAuth();
 	const backend = useBackend();
+	const { developerMode } = useDeveloperMode();
 	const hasAccessToken = Boolean(auth?.user?.access_token);
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -1102,11 +1110,15 @@ export function NavUser({
 		[auth?.user?.profile?.sub, hasAccessToken],
 	);
 
-	const displayName: string = useMemo(() => {
-		if (!info.data) return "Offline";
+	const displayName: string = useMemo(
+		() => userDisplayName(info.data, "Offline"),
+		[info.data],
+	);
 
-		return info.data?.name ?? info.data?.preferred_username ?? "Offline";
-	}, [info.data]);
+	const initials: string = useMemo(
+		() => userInitials(displayName, "?"),
+		[displayName],
+	);
 
 	const email: string = useMemo(() => {
 		return info.data?.email ?? "Anonymous";
@@ -1116,7 +1128,7 @@ export function NavUser({
 		backend.userState.getNotifications,
 		backend.userState,
 		[],
-		Boolean(auth?.isAuthenticated),
+		true, // getNotifications returns local counts offline; keep it enabled signed-out
 		[auth?.user?.profile?.sub, auth?.isAuthenticated],
 		0, // staleTime: 0 to always refetch on mount
 	);
@@ -1137,12 +1149,9 @@ export function NavUser({
 							whileHover="hover"
 						>
 							<Avatar className="h-8 w-8 rounded-lg">
-								<AvatarImage
-									src={info.data?.avatar}
-									alt={user?.name ?? "Offline"}
-								/>
+								<AvatarImage src={info.data?.avatar} alt={displayName} />
 								<AvatarFallback className="rounded-lg">
-									{displayName.slice(0, 2).toUpperCase()}
+									{initials}
 								</AvatarFallback>
 							</Avatar>
 							{notificationCount > 0 && (
@@ -1168,9 +1177,9 @@ export function NavUser({
 						<DropdownMenuLabel className="p-0 font-normal">
 							<div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
 								<Avatar className="h-8 w-8 rounded-lg">
-									<AvatarImage src={info.data?.avatar} alt={"User Avatar"} />
+									<AvatarImage src={info.data?.avatar} alt={displayName} />
 									<AvatarFallback className="rounded-lg">
-										{displayName.slice(0, 2).toUpperCase()}
+										{initials}
 									</AvatarFallback>
 								</Avatar>
 								<div className="grid flex-1 text-left text-sm leading-tight">
@@ -1235,24 +1244,28 @@ export function NavUser({
 											Notifications
 										</DropdownMenuItem>
 									</Link>
-									<Link href="/account/pat">
-										<DropdownMenuItem className="gap-2 p-2">
-											<KeyIcon className="size-4" />
-											Token
-										</DropdownMenuItem>
-									</Link>
-									<Link href="/settings/sinks">
-										<DropdownMenuItem className="gap-2 p-2">
-											<ZapIcon className="size-4" />
-											Active Sinks
-										</DropdownMenuItem>
-									</Link>
-									<Link href="/settings/statistics">
-										<DropdownMenuItem className="gap-2 p-2">
-											<BarChart3 className="size-4" />
-											Board Statistics
-										</DropdownMenuItem>
-									</Link>
+									{developerMode && (
+										<>
+											<Link href="/account/pat">
+												<DropdownMenuItem className="gap-2 p-2">
+													<KeyIcon className="size-4" />
+													Token
+												</DropdownMenuItem>
+											</Link>
+											<Link href="/settings/sinks">
+												<DropdownMenuItem className="gap-2 p-2">
+													<ZapIcon className="size-4" />
+													Active Sinks
+												</DropdownMenuItem>
+											</Link>
+											<Link href="/settings/statistics">
+												<DropdownMenuItem className="gap-2 p-2">
+													<BarChart3 className="size-4" />
+													Board Statistics
+												</DropdownMenuItem>
+											</Link>
+										</>
+									)}
 								</DropdownMenuGroup>
 								<DropdownMenuSeparator />
 								<DropdownMenuItem

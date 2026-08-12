@@ -127,7 +127,7 @@ pub struct UpdateDiscountRequest {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/sales/discounts", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/sales/discounts", skip(state, user, query))]
 pub async fn list_discounts(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -221,7 +221,7 @@ pub async fn get_discount(
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/sales/discounts", skip(state, user))]
+#[tracing::instrument(name = "POST /apps/{app_id}/sales/discounts", skip(state, user, body))]
 pub async fn create_discount(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -347,7 +347,7 @@ pub async fn create_discount(
 )]
 #[tracing::instrument(
     name = "PATCH /apps/{app_id}/sales/discounts/{discount_id}",
-    skip(state, user)
+    skip(state, user, body)
 )]
 pub async fn update_discount(
     State(state): State<AppState>,

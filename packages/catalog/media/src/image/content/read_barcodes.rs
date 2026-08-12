@@ -867,10 +867,10 @@ fn decode_barcodes_in_luma(
         }
     }
 
-    if barcodes.is_empty() {
-        if let Some(error) = first_error {
-            return Err(anyhow!("Decoder Error: {}", error));
-        }
+    if barcodes.is_empty()
+        && let Some(error) = first_error
+    {
+        return Err(anyhow!("Decoder Error: {}", error));
     }
 
     Ok(barcodes)
@@ -898,7 +898,7 @@ fn append_processed_variants<F>(
     let source_count = source_count.min(variants.len());
     let generated: Vec<DecodeVariant> = variants[..source_count]
         .iter()
-        .filter_map(|variant| build_variant(variant))
+        .filter_map(build_variant)
         .take(max_variants.saturating_sub(variants.len()))
         .collect();
 

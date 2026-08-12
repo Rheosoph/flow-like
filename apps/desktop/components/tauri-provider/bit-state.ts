@@ -1,5 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
-import { type UnlistenFn, listen } from "@tauri-apps/api/event";
 import type {
 	IBit,
 	IBitPack,
@@ -20,6 +18,8 @@ import {
 	localTtsAssetId,
 } from "@flow-like/flow-like-ui";
 import type { IBitSearchQuery } from "@flow-like/flow-like-ui/lib/schema/hub/bit-search-query";
+import { invoke } from "@tauri-apps/api/core";
+import { type UnlistenFn, listen } from "@tauri-apps/api/event";
 import type { TauriBackend } from "../tauri-provider";
 
 export class BitState implements IBitState {
@@ -192,6 +192,89 @@ export class BitState implements IBitState {
 	}
 	async getProfileBits(): Promise<IBit[]> {
 		return await invoke("get_bits_in_current_profile");
+	}
+
+	private static mergeSecretParams(
+		bit: IBit,
+		secrets?: Record<string, unknown>,
+	): IBit {
+		if (!secrets || Object.keys(secrets).length === 0) return bit;
+		const parameters = (bit.parameters ?? {}) as Record<string, unknown>;
+		const provider = {
+			...((parameters.provider ?? {}) as Record<string, unknown>),
+		};
+		provider.params = {
+			...((provider.params ?? {}) as Record<string, unknown>),
+			...secrets,
+		};
+		return {
+			...bit,
+			parameters: { ...parameters, provider },
+		};
+	}
+
+	/**
+	 * The user-wide custom-model library: configured once, offline-capable, and
+	 * independent of which profile activates a model. With a session it also
+	 * syncs from the API (stored encrypted) so the same library follows the
+	 * user to the browser.
+	 */
+	async listCustomBits(): Promise<IBit[]> {
+		try {
+			const profile = this.backend.profile;
+			if (profile) {
+				const remote = await this.backend.apiState.get<IBit[]>(
+					profile,
+					"user/bits?include_secrets=true",
+				);
+				for (const bit of remote ?? []) {
+					await invoke("upsert_custom_bit", { bit });
+				}
+			}
+		} catch (error) {
+			console.warn("Custom bit sync from API failed, using local only", error);
+		}
+		return await invoke<IBit[]>("get_custom_bits");
+	}
+
+	async upsertCustomBit(
+		bit: IBit,
+		secrets?: Record<string, unknown>,
+	): Promise<IBit> {
+		const localBit = BitState.mergeSecretParams(bit, secrets);
+		const savedLocal = await invoke<IBit>("upsert_custom_bit", {
+			bit: localBit,
+		});
+
+		try {
+			const profile = this.backend.profile;
+			if (profile) {
+				await this.backend.apiState.put(profile, `user/bits/${bit.id}`, {
+					bit,
+					secrets,
+				});
+			}
+		} catch (error) {
+			console.warn(
+				`Custom bit ${bit.id} not synced to API (local only)`,
+				error,
+			);
+		}
+
+		return savedLocal;
+	}
+
+	async deleteCustomBit(bitId: string): Promise<void> {
+		await invoke("remove_custom_bit", { bitId });
+
+		try {
+			const profile = this.backend.profile;
+			if (profile) {
+				await this.backend.apiState.del(profile, `user/bits/${bitId}`);
+			}
+		} catch (error) {
+			console.warn(`Custom bit ${bitId} not deleted from API`, error);
+		}
 	}
 
 	async repairTtsBitAssets(bit: IBit, force = false): Promise<IBitPack> {

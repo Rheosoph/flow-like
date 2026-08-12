@@ -1,0 +1,209 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="720" viewBox="0 0 1440 720" overflow="hidden" role="img" aria-labelledby="ml-auto-title ml-auto-desc">
+  <title id="ml-auto-title">Flow-Like automatic model selection and tuning</title>
+  <desc id="ml-auto-desc">A two-stage machine-learning selection flow. Auto compares tree, linear, and kernel candidate families across three cross-validation folds and ranks them on a leaderboard. Grid Search tunes the winning tree family, which is verified once on held-out data before the model is saved. A dashed path keeps the held-out data outside the cross-validation loop.</desc>
+  <defs>
+    <linearGradient id="ml-auto-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#101216"/>
+      <stop offset="1" stop-color="#17191f"/>
+    </linearGradient>
+    <linearGradient id="ml-auto-winner" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#262234"/>
+      <stop offset="1" stop-color="#202b28"/>
+    </linearGradient>
+    <pattern id="ml-auto-grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/>
+    </pattern>
+    <filter id="ml-auto-shadow" x="-20%" y="-20%" width="140%" height="150%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#050608" flood-opacity=".42"/>
+    </filter>
+    <marker id="ml-auto-arrow-coral" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#ff7656"/>
+    </marker>
+    <marker id="ml-auto-arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#a78bfa"/>
+    </marker>
+    <marker id="ml-auto-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#34d399"/>
+    </marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+      .kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.3px}
+      .heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}
+      .sub{fill:#a7adb8;font-size:16px}
+      .stage{fill:#f7f8fa;font-size:16px;font-weight:800;letter-spacing:1.6px}
+      .stage-num{fill:#14161a;font-size:13px;font-weight:850}
+      .family{fill:#f0f2f5;font-size:14px;font-weight:720;letter-spacing:.5px}
+      .label{fill:#d8dbe1;font-size:13px;font-weight:700;letter-spacing:.8px}
+      .micro{fill:#939aa7;font-size:12px;font-weight:560}
+      .score{fill:#aeb4bf;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+      .winner-label{fill:#7ce4bc;font-size:12px;font-weight:780;letter-spacing:1.3px}
+      .winner-name{fill:#f7f8fa;font-size:25px;font-weight:760;letter-spacing:-.3px}
+      .final-title{fill:#f7f8fa;font-size:17px;font-weight:790;letter-spacing:.8px}
+      .equation{fill:#f1f2f5;font-size:18px;font-weight:680;letter-spacing:.15px}
+    </style>
+  </defs>
+
+  <rect width="1440" height="720" rx="28" fill="#101216"/>
+  <rect width="1440" height="720" rx="28" fill="url(#ml-auto-bg)"/>
+  <rect width="1440" height="720" rx="28" fill="url(#ml-auto-grid)"/>
+
+  <g aria-label="Diagram heading">
+    <rect x="64" y="46" width="300" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/>
+    <circle cx="84" cy="63" r="5" fill="#ff7656"/>
+    <text x="99" y="69" class="kicker">MODEL SELECTION PIPELINE</text>
+    <text x="64" y="124" class="heading">Select broadly. Tune precisely. Test once.</text>
+    <text x="64" y="155" class="sub">Cross-validation chooses the model; untouched data verifies it.</text>
+  </g>
+
+  <g role="group" aria-label="Stage one, automatic family selection">
+    <rect x="64" y="188" width="660" height="350" rx="28" fill="#191c22" stroke="#3e434e" stroke-width="2" filter="url(#ml-auto-shadow)"/>
+    <rect x="88" y="210" width="112" height="34" rx="17" fill="#ff7656" opacity=".13" stroke="#ff7656" stroke-opacity=".56"/>
+    <circle cx="108" cy="227" r="13" fill="#ff7656"/>
+    <text x="108" y="232" text-anchor="middle" class="stage-num">01</text>
+    <text x="132" y="233" class="stage">AUTO</text>
+
+    <text x="90" y="272" class="micro">CANDIDATE FAMILIES</text>
+    <g aria-label="Tree family candidate">
+      <rect x="88" y="286" width="158" height="52" rx="14" fill="#292327" stroke="#5d3c35"/>
+      <circle cx="108" cy="312" r="7" fill="#ff7656"/>
+      <text x="124" y="317" class="family">TREE FAMILY</text>
+    </g>
+    <g aria-label="Linear family candidate">
+      <rect x="88" y="354" width="158" height="52" rx="14" fill="#282534" stroke="#574e71"/>
+      <circle cx="108" cy="380" r="7" fill="#a78bfa"/>
+      <text x="124" y="385" class="family">LINEAR FAMILY</text>
+    </g>
+    <g aria-label="Kernel family candidate">
+      <rect x="88" y="422" width="158" height="52" rx="14" fill="#202b28" stroke="#3e6759"/>
+      <circle cx="108" cy="448" r="7" fill="#34d399"/>
+      <text x="124" y="453" class="family">KERNEL FAMILY</text>
+    </g>
+
+    <path d="M246 312H266M246 380H266M246 448H266M266 312V448" fill="none" stroke="#626975" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="266" cy="380" r="5" fill="#ff7656"/>
+
+    <text x="304" y="272" class="micro">REPEATED VALIDATION</text>
+    <path d="M266 380H284M284 312V448" fill="none" stroke="#ff7656" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M284 312H304M284 380H304M284 448H304" fill="none" stroke="#ff7656" stroke-width="2.5" stroke-linecap="round" marker-end="url(#ml-auto-arrow-coral)"/>
+    <g aria-label="Cross-validation fold one">
+      <rect x="308" y="286" width="126" height="52" rx="14" fill="#24262d" stroke="#4a505c"/>
+      <text x="324" y="308" class="label">FOLD 1</text>
+      <rect x="324" y="318" width="54" height="6" rx="3" fill="#a78bfa" opacity=".78"/>
+      <rect x="381" y="318" width="35" height="6" rx="3" fill="#34d399"/>
+    </g>
+    <g aria-label="Cross-validation fold two">
+      <rect x="308" y="354" width="126" height="52" rx="14" fill="#24262d" stroke="#4a505c"/>
+      <text x="324" y="376" class="label">FOLD 2</text>
+      <rect x="324" y="386" width="35" height="6" rx="3" fill="#34d399"/>
+      <rect x="362" y="386" width="54" height="6" rx="3" fill="#a78bfa" opacity=".78"/>
+    </g>
+    <g aria-label="Cross-validation fold three">
+      <rect x="308" y="422" width="126" height="52" rx="14" fill="#24262d" stroke="#4a505c"/>
+      <text x="324" y="444" class="label">FOLD 3</text>
+      <rect x="324" y="454" width="42" height="6" rx="3" fill="#a78bfa" opacity=".78"/>
+      <rect x="369" y="454" width="47" height="6" rx="3" fill="#34d399"/>
+    </g>
+
+    <path d="M434 312H456M434 380H456M434 448H456M456 312V448" fill="none" stroke="#7c8491" stroke-width="2" stroke-linecap="round"/>
+    <path d="M456 380H478" fill="none" stroke="#7c8491" stroke-width="2" stroke-linecap="round" marker-end="url(#ml-auto-arrow-coral)"/>
+
+    <g role="group" aria-label="Leaderboard with tree family ranked first">
+      <rect x="482" y="278" width="216" height="196" rx="18" fill="#202229" stroke="#4a505c"/>
+      <text x="500" y="304" class="label">LEADERBOARD</text>
+      <path d="M500 316H680" stroke="#3c414c"/>
+      <rect x="494" y="326" width="192" height="40" rx="10" fill="#34d399" opacity=".11" stroke="#34d399" stroke-opacity=".62"/>
+      <circle cx="512" cy="346" r="10" fill="#34d399"/>
+      <text x="512" y="350" text-anchor="middle" class="stage-num">1</text>
+      <text x="532" y="351" class="family">TREE</text>
+      <text x="665" y="351" text-anchor="end" class="score" fill="#7ce4bc">0.91</text>
+      <circle cx="512" cy="394" r="10" fill="#353943"/>
+      <text x="512" y="398" text-anchor="middle" class="score">2</text>
+      <text x="532" y="399" class="family">LINEAR</text>
+      <text x="665" y="399" text-anchor="end" class="score">0.87</text>
+      <circle cx="512" cy="442" r="10" fill="#353943"/>
+      <text x="512" y="446" text-anchor="middle" class="score">3</text>
+      <text x="532" y="447" class="family">KERNEL</text>
+      <text x="665" y="447" text-anchor="end" class="score">0.84</text>
+    </g>
+
+    <g aria-label="Metric direction reminder">
+      <rect x="482" y="488" width="216" height="32" rx="16" fill="#2a2534" stroke="#6b5a94"/>
+      <circle cx="501" cy="504" r="5" fill="#a78bfa"/>
+      <text x="514" y="509" class="micro" fill="#d8ccff">↑ or ↓ — read the metric</text>
+    </g>
+  </g>
+
+  <path d="M698 380H756" fill="none" stroke="#ff7656" stroke-opacity=".14" stroke-width="17" stroke-linecap="round"/>
+  <path d="M698 380H756" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#ml-auto-arrow-coral)"/>
+
+  <g role="group" aria-label="Stage two, grid search tuning">
+    <rect x="756" y="188" width="350" height="350" rx="28" fill="#1d1c24" stroke="#65538e" stroke-width="2" filter="url(#ml-auto-shadow)"/>
+    <rect x="780" y="210" width="180" height="34" rx="17" fill="#a78bfa" opacity=".13" stroke="#a78bfa" stroke-opacity=".56"/>
+    <circle cx="800" cy="227" r="13" fill="#a78bfa"/>
+    <text x="800" y="232" text-anchor="middle" class="stage-num">02</text>
+    <text x="824" y="233" class="stage">GRID SEARCH</text>
+
+    <text x="780" y="272" class="micro">PARAMETER CHIPS</text>
+    <g aria-label="Grid search parameters">
+      <rect x="780" y="286" width="92" height="38" rx="12" fill="#292635" stroke="#574e71"/>
+      <text x="826" y="310" text-anchor="middle" class="label">DEPTH</text>
+      <rect x="883" y="286" width="92" height="38" rx="12" fill="#292635" stroke="#574e71"/>
+      <text x="929" y="310" text-anchor="middle" class="label">TREES</text>
+      <rect x="986" y="286" width="96" height="38" rx="12" fill="#292635" stroke="#574e71"/>
+      <text x="1034" y="310" text-anchor="middle" class="label">FEATURES</text>
+    </g>
+    <path d="M826 324V354M929 324V354M1034 324V354" fill="none" stroke="#a78bfa" stroke-width="3" stroke-linecap="round" marker-end="url(#ml-auto-arrow-violet)"/>
+
+    <g aria-label="Winning tree family refit">
+      <rect x="780" y="360" width="302" height="128" rx="22" fill="url(#ml-auto-winner)" stroke="#a78bfa" stroke-width="2"/>
+      <circle cx="816" cy="400" r="26" fill="#ff7656" opacity=".1"/>
+      <circle cx="816" cy="400" r="17" fill="#ff7656"/>
+      <path d="M810 406V395M816 406V389M822 406V397" fill="none" stroke="#14161a" stroke-width="3" stroke-linecap="round"/>
+      <text x="846" y="397" class="winner-label">WINNING FAMILY</text>
+      <text x="846" y="430" class="winner-name">TREE</text>
+      <rect x="806" y="452" width="250" height="24" rx="12" fill="#17191f" opacity=".74"/>
+      <text x="931" y="469" text-anchor="middle" class="micro">refit on all cross-validation data</text>
+    </g>
+  </g>
+
+  <g role="group" aria-label="Final verification and saved model">
+    <path d="M1082 424C1118 424 1118 330 1144 330" fill="none" stroke="#ff7656" stroke-opacity=".14" stroke-width="17" stroke-linecap="round"/>
+    <path d="M1082 424C1118 424 1118 330 1144 330" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#ml-auto-arrow-coral)"/>
+
+    <g aria-label="Held-out test">
+      <rect x="1146" y="276" width="230" height="108" rx="23" fill="#202b28" stroke="#34d399" stroke-width="2" filter="url(#ml-auto-shadow)"/>
+      <circle cx="1180" cy="320" r="17" fill="#34d399"/>
+      <path d="M1172 320l6 6 11-14" fill="none" stroke="#132019" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1208" y="317" class="final-title">HELD-OUT TEST</text>
+      <text x="1208" y="342" class="micro">verify once</text>
+    </g>
+
+    <path d="M1305 384V432" fill="none" stroke="#34d399" stroke-opacity=".14" stroke-width="17" stroke-linecap="round"/>
+    <path d="M1305 384V432" fill="none" stroke="#34d399" stroke-width="5" stroke-linecap="round" marker-end="url(#ml-auto-arrow-green)"/>
+
+    <g aria-label="Saved model">
+      <rect x="1146" y="434" width="230" height="108" rx="23" fill="#24232d" stroke="#a78bfa" stroke-width="2" filter="url(#ml-auto-shadow)"/>
+      <circle cx="1180" cy="478" r="17" fill="#a78bfa"/>
+      <path d="M1173 470h14v17h-14zM1176 470v6h8v-6M1177 482h6" fill="none" stroke="#191722" stroke-width="2.5" stroke-linejoin="round"/>
+      <text x="1208" y="475" class="final-title">SAVED MODEL</text>
+      <text x="1208" y="500" class="micro">versioned artifact</text>
+    </g>
+  </g>
+
+  <g role="group" aria-label="Held-out data bypasses cross-validation">
+    <rect x="64" y="558" width="136" height="34" rx="17" fill="#202b28" stroke="#34d399" stroke-opacity=".62"/>
+    <circle cx="84" cy="575" r="5" fill="#34d399"/>
+    <text x="98" y="580" class="label" fill="#7ce4bc">UNSEEN DATA</text>
+    <path d="M200 575H1388C1402 575 1410 567 1410 553V330C1410 318 1402 310 1390 310H1382" fill="none" stroke="#34d399" stroke-width="2.5" stroke-dasharray="8 8" stroke-linecap="round" marker-end="url(#ml-auto-arrow-green)"/>
+    <rect x="630" y="563" width="118" height="24" rx="12" fill="#15171c"/>
+    <text x="689" y="580" text-anchor="middle" class="micro" fill="#7ce4bc">OUTSIDE CV</text>
+  </g>
+
+  <g aria-label="Training cost equation">
+    <rect x="407" y="630" width="626" height="50" rx="25" fill="#202229" stroke="#4a505c"/>
+    <circle cx="437" cy="655" r="7" fill="#ff7656"/>
+    <circle cx="459" cy="655" r="7" fill="#a78bfa"/>
+    <circle cx="481" cy="655" r="7" fill="#34d399"/>
+    <text x="726" y="662" text-anchor="middle" class="equation">per tuner: cost ≈ candidates × folds + one refit</text>
+  </g>
+</svg>

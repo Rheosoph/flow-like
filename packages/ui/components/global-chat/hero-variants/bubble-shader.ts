@@ -19,6 +19,26 @@ uniform float u_morph;
 uniform float u_light;
 uniform vec3 u_primary;
 
+// ── FlowPilot activity state ──
+// Every one of these is a no-op at 0, which is what unset uniforms are in WebGL. Callers that
+// don't drive the orb's state (the hero composer) therefore render exactly the film they did
+// before this block existed.
+uniform float u_round;    // 0 organic wobble … 1 perfect circle
+uniform float u_spin;     // accumulated rotation, radians
+uniform float u_teeth;    // cog-rim amplitude
+uniform float u_teethN;   // number of cog teeth
+uniform float u_sat;      // orbiting satellite bubbles
+uniform float u_pop;      // 1 → 0 acknowledge shockwave
+uniform float u_spin_mix; // how much the iridescence rides along with u_spin
+
+// ── satellite steering ──
+// Lets a caller fly the three satellites to fixed targets instead of leaving them on their
+// orbit. Same no-op-at-0 contract as the block above: every default reproduces the free orbit.
+uniform float u_sat_orbit;      // orbit radius; 0 keeps the built-in one
+uniform vec2 u_sat_pos[3];      // per-satellite destination, film space
+uniform float u_sat_dock[3];    // 0 free orbit … 1 parked on u_sat_pos
+uniform float u_sat_shrink[3];  // 0 present … 1 collapsed away
+
 float hash(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
@@ -37,6 +57,7 @@ float fbm(vec2 p) {
 	}
 	return v;
 }
+mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
 float sdRoundBox(vec2 p, vec2 b, float r) {
 	vec2 q = abs(p) - b + r;
 	return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
@@ -54,12 +75,46 @@ void main() {
 	// long, slow swells — lower frequency + higher amplitude = bigger waves
 	float n1 = fbm(uv * 0.28 + vec2(t * 0.12, -t * 0.09));
 	float n2 = fbm(uv * 0.38 + vec2(-t * 0.10, t * 0.12) + 5.2);
-	vec2 p = uv + (vec2(n1, n2) - 0.5) * 0.44 * wob * calm;
+	float organic = 1.0 - clamp(u_round, 0.0, 1.0);
+	vec2 p = uv + (vec2(n1, n2) - 0.5) * 0.44 * wob * calm * organic;
 	float radius = u_box.y * mix(1.0, 0.3, u_morph);
 	float d = sdRoundBox(p, u_box, radius);
-	d -= (fbm(p * 0.55 + vec2(t * 0.16, 1.7)) - 0.5) * 0.11 * wob * calm;
+	d -= (fbm(p * 0.55 + vec2(t * 0.16, 1.7)) - 0.5) * 0.11 * wob * calm * organic;
 	// traveling surface wave keeps the silhouette visibly alive
-	d -= sin(p.x * 1.8 - t * 1.4) * 0.03 * mix(1.0, 0.2, m);
+	d -= sin(p.x * 1.8 - t * 1.4) * 0.03 * mix(1.0, 0.2, m) * organic;
+
+	// working: a cog rim turned by u_spin. Flat-topped but soft-shouldered so it still reads as
+	// a soap film, and gated to a band around the silhouette so the interference pattern inside
+	// stays concentric instead of turning into a sunburst.
+	vec2 pr = rot(u_spin) * p;
+	float cogAng = atan(pr.y, pr.x);
+	float cog = clamp(cos(cogAng * max(u_teethN, 1.0)) * 2.6, -1.0, 1.0);
+	d -= u_teeth * 0.042 * cog * exp(-d * d / 0.0144);
+
+	// thinking: three satellites locked exactly 120 deg apart, so they can never bunch up —
+	// even spacing is structural, not tuned. Depth comes from each shell breathing on its own
+	// phase and each satellite swelling as it swings toward the viewer. Shell radii stay clear
+	// of the rim at every point of the cycle, so a satellite never merges into the nucleus.
+	float dsat = 8.0;
+	float orbitR = u_sat_orbit > 0.0 ? u_sat_orbit : 0.63;
+	for (int i = 0; i < 3; i++) {
+		float fi = float(i);
+		float oa = u_time * 1.15 + fi * 2.0944;
+		// Breathing scales with the orbit, so closing the orbit really does stack the satellites
+		// on the nucleus. At the default radius this is the same 0.05 amplitude as before.
+		float rad = orbitR * (1.0 + 0.0794 * sin(u_time * 0.9 + fi * 2.1));
+		vec2 o = mix(vec2(cos(oa), sin(oa)) * rad, u_sat_pos[i], u_sat_dock[i]);
+		float depth = 1.0 + 0.32 * sin(u_time * 1.3 + fi * 2.4);
+		// Collapsing shrinks the shell, then drops it once it is a couple of pixels across.
+		// Letting the radius reach exactly 0 would leave a singular bright point on the target.
+		float shrink = clamp(u_sat_shrink[i], 0.0, 1.0);
+		float rsat = 0.046 * depth * (1.0 - shrink);
+		// A docking satellite crosses out of the film's wobble field into plain screen space, or
+		// the organic displacement baked into p would land it tens of pixels off its target.
+		vec2 psat = mix(p, uv, u_sat_dock[i]);
+		dsat = min(dsat, length(psat - o) - rsat + step(0.9, shrink) * 6.0);
+	}
+	d = min(d, dsat + (1.0 - clamp(u_sat, 0.0, 1.0)) * 6.0);
 
 	// cursor physics: the film bulges toward the pointer and ripples around it
 	// (only a whisper of it remains in composer mode)
@@ -78,7 +133,9 @@ void main() {
 
 	// thin-film interference: hue cycles with distance from the film edge,
 	// and the interference pattern shifts under the cursor
-	float phase = -d * 5.0 + fbm(p * 1.3 + vec2(t * 0.25, -t * 0.2)) * 1.6 + t * 0.5 + mnear * 0.9;
+	// The cog can turn without dragging the iridescence around with it, and vice versa.
+	vec2 pf = mix(p, pr, clamp(u_spin_mix, 0.0, 1.0));
+	float phase = -d * 5.0 + fbm(pf * 1.3 + vec2(t * 0.25, -t * 0.2)) * 1.6 + t * 0.5 + mnear * 0.9;
 	vec3 film = 0.5 + 0.5 * cos(6.2831 * (phase * 0.22 + vec3(0.0, 0.21, 0.42)));
 	film = mix(film, vec3(0.62, 0.66, 1.0), 0.3);
 
@@ -92,8 +149,8 @@ void main() {
 	film = mix(film, warm, (1.0 - left) * (1.0 - top) * 0.5 + (1.0 - left) * top * 0.22);
 	film = mix(film, vec3(1.0, 0.5, 0.85), (1.0 - top) * left * 0.22);
 	float boost = 1.0 + 0.5 * u_focus;
-	float swirl = fbm(p * 1.1 + vec2(t * 0.12, -t * 0.09) + n1);
-	float swirl2 = fbm(p * 2.1 - vec2(t * 0.07, t * 0.1) + n2);
+	float swirl = fbm(pf * 1.1 + vec2(t * 0.12, -t * 0.09) + n1);
+	float swirl2 = fbm(pf * 2.1 - vec2(t * 0.07, t * 0.1) + n2);
 	// window-light streak, hugging the upper-left rim away from the text
 	vec2 hlp = (p - vec2(-u_box.x * 0.55 + sin(t * 0.4) * 0.05, u_box.y * 0.8)) * vec2(1.4, 3.0);
 	float streak = exp(-dot(hlp, hlp) * 4.5);
@@ -142,6 +199,15 @@ void main() {
 	float rimLineL = exp(-abs(d) * 60.0) * (1.0 + 0.6 * mnear) * mix(1.0, 0.7, m);
 	float alphaL = fill * mix(0.1 + 0.5 * fres + 0.1 * swirl + spec + 0.12 * mnear, 0.95, m)
 		+ rimLineL * 0.7;
+
+	// acknowledge: a ring launched off the rim, expanding and thinning as u_pop decays
+	float popR = u_box.x + (1.0 - u_pop) * 0.50;
+	float popRing = exp(-abs(length(p) - popR) * (14.0 + 26.0 * (1.0 - u_pop)))
+		* u_pop * u_pop * 1.9;
+	colD += film * popRing;
+	colL += clamp(filmL * 1.2, 0.0, 1.0) * popRing * 0.75;
+	alphaD += popRing * 0.85;
+	alphaL += popRing * 0.7;
 
 	vec3 col = mix(colD, colL, u_light);
 	float alpha = mix(alphaD, alphaL, u_light);

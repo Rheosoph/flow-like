@@ -66,5 +66,10 @@ name = "integration_tests"
 path = "tests/integration_tests.rs"
 required-features = ["execute"]
 
+[[test]]
+name = "ner_models"
+path = "tests/ner_models.rs"
+required-features = ["execute"]
+
 [build-dependencies]
 flow-like-catalog-build-helper.workspace = true

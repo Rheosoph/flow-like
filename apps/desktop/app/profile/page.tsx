@@ -15,6 +15,9 @@ import {
 	useBackend,
 	useInfiniteInvoke,
 	useInvoke,
+	userDisplayName,
+	userHandle,
+	userInitials,
 } from "@flow-like/flow-like-ui";
 import { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
 import type { IUserLookup } from "@flow-like/flow-like-ui/state/backend-state/types";
@@ -47,15 +50,6 @@ const APP_SKELETON_IDS = [
 	"app-skeleton-five",
 	"app-skeleton-six",
 ];
-
-function getInitials(label: string) {
-	const parts = label.trim().split(/\s+/).filter(Boolean);
-	if (parts.length === 0) return "??";
-	if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-	return `${parts[0][0] ?? ""}${parts[parts.length - 1][0] ?? ""}`
-		.toUpperCase()
-		.slice(0, 2);
-}
 
 function formatDate(value: string) {
 	const date = new Date(value);
@@ -212,10 +206,9 @@ const ProfileContent = ({
 	appsError: Error | null;
 }) => {
 	const router = useRouter();
-	const displayName =
-		user.name || user.preferred_username || user.username || "Unknown user";
-	const username = user.preferred_username || user.username;
-	const initials = getInitials(displayName);
+	const displayName = userDisplayName(user, "Unknown user");
+	const username = userHandle(user);
+	const initials = userInitials(displayName, "??");
 	const joinDate = formatDate(user.created_at);
 	const hasDescription = Boolean(user.description?.trim());
 	const hasAdditionalInfo = Boolean(user.additional_info?.trim());

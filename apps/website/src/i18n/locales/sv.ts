@@ -121,7 +121,6 @@ export const sv = {
 	"design.feature3.desc":
 		"Samma flöde körs lokalt, staging, produktion — inga omskrivningar.",
 
-
 	// Portability
 	"portability.tagline": "Automatisering överallt",
 	"portability.headline": "Bygg en gång, kör överallt",
@@ -686,7 +685,6 @@ export const sv = {
 	"usecases.learnmore": "Läs mer",
 
 	"design.headline.highlight": "visuellt",
-
 
 	"portability.headline.start": "Börja",
 	"portability.headline.offline": "offline",

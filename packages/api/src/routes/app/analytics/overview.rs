@@ -92,14 +92,14 @@ fn filter_execution_query_by_event(
     let mut condition =
         Condition::any().add(execution_usage_tracking::Column::NodeId.eq(&event_filter.event_id));
 
-    if let Some(board_id) = event_filter.board_id.as_ref() {
-        if let Some(node_id) = event_filter.node_id.as_ref() {
-            condition = condition.add(
-                Condition::all()
-                    .add(execution_usage_tracking::Column::BoardId.eq(board_id))
-                    .add(execution_usage_tracking::Column::NodeId.eq(node_id)),
-            );
-        }
+    if let Some(board_id) = event_filter.board_id.as_ref()
+        && let Some(node_id) = event_filter.node_id.as_ref()
+    {
+        condition = condition.add(
+            Condition::all()
+                .add(execution_usage_tracking::Column::BoardId.eq(board_id))
+                .add(execution_usage_tracking::Column::NodeId.eq(node_id)),
+        );
     }
 
     query.filter(condition)
@@ -198,7 +198,7 @@ pub struct AnalyticsStats {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/analytics", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/analytics", skip(state, user, query))]
 pub async fn get_analytics_overview(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -385,7 +385,7 @@ pub async fn get_analytics_overview(
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/analytics/stats", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/analytics/stats", skip(state, user, query))]
 pub async fn get_analytics_stats(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

@@ -2,7 +2,10 @@ name: app
 options:
   bundleIdPrefix: com.flow-like.app
   deploymentTarget:
-    iOS: "15.1"
+    iOS: "17.0"
+packages:
+  FlowLikeMLX:
+    path: ../../apple/FlowLikeMLX
 fileGroups: [../../src]
 configs:
   debug: debug
@@ -64,6 +67,7 @@ targets:
         ENABLE_BITCODE: false
         ARCHS: [arm64]
         VALID_ARCHS: arm64
+        RUSTUP_TOOLCHAIN: 1.97.1
         LIBRARY_SEARCH_PATHS[arch=x86_64]: $(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)
         LIBRARY_SEARCH_PATHS[arch=arm64]: $(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)
         ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
@@ -71,6 +75,8 @@ targets:
         OTHER_LDFLAGS: ["-lz"]
       groups: [app]
     dependencies:
+      - package: FlowLikeMLX
+        product: FlowLikeMLX
       - framework: libapp.a
         embed: false
       - framework: thirdparty/onnxruntime.xcframework

@@ -11,14 +11,18 @@ Flow-Like is available under different licensing terms depending on your use cas
 
 ### Business Source License (BSL 1.1)
 
-The open-source version of Flow-Like is released under the **Business Source License 1.1**, owned by **Rheosoph GmbH**.
+The source-available edition of Flow-Like is released under the **Business Source License 1.1**, owned by **Rheosoph GmbH**. The BSL is not an Open Source license before the Change License takes effect.
+
+:::note[The license text controls]
+This page is a practical summary, not legal advice. If this summary and the repository's [LICENSE](https://github.com/Rheosoph/flow-like/blob/main/LICENSE) differ, the LICENSE controls.
+:::
 
 **What this means:**
 
-- ✅ **Free for most use cases** — Internal use, personal projects, and most commercial applications
-- ✅ **Full source access** — Build, modify, create derivative works
-- ✅ **Self-hosting allowed** — Run on your own infrastructure
-- ✅ **Redistribution allowed** — Share the code (with license intact)
+- ✅ **Source access** — Inspect, copy, modify, and create derivative works
+- ✅ **Non-production use** — Granted directly by the BSL terms
+- ✅ **Additional production use** — Allowed when your use fits the Additional Use Grant
+- ✅ **Self-hosting and redistribution** — Allowed when you follow the license, retain it with copies, and remain within the Additional Use Grant
 
 ### Restrictions
 
@@ -32,7 +36,12 @@ The BSL includes specific restrictions:
 
 ### Change Date & Future License
 
-After **8 years** from each release's publication date, the code automatically converts to **MPL 2.0** (Mozilla Public License), giving you full permissive open-source rights.
+For each version, the **Change License is MPL 2.0**. The BSL terms apply the Change License on the earlier of:
+
+1. the stated Change Date, which is eight years after publication; or
+2. the fourth anniversary of the first publicly available distribution of that version.
+
+After that point, the version is available under MPL 2.0 and its terms.
 
 ### Enterprise License
 
@@ -49,50 +58,58 @@ For organizations that need:
 
 ### Can I use Flow-Like for my company?
 
-**Yes.** Internal use for your own business operations is permitted under the BSL.
+**Yes, when your organization and use remain within the Additional Use
+Grant.** Large Entities must obtain a separate commercial license before any
+use.
 
 ### Can I build products that use Flow-Like workflows?
 
-**Get in contact!** Building products with Flow-Like as the workflow engine may require a commercial license depending on your use case.
+Building customer-facing products with Flow-Like as the workflow engine may
+require a commercial license. The deciding factors include whether the product
+is competitive or substantially similar, whether it is hosted, and whether the
+organization is a Large Entity.
 
-📧 [info@great-co.de](mailto:info@great-co.de)
+Describe the product and deployment model to
+[enterprise@flow-like.com](mailto:enterprise@flow-like.com).
 
 ### Can I self-host Flow-Like for my team?
 
-**Yes.** Self-hosting for your organization is permitted under the BSL.
+**Yes, when your organization and use case remain within the Additional Use Grant.** Large Entities and uses that create a Competitive Product or Service require a separate commercial license.
 
 ### Can I offer Flow-Like as a service to customers?
 
-**Yes.** Setting up Flow-Like for customers without rebranding is permitted under the BSL.
+Offering a hosted, rebranded, or substantially similar workflow product may fall outside the Additional Use Grant. Contact Rheosoph GmbH before offering Flow-Like as a customer-facing service.
 
-If you want to **rebrand** Flow-Like (white-label under your own name), please get in contact — we'd like to know!
-
-📧 [info@great-co.de](mailto:info@great-co.de)
+📧 [enterprise@flow-like.com](mailto:enterprise@flow-like.com)
 
 ### Can I modify Flow-Like?
 
-**Yes.** You can modify the source code for your own use. If you want to distribute modifications or offer them as a service, contact us.
+**Yes.** The BSL grants the right to modify, create derivative works, and
+redistribute the Licensed Work. Original and modified copies remain subject to
+the BSL, must conspicuously display the license, and must comply with the use
+restrictions in effect. Offering a modified version as a service may require a
+commercial license depending on the use.
 
 ### What happens after the change date?
 
-The BSL automatically converts to **MPL 2.0** (Mozilla Public License) **8 years** after each release, giving you full permissive open-source rights.
+That version becomes available under **MPL 2.0** on the earlier trigger described above. MPL 2.0 is an Open Source license with its own notice and source-availability requirements.
 
 ## Enterprise Pricing
 
 Enterprise licensing is priced based on:
 
-- **Deployment type** — Engine embed vs full platform
-- **Scale** — Number of users/deployments
-- **Support level** — Community vs priority SLA
+- **Deployment type** — Embedded, Headless, Hybrid, or a custom combination
+- **Scale** — Usage and number of customer or internal deployments
+- **Support level** — Support coverage and SLA requirements
 - **Custom work** — Integrations, nodes, branding
 
-📧 **Request a quote:** [info@great-co.de](mailto:info@great-co.de)
+📧 **Request a quote:** [enterprise@flow-like.com](mailto:enterprise@flow-like.com)
 
 ## Contact
 
 For licensing questions or to discuss enterprise options:
 
-📧 **[info@great-co.de](mailto:info@great-co.de)**
+📧 **[enterprise@flow-like.com](mailto:enterprise@flow-like.com)**
 
 ## Related
 

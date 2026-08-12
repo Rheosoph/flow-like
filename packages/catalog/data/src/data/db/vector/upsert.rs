@@ -1,10 +1,9 @@
 use flow_like::flow::{
-    execution::context::ExecutionContext,
+    execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_storage::databases::vector::VectorStore;
 use flow_like_types::{Value, async_trait, json::json};
 
 use super::NodeDBConnection;
@@ -66,17 +65,17 @@ impl NodeLogic for UpsertLocalDatabaseNode {
         context.deactivate_exec_pin("error").await?;
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
-        let database = database.load(context).await?.db.clone();
-        let mut database = database.write().await;
+        let database = database.load(context).await?;
         let id_row: String = context.evaluate_pin("id_row").await?;
         let value: Value = context.evaluate_pin("value").await?;
         let value = vec![value];
 
-        match database.upsert(value, id_row).await {
+        match database.upsert_from(context, value, id_row).await {
             Ok(()) => {
                 context.activate_exec_pin("exec_out").await?;
             }
             Err(e) => {
+                context.log_message(&format!("Database upsert failed: {e:#}"), LogLevel::Error);
                 context
                     .set_pin_value("error_message", json!(e.to_string()))
                     .await?;
@@ -146,16 +145,19 @@ impl NodeLogic for BatchUpsertLocalDatabaseNode {
         context.deactivate_exec_pin("error").await?;
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
-        let database = database.load(context).await?.db.clone();
-        let mut database = database.write().await;
+        let database = database.load(context).await?;
         let value: Vec<Value> = context.evaluate_pin("value").await?;
         let id_row: String = context.evaluate_pin("id_row").await?;
 
-        match database.upsert(value, id_row).await {
+        match database.upsert_from(context, value, id_row).await {
             Ok(()) => {
                 context.activate_exec_pin("exec_out").await?;
             }
             Err(e) => {
+                context.log_message(
+                    &format!("Database batch upsert failed: {e:#}"),
+                    LogLevel::Error,
+                );
                 context
                     .set_pin_value("error_message", json!(e.to_string()))
                     .await?;

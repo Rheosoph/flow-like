@@ -1,7 +1,5 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
 import {
 	Breadcrumb,
 	BreadcrumbItem,
@@ -27,6 +25,11 @@ import {
 	Label,
 	ScrollArea,
 	Separator,
+	Sheet,
+	SheetContent,
+	SheetDescription,
+	SheetHeader,
+	SheetTitle,
 	Skeleton,
 	Switch,
 	Tooltip,
@@ -36,6 +39,7 @@ import {
 	VisibilityIcon,
 	toastError,
 	useBackend,
+	useDeveloperMode,
 	useExecutionServiceOptional,
 	useInvoke,
 	useMobileHeader,
@@ -46,9 +50,14 @@ import {
 	type RawAppPublicationRequestItem,
 	normalizeAppPublicationRequests,
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
+import { VisibilityUpgradeDialog } from "@flow-like/flow-like-ui/components/settings/visibility-status/visibility-upgrade-dialog";
+import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
+import { useQuery } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
 	ChartAreaIcon,
+	ChevronLeftIcon,
 	CogIcon,
 	CopyIcon,
 	CrownIcon,
@@ -68,6 +77,7 @@ import {
 	Minimize2Icon,
 	PackageIcon,
 	PlayCircleIcon,
+	SearchIcon,
 	SendIcon,
 	SparklesIcon,
 	SquarePenIcon,
@@ -78,7 +88,7 @@ import {
 	ZapIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
 	Suspense,
 	useCallback,
@@ -89,10 +99,9 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { appsDB } from "../../../lib/apps-db";
-import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import { isIosTauriRuntime } from "../../../lib/platform";
 
-const navigationItems: {
+interface INavigationItem {
 	href: string;
 	label: string;
 	icon: React.ForwardRefExoticComponent<
@@ -104,7 +113,20 @@ const navigationItems: {
 	visibilities?: IAppVisibility[];
 	requiresPaid?: boolean;
 	disabled?: boolean;
-}[] = [
+	devOnly?: boolean;
+	/**
+	 * Visibilities where the section stays in the nav but is locked: hiding it
+	 * outright reads as "this feature does not exist". Clicking a locked row
+	 * offers the visibility change that unlocks it.
+	 */
+	lockedVisibilities?: IAppVisibility[];
+	/** Copy for the unlock dialog. */
+	lockedReason?: string;
+	/** Visibility the unlock dialog switches to. */
+	unlockVisibility?: IAppVisibility;
+}
+
+const navigationItems: INavigationItem[] = [
 	{
 		href: "/library/config",
 		label: "Dashboard",
@@ -132,6 +154,7 @@ const navigationItems: {
 		icon: WorkflowIcon,
 		description: "Business logic and workflow definitions",
 		group: "Build",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/pages",
@@ -139,6 +162,7 @@ const navigationItems: {
 		icon: SparklesIcon,
 		description: "Events, pages, and path-based navigation",
 		group: "Build",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/templates",
@@ -146,6 +170,7 @@ const navigationItems: {
 		icon: CopyIcon,
 		description: "Reusable Flow templates",
 		group: "Build",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/widgets",
@@ -153,6 +178,7 @@ const navigationItems: {
 		icon: LayoutGridIcon,
 		description: "Reusable UI components and widgets",
 		group: "Build",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/storage",
@@ -167,6 +193,7 @@ const navigationItems: {
 		icon: UserIcon,
 		description: "Browse and search your private app files",
 		group: "Data",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/explore",
@@ -174,6 +201,7 @@ const navigationItems: {
 		icon: DatabaseIcon,
 		description: "Model, explore, operate, and share project data",
 		group: "Data",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/packages",
@@ -181,6 +209,7 @@ const navigationItems: {
 		icon: PackageIcon,
 		description: "Manage WASM packages for this app",
 		group: "Data",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/team",
@@ -192,6 +221,10 @@ const navigationItems: {
 			IAppVisibility.Prototype,
 			IAppVisibility.PublicRequestAccess,
 		],
+		lockedVisibilities: [IAppVisibility.Private],
+		lockedReason:
+			"A private project is synced to your account only. Switch to Prototype to invite collaborators, assign roles and share a link.",
+		unlockVisibility: IAppVisibility.Prototype,
 		group: "Collaborate",
 	},
 	{
@@ -207,6 +240,7 @@ const navigationItems: {
 			IAppVisibility.Private,
 		],
 		group: "Collaborate",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/roles",
@@ -219,6 +253,7 @@ const navigationItems: {
 			IAppVisibility.PublicRequestAccess,
 		],
 		group: "Collaborate",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/sales",
@@ -228,6 +263,7 @@ const navigationItems: {
 		visibilities: [IAppVisibility.Public, IAppVisibility.PublicRequestAccess],
 		requiresPaid: true,
 		group: "Insights",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/analytics",
@@ -235,6 +271,7 @@ const navigationItems: {
 		icon: ChartAreaIcon,
 		description: "Performance metrics and insights",
 		group: "Insights",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/endpoints",
@@ -242,6 +279,7 @@ const navigationItems: {
 		icon: GlobeIcon,
 		description: "API endpoints and integrations",
 		group: "Insights",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/publication",
@@ -249,6 +287,7 @@ const navigationItems: {
 		icon: SendIcon,
 		description: "Track publication review status and auditor feedback",
 		group: "Insights",
+		devOnly: true,
 	},
 ];
 
@@ -275,6 +314,7 @@ export default function Id({
 		[id ?? ""],
 	) ?? { visibility: IAppVisibility.Offline };
 	const currentRoute = usePathname();
+	const router = useRouter();
 	const metadata = useInvoke(
 		backend.appState.getAppMeta,
 		backend.appState,
@@ -296,6 +336,8 @@ export default function Id({
 	const [showPassword, setShowPassword] = useState(false);
 	const [exporting, setExporting] = useState(false);
 	const [mobileNavOpen, setMobileNavOpen] = useState(false);
+	const [mobileNavFilter, setMobileNavFilter] = useState("");
+	const [lockedItem, setLockedItem] = useState<INavigationItem | null>(null);
 	const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
 	const settingsProfile = useInvoke(
@@ -327,6 +369,57 @@ export default function Id({
 				(r) => r.status === "pending" || r.status === "on_hold",
 			),
 		[publicationRequests.data],
+	);
+
+	const { developerMode } = useDeveloperMode();
+
+	const visibility = online?.visibility ?? IAppVisibility.Offline;
+
+	// Nav items visible for this app's visibility + paywall state — shared by the
+	// desktop sidebar and the mobile bottom-sheet switcher (no double filtering).
+	// Items whose visibility gate can be lifted stay in the list as `locked`.
+	const visibleNavItems = useMemo(
+		() =>
+			navigationItems
+				.filter(
+					(item) =>
+						(!item.devOnly || developerMode) &&
+						(!item.visibilities ||
+							item.visibilities.includes(visibility) ||
+							item.lockedVisibilities?.includes(visibility)) &&
+						(!item.requiresPaid ||
+							(app.data?.price != null && app.data.price > 0)),
+				)
+				.map((item) => ({
+					...item,
+					locked:
+						!!item.visibilities && !item.visibilities.includes(visibility),
+				})),
+		[visibility, app.data?.price, developerMode],
+	);
+
+	const activeItem = useMemo(
+		() =>
+			visibleNavItems.find((item) => isRouteActive(item.href, currentRoute)),
+		[visibleNavItems, currentRoute],
+	);
+
+	const openLockedItem = useCallback((item: INavigationItem) => {
+		setMobileNavOpen(false);
+		setMobileNavFilter("");
+		setLockedItem(item);
+	}, []);
+
+	// The nav reads the locally cached visibility, so mirror the new value right
+	// away instead of waiting for the background app refetch to land, then take
+	// the user to the section they originally clicked.
+	const unlockSection = useCallback(
+		async (item: INavigationItem, next: IAppVisibility) => {
+			if (!id) return;
+			await appsDB.visibility.put({ appId: id, visibility: next });
+			router.push(`${item.href}?id=${id}`);
+		},
+		[id, router],
 	);
 
 	const [isIosTauri, setIsIosTauri] = useState(false);
@@ -421,30 +514,7 @@ export default function Id({
 		(id ?? "") !== "",
 	);
 
-	const { update } = useMobileHeader(
-		{
-			title:
-				metadata.data?.name ??
-				(metadata.isFetching ? (
-					<Skeleton className="h-4 w-24" />
-				) : (
-					"Unknown App"
-				)),
-			right: (
-				<Button
-					key={"open-menu"}
-					variant="outline"
-					size="sm"
-					className="md:hidden"
-					onClick={() => setMobileNavOpen(true)}
-					aria-label="Open menu"
-				>
-					<MenuIcon className="w-4 h-4" />
-				</Button>
-			),
-		},
-		[events.data],
-	);
+	const { update } = useMobileHeader();
 
 	const usableEvents = useMemo(() => {
 		const set = new Set<string>();
@@ -487,48 +557,56 @@ export default function Id({
 
 	useEffect(() => {
 		const canUseApp = !!useAppHref;
+		const appName =
+			metadata.data?.name ??
+			(metadata.isFetching ? <Skeleton className="h-4 w-24" /> : "Unknown App");
+		// Inside a sub-section the header shows "where you are" + a back chevron to
+		// the app dashboard; on the dashboard it just shows the app name.
+		const inSubSection = !!activeItem && activeItem.href !== "/library/config";
 
 		update({
-			title:
-				metadata.data?.name ??
-				(metadata.isFetching ? (
-					<Skeleton className="h-4 w-24" />
-				) : (
-					"Unknown App"
-				)),
-			right: [
+			title: activeItem?.label ?? appName,
+			left: [
 				<Button
-					key={"open-menu"}
+					key="config-menu"
 					variant="outline"
-					size="sm"
-					className="md:hidden"
+					size="icon"
+					className="md:hidden size-9"
 					onClick={() => setMobileNavOpen(true)}
-					aria-label="Open menu"
+					aria-label="Configuration sections"
 				>
 					<MenuIcon className="w-4 h-4" />
 				</Button>,
-				canUseApp ? (
-					<Link key={"use-app"} href={useAppHref} className="md:hidden">
-						<Button variant="default" size="sm" aria-label="Use App">
-							<SparklesIcon className="w-4 h-4" />
-							Use App
-						</Button>
-					</Link>
-				) : (
+				inSubSection ? (
 					<Link
-						key={"start-building"}
+						key="config-back"
 						href={`/library/config?id=${id}`}
 						className="md:hidden"
+						aria-label="Back to dashboard"
 					>
-						<Button variant="default" size="sm" aria-label="Start Building">
-							<WorkflowIcon className="w-4 h-4" />
-							Start Building
+						<Button variant="ghost" size="icon" className="size-9">
+							<ChevronLeftIcon className="w-5 h-5" />
 						</Button>
 					</Link>
-				),
+				) : null,
 			],
+			right: canUseApp ? (
+				<Link key="use-app" href={useAppHref} className="md:hidden">
+					<Button variant="default" size="sm" aria-label="Use App">
+						<SparklesIcon className="w-4 h-4" />
+						Use App
+					</Button>
+				</Link>
+			) : undefined,
 		});
-	}, [metadata.data?.name, metadata.isFetching, useAppHref, id, update]);
+	}, [
+		metadata.data?.name,
+		metadata.isFetching,
+		useAppHref,
+		id,
+		update,
+		activeItem,
+	]);
 
 	const strength = useMemo(() => {
 		if (!encrypt) return 0;
@@ -596,26 +674,6 @@ export default function Id({
 	return (
 		<TooltipProvider>
 			<main className="flex overflow-hidden flex-col w-full p-4 sm:p-6 gap-4 sm:gap-6 flex-1 min-h-0 h-full">
-				{isIosTauri && !mobileNavOpen && (
-					<div
-						className="md:hidden fixed right-3 z-70"
-						style={{ top: "calc(var(--fl-safe-top, 0px) + 10px)" }}
-					>
-						<Button
-							size="icon"
-							variant="outline"
-							className="h-10 w-10 rounded-lg shadow-lg bg-card/95 backdrop-blur supports-backdrop-filter:bg-background/70"
-							onClick={() => setMobileNavOpen(true)}
-							onTouchStart={(event) => {
-								event.stopPropagation();
-							}}
-							aria-label="Open config menu"
-						>
-							<MenuIcon className="w-4 h-4" />
-						</Button>
-					</div>
-				)}
-
 				{!isMaximized && (
 					<Card className="border-0 shadow-sm bg-linear-to-r from-background to-muted/20 h-fit py-3 sm:py-4 hidden md:flex">
 						<CardContent className="p-4 py-0 flex flex-row items-center justify-between">
@@ -707,68 +765,128 @@ export default function Id({
 					</Card>
 				)}
 
-				{/* Mobile navigation dialog */}
-				<Dialog open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-					<DialogContent className="sm:max-w-[480px] p-0 overflow-hidden">
-						<div className="p-4 border-b">
-							<DialogTitle>Navigation</DialogTitle>
-							<DialogDescription>
-								Quickly jump to settings sections
-							</DialogDescription>
-						</div>
-						<ScrollArea className="max-h-[70vh]">
+				{/* Mobile configuration-section switcher: a grouped, searchable
+				    bottom sheet with an active highlight and thumb-sized rows. */}
+				<Sheet
+					open={mobileNavOpen}
+					onOpenChange={(open) => {
+						setMobileNavOpen(open);
+						if (!open) setMobileNavFilter("");
+					}}
+				>
+					<SheetContent
+						side="bottom"
+						className="h-[85dvh] max-h-[85dvh] overflow-hidden p-0 flex flex-col rounded-t-2xl pb-safe"
+					>
+						<SheetHeader className="p-4 pb-3 border-b text-left space-y-3">
+							<div>
+								<SheetTitle>
+									Configure {metadata.data?.name ?? "app"}
+								</SheetTitle>
+								<SheetDescription>
+									Jump to a configuration section
+								</SheetDescription>
+							</div>
+							<div className="relative">
+								<SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+								<Input
+									value={mobileNavFilter}
+									onChange={(e) => setMobileNavFilter(e.target.value)}
+									placeholder="Filter sections…"
+									className="pl-8 h-10"
+									aria-label="Filter configuration sections"
+								/>
+							</div>
+						</SheetHeader>
+						<div className="flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y p-3 [-webkit-overflow-scrolling:touch]">
 							<nav
-								className="flex flex-col gap-1 p-3"
+								className="flex flex-col gap-0.5"
 								key={id + (online?.visibility ?? "")}
 							>
-								{navigationItems
-									.filter(
-										(item) =>
-											(!item.visibilities ||
-												item.visibilities.includes(
-													online?.visibility ?? IAppVisibility.Offline,
-												)) &&
-											(!item.requiresPaid ||
-												(app.data?.price != null && app.data.price > 0)),
-									)
-									.map((item) => {
-										const Icon = item.icon;
-										if (item.disabled) {
-											return (
-												<div
-													key={item.href}
-													className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-muted-foreground bg-muted/50 opacity-60"
-													aria-disabled="true"
-												>
-													<Icon className="w-4 h-4 shrink-0" />
-													<span className="truncate">{item.label} (soon)</span>
-												</div>
-											);
-										}
+								{(() => {
+									const query = mobileNavFilter.trim().toLowerCase();
+									const filtered = query
+										? visibleNavItems.filter(
+												(item) =>
+													item.label.toLowerCase().includes(query) ||
+													item.group.toLowerCase().includes(query) ||
+													item.description.toLowerCase().includes(query),
+											)
+										: visibleNavItems;
+									if (filtered.length === 0) {
 										return (
-											<Link
-												key={item.href}
-												href={`${item.href}?id=${id}`}
-												className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm hover:bg-muted text-muted-foreground hover:text-foreground"
-												onClick={() => setMobileNavOpen(false)}
-											>
-												<Icon className="w-4 h-4 shrink-0" />
-												<span className="truncate">{item.label}</span>
-												{item.href === "/library/config/publication" &&
-													hasActivePublicationRequest && (
-														<span className="ml-auto w-2 h-2 rounded-full bg-blue-500 shrink-0" />
-													)}
-											</Link>
+											<p className="px-3 py-8 text-center text-sm text-muted-foreground">
+												No sections match “{mobileNavFilter}”.
+											</p>
 										);
-									})}
+									}
+									let lastGroup = "";
+									return filtered.map((item) => {
+										const Icon = item.icon;
+										const showGroupHeader = item.group !== lastGroup;
+										lastGroup = item.group;
+										const active = isRouteActive(item.href, currentRoute);
+										return (
+											<div key={item.href}>
+												{showGroupHeader && (
+													<div className="text-[11px] font-semibold text-muted-foreground/70 uppercase tracking-wider px-3 pt-4 pb-1 first:pt-0">
+														{item.group}
+													</div>
+												)}
+												{item.disabled ? (
+													<div
+														className="flex items-center gap-3 px-3 min-h-11 rounded-lg text-sm text-muted-foreground bg-muted/50 opacity-60"
+														aria-disabled="true"
+													>
+														<Icon className="w-4 h-4 shrink-0" />
+														<span className="truncate">
+															{item.label} (soon)
+														</span>
+													</div>
+												) : item.locked ? (
+													<button
+														type="button"
+														className="w-full flex items-center gap-3 px-3 min-h-11 rounded-lg text-sm text-muted-foreground/60 bg-muted/40 transition-colors"
+														onClick={() => openLockedItem(item)}
+													>
+														<Icon className="w-4 h-4 shrink-0" />
+														<span className="truncate">{item.label}</span>
+														<LockIcon className="ml-auto w-3.5 h-3.5 shrink-0" />
+													</button>
+												) : (
+													<Link
+														href={`${item.href}?id=${id}`}
+														className={`flex items-center gap-3 px-3 min-h-11 rounded-lg text-sm transition-colors ${
+															active
+																? "bg-primary/10 text-primary font-medium"
+																: "text-muted-foreground hover:bg-muted hover:text-foreground"
+														}`}
+														onClick={() => {
+															setMobileNavOpen(false);
+															setMobileNavFilter("");
+														}}
+													>
+														<Icon className="w-4 h-4 shrink-0" />
+														<span className="truncate">{item.label}</span>
+														{item.href === "/library/config/publication" &&
+															hasActivePublicationRequest && (
+																<span className="ml-auto w-2 h-2 rounded-full bg-blue-500 shrink-0" />
+															)}
+													</Link>
+												)}
+											</div>
+										);
+									});
+								})()}
 
 								{(online?.visibility ?? IAppVisibility.Private) ===
 									IAppVisibility.Offline && (
 									<Button
 										variant="ghost"
-										className="flex items-center gap-3 px-3 py-2 justify-start text-foreground"
+										className="flex items-center gap-3 px-3 min-h-11 justify-start text-foreground mt-1"
 										onClick={() => {
 											setMobileNavOpen(false);
+											setMobileNavFilter("");
 											setExportOpen(true);
 										}}
 									>
@@ -777,9 +895,25 @@ export default function Id({
 									</Button>
 								)}
 							</nav>
-						</ScrollArea>
-					</DialogContent>
-				</Dialog>
+						</div>
+					</SheetContent>
+				</Sheet>
+
+				{/* Unlock dialog for nav sections gated behind a visibility change */}
+				{id && lockedItem && (
+					<VisibilityUpgradeDialog
+						appId={id}
+						open
+						onOpenChange={(open) => {
+							if (!open) setLockedItem(null);
+						}}
+						feature={lockedItem.label}
+						reason={lockedItem.lockedReason ?? lockedItem.description}
+						current={visibility}
+						target={lockedItem.unlockVisibility ?? IAppVisibility.Prototype}
+						onChanged={(next) => unlockSection(lockedItem, next)}
+					/>
+				)}
 
 				{/* Global Export Dialog */}
 				<Dialog open={exportOpen} onOpenChange={setExportOpen}>
@@ -925,15 +1059,7 @@ export default function Id({
 										key={id + (online?.visibility ?? "")}
 									>
 										{(() => {
-											const filtered = navigationItems.filter(
-												(item) =>
-													(!item.visibilities ||
-														item.visibilities.includes(
-															online?.visibility ?? IAppVisibility.Offline,
-														)) &&
-													(!item.requiresPaid ||
-														(app.data?.price != null && app.data.price > 0)),
-											);
+											const filtered = visibleNavItems;
 											let lastGroup = "";
 											return filtered.map((item) => {
 												const Icon = item.icon;
@@ -970,6 +1096,33 @@ export default function Id({
 																	</p>
 																	<p className="text-xs mt-1">
 																		{item.description}
+																	</p>
+																</TooltipContent>
+															</Tooltip>
+														) : item.locked ? (
+															<Tooltip delayDuration={300}>
+																<TooltipTrigger asChild>
+																	<button
+																		type="button"
+																		className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-muted-foreground/60 bg-muted/40 hover:bg-muted hover:text-muted-foreground transition-all"
+																		onClick={() => openLockedItem(item)}
+																	>
+																		<Icon className="w-4 h-4 shrink-0" />
+																		<span className="truncate">
+																			{item.label}
+																		</span>
+																		<LockIcon className="ml-auto w-3.5 h-3.5 shrink-0" />
+																	</button>
+																</TooltipTrigger>
+																<TooltipContent
+																	side="right"
+																	className="max-w-xs"
+																>
+																	<p className="font-bold">
+																		{item.label} (locked)
+																	</p>
+																	<p className="text-xs mt-1">
+																		{item.lockedReason ?? item.description}
 																	</p>
 																</TooltipContent>
 															</Tooltip>
@@ -1098,7 +1251,7 @@ export default function Id({
 					)}
 
 					<Card
-						className={`relative h-full max-h-full flex-col grow overflow-hidden min-h-0 transition-all duration-300 bg-transparent hidden md:flex ${isMaximized ? "shadow-2xl" : ""} order-1 md:order-2`}
+						className={`relative h-full max-h-full flex-col grow overflow-hidden min-h-0 transition-all duration-300 bg-transparent flex border-0 shadow-none md:border md:shadow-sm ${isMaximized ? "shadow-2xl" : ""} order-1 md:order-2`}
 					>
 						<div className="pointer-events-none absolute right-4 top-4 z-20 hidden md:block">
 							<div className="pointer-events-auto">
@@ -1126,7 +1279,7 @@ export default function Id({
 						<CardContent className="flex-1 p-0 overflow-hidden min-h-0">
 							{hasActivePublicationRequest &&
 								!currentRoute?.includes("/publication") && (
-									<div className="px-6 pt-4 pr-16">
+									<div className="px-0 pt-4 md:px-6 md:pr-16">
 										<AppPublicationBanner
 											requests={publicationRequests.data ?? []}
 											onNavigate={() => {
@@ -1138,7 +1291,7 @@ export default function Id({
 							{currentRoute?.includes("/storage") ||
 							currentRoute?.includes("/explore") ? (
 								<div className="h-full flex flex-col">
-									<div className="flex-1 min-h-0 overflow-hidden p-6 pt-4 pr-16">
+									<div className="flex-1 min-h-0 overflow-hidden p-0 md:p-6 md:pt-4 md:pr-16">
 										<Suspense
 											fallback={
 												<div className="space-y-4">
@@ -1156,7 +1309,7 @@ export default function Id({
 								</div>
 							) : (
 								<div className="h-full overflow-y-auto">
-									<div className="p-6 pt-4 pr-16">
+									<div className="p-0 md:p-6 md:pt-4 md:pr-16">
 										<Suspense
 											fallback={
 												<div className="space-y-4">
@@ -1175,22 +1328,6 @@ export default function Id({
 							)}
 						</CardContent>
 					</Card>
-
-					<div className="flex flex-col max-h-full md:hidden overflow-auto ">
-						<Suspense
-							fallback={
-								<div className="space-y-4">
-									<Skeleton className="h-8 w-full" />
-									<Skeleton className="h-32 w-full" />
-									<Skeleton className="h-24 w-full" />
-								</div>
-							}
-						>
-							<div key={id ?? "missing-app"} className="contents">
-								{children}
-							</div>
-						</Suspense>
-					</div>
 				</div>
 			</main>
 		</TooltipProvider>

@@ -395,13 +395,13 @@ fn trimmed_option(value: &str) -> Option<String> {
 }
 
 fn host_without_port(address: &str) -> &str {
-    if let Some(rest) = address.strip_prefix('[') {
-        if let Some((host, suffix)) = rest.split_once(']') {
-            let host = host.trim();
-            let suffix = suffix.trim();
-            if !host.is_empty() && (suffix.is_empty() || suffix.starts_with(':')) {
-                return host;
-            }
+    if let Some(rest) = address.strip_prefix('[')
+        && let Some((host, suffix)) = rest.split_once(']')
+    {
+        let host = host.trim();
+        let suffix = suffix.trim();
+        if !host.is_empty() && (suffix.is_empty() || suffix.starts_with(':')) {
+            return host;
         }
     }
 

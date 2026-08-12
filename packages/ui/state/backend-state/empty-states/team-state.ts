@@ -61,6 +61,16 @@ export class EmptyTeamState implements ITeamState {
 	getInvites(offset?: number, limit?: number): Promise<IInvite[]> {
 		throw new Error("Method not implemented.");
 	}
+	getAppInvites(
+		appId: string,
+		offset?: number,
+		limit?: number,
+	): Promise<IInvite[]> {
+		throw new Error("Method not implemented.");
+	}
+	revokeAppInvite(appId: string, inviteId: string): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
 	acceptInvite(inviteId: string): Promise<void> {
 		throw new Error("Method not implemented.");
 	}

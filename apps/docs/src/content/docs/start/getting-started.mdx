@@ -10,7 +10,7 @@ sidebar:
 
 import { Steps, Aside, Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Welcome to Flow-Like! This guide will have you building your first workflow in minutes.
+This guide takes you from a fresh install to a Flow you can run and inspect.
 
 ## Quick Start
 
@@ -18,31 +18,44 @@ Welcome to Flow-Like! This guide will have you building your first workflow in m
 
 1. **Download Flow-Like**
 
-   Get the desktop app for your platform:
-   - [Windows](https://flow-like.com/download) — `.exe` installer
-   - [macOS](https://flow-like.com/download) — `.dmg` for Intel and Apple Silicon
-   - [Linux](https://flow-like.com/download) — AppImage or `.deb`
+   Get Flow-Like Desktop for Windows, macOS, or Linux from the
+   [download page](https://flow-like.com/download). You can also use the
+   [web app](https://app.flow-like.com) for online projects.
 
-2. **Launch and Create Your First App**
+2. **Choose a Profile**
 
-   Open Flow-Like, click **New App**, and give it a name. You'll land in the Studio — your visual workspace for building flows.
+   On first use, choose a starter Profile. A Profile carries your model
+   selection, theme, and other preferences. If the Profile includes local
+   models, Flow-Like can continue downloading them in the background.
 
-3. **Add Your First Nodes**
+3. **Create a Project**
 
-   Right-click the canvas to open the node picker. Try adding:
-   - A **Text** node (to input some data)
-   - A **Log** node (to see output)
+   Open **Library** and select **Create Flow**. Name the project and choose:
 
-   Connect them by dragging from the output pin to the input pin.
+   - **Offline — Local only** for a project stored on this device.
+   - **Online — Sync with cloud** for browser access and collaboration.
 
-4. **Run Your Flow**
+   Choose a template for a guided starting point, or start empty. Select
+   **Create Project** to open the initial Flow in Studio.
 
-   Click the **Play** button. You'll see your text flow through the graph, with each step recorded in the log panel.
+4. **Build the Flow**
+
+   Right-click an open area of the canvas to browse the Node Catalog. Nodes
+   with matching pin types can be connected by dragging between their pins.
+   Begin with an event node, add the processing steps you need, and finish
+   with an observable result such as a response or log node.
+
+5. **Run and Inspect**
+
+   Run the Flow from its event node. If the event exposes inputs, Flow-Like
+   asks for them before execution. Open **Runs** to inspect the execution,
+   node logs, duration, and payload, or to run the same payload again.
 
 </Steps>
 
 <Aside type="tip">
-<b>Pro tip:</b> Press `Space` to open the quick node picker, or use `Ctrl/Cmd + K` for command palette.
+Use `Ctrl/Cmd + K` to open Flow-Like's command palette. Inside Studio,
+right-clicking the canvas opens the type-aware Node Catalog at the pointer.
 </Aside>
 
 ## What's Next?
@@ -66,7 +79,7 @@ Welcome to Flow-Like! This guide will have you building your first workflow in m
   <LinkCard
     title="Connect AI Models"
     href="/start/models/"
-    description="Set up LLMs and embedding models"
+    description="Download and assign models to your Profile"
   />
 </CardGrid>
 
@@ -74,7 +87,7 @@ Welcome to Flow-Like! This guide will have you building your first workflow in m
 
 <CardGrid>
   <Card title="Discord Community" icon="discord" >
-    Join 1000+ developers building with Flow-Like. Get help, share your flows, and stay updated.
+    Get help, share your Flows, and follow project updates.
 
     [Join Discord →](https://discord.gg/KTWMrS2)
   </Card>

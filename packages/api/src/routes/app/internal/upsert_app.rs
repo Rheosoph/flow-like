@@ -48,6 +48,7 @@ pub struct AppUpsertBody {
     responses(
         (status = 200, description = "Application created or updated", body = Object),
         (status = 401, description = "Unauthorized"),
+        (status = 402, description = "Plan limit reached — upgrading the subscription unlocks more projects"),
         (status = 403, description = "Forbidden")
     )
 )]
@@ -95,6 +96,7 @@ pub async fn upsert_app(
             bucket_app.changelog = app_updates.changelog.clone();
             bucket_app.primary_category = app_updates.primary_category.clone();
             bucket_app.secondary_category = app_updates.secondary_category.clone();
+            bucket_app.app_type = app_updates.app_type.clone();
             bucket_app.price = app_updates.price;
             bucket_app.updated_at = SystemTime::now();
             bucket_app.status = app_updates.status.clone();
@@ -109,6 +111,7 @@ pub async fn upsert_app(
 
         app.primary_category = sea_orm::ActiveValue::Set(app_updates.primary_category);
         app.secondary_category = sea_orm::ActiveValue::Set(app_updates.secondary_category);
+        app.app_type = sea_orm::ActiveValue::Set(app_updates.app_type);
         app.price = sea_orm::ActiveValue::Set(app_updates.price);
         app.version = sea_orm::ActiveValue::Set(app_updates.version);
         app.execution_mode = sea_orm::ActiveValue::Set(app_updates.execution_mode);
@@ -149,7 +152,9 @@ pub async fn upsert_app(
 
     if tier.max_non_visible_projects == 0 {
         tracing::warn!("Configuration doesn't allow for the creation of non-visible projects",);
-        return Err(ApiError::FORBIDDEN);
+        return Err(ApiError::payment_required(
+            "Your current plan does not include online projects.",
+        ));
     }
 
     if tier.max_non_visible_projects > 0 {
@@ -174,7 +179,10 @@ pub async fn upsert_app(
                 tier.max_non_visible_projects,
                 count
             );
-            return Err(ApiError::FORBIDDEN);
+            return Err(ApiError::payment_required(format!(
+                "You have used {} of {} online projects included in your plan.",
+                count, tier.max_non_visible_projects
+            )));
         }
     }
 

@@ -10,7 +10,8 @@ export type IAttachment =
 			preview_text?: string;
 			thumbnail_url?: string;
 			name?: string;
-			size?: number;
+			/** Nullable on the wire: `ComplexAttachment.size` is an `Option<u64>` that serialises as `null`. */
+			size?: number | null;
 			type?: string;
 			anchor?: string;
 			page?: number;
@@ -47,6 +48,39 @@ export interface IChatWidget {
 
 export type PlanStepStatus = "planned" | "progress" | "done" | "failed";
 
+/** One planned slice of a workflow build, and whether it has reached the board yet. */
+export interface IBuildLaneSegment {
+	id: string;
+	title: string;
+	applied?: boolean;
+}
+
+/** A function the specialist could not build, committed with its interface but no logic. */
+export interface IBuildLaneGap {
+	function?: string;
+	detail: string;
+}
+
+/**
+ * A concurrent branch of one build. The data, page and workflow specialists own disjoint state and
+ * run at the same time, so a flat list of rows misrepresents what is happening — this carries the
+ * shape a lane needs to render as a real progress block instead of one truncated line.
+ */
+export interface IBuildLaneDetail {
+	kind: "build_lane";
+	lane: "data" | "page" | "workflow";
+	/** What this lane is building: a route, a board name, the tables. */
+	target?: string;
+	segments?: IBuildLaneSegment[];
+	segmentsApplied?: number;
+	segmentsTotal?: number;
+	/** Wall clock this lane earned by proving progress, in minutes. */
+	earnedMinutes?: number;
+	gaps?: IBuildLaneGap[];
+}
+
+export type IPlanStepDetail = IBuildLaneDetail;
+
 export interface IPlanStep {
 	id: string;
 	title: string;
@@ -56,6 +90,20 @@ export interface IPlanStep {
 	timestamp?: number;
 	startTime?: number;
 	endTime?: number;
+	/**
+	 * Structured payload for steps that deserve more than a title/description row. Optional and
+	 * additive: producers that do not set it keep the plain row, and it survives persistence and the
+	 * sub-step fold because both pass step objects through untouched.
+	 */
+	detail?: IPlanStepDetail;
+	/**
+	 * Offset into the message text at the moment this step started. Lets the renderer place the
+	 * step inline between the text segments it interrupted; steps without an anchor render in the
+	 * legacy grouped block above the text.
+	 */
+	content_offset?: number;
+	/** Tool that produced this step. Drives the FlowPilot orb's activity state and tool labels. */
+	toolName?: string;
 }
 
 export interface IModelCallEntry {
@@ -120,6 +168,11 @@ export interface ISession {
 	summarization: string;
 	createdAt: number;
 	updatedAt: number;
+	/**
+	 * Epoch millis the user pinned this conversation; absent means unpinned. A timestamp rather
+	 * than a boolean because booleans are not valid IndexedDB keys.
+	 */
+	pinnedAt?: number;
 }
 
 export interface ILocalChatState {
@@ -147,6 +200,13 @@ const chatDb = new Dexie("Chat-History") as Dexie & {
 // Schema declaration:
 chatDb.version(3).stores({
 	sessions: "id, appId, updatedAt, [updatedAt+appId]",
+	messages: "id, sessionId",
+	localStage: "sessionId, appId, eventId, [sessionId+eventId], timestamp",
+	globalState: "appId, eventId, [appId+eventId]",
+});
+
+chatDb.version(4).stores({
+	sessions: "id, appId, updatedAt, [updatedAt+appId], pinnedAt",
 	messages: "id, sessionId",
 	localStage: "sessionId, appId, eventId, [sessionId+eventId], timestamp",
 	globalState: "appId, eventId, [appId+eventId]",

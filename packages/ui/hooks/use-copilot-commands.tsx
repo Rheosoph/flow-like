@@ -20,6 +20,12 @@ import {
 	upsertVariableCommand,
 } from "../lib";
 import { expectedCopilotPinType } from "../lib/copilot-command-pins";
+import { getErrorMessage } from "../lib/error-message";
+import {
+	type FlowPilotCommandApplyFailure,
+	executeFlowPilotCommandBatch,
+	throwFlowPilotCommandApplyError,
+} from "../lib/flowpilot-command-apply";
 import { flowPilotDebugLog } from "../lib/flowpilot-debug";
 import { toastError } from "../lib/messages";
 import type { IGenericCommand } from "../lib/schema";
@@ -325,6 +331,28 @@ export function useCopilotCommands({
 				board.data?.variables ?? {};
 			let latestBoardComments: Record<string, IComment> =
 				board.data?.comments ?? {};
+			let appliedGenericCommandCount = 0;
+			const commandFailures: FlowPilotCommandApplyFailure[] = [];
+			const recordedFailureKeys = new Set<string>();
+			const recordCommandFailure = (
+				command: BoardCommand,
+				phase: string,
+				message: string,
+			) => {
+				const queueIndex = commands.indexOf(command);
+				const failure: FlowPilotCommandApplyFailure = {
+					queueIndex: queueIndex >= 0 ? queueIndex : undefined,
+					phase,
+					commandType: command.command_type,
+					message,
+				};
+				const key = `${failure.queueIndex ?? "unknown"}:${phase}:${message}`;
+				if (!recordedFailureKeys.has(key)) {
+					recordedFailureKeys.add(key);
+					commandFailures.push(failure);
+				}
+				toastError(message, <XIcon />);
+			};
 
 			const nodeReferenceMap = new Map<string, INode>();
 			const ambiguousNodeRefs = new Set<string>();
@@ -525,12 +553,14 @@ export function useCopilotCommands({
 
 			const refreshBoardSnapshot = async () => {
 				const freshBoard = await board.refetch();
+				if (freshBoard.error) throw freshBoard.error;
 				const data = freshBoard.data ?? board.data;
 				latestBoardNodes = data?.nodes ?? latestBoardNodes;
 				latestBoardLayers = data?.layers ?? latestBoardLayers;
 				latestBoardVariables = data?.variables ?? latestBoardVariables;
 				latestBoardComments = data?.comments ?? latestBoardComments;
 				rebuildPinMappings();
+				return freshBoard;
 			};
 
 			const applyExecutedCommandsToSnapshot = (
@@ -618,12 +648,21 @@ export function useCopilotCommands({
 							approxBytes: batchBytes,
 						},
 					);
-					const result = await executeCommands([...batch], {
-						refetch: options.refetch ?? false,
-					});
-					if (Array.isArray(result)) {
-						executedCommands.push(...(result as IGenericCommand[]));
-					}
+					const executedBatch =
+						await executeFlowPilotCommandBatch<IGenericCommand>({
+							requestedCommands: commands.length,
+							alreadyAppliedCommands: appliedGenericCommandCount,
+							expectedBatchCommands: batch.length,
+							phase: `${label} batch ${batchIndex}`,
+							commandType: batch[0]?.command_type ?? "GenericCommandBatch",
+							execute: () =>
+								executeCommands([...batch], {
+									refetch: options.refetch ?? false,
+								}),
+							refetch: refreshBoardSnapshot,
+						});
+					executedCommands.push(...executedBatch);
+					appliedGenericCommandCount += executedBatch.length;
 					batch = [];
 					batchBytes = 2;
 				};
@@ -652,6 +691,15 @@ export function useCopilotCommands({
 			for (const cmd of commands) {
 				if (cmd.command_type === "CreateLayer" && isSetupLayerCommand(cmd)) {
 					const layerId = createId();
+					const layerType = layerTypeFromCommand(cmd.layer_type);
+					if (cmd.cache != null && layerType !== ILayerType.Function) {
+						recordCommandFailure(
+							cmd,
+							"layer creation",
+							`Cannot configure function cache on non-Function layer "${cmd.name}"`,
+						);
+						continue;
+					}
 					const position = cmd.position || {
 						x: baseX + (nodeIndex % 3) * 300,
 						y: baseY + Math.floor(nodeIndex / 3) * 200,
@@ -660,13 +708,14 @@ export function useCopilotCommands({
 					const layer: ILayer = {
 						id: layerId,
 						name: cmd.name,
-						type: layerTypeFromCommand(cmd.layer_type),
+						type: layerType,
 						color: cmd.color || null,
 						coordinates: [position.x, position.y, 0],
 						nodes: {},
 						variables: {},
 						comments: {},
 						pins: pinsFromDefs(cmd.pins, false),
+						cache: cmd.cache ?? null,
 						parent_id: targetLayer,
 					};
 
@@ -696,9 +745,10 @@ export function useCopilotCommands({
 						(node) => node.name === cmd.node_type,
 					);
 					if (!catalogNode) {
-						toastError(
-							`Node type ${cmd.node_type} not found in catalog`,
-							<XIcon />,
+						recordCommandFailure(
+							cmd,
+							"node creation",
+							`Node type "${cmd.node_type}" was not found in the current catalog`,
 						);
 						continue;
 					}
@@ -709,17 +759,27 @@ export function useCopilotCommands({
 					};
 					const targetLayer = resolveLayerId(cmd.target_layer) ?? currentLayer;
 
-					const result = addNodeCommand({
-						node: appendAdditionalNodePins(
-							{
-								...cloneNode(catalogNode),
-								coordinates: [position.x, position.y, 0],
-								friendly_name: cmd.friendly_name ?? catalogNode.friendly_name,
-							},
-							cmd.additional_pins,
-						),
-						current_layer: targetLayer,
-					});
+					let result: ReturnType<typeof addNodeCommand>;
+					try {
+						result = addNodeCommand({
+							node: appendAdditionalNodePins(
+								{
+									...cloneNode(catalogNode),
+									coordinates: [position.x, position.y, 0],
+									friendly_name: cmd.friendly_name ?? catalogNode.friendly_name,
+								},
+								cmd.additional_pins,
+							),
+							current_layer: targetLayer,
+						});
+					} catch (error) {
+						recordCommandFailure(
+							cmd,
+							"node creation",
+							`Cannot create node "${cmd.node_type}": ${getErrorMessage(error)}`,
+						);
+						continue;
+					}
 					const plannedNode = result.node as INode;
 
 					nodeCreateCommands.push(result.command);
@@ -855,9 +915,10 @@ export function useCopilotCommands({
 							boardNodeIds: Object.keys(latestBoardNodes),
 						},
 					);
-					toastError(
-						`Pin update failed: Node "${cmd.node_id}" not found`,
-						<XIcon />,
+					recordCommandFailure(
+						cmd,
+						"pin update",
+						`Pin update failed: Node "${cmd.node_id}" was not found`,
 					);
 					return null;
 				}
@@ -879,9 +940,10 @@ export function useCopilotCommands({
 							})),
 						},
 					);
-					toastError(
-						`Pin update failed: Pin "${cmd.pin_id}" not found in "${node.friendly_name}"`,
-						<XIcon />,
+					recordCommandFailure(
+						cmd,
+						"pin update",
+						`Pin update failed: Pin "${cmd.pin_id}" was not found in "${node.friendly_name}"`,
 					);
 					return null;
 				}
@@ -894,7 +956,11 @@ export function useCopilotCommands({
 							"[UpdateNodePin] FAILED - Could not encode value:",
 							cmd.value,
 						);
-						toastError("Pin update failed: Could not encode value", <XIcon />);
+						recordCommandFailure(
+							cmd,
+							"pin update",
+							`Pin update failed: The value for "${cmd.pin_id}" could not be encoded`,
+						);
 						return null;
 					}
 					encodedValue = Array.from(encoded);
@@ -998,7 +1064,14 @@ export function useCopilotCommands({
 
 					case "RemoveNode": {
 						const node = resolveNode(cmd.node_id);
-						if (!node) break;
+						if (!node) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot remove node: "${cmd.node_id}" was not found`,
+							);
+							break;
+						}
 
 						remainingGenericCommands.push(
 							removeNodeCommand({
@@ -1019,7 +1092,14 @@ export function useCopilotCommands({
 
 					case "MoveNode": {
 						const node = resolveNode(cmd.node_id);
-						if (!node) break;
+						if (!node) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot move node: "${cmd.node_id}" was not found`,
+							);
+							break;
+						}
 
 						const targetLayer =
 							resolveLayerId(cmd.target_layer) ?? currentLayer;
@@ -1040,12 +1120,43 @@ export function useCopilotCommands({
 						break;
 					}
 
+					case "RenameNode": {
+						const node = resolveNode(cmd.node_id);
+						if (!node) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot rename node: "${cmd.node_id}" was not found`,
+							);
+							break;
+						}
+						const renamedNode: INode = {
+							...node,
+							friendly_name: cmd.friendly_name,
+						};
+						remainingGenericCommands.push(
+							updateNodeCommand({ node: renamedNode, old_node: node }),
+						);
+						latestBoardNodes[renamedNode.id] = renamedNode;
+						replaceMappedNode(renamedNode);
+						break;
+					}
+
+					case "SetNodeFunctionRefs":
+						recordCommandFailure(
+							cmd,
+							"board edit",
+							"Function references require the atomic FlowScript apply path and cannot be safely applied from a client-side command queue",
+						);
+						break;
+
 					case "UpdateVariable": {
 						const existingVariable = latestBoardVariables[cmd.variable_id];
 						if (!existingVariable) {
-							toastError(
-								`Cannot update variable: "${cmd.variable_id}" not found`,
-								<XIcon />,
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot update variable: "${cmd.variable_id}" was not found`,
 							);
 							break;
 						}
@@ -1104,9 +1215,10 @@ export function useCopilotCommands({
 					case "DeleteVariable": {
 						const variableToDelete = latestBoardVariables[cmd.variable_id];
 						if (!variableToDelete) {
-							toastError(
-								`Cannot delete variable: "${cmd.variable_id}" not found`,
-								<XIcon />,
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot delete variable: "${cmd.variable_id}" was not found`,
 							);
 							break;
 						}
@@ -1155,9 +1267,10 @@ export function useCopilotCommands({
 					case "UpdateComment": {
 						const existingComment = latestBoardComments[cmd.comment_id];
 						if (!existingComment) {
-							toastError(
-								`Cannot update comment: "${cmd.comment_id}" not found`,
-								<XIcon />,
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot update comment: "${cmd.comment_id}" was not found`,
 							);
 							break;
 						}
@@ -1185,9 +1298,10 @@ export function useCopilotCommands({
 					case "DeleteComment": {
 						const commentToDelete = latestBoardComments[cmd.comment_id];
 						if (!commentToDelete) {
-							toastError(
-								`Cannot delete comment: "${cmd.comment_id}" not found`,
-								<XIcon />,
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot delete comment: "${cmd.comment_id}" was not found`,
 							);
 							break;
 						}
@@ -1207,6 +1321,15 @@ export function useCopilotCommands({
 							break;
 						}
 						const layerId = createId();
+						const layerType = layerTypeFromCommand(cmd.layer_type);
+						if (cmd.cache != null && layerType !== ILayerType.Function) {
+							recordCommandFailure(
+								cmd,
+								"layer creation",
+								`Cannot configure function cache on non-Function layer "${cmd.name}"`,
+							);
+							break;
+						}
 						const targetLayer =
 							resolveLayerId(cmd.target_layer) ?? currentLayer;
 						const nodeIds = resolveNodeIds(cmd.node_ids || []);
@@ -1215,13 +1338,14 @@ export function useCopilotCommands({
 						const layer: ILayer = {
 							id: layerId,
 							name: cmd.name,
-							type: layerTypeFromCommand(cmd.layer_type),
+							type: layerType,
 							color: cmd.color || null,
 							coordinates: [position.x, position.y, 0],
 							nodes: {},
 							variables: {},
 							comments: {},
 							pins: pinsFromDefs(cmd.pins, false),
+							cache: cmd.cache ?? null,
 							parent_id: targetLayer,
 						};
 
@@ -1243,12 +1367,48 @@ export function useCopilotCommands({
 						break;
 					}
 
+					case "UpdateLayerCache": {
+						const existingLayer = resolveLayer(cmd.layer_id);
+						if (!existingLayer) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot update function cache: "${cmd.layer_id}" was not found`,
+							);
+							break;
+						}
+						if (existingLayer.type !== ILayerType.Function) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot update function cache: "${cmd.layer_id}" is not a Function layer`,
+							);
+							break;
+						}
+
+						const updatedLayer: ILayer = {
+							...existingLayer,
+							cache: cmd.cache ?? null,
+						};
+						remainingGenericCommands.push(
+							upsertLayerCommand({
+								layer: updatedLayer,
+								node_ids: [],
+								current_layer: existingLayer.parent_id ?? null,
+								old_layer: existingLayer,
+							}),
+						);
+						latestBoardLayers[existingLayer.id] = updatedLayer;
+						break;
+					}
+
 					case "AddNodesToLayer": {
 						const existingLayer = resolveLayer(cmd.layer_id);
 						if (!existingLayer) {
-							toastError(
-								`Cannot add nodes to layer: "${cmd.layer_id}" not found`,
-								<XIcon />,
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot add nodes to layer: "${cmd.layer_id}" was not found`,
 							);
 							break;
 						}
@@ -1276,9 +1436,10 @@ export function useCopilotCommands({
 					case "RemoveNodesFromLayer": {
 						const layerToUpdate = resolveLayer(cmd.layer_id);
 						if (!layerToUpdate) {
-							toastError(
-								`Cannot remove nodes from layer: "${cmd.layer_id}" not found`,
-								<XIcon />,
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot remove nodes from layer: "${cmd.layer_id}" was not found`,
 							);
 							break;
 						}
@@ -1338,8 +1499,8 @@ export function useCopilotCommands({
 				const fromNode = resolveNode(cmd.from_node);
 				const toNode = resolveNode(cmd.to_node);
 				if (!fromNode || !toNode) {
+					const missingNode = !fromNode ? cmd.from_node : cmd.to_node;
 					if (cmd.command_type === "ConnectPins") {
-						const missingNode = !fromNode ? cmd.from_node : cmd.to_node;
 						console.error(
 							`[ConnectPins] FAILED - Node not found: "${missingNode}"`,
 							{
@@ -1348,11 +1509,12 @@ export function useCopilotCommands({
 								boardNodeIds: Object.keys(latestBoardNodes),
 							},
 						);
-						toastError(
-							`Connection failed: Node "${missingNode}" not found`,
-							<XIcon />,
-						);
 					}
+					recordCommandFailure(
+						cmd,
+						"connection",
+						`${cmd.command_type === "ConnectPins" ? "Connection" : "Disconnection"} failed: Node "${missingNode}" was not found`,
+					);
 					continue;
 				}
 
@@ -1363,10 +1525,10 @@ export function useCopilotCommands({
 				);
 				const toPinId = resolvePinId(cmd.to_node, cmd.to_pin, IPinType.Input);
 				if (!fromPinId || !toPinId) {
+					const missingPin = !fromPinId
+						? `${fromNode.friendly_name}.${cmd.from_pin}`
+						: `${toNode.friendly_name}.${cmd.to_pin}`;
 					if (cmd.command_type === "ConnectPins") {
-						const missingPin = !fromPinId
-							? `${fromNode.friendly_name}.${cmd.from_pin}`
-							: `${toNode.friendly_name}.${cmd.to_pin}`;
 						console.error(
 							`[ConnectPins] FAILED - Pin not found: "${missingPin}"`,
 							{
@@ -1387,11 +1549,12 @@ export function useCopilotCommands({
 								})),
 							},
 						);
-						toastError(
-							`Connection failed: Pin "${missingPin}" not found`,
-							<XIcon />,
-						);
 					}
+					recordCommandFailure(
+						cmd,
+						"connection",
+						`${cmd.command_type === "ConnectPins" ? "Connection" : "Disconnection"} failed: Pin "${missingPin}" was not found`,
+					);
 					continue;
 				}
 
@@ -1432,6 +1595,17 @@ export function useCopilotCommands({
 			if (executedConnectionCommands.length > 0) {
 				executedAnyCommands = true;
 				refreshedAfterLastExecution = false;
+			}
+
+			if (commandFailures.length > 0) {
+				await throwFlowPilotCommandApplyError(
+					{
+						requestedCommands: commands.length,
+						appliedCommands: appliedGenericCommandCount,
+						failures: commandFailures,
+					},
+					refreshBoardSnapshot,
+				);
 			}
 
 			if (executedAnyCommands && !refreshedAfterLastExecution) {

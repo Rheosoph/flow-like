@@ -1,0 +1,83 @@
+---
+title: "Connected Apps, Permissioned Calls, and End-to-End Process Lineage"
+description: "Flow-Like apps can now call one another through explicit roles, typed remote events, and traceable process cases — without dissolving their security boundaries."
+date: 2026-07-10
+tags: ["app-connections", "permissions", "process-mining", "observability", "governance", "flow-like"]
+cover: "/images/app-connections-lineage.jpg"
+draft: false
+---
+
+import { BlogInteractiveDemo } from "../../components/blog/BlogInteractiveDemo";
+
+An app should be able to ask another app to do useful work without inheriting its keys, joining its team, or quietly gaining access to everything it owns. Flow-Like now has that boundary.
+
+**App Connections** let one app request narrowly defined access to another. The receiving team approves a role, that role determines what crosses the boundary, and every call carries enough signed context to reconstruct the full process later. What used to be a brittle chain of URLs and shared credentials becomes a permissioned, inspectable relationship between products.
+
+<BlogInteractiveDemo client:only="react" preset="app-connections" />
+
+## A connection is a role, not blanket trust
+
+Connections are directional. If the Intake app needs to call the Fulfilment app, Intake sends a request with an optional explanation. A Fulfilment owner approves it and chooses one of Fulfilment's roles. The resulting capability set is visible on the connection itself:
+
+- **Events** allows the connected app to execute exposed events.
+- **Database** can be read-only or read/write.
+- **Files** can be read-only or read/write.
+
+The important detail is where authority comes from: the role belongs to the **target** app. Its owners can change the role or remove the connection at any time, and access disappears immediately. Pending requests do nothing until approved. Owner and Admin roles cannot be handed to a connected app through this flow.
+
+This is also not a user membership in disguise. Teams stay separate, ownership stays separate, and the calling app receives only the capabilities granted by the connection role.
+
+## Remote calls still feel like Flow-Like
+
+Once connected, a workflow can select a remote app and one of its available events directly on the node. The node reads the event's metadata and builds the right pins for the operation: REST routes, file inputs, MCP tools and resources, and their schemas. If the target changes its event contract, the node reconciles the inputs while preserving existing values and wires where possible.
+
+Database access follows the same model. A remote database selector lists only accessible connected apps and tables; execution is proxied through the connection rather than handing the source app a reusable database credential. LLM agents can register permitted remote MCP tools too, so an agent gains a useful capability instead of an all-access token.
+
+Under the hood, each call uses a short-lived JWT pinned to both the origin and target app. It cannot be replayed against a third app, and a connected-app token cannot mint another connection token. Flow-Like propagates the original user, calling run, app chain, and process correlation through those signed claims, while enforcing a bounded call depth.
+
+## The process graph comes from real executions
+
+Static topology answers **which apps may communicate**. Operations teams need the next question too: **which paths did the work actually take?**
+
+Every connected execution records its caller-app chain. Flow-Like aggregates those runs into observed paths with run count, failure count, average duration, last activity, and terminal event. The Connections view places those paths over the permission graph, so a declared edge and a used edge are visibly different. App owners can attach process notes — “normalizes the invoice,” “runs fraud screening,” “owns final approval” — to explain why each system exists in the chain.
+
+<BlogInteractiveDemo client:only="react" preset="process-lineage" />
+
+## From runs to business cases
+
+A technical trace is useful; a business case is better. Events can now map stable case keys from their invocation payload:
+
+```json
+{
+  "correlation_mappings": {
+    "order_id": "order.id",
+    "customer_id": "customer.id"
+  }
+}
+```
+
+Flow-Like extracts scalar values from those dot-paths when the event runs, then carries them across app hops. Each execution stores three pieces of lineage:
+
+- `parentRunId` points to the run that directly triggered it.
+- `traceId` points to the root of the causal tree.
+- `correlationKeys` identifies the business objects travelling through it.
+
+That produces a Process Cases view, not merely another log table. Search for an order ID, filter by status, see every app the case crossed, and expand it into a waterfall of parent and child runs with timing. A failure in the fourth app is attached to the same case that began at the first.
+
+Correlation mappings are deliberately bounded to eight keys, with limits on key and value length. That keeps signed headers and stored metadata predictable while still covering the identifiers teams actually investigate.
+
+<BlogInteractiveDemo client:only="react" preset="process-cases" />
+
+## Visibility follows the viewer
+
+A process graph must not become a directory leak. App owners see the subgraph their app participates in, but apps they cannot access are pseudonymized server-side. Their IDs, names, artwork, notes, tags, categories, and content counts are withheld. The same stable masked nodes appear in process cases, so the path remains intelligible without exposing the hidden system.
+
+Platform administrators can inspect the full topology. App teams get the context needed to operate their own boundary. Both views are built from the same connection and execution records, with different disclosure rules.
+
+## Apps can stay small without becoming islands
+
+This changes how a Flow-Like system can be designed. An OCR app can focus on documents, a policy app on decisions, and a fulfilment app on execution. Each remains independently owned and deployable, yet the complete process is callable, governed, and observable from end to end.
+
+The same connection layer also powers [remote ontologies in Data Studio](/blog/data-studio-ontologies/). And when those focused apps should be presented as one product, [Suites package them without changing their runtime permissions](/blog/app-suites/).
+
+The implementation landed in [PR #688](https://github.com/Rheosoph/flow-like/pull/688), addressing [issue #600](https://github.com/Rheosoph/flow-like/issues/600) and the broader cross-app visibility work in [issue #336](https://github.com/Rheosoph/flow-like/issues/336). It ships as part of [Flow-Like Beta v0.1.6](/blog/beta-0-1-6/).

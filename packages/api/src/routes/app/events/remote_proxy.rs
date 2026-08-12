@@ -116,7 +116,7 @@ async fn proxy_rest_inner(
 /// ANY /apps/{app_id}/events/{event_id}/rest — root of the event's REST surface
 #[tracing::instrument(
     name = "ANY /apps/{app_id}/events/{event_id}/rest",
-    skip(state, user, headers, body)
+    skip(state, user, raw_query, headers, body)
 )]
 pub async fn proxy_rest_root(
     State(state): State<AppState>,
@@ -144,7 +144,7 @@ pub async fn proxy_rest_root(
 /// ANY /apps/{app_id}/events/{event_id}/rest/{*path}
 #[tracing::instrument(
     name = "ANY /apps/{app_id}/events/{event_id}/rest/{*path}",
-    skip(state, user, headers, body)
+    skip(state, user, path, raw_query, headers, body)
 )]
 pub async fn proxy_rest(
     State(state): State<AppState>,
@@ -199,7 +199,7 @@ async fn proxy_mcp_inner(
 /// reachable by connected apps with an ExecuteEvents connection role.
 #[tracing::instrument(
     name = "ANY /apps/{app_id}/events/{event_id}/mcp",
-    skip(state, user, headers, body)
+    skip(state, user, raw_query, headers, body)
 )]
 pub async fn proxy_mcp(
     State(state): State<AppState>,
@@ -228,7 +228,7 @@ pub async fn proxy_mcp(
 /// including OAuth protected-resource metadata discovery.
 #[tracing::instrument(
     name = "ANY /apps/{app_id}/events/{event_id}/mcp/{*path}",
-    skip(state, user, headers, body)
+    skip(state, user, path, raw_query, headers, body)
 )]
 pub async fn proxy_mcp_path(
     State(state): State<AppState>,

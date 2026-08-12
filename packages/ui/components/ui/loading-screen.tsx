@@ -98,7 +98,12 @@ function FlowLogo() {
 
 			{/* glass container */}
 			<div className="relative h-12 w-12 rounded-xl bg-muted/40 border border-border/60 backdrop-blur-sm flex items-center justify-center shadow-sm">
-				<svg className="h-6 w-6 text-primary" viewBox="0 0 24 24" fill="none">
+				<svg
+					aria-hidden="true"
+					className="h-6 w-6 text-primary"
+					viewBox="0 0 24 24"
+					fill="none"
+				>
 					<path
 						d="M5 8h3a4 4 0 0 1 4 4v0a4 4 0 0 0 4 4h3"
 						stroke="currentColor"
@@ -180,7 +185,9 @@ export function LoadingScreen({
 	const clamped = Math.min(Math.max(progress, 0), 100);
 
 	const allCards = useMemo(() => [...TIPS, ...HINTS], []);
-	const [cardIndex, setCardIndex] = useState(() => pickRandom(allCards));
+	// The first server and client render must agree. Randomizing in the state initializer causes a
+	// hydration recovery that can remount consumers and replay their startup effects.
+	const [cardIndex, setCardIndex] = useState(0);
 	const [transitioning, setTransitioning] = useState(false);
 
 	useEffect(() => {

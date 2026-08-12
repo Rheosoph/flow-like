@@ -9,7 +9,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "../../ui/dialog";
-import { useComponentActionTrigger } from "../ActionHandler";
+import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -35,7 +35,7 @@ export function A2UIModal({
 	onAction,
 	renderChild,
 }: ComponentProps<ModalComponent>) {
-	const triggerAction = useComponentActionTrigger(componentId);
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const open = useResolved<boolean>(component.open);
 	const title = useResolved<string>(component.title);
 	const description = useResolved<string>(component.description);
@@ -54,7 +54,7 @@ export function A2UIModal({
 				timestamp: Date.now(),
 				context: { open: false },
 			});
-			void triggerAction(component.actions, { open: false });
+			void triggerEvent("close", component, { open: false });
 		}
 	};
 

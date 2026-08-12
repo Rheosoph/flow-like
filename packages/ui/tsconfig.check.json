@@ -1,0 +1,4 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": { "ignoreDeprecations": "5.0" }
+}

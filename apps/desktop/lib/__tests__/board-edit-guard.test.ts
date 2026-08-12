@@ -2,19 +2,26 @@ import {
 	BoardEditCoordinator,
 	type BoardEditRecoveryStorage,
 	BoardEditRecoveryStore,
+	BoardZeroProgressRetryGuard,
 	CreatedArtifactJournal,
 	type CreatedArtifactRequestIdentity,
 	FrontendRequestExecutionFence,
+	assessFlowScriptCorrectionReadback,
 	assessFlowScriptReadback,
 	boardEditInterruptionResult,
 	boardEditLockKey,
 	boardEditRecoveryKey,
 	creationRequestFingerprint,
+	flowPilotBoardInitialLockKey,
 	flowScriptSnapshotChanged,
+	flowScriptSnapshotFingerprint,
 	hasActiveFrontendRequestOwnership,
+	isCancellableNestedCopilotTool,
 	isCreatedAppBuildTargetMismatch,
+	resolveFlowPilotBoardCreationId,
 	resolveFrontendToolExecutionDeadline,
 	retainedFlowScriptRecoveryInstruction,
+	retainedFlowScriptReferenceInstruction,
 	retryCreatedAppReadiness,
 	safeFlowScriptPlanReasoning,
 } from "@flow-like/flow-like-ui/components/flowpilot/board-edit-guard";
@@ -61,6 +68,49 @@ eventsSimple() {
 }`;
 
 describe("board edit guard", () => {
+	test("all delegated native agents are cancellation-scoped", () => {
+		for (const toolName of [
+			"flowpilot_board",
+			"flowpilot_widget",
+			"data_studio_agent",
+			"project_scout",
+			"research_agent",
+		]) {
+			expect(isCancellableNestedCopilotTool(toolName)).toBe(true);
+		}
+		expect(isCancellableNestedCopilotTool("database_tool")).toBe(false);
+	});
+
+	test("caller-selected new boards start on the app manifest lock", () => {
+		expect(flowPilotBoardInitialLockKey("app", "board-secondary", true)).toBe(
+			"app",
+		);
+		expect(flowPilotBoardInitialLockKey("app", "board-secondary", false)).toBe(
+			boardEditLockKey("app", "board-secondary"),
+		);
+	});
+
+	test("caller-selected board ids win over recovery and generation", () => {
+		expect(
+			resolveFlowPilotBoardCreationId({
+				requestedBoardId: "board-secondary",
+				journaledBoardId: "board-recovered",
+				createId: () => "board-generated",
+			}),
+		).toBe("board-secondary");
+		expect(
+			resolveFlowPilotBoardCreationId({
+				journaledBoardId: "board-recovered",
+				createId: () => "board-generated",
+			}),
+		).toBe("board-recovered");
+		expect(
+			resolveFlowPilotBoardCreationId({
+				createId: () => "board-generated",
+			}),
+		).toBe("board-generated");
+	});
+
 	test("retained FlowScript recovery overrides delegated tiny diagnostic fallbacks", () => {
 		const instruction =
 			retainedFlowScriptRecoveryInstruction(completeSupportFlow);
@@ -72,6 +122,18 @@ describe("board edit guard", () => {
 		expect(instruction).toContain("Own the edit_flowscript validation loop");
 		expect(instruction).toContain(completeSupportFlow);
 		expect(retainedFlowScriptRecoveryInstruction("   ")).toBe("");
+	});
+
+	test("labels stale retained FlowScript as reference-only", () => {
+		const instruction =
+			retainedFlowScriptReferenceInstruction(completeSupportFlow);
+
+		expect(instruction).toContain("reference-only");
+		expect(instruction).toContain("current board FlowScript is authoritative");
+		expect(instruction).toContain("do NOT copy or preserve any");
+		expect(instruction).toContain("not the active production workspace");
+		expect(instruction).toContain(completeSupportFlow);
+		expect(retainedFlowScriptReferenceInstruction("   ")).toBe("");
 	});
 
 	test("uses the backend per-tool deadline without an extra board or widget cap", () => {
@@ -357,21 +419,124 @@ describe("board edit guard", () => {
 			source: completeSupportFlow,
 			status: "validation_errors",
 		};
-		recovery.set(firstTurnKey, retained);
+		const baseline = flowScriptSnapshotFingerprint(
+			"eventsSimple() {   //@n:event-current\n}\n",
+		);
+		const advancedBaseline = flowScriptSnapshotFingerprint(
+			"eventsSimple() {   //@n:event-replaced\n}\n",
+		);
+		recovery.set(firstTurnKey, retained, baseline);
 
 		expect(retryTurnKey).toBe(firstTurnKey);
 		expect(boardEditRecoveryKey("app-1", "board-2")).not.toBe(firstTurnKey);
-		expect(recovery.get(retryTurnKey)).toEqual(retained);
+		expect(recovery.get(retryTurnKey, baseline)).toEqual(retained);
+		expect(recovery.get(retryTurnKey, advancedBaseline)).toBeUndefined();
+		expect(recovery.getReference(retryTurnKey)).toEqual(retained);
 		now += 100;
-		expect(recovery.get(retryTurnKey)).toBeUndefined();
+		expect(recovery.get(retryTurnKey, baseline)).toBeUndefined();
+		expect(recovery.getReference(retryTurnKey)).toBeUndefined();
 
 		const bounded = new BoardEditRecoveryStore(1_000, 2, () => now, null);
-		bounded.set("app:a", retained);
-		bounded.set("app:b", retained);
-		bounded.set("app:c", retained);
-		expect(bounded.get("app:a")).toBeUndefined();
-		expect(bounded.get("app:b")).toEqual(retained);
-		expect(bounded.get("app:c")).toEqual(retained);
+		bounded.set("app:a", retained, baseline);
+		bounded.set("app:b", retained, baseline);
+		bounded.set("app:c", retained, baseline);
+		expect(bounded.get("app:a", baseline)).toBeUndefined();
+		expect(bounded.get("app:b", baseline)).toEqual(retained);
+		expect(bounded.get("app:c", baseline)).toEqual(retained);
+	});
+
+	test("keeps legacy and mismatched recovery reference-only", () => {
+		const storage = new MemoryRecoveryStorage();
+		const key = boardEditRecoveryKey("legacy-app", "legacy-board");
+		storage.setItem(
+			"flowpilot.board-edit-recovery.v1",
+			JSON.stringify({
+				version: 1,
+				entries: [
+					{
+						key,
+						candidate: {
+							source: completeSupportFlow,
+							status: "validation_errors",
+						},
+						retainedAtMs: 10,
+					},
+				],
+			}),
+		);
+		const currentBaseline = flowScriptSnapshotFingerprint(
+			"eventsSimple() {   //@n:current-event\n}\n",
+		);
+		const recovery = new BoardEditRecoveryStore(1_000, 64, () => 10, storage);
+
+		expect(recovery.get(key, currentBaseline)).toBeUndefined();
+		expect(recovery.getReference(key)?.source).toBe(completeSupportFlow);
+
+		const fresh = {
+			source: `eventsSimple() {
+  logInfo({ message: "fresh" })
+}`,
+			status: "validation_errors",
+		};
+		// A richer source from an unknown/older baseline must not outrank a fresh candidate.
+		recovery.set(key, fresh, currentBaseline);
+		expect(recovery.get(key, currentBaseline)).toEqual(fresh);
+		expect(recovery.getReference(key)).toEqual(fresh);
+		expect([...storage.values.values()].join("\n")).toContain(currentBaseline);
+	});
+
+	test("allows one zero-progress retry and refuses a third equivalent board run", () => {
+		const guard = new BoardZeroProgressRetryGuard();
+		const boardKey = boardEditRecoveryKey("app-1", "board-1");
+
+		expect(guard.canStart("assistant-turn-1", boardKey)).toBe(true);
+		expect(
+			guard.recordRunOutcome("assistant-turn-1", boardKey, "request-1", false),
+		).toBe(1);
+		// A frontend timeout and the cancelled nested catch can both report the same run.
+		expect(
+			guard.recordRunOutcome("assistant-turn-1", boardKey, "request-1", false),
+		).toBe(1);
+		expect(guard.canStart("assistant-turn-1", boardKey)).toBe(true);
+		expect(
+			guard.recordRunOutcome("assistant-turn-1", boardKey, "request-2", false),
+		).toBe(2);
+		expect(guard.canStart("assistant-turn-1", boardKey)).toBe(false);
+
+		// The guard is scoped to one assistant owner and board, not future user turns or boards.
+		expect(guard.canStart("assistant-turn-2", boardKey)).toBe(true);
+		expect(
+			guard.canStart(
+				"assistant-turn-1",
+				boardEditRecoveryKey("app-1", "board-2"),
+			),
+		).toBe(true);
+
+		guard.clear("assistant-turn-1", boardKey);
+		expect(guard.canStart("assistant-turn-1", boardKey)).toBe(true);
+		expect(
+			guard.recordRunOutcome("assistant-turn-1", boardKey, "request-3", true),
+		).toBe(0);
+
+		const deadlineRace = new BoardZeroProgressRetryGuard();
+		expect(
+			deadlineRace.recordRunOutcome(
+				"assistant-turn-1",
+				boardKey,
+				"racing-request",
+				false,
+			),
+		).toBe(1);
+		// A late retained candidate upgrades the same run instead of consuming the retry.
+		expect(
+			deadlineRace.recordRunOutcome(
+				"assistant-turn-1",
+				boardKey,
+				"racing-request",
+				true,
+			),
+		).toBe(0);
+		expect(deadlineRace.canStart("assistant-turn-1", boardKey)).toBe(true);
 	});
 
 	test("redacts canonical @secret values before durable recovery or plan persistence", () => {
@@ -498,18 +663,25 @@ eventsSimple() {
 		const priorSafe = `eventsSimple() {
   logInfo({ message: "previous safe recovery" })
 }`;
-		active.set("app:board", {
-			source: priorSafe,
-			status: "validation_errors",
-		});
-		active.set("app:board", { source, status: "validation_errors" });
+		const baseline = flowScriptSnapshotFingerprint(
+			"eventsSimple() {   //@n:event\n}\n",
+		);
+		active.set(
+			"app:board",
+			{
+				source: priorSafe,
+				status: "validation_errors",
+			},
+			baseline,
+		);
+		active.set("app:board", { source, status: "validation_errors" }, baseline);
 		// The active renderer can still repair it, but no raw or partial source reaches storage.
-		expect(active.get("app:board")?.source).toBe(source);
+		expect(active.get("app:board", baseline)?.source).toBe(source);
 		expect([...storage.values.values()].join("\n")).not.toContain(
 			"must-not-leak",
 		);
 		const reloaded = new BoardEditRecoveryStore(1_000, 64, () => 10, storage);
-		expect(reloaded.get("app:board")?.source).toBe(priorSafe);
+		expect(reloaded.get("app:board", baseline)?.source).toBe(priorSafe);
 	});
 
 	test("recovers across reload, keeps the richer draft, expires it, and durably deletes it", () => {
@@ -528,12 +700,15 @@ eventsSimple() {
 		const tiny = `eventsSimple() {
   logInfo({ message: "test" })
 }`;
+		const baseline = flowScriptSnapshotFingerprint(
+			"eventsSimple() {   //@n:event\n}\n",
+		);
 		const first = new BoardEditRecoveryStore(100, 64, () => now, storage);
-		first.set(key, { source: rich, status: "validation_errors" });
-		first.set(key, { source: tiny, status: "queued" });
+		first.set(key, { source: rich, status: "validation_errors" }, baseline);
+		first.set(key, { source: tiny, status: "queued" }, baseline);
 
 		const reloaded = new BoardEditRecoveryStore(100, 64, () => now, storage);
-		const recovered = reloaded.get(key);
+		const recovered = reloaded.get(key, baseline);
 		expect(recovered?.source).toContain("function pollInbox");
 		expect(recovered?.source).toContain('const IMAP_HOST: string = ""');
 		expect(recovered?.source).not.toContain("imap.private");
@@ -541,12 +716,12 @@ eventsSimple() {
 
 		reloaded.delete(key);
 		const afterDelete = new BoardEditRecoveryStore(100, 64, () => now, storage);
-		expect(afterDelete.get(key)).toBeUndefined();
+		expect(afterDelete.get(key, baseline)).toBeUndefined();
 
-		first.set(key, { source: rich, status: "validation_errors" });
+		first.set(key, { source: rich, status: "validation_errors" }, baseline);
 		now += 100;
 		const expired = new BoardEditRecoveryStore(100, 64, () => now, storage);
-		expect(expired.get(key)).toBeUndefined();
+		expect(expired.get(key, baseline)).toBeUndefined();
 		expect([...storage.values.values()].join("\n")).not.toContain(
 			"imap.private",
 		);
@@ -569,6 +744,22 @@ eventsSimple() {
 				operation: "create_table",
 			}),
 		).toBe(true);
+		expect(
+			isCreatedAppBuildTargetMismatch({
+				createdAppId: "new-app",
+				requestedAppId: "older-similar-app",
+				toolName: "database_tool",
+				operation: "delete_table",
+			}),
+		).toBe(true);
+		expect(
+			isCreatedAppBuildTargetMismatch({
+				createdAppId: "new-app",
+				requestedAppId: "older-similar-app",
+				toolName: "database_tool",
+				operation: "describe_table",
+			}),
+		).toBe(false);
 		expect(
 			isCreatedAppBuildTargetMismatch({
 				createdAppId: "new-app",
@@ -809,6 +1000,12 @@ eventsSimple() {
 		expect(
 			flowScriptSnapshotChanged("eventsSimple() {}\r\n", "eventsSimple() {}\n"),
 		).toBe(false);
+		expect(flowScriptSnapshotFingerprint("eventsSimple() {}\r\n")).toBe(
+			flowScriptSnapshotFingerprint("eventsSimple() {}\n"),
+		);
+		expect(flowScriptSnapshotFingerprint("eventsSimple() {}")).not.toBe(
+			flowScriptSnapshotFingerprint("eventsGeneric() {}"),
+		);
 	});
 
 	test("rejects command-only success when persisted FlowScript did not change", () => {
@@ -845,6 +1042,45 @@ eventsSimple() {
 		});
 
 		expect(assessment).toEqual({ ok: true });
+	});
+
+	test("accepts canonical source for a correction-only apply", () => {
+		const canonical = completeSupportFlow.replace(
+			"eventsSimple()",
+			"//@n:live-entry\neventsSimple()",
+		);
+		const staleWorkspace = completeSupportFlow.replace(
+			"eventsSimple()",
+			"//@n:deleted-entry\neventsSimple()",
+		);
+
+		expect(
+			assessFlowScriptCorrectionReadback({
+				expected: staleWorkspace,
+				actual: canonical,
+			}),
+		).toEqual({ ok: true });
+	});
+
+	test("rejects a correction readback that still contains the submitted stale source", () => {
+		expect(
+			assessFlowScriptCorrectionReadback({
+				expected: completeSupportFlow,
+				actual: completeSupportFlow,
+			}),
+		).toMatchObject({ ok: false, code: "not_persisted" });
+	});
+
+	test("rejects a correction readback that loses requested workflow scope", () => {
+		const assessment = assessFlowScriptCorrectionReadback({
+			expected: completeSupportFlow,
+			actual: `eventsSimple() {
+  printInfo({ message: "test" })
+}`,
+		});
+
+		expect(assessment.ok).toBe(false);
+		expect(assessment.code).toMatch(/completeness_regression|scope_missing/);
 	});
 
 	test("returns an actionable retained workspace when a board run times out", () => {

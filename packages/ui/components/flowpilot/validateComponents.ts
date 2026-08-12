@@ -17,7 +17,9 @@ import {
 	isSemanticBoxTag,
 	normalizeSemanticBoxTag,
 } from "../a2ui/semantic-box-tags";
+import { normalizeSurfaceComponentForPersistence } from "../a2ui/style-normalization";
 import type {
+	Action,
 	BoundValue,
 	CanvasSettings,
 	SurfaceComponent,
@@ -37,7 +39,7 @@ const RUNTIME_ONLY_PROPS: Partial<
 };
 
 /** Which props a given component type accepts (excluding the shared base:
- *  `type`, `id`, `style`, `children`, `actions`, `hidden`). Derived from the
+ *  `type`, `id`, `style`, `children`, `actions`, `eventHandlers`, `hidden`). Derived from the
  *  compile-time-checked manifest so it cannot drift from a2ui/types.ts. */
 export const KNOWN_PROPS: Record<
 	string,
@@ -66,6 +68,7 @@ export const BASE_PROPS = new Set<string>(["type", ...COMPONENT_BASE_PROPS]);
 
 /** Required props that MUST exist (non-optional in the TS interface). */
 const REQUIRED_PROPS: Record<string, string[]> = {
+	overlay: ["baseComponentId", "overlays"],
 	text: ["content"],
 	image: ["src"],
 	icon: ["name"],
@@ -86,18 +89,38 @@ const REQUIRED_PROPS: Record<string, string[]> = {
 	dateTimeInput: ["value"],
 	fileInput: ["value"],
 	imageInput: ["value"],
+	voiceInput: ["value"],
 	link: ["href"],
 	modal: ["open"],
-	tabs: ["value"],
+	tabs: ["value", "tabs"],
+	accordion: ["items"],
+	drawer: ["open"],
+	tooltip: ["content"],
+	popover: ["contentComponentId"],
+	table: ["columns", "data"],
+	tableRow: ["cells"],
+	tableCell: ["content"],
 	canvas2d: ["width", "height"],
 	sprite: ["src", "x", "y"],
 	shape: ["shapeType", "x", "y"],
 	scene3d: ["width", "height"],
 	model3d: ["src"],
+	dialogue: ["text"],
+	characterPortrait: ["image"],
+	choiceMenu: ["choices"],
+	inventoryGrid: ["items"],
+	healthBar: ["value", "maxValue"],
+	miniMap: ["width", "height"],
 	aspectRatio: ["ratio"],
-	boundingBoxOverlay: ["src"],
+	nivoChart: ["chartType"],
+	boundingBoxOverlay: ["src", "boxes"],
+	imageLabeler: ["src", "labels"],
+	imageHotspot: ["src", "hotspots"],
+	widgetInstance: ["instanceId", "widgetId"],
 	calendar: ["events"],
 	gantt: ["tasks"],
+	graph: ["nodes"],
+	ontologyGraph: ["ontologyId"],
 };
 
 /** Default BoundValue to inject when a required prop is missing. */
@@ -119,12 +142,42 @@ const DEFAULT_BOUND_VALUES: Record<string, BoundValue> = {
 	y: { literalNumber: 0 },
 	shapeType: { literalString: "rectangle" },
 	ratio: { literalNumber: 1 },
+	text: { literalString: "" },
+	maxValue: { literalNumber: 100 },
+	chartType: { literalString: "bar" },
+	ontologyId: { literalString: "" },
 };
+
+function defaultRequiredProp(type: string, prop: string): unknown {
+	if (
+		prop === "overlays" ||
+		(type === "tabs" && prop === "tabs") ||
+		(type === "accordion" && prop === "items")
+	) {
+		return [];
+	}
+	if (
+		prop === "columns" ||
+		prop === "data" ||
+		prop === "cells" ||
+		prop === "choices" ||
+		prop === "items" ||
+		prop === "boxes" ||
+		prop === "labels" ||
+		prop === "hotspots" ||
+		prop === "nodes"
+	) {
+		return { literalJson: "[]" } satisfies BoundValue;
+	}
+	return DEFAULT_BOUND_VALUES[prop];
+}
 
 const MAX_COMPONENTS = 120;
 const MAX_COMPONENT_ID_CHARS = 120;
 const MAX_BOUND_STRING_CHARS = 8_000;
-const MAX_CUSTOM_CSS_CHARS = 12_000;
+const MAX_EVENT_HANDLERS = 64;
+const MAX_EVENT_NAME_CHARS = 128;
+const MAX_ACTIONS_PER_EVENT = 20;
 
 // ---------------------------------------------------------------------------
 // BoundValue coercion
@@ -272,6 +325,180 @@ function validateChildren(
 }
 
 // ---------------------------------------------------------------------------
+// Named event handler validation
+// ---------------------------------------------------------------------------
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The action names `ActionHandler.tsx` dispatches. Anything else falls through its `default`
+ * branch into a no-op `userAction`, so the control renders but never runs. Keep in sync with
+ * `executeAction` there and with `BUILTIN_ACTION_NAMES` in the Rust emit_ui validator
+ * (apps/desktop/src-tauri/src/functions/ai/copilot_sdk_tools.rs).
+ */
+export const BUILTIN_ACTION_NAMES = [
+	"workflow_event",
+	"widget_event",
+	"navigate_page",
+	"external_link",
+	"navigate_app_config",
+	"navigate_app_overview",
+	"submit_feedback",
+] as const;
+
+const BUILTIN_ACTION_NAME_SET: ReadonlySet<string> = new Set(
+	BUILTIN_ACTION_NAMES,
+);
+
+/** Routing actions that are inert without their target id. */
+const REQUIRED_ACTION_CONTEXT_KEY: Readonly<Record<string, string>> = {
+	workflow_event: "nodeId",
+	widget_event: "actionId",
+};
+
+/**
+ * Warn about actions the runtime cannot dispatch. This is deliberately non-destructive: the
+ * action is kept so the builder's inspector can still show it as `Custom: <name>` for a human to
+ * repair, while the warning travels back to the model as a tool result so it self-corrects.
+ */
+function warnUnroutableAction(
+	action: Action,
+	componentId: string,
+	path: string,
+	warnings: string[],
+): void {
+	if (!BUILTIN_ACTION_NAME_SET.has(action.name)) {
+		warnings.push(
+			`${componentId}: ${path}.name "${action.name}" is not a built-in action and will not run. The name is a fixed verb, never a board node / event / widget action id — put that id in the context. Valid: ${BUILTIN_ACTION_NAMES.join(", ")}.`,
+		);
+		return;
+	}
+
+	const requiredKey = REQUIRED_ACTION_CONTEXT_KEY[action.name];
+	if (!requiredKey) return;
+	const target = action.context?.[requiredKey];
+	if (typeof target !== "string" || target.trim().length === 0) {
+		warnings.push(
+			`${componentId}: ${path} is a "${action.name}" action without context.${requiredKey}, so it renders a control that does nothing.`,
+		);
+	}
+}
+
+/**
+ * Legacy `actions` stay verbatim — the list is an intentionally permissive extension point, so
+ * entries that are not `{name, context}` objects are left alone. Only named actions the runtime
+ * cannot route are reported, and even those are kept: dropping one would turn a mis-wired control
+ * into a silently action-less one and lose the evidence a human needs to repair it.
+ */
+function reportLegacyActions(
+	value: unknown,
+	componentId: string,
+	warnings: string[],
+): void {
+	if (!Array.isArray(value)) return;
+	for (const [index, rawAction] of value.entries()) {
+		if (!isPlainObject(rawAction) || typeof rawAction.name !== "string") {
+			continue;
+		}
+		warnUnroutableAction(
+			{
+				name: rawAction.name,
+				context: isPlainObject(rawAction.context) ? rawAction.context : {},
+			},
+			componentId,
+			`actions[${index}]`,
+			warnings,
+		);
+	}
+}
+
+function sanitizeEventHandlers(
+	value: unknown,
+	componentId: string,
+	warnings: string[],
+): Record<string, Action[]> | undefined {
+	if (!isPlainObject(value)) {
+		warnings.push(`${componentId}: removed invalid eventHandlers map`);
+		return undefined;
+	}
+
+	const entries = Object.entries(value);
+	if (entries.length > MAX_EVENT_HANDLERS) {
+		warnings.push(
+			`${componentId}: only the first ${MAX_EVENT_HANDLERS} event handlers were kept`,
+		);
+	}
+
+	const sanitized: [string, Action[]][] = [];
+	for (const [eventName, rawActions] of entries.slice(0, MAX_EVENT_HANDLERS)) {
+		if (
+			eventName.trim().length === 0 ||
+			eventName.length > MAX_EVENT_NAME_CHARS
+		) {
+			warnings.push(`${componentId}: removed invalid event handler name`);
+			continue;
+		}
+		if (!Array.isArray(rawActions)) {
+			warnings.push(
+				`${componentId}: eventHandlers.${eventName} must be an action array`,
+			);
+			continue;
+		}
+		if (rawActions.length > MAX_ACTIONS_PER_EVENT) {
+			warnings.push(
+				`${componentId}: eventHandlers.${eventName} was limited to ${MAX_ACTIONS_PER_EVENT} actions`,
+			);
+		}
+
+		const actions: Action[] = [];
+		for (const [index, rawAction] of rawActions
+			.slice(0, MAX_ACTIONS_PER_EVENT)
+			.entries()) {
+			if (!isPlainObject(rawAction)) {
+				warnings.push(
+					`${componentId}: removed invalid eventHandlers.${eventName}[${index}]`,
+				);
+				continue;
+			}
+
+			const name = rawAction.name;
+			const context = rawAction.context;
+			if (typeof name !== "string" || name.trim().length === 0) {
+				warnings.push(
+					`${componentId}: eventHandlers.${eventName}[${index}].name must be a non-empty string`,
+				);
+				continue;
+			}
+			if (!isPlainObject(context)) {
+				warnings.push(
+					`${componentId}: eventHandlers.${eventName}[${index}].context must be an object`,
+				);
+				continue;
+			}
+
+			const action: Action = { name, context: { ...context } };
+			warnUnroutableAction(
+				action,
+				componentId,
+				`eventHandlers.${eventName}[${index}]`,
+				warnings,
+			);
+			actions.push(action);
+		}
+
+		// An authored empty list explicitly suppresses legacy fallback. Do not turn
+		// a non-empty but wholly invalid list into that meaningful state.
+		if (rawActions.length === 0 || actions.length > 0) {
+			sanitized.push([eventName, actions]);
+		}
+	}
+
+	return Object.fromEntries(sanitized);
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -348,8 +575,17 @@ export function validateComponents(
 		for (const [key, value] of Object.entries(rawComponent)) {
 			if (key === "type" || key === "id" || key === "children") continue; // handled separately
 			if (BASE_PROPS.has(key)) {
-				// Base props (style, actions, hidden) pass through verbatim.
-				cleaned[key] = value;
+				// Legacy actions pass through verbatim. Named handlers are additive but
+				// structurally validated before they can suppress the legacy fallback.
+				if (key === "eventHandlers") {
+					const handlers = sanitizeEventHandlers(value, componentId, warnings);
+					if (handlers !== undefined) cleaned[key] = handlers;
+				} else {
+					if (key === "actions") {
+						reportLegacyActions(value, componentId, warnings);
+					}
+					cleaned[key] = value;
+				}
 				continue;
 			}
 
@@ -432,19 +668,26 @@ export function validateComponents(
 
 		// Inject defaults for missing required props
 		const required = REQUIRED_PROPS[type];
+		let missingUnfixableRequiredProp = false;
 		if (required) {
 			for (const prop of required) {
 				if (!(prop in cleaned)) {
-					const defaultVal = DEFAULT_BOUND_VALUES[prop];
-					if (defaultVal) {
+					const defaultVal = defaultRequiredProp(type, prop);
+					if (defaultVal !== undefined) {
 						cleaned[prop] = defaultVal;
 						warnings.push(
 							`${componentId}: injected default for required prop "${prop}" on ${type}`,
+						);
+					} else {
+						missingUnfixableRequiredProp = true;
+						warnings.push(
+							`${componentId}: skipped ${type} because required prop "${prop}" is missing`,
 						);
 					}
 				}
 			}
 		}
+		if (missingUnfixableRequiredProp) continue;
 
 		// Validate children references
 		const rawChildren = rawComponent.children;
@@ -455,11 +698,13 @@ export function validateComponents(
 			warnings.push(`${componentId}: removed invalid children reference`);
 		}
 
-		validated.push({
-			id: componentId,
-			style: comp.style,
-			component: cleaned as unknown as SurfaceComponent["component"],
-		});
+		validated.push(
+			normalizeSurfaceComponentForPersistence({
+				id: componentId,
+				style: comp.style,
+				component: cleaned as unknown as SurfaceComponent["component"],
+			}),
+		);
 	}
 
 	const validIds = new Set(validated.map((component) => component.id));
@@ -498,7 +743,10 @@ export function validateCanvasSettings(
 		result.padding = obj.padding;
 	}
 	if (typeof obj.customCss === "string") {
-		result.customCss = obj.customCss.slice(0, MAX_CUSTOM_CSS_CHARS);
+		// CSS cannot be truncated safely at an arbitrary character boundary: a
+		// cut inside a declaration, string, or nested at-rule invalidates the
+		// stylesheet. Large stylesheets are parsed off-thread by ScopedCustomCss.
+		result.customCss = obj.customCss;
 	}
 	if (typeof obj.backgroundImage === "string") {
 		const image = obj.backgroundImage.trim();

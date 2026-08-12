@@ -1,6 +1,9 @@
 import type {
 	IBoard,
 	IMetadata,
+	ITemplatePreview,
+	ITemplateSearchHit,
+	ITemplateSearchQuery,
 	ITemplateState,
 	IVersionType,
 } from "@flow-like/flow-like-ui";
@@ -27,6 +30,38 @@ export class WebTemplateState implements ITemplateState {
 		} catch {
 			return [];
 		}
+	}
+
+	async searchTemplates(
+		query: ITemplateSearchQuery,
+	): Promise<ITemplateSearchHit[]> {
+		const params = new URLSearchParams();
+		params.set("query", query.query);
+		if (query.language) params.set("language", query.language);
+		if (query.category) params.set("category", query.category);
+		if (query.tag) params.set("tag", query.tag);
+		if (query.forkable_only) params.set("forkable_only", "true");
+		if (query.limit !== undefined) params.set("limit", String(query.limit));
+		if (query.offset !== undefined) params.set("offset", String(query.offset));
+
+		try {
+			return await apiGet<ITemplateSearchHit[]>(
+				`apps/templates/search?${params}`,
+				this.backend.auth,
+			);
+		} catch {
+			return [];
+		}
+	}
+
+	async getTemplatePreview(
+		appId: string,
+		templateId: string,
+	): Promise<ITemplatePreview> {
+		return apiGet<ITemplatePreview>(
+			`apps/${appId}/templates/${templateId}/preview`,
+			this.backend.auth,
+		);
 	}
 
 	async getTemplate(

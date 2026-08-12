@@ -1,15 +1,14 @@
 "use client";
-import { createId } from "@paralleldrive/cuid2";
 import {
 	type FlowLibraryBoardCreationState,
-	FlowLibraryBoardsSection,
-	FlowLibraryHeader,
+	FlowsOverviewPage,
 	IExecutionStage,
 	ILogLevel,
 	useBackend,
 	useFlowBoardParentState,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { createId } from "@paralleldrive/cuid2";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -83,17 +82,13 @@ export default function Page() {
 	return (
 		<main className="h-full flex flex-col max-h-full overflow-auto md:overflow-visible min-h-0">
 			<div className="container mx-auto px-6 pb-4 flex flex-col h-full gap-4">
-				<FlowLibraryHeader
+				<FlowsOverviewPage
+					appId={id ?? ""}
+					app={app.data}
+					boards={boards}
 					boardCreation={boardCreation}
 					setBoardCreation={setBoardCreation}
 					onCreateBoard={handleCreateBoard}
-				/>
-
-				<FlowLibraryBoardsSection
-					boards={boards}
-					app={app.data}
-					boardCreation={boardCreation}
-					setBoardCreation={setBoardCreation}
 					onOpenBoard={handleOpenBoard}
 					onDeleteBoard={handleDeleteBoard}
 					boardHref={
@@ -101,6 +96,13 @@ export default function Page() {
 							? (boardId) => `/flow?id=${boardId}&app=${app.data.id}`
 							: undefined
 					}
+					pageHref={
+						app.data
+							? (pageId, boardId) =>
+									`/page-builder?id=${pageId}&app=${app.data.id}&board=${boardId}`
+							: undefined
+					}
+					eventsHref={id ? `/library/config/events?id=${id}` : undefined}
 				/>
 			</div>
 		</main>

@@ -9,6 +9,7 @@ import {
 	useInvoke,
 	useQuery,
 	useQueryClient,
+	useSearch,
 } from "@flow-like/flow-like-ui";
 import {
 	AdminPackageDetail,
@@ -237,17 +238,10 @@ function AdminPackageListContent() {
 		queryClient.invalidateQueries({ queryKey: ["admin", "packages"] });
 	}, [queryClient]);
 
-	const filteredPackages = useMemo(() => {
-		if (!packages.data?.packages) return [];
-		if (!debouncedSearch) return packages.data.packages;
-		const search = debouncedSearch.toLowerCase();
-		return packages.data.packages.filter(
-			(pkg) =>
-				pkg.name.toLowerCase().includes(search) ||
-				pkg.description.toLowerCase().includes(search) ||
-				pkg.id.toLowerCase().includes(search),
-		);
-	}, [packages.data?.packages, debouncedSearch]);
+	const filteredPackages = useSearch(packages.data?.packages, debouncedSearch, {
+		fields: ["name", "id", "description", "keywords"],
+		boost: { name: 3, id: 2, keywords: 1.5 },
+	});
 
 	const totalPages = Math.ceil((packages.data?.totalCount ?? 0) / limit);
 

@@ -11,8 +11,10 @@ import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-
 import type {
 	IBeginOfflineForkBody,
 	IBeginOfflineForkResponse,
+	IForkPolicy,
 	IForkPreviewResponse,
 	IForkPreviewTarget,
+	IForkSettings,
 	IOnlineForkBody,
 	IOnlineForkResponse,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
@@ -92,6 +94,12 @@ export class EmptyAppState implements IAppState {
 		throw new Error("Method not implemented.");
 	}
 	changeAppAllowForking(appId: string, allow: boolean): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
+	getForkSettings(appId: string): Promise<IForkSettings> {
+		throw new Error("Method not implemented.");
+	}
+	changeAppForkPolicy(appId: string, policy: IForkPolicy): Promise<void> {
 		throw new Error("Method not implemented.");
 	}
 	getForkPreview(

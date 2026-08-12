@@ -95,7 +95,9 @@ impl AzureRuntimeCredentials {
     }
 
     pub fn from_env() -> Self {
-        let logs_container = std::env::var("AZURE_LOG_CONTAINER").unwrap_or_default();
+        let logs_container = std::env::var("AZURE_LOG_CONTAINER")
+            .or_else(|_| std::env::var("LOG_BUCKET"))
+            .unwrap_or_default();
         if logs_container.is_empty() {
             tracing::warn!(
                 "AZURE_LOG_CONTAINER environment variable is not set - logs will not be persisted"
@@ -106,8 +108,12 @@ impl AzureRuntimeCredentials {
             content_sas_token: None,
             user_content_sas_token: None,
             logs_sas_token: None,
-            meta_container: std::env::var("AZURE_META_CONTAINER").unwrap_or_default(),
-            content_container: std::env::var("AZURE_CONTENT_CONTAINER").unwrap_or_default(),
+            meta_container: std::env::var("AZURE_META_CONTAINER")
+                .or_else(|_| std::env::var("META_BUCKET"))
+                .unwrap_or_default(),
+            content_container: std::env::var("AZURE_CONTENT_CONTAINER")
+                .or_else(|_| std::env::var("CONTENT_BUCKET"))
+                .unwrap_or_default(),
             logs_container,
             account_name: std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap_or_default(),
             account_key: std::env::var("AZURE_STORAGE_ACCOUNT_KEY").ok(),
@@ -136,7 +142,7 @@ impl AzureRuntimeCredentials {
 
     #[tracing::instrument(
         name = "AzureRuntimeCredentials::scoped_credentials",
-        skip(self, _state),
+        skip(self, sub, _state),
         level = "debug"
     )]
     pub async fn scoped_credentials(

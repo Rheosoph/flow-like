@@ -95,7 +95,7 @@ async fn ensure_group_owner(
 )]
 #[tracing::instrument(
     name = "PATCH /apps/{app_id}/groups/{group_id}/visibility",
-    skip(state, user)
+    skip(state, user, payload)
 )]
 pub async fn change_group_visibility(
     State(state): State<AppState>,

@@ -183,7 +183,6 @@ export const ja = {
 	"design.feature3.title": "比較＆デバッグ",
 	"design.feature3.desc": "入出力のスナップショットで不一致の発見が簡単。",
 
-
 	// Portability
 	"portability.tagline": "コンテキスト付きライフサイクル",
 	"portability.headline.start": "オフラインで",

@@ -17,6 +17,7 @@ import {
 import { useEffect, useState } from "react";
 import { AuthProvider, useAuth } from "react-oidc-context";
 import { get } from "../lib/api";
+import { currentRelativeUrl, saveReturnUrl } from "../lib/return-url";
 import { SignInRequired } from "./sign-in-required";
 import { WebBackend } from "./web-provider";
 
@@ -134,7 +135,10 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	const [profileLoaded, setProfileLoaded] = useState(false);
 	const [authPushed, setAuthPushed] = useState(false);
 
-	const isPublicPath = PUBLIC_PATHS.some((path) => pathname?.startsWith(path));
+	const isPublicPath =
+		pathname === "/debug/markdown" ||
+		pathname === "/debug/upgrade" ||
+		PUBLIC_PATHS.some((path) => pathname?.startsWith(path));
 
 	// Listen for auth changes from other tabs
 	useEffect(() => {
@@ -279,7 +283,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 							console.warn(
 								"Silent login returned no user, attempting redirect login.",
 							);
-							await auth?.signinRedirect();
+							await auth?.signinRedirect({ url_state: currentRelativeUrl() });
 						}
 					} catch (silentError) {
 						console.warn(
@@ -288,7 +292,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 						);
 
 						try {
-							await auth?.signinRedirect();
+							await auth?.signinRedirect({ url_state: currentRelativeUrl() });
 						} catch (redirectError) {
 							console.error(
 								"Both silent and redirect login failed:",
@@ -303,6 +307,21 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		})();
 	}, [auth.user?.profile?.sub]);
 
+	// Preserve the pre-login location (e.g. /join?appId=…&token=…) so the
+	// callback can restore it. url_state on signinRedirect is the primary
+	// carrier; this stored copy covers logins started outside SignInRequired.
+	useEffect(() => {
+		if (auth.isLoading || auth.isAuthenticated || isPublicPath) return;
+		if (auth.activeNavigator) return;
+		const returnUrl = currentRelativeUrl();
+		if (returnUrl) saveReturnUrl(returnUrl);
+	}, [
+		auth.isLoading,
+		auth.isAuthenticated,
+		auth.activeNavigator,
+		isPublicPath,
+	]);
+
 	// Show loading state while auth is initializing
 	if (auth.isLoading && !isPublicPath) {
 		return <LoadingScreen progress={95} />;
@@ -315,17 +334,6 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 
 	// Show sign-in required screen when not authenticated (skip for public paths)
 	if (!auth.isAuthenticated && !isPublicPath) {
-		if (typeof window !== "undefined" && pathname) {
-			const returnUrl = window.location.pathname + window.location.search;
-			if (returnUrl && returnUrl !== "/") {
-				// Use both storages: localStorage survives cross-context mobile
-				// redirects, sessionStorage is the fallback
-				try {
-					localStorage.setItem("flow-like-return-url", returnUrl);
-				} catch {}
-				sessionStorage.setItem("flow-like-return-url", returnUrl);
-			}
-		}
 		return <SignInRequired />;
 	}
 

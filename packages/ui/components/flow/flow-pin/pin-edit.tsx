@@ -123,7 +123,11 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 				pin={pin}
 				value={cachedDefaultValue}
 				appId={appId}
+				boardId={boardId}
+				nodeId={nodeId}
+				boardRef={boardRef}
 				setValue={updateDefaultValue}
+				onPreviewValue={previewDefaultValue}
 			/>
 		);
 	}
@@ -157,6 +161,7 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 				appId={appId}
 				boardId={boardId}
 				nodeId={nodeId}
+				nodeName={nodeName}
 				boardRef={boardRef}
 				setValue={updateDefaultValue}
 				onPreviewValue={previewDefaultValue}

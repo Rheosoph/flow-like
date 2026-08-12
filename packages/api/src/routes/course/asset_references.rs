@@ -183,7 +183,7 @@ async fn sign_asset(
     let store = store?;
     let path = course_asset_storage_path(&asset.course_id, &asset.storage_key);
     match store
-        .sign("GET", &path, Duration::from_secs(SIGNED_URL_TTL_SECS))
+        .sign_cached("GET", &path, Duration::from_secs(SIGNED_URL_TTL_SECS))
         .await
     {
         Ok(url) => Some(url.to_string()),

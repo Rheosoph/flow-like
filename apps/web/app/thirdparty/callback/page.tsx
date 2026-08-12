@@ -1,8 +1,8 @@
 "use client";
 
+import { Button } from "@flow-like/flow-like-ui";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
-import { Button } from "@flow-like/flow-like-ui";
 import { storePendingOAuthCallback } from "../../../lib/oauth-callback-storage";
 
 function ThirdpartyCallbackContent() {

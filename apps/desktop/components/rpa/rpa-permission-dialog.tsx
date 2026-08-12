@@ -1,6 +1,5 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/core";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -11,6 +10,7 @@ import {
 	AlertDialogTitle,
 	cn,
 } from "@flow-like/flow-like-ui";
+import { invoke } from "@tauri-apps/api/core";
 import { AlertCircle, Check, ShieldAlert, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 

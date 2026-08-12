@@ -1,6 +1,7 @@
 use crate::{
     audit_branch, ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    permission::role_permission::RolePermissions,
+    routes::app::board::secrets::filter_board_secrets, state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -33,6 +34,10 @@ pub struct UpsertBoardResponse {
     pub id: String,
     #[schema(value_type = Object)]
     pub updated_at: SystemTime,
+    /// Present when a board was instantiated from a template so clients can cache the exact
+    /// server-generated node and pin IDs without instantiating the template a second time.
+    #[schema(value_type = Option<Object>)]
+    pub board: Option<Board>,
 }
 
 #[utoipa::path(
@@ -62,36 +67,24 @@ pub async fn upsert_board(
 ) -> Result<Json<UpsertBoardResponse>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
-    let mutation_lock = state.board_mutation_lock(&app_id, &board_id);
-    let _mutation_guard = mutation_lock.lock().await;
+    let _mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
 
     let mut app = state.master_app(&sub, &app_id, &state).await?;
     let mut id = board_id.clone();
     let created_board = !app.boards.contains(&board_id);
-    let template = params.template.clone();
+    let had_template = params.template.is_some();
     if created_board {
-        id = app.create_board(Some(board_id.clone()), None).await?;
+        // Instantiate through the same core path as offline boards. Besides remapping node/pin
+        // IDs, this runs catalog schema migrations and keeps compact schema refs resolvable before
+        // the first board snapshot is saved.
+        id = app
+            .create_board(Some(board_id.clone()), params.template)
+            .await?;
         app.save().await?;
     }
 
     let board = app.open_board(id, Some(false), None).await?;
     let mut board = board.lock().await;
-
-    if created_board {
-        if let Some(data) = template {
-            board.variables = data.variables;
-            board.comments = data.comments;
-            board.nodes = data.nodes;
-            board.layers = data.layers;
-            board.parent = data.parent;
-            board.refs = data.refs;
-            board.version = data.version;
-            board.viewport = data.viewport;
-            board.page_ids = data.page_ids;
-            board.created_at = data.created_at;
-            board.updated_at = data.updated_at;
-        }
-    }
 
     board.name = params.name.unwrap_or(board.name.clone());
     board.description = params.description.unwrap_or(board.description.clone());
@@ -121,8 +114,14 @@ pub async fn upsert_board(
         board.id,
         "Board created or updated"
     );
+    let response_board = (created_board && had_template).then(|| {
+        let mut response_board = (*board).clone();
+        filter_board_secrets(&mut response_board);
+        response_board
+    });
     Ok(Json(UpsertBoardResponse {
         id: board.id.clone(),
         updated_at: board.updated_at,
+        board: response_board,
     }))
 }

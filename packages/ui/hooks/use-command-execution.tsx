@@ -3,13 +3,20 @@ import { AlertTriangleIcon, XIcon } from "lucide-react";
 import { useCallback, useRef } from "react";
 import { getErrorMessage } from "../lib/error-message";
 import { boardFingerprint } from "../lib/flow-history-stacks";
+import {
+	type BoardEditReceiptHistoryMode,
+	flowIrCommitDeliveryId,
+} from "../lib/flowpilot/board-edit-job-delivery";
 import { toastError, toastWarning } from "../lib/messages";
 import type { IGenericCommand } from "../lib/schema";
 import type { FlowIrCommitToken } from "../lib/schema/copilot";
 import type { IBoard } from "../lib/schema/flow/board";
 import type { INode } from "../lib/schema/flow/node";
 import { useBackendStore } from "../state/backend-state";
-import type { IApplyFlowIrCommitResponse } from "../state/backend-state/board-state";
+import type {
+	IApplyFlowIrCommitResponse,
+	IApplyFlowScriptResponse,
+} from "../state/backend-state/board-state";
 
 interface ExecuteCommandsOptions {
 	refetch?: boolean;
@@ -22,8 +29,13 @@ interface UseCommandExecutionProps {
 	boardId: string;
 	board: UseQueryResult<IBoard>;
 	version: [number, number, number] | undefined;
-	pushCommand: (command: any, append?: boolean) => Promise<void>;
-	pushCommands: (commands: any[]) => Promise<void>;
+	pushCommand: (command: IGenericCommand, append?: boolean) => Promise<void>;
+	pushCommands: (commands: IGenericCommand[]) => Promise<void>;
+	pushCommandsOnce: (
+		commands: IGenericCommand[],
+		deliveryId: string,
+		historyMode?: BoardEditReceiptHistoryMode,
+	) => Promise<void>;
 	stampHistory: (stamp?: string) => Promise<void>;
 }
 
@@ -42,9 +54,66 @@ export function useCommandExecution({
 	version,
 	pushCommand,
 	pushCommands,
+	pushCommandsOnce,
 	stampHistory,
 }: UseCommandExecutionProps) {
 	const awarenessRef = useRef<any | undefined>(undefined);
+	const refetchBoardAndStampHistory = useCallback(async () => {
+		const refreshed = await board.refetch();
+		if (refreshed.error) throw refreshed.error;
+		await stampHistory(boardFingerprint(refreshed.data));
+		return refreshed;
+	}, [board.refetch, stampHistory]);
+	const preserveApplyErrorAfterRefetch = useCallback(
+		async (operation: string, error: unknown): Promise<Error> => {
+			const primaryMessage = getErrorMessage(error, "Unknown error");
+			try {
+				await refetchBoardAndStampHistory();
+			} catch (refreshError) {
+				return new Error(
+					`${operation} failed: ${primaryMessage}. The board refresh/history recovery also failed: ${getErrorMessage(refreshError, "Unknown recovery error")}`,
+				);
+			}
+			return error instanceof Error
+				? error
+				: new Error(`${operation} failed: ${primaryMessage}`);
+		},
+		[refetchBoardAndStampHistory],
+	);
+	const settleCommittedMutation = useCallback(
+		async (pushHistory: () => Promise<void>, shouldRefetch: boolean) => {
+			const followupErrors: string[] = [];
+			try {
+				await pushHistory();
+			} catch (error) {
+				followupErrors.push(
+					`undo/history update failed: ${getErrorMessage(error, "Unknown history error")}`,
+				);
+			}
+
+			let refreshed: Awaited<ReturnType<typeof board.refetch>> | undefined;
+			if (shouldRefetch || followupErrors.length > 0) {
+				try {
+					refreshed = await refetchBoardAndStampHistory();
+				} catch (error) {
+					followupErrors.push(
+						`board refetch failed: ${getErrorMessage(error, "Unknown board refetch error")}`,
+					);
+				}
+			}
+
+			if (followupErrors.length > 0) {
+				const warning = `The board mutation was applied, but local bookkeeping needs recovery: ${followupErrors.join("; ")}`;
+				console.error(
+					"[commandExecution] Post-apply recovery needed:",
+					warning,
+				);
+				toastWarning(warning, <AlertTriangleIcon />);
+			}
+			return refreshed;
+		},
+		[refetchBoardAndStampHistory],
+	);
 
 	const executeCommand = useCallback(
 		async (command: IGenericCommand, append = false): Promise<any> => {
@@ -62,32 +131,39 @@ export function useCommandExecution({
 
 			console.log("[executeCommand] Executing:", command.command_type, command);
 
+			let result: IGenericCommand;
 			try {
-				const result = await backend.boardState.executeCommand(
+				result = await backend.boardState.executeCommand(
 					appId,
 					boardId,
 					command,
 				);
-				console.log("[executeCommand] Success:", command.command_type, result);
-				await pushCommand(result, append);
-				const refreshed = await board.refetch();
-				await stampHistory(boardFingerprint(refreshed.data));
-
-				if (awarenessRef.current) {
-					awarenessRef.current.setLocalStateField("boardUpdate", Date.now());
-				}
-
-				return result;
 			} catch (error) {
-				console.error("[executeCommand] Failed:", command.command_type, error);
-				toastError(
-					`Command failed: ${getErrorMessage(error, "Unknown error")}`,
-					<XIcon />,
+				const recoveredError = await preserveApplyErrorAfterRefetch(
+					`Command ${command.command_type}`,
+					error,
 				);
-				throw error;
+				console.error(
+					"[executeCommand] Failed:",
+					command.command_type,
+					recoveredError,
+				);
+				toastError(`Command failed: ${recoveredError.message}`, <XIcon />);
+				throw recoveredError;
 			}
+			console.log("[executeCommand] Success:", command.command_type, result);
+			await settleCommittedMutation(() => pushCommand(result, append), true);
+			awarenessRef.current?.setLocalStateField("boardUpdate", Date.now());
+			return result;
 		},
-		[board.refetch, appId, boardId, pushCommand, stampHistory, version],
+		[
+			appId,
+			boardId,
+			preserveApplyErrorAfterRefetch,
+			pushCommand,
+			settleCommittedMutation,
+			version,
+		],
 	);
 
 	const executeCommands = useCallback(
@@ -108,33 +184,37 @@ export function useCommandExecution({
 			}
 			if (commands.length === 0) return;
 
+			let result: IGenericCommand[];
 			try {
-				const result = await backend.boardState.executeCommands(
+				result = await backend.boardState.executeCommands(
 					appId,
 					boardId,
 					commands,
 				);
-				await pushCommands(result);
-				if (options.refetch !== false) {
-					const refreshed = await board.refetch();
-					await stampHistory(boardFingerprint(refreshed.data));
-				}
-
-				if (awarenessRef.current) {
-					awarenessRef.current.setLocalStateField("boardUpdate", Date.now());
-				}
-
-				return result;
 			} catch (error) {
-				console.error("[executeCommands] Failed:", error);
-				toastError(
-					`Commands failed: ${getErrorMessage(error, "Unknown error")}`,
-					<XIcon />,
+				const recoveredError = await preserveApplyErrorAfterRefetch(
+					"Command batch",
+					error,
 				);
-				throw error;
+				console.error("[executeCommands] Failed:", recoveredError);
+				toastError(`Commands failed: ${recoveredError.message}`, <XIcon />);
+				throw recoveredError;
 			}
+			await settleCommittedMutation(
+				() => pushCommands(result),
+				options.refetch !== false,
+			);
+			awarenessRef.current?.setLocalStateField("boardUpdate", Date.now());
+			return result;
 		},
-		[board.refetch, appId, boardId, pushCommands, stampHistory, version],
+		[
+			appId,
+			boardId,
+			preserveApplyErrorAfterRefetch,
+			pushCommands,
+			settleCommittedMutation,
+			version,
+		],
 	);
 
 	const applyFlowScript = useCallback(
@@ -157,8 +237,9 @@ export function useCommandExecution({
 			}
 			if (!flowscript.trim()) return;
 
+			let result: IApplyFlowScriptResponse;
 			try {
-				const result = await backend.boardState.applyFlowScript(
+				result = await backend.boardState.applyFlowScript(
 					appId,
 					boardId,
 					flowscript,
@@ -166,60 +247,82 @@ export function useCommandExecution({
 					catalogNodes,
 					options.allowDeletions === true,
 				);
-
-				let finalBoardNodeCount: number | undefined;
-				if (result.commands.length > 0) {
-					await pushCommands(result.commands);
-					if (options.refetch !== false) {
-						const refreshed = await board.refetch();
-						await stampHistory(boardFingerprint(refreshed.data));
-						if (refreshed.data) {
-							finalBoardNodeCount = totalBoardNodeCount(refreshed.data);
-						}
-					}
-
-					if (awarenessRef.current) {
-						awarenessRef.current.setLocalStateField("boardUpdate", Date.now());
-					}
-
-					// Partial apply: the derivable changes were applied, but some arguments/
-					// connections were skipped. Surface them without blocking.
-					if (result.diagnostics.length > 0) {
-						toastWarning(
-							`Applied with ${result.diagnostics.length} warning${
-								result.diagnostics.length === 1 ? "" : "s"
-							}: ${result.diagnostics[0]}`,
-							<AlertTriangleIcon />,
-						);
-					}
-				} else if (result.diagnostics.length > 0) {
-					const suppressToast =
-						options.suppressBlockedToast === true &&
-						result.diagnostics[0]?.startsWith("FlowScript edit would delete ");
-					if (suppressToast) return result;
-					toastError(
-						`FlowScript apply blocked: ${result.diagnostics[0]}`,
-						<XIcon />,
-					);
-				}
-
-				return Number.isSafeInteger(finalBoardNodeCount)
-					? { ...result, final_board_node_count: finalBoardNodeCount }
-					: result;
 			} catch (error) {
-				console.error("[applyFlowScript] Failed:", error);
+				const recoveredError = await preserveApplyErrorAfterRefetch(
+					"FlowScript apply",
+					error,
+				);
+				console.error("[applyFlowScript] Failed:", recoveredError);
 				toastError(
-					`FlowScript apply failed: ${getErrorMessage(error, "Unknown error")}`,
+					`FlowScript apply failed: ${recoveredError.message}`,
 					<XIcon />,
 				);
-				throw error;
+				throw recoveredError;
 			}
+
+			let finalBoardNodeCount: number | undefined;
+			if (result.commands.length > 0) {
+				const refreshed = await settleCommittedMutation(
+					() => pushCommands(result.commands),
+					options.refetch !== false,
+				);
+				if (refreshed?.data) {
+					finalBoardNodeCount = totalBoardNodeCount(refreshed.data);
+				}
+				awarenessRef.current?.setLocalStateField("boardUpdate", Date.now());
+
+				// Partial apply: the derivable changes were applied, but some arguments/
+				// connections were skipped. Surface them without blocking.
+				if (result.diagnostics.length > 0) {
+					toastWarning(
+						`Applied with ${result.diagnostics.length} warning${
+							result.diagnostics.length === 1 ? "" : "s"
+						}: ${result.diagnostics[0]}`,
+						<AlertTriangleIcon />,
+					);
+				}
+			} else if (result.diagnostics.length > 0) {
+				try {
+					await refetchBoardAndStampHistory();
+				} catch (refreshError) {
+					const warning = `Board refetch after the blocked FlowScript apply failed: ${getErrorMessage(refreshError, "Unknown recovery error")}`;
+					console.error("[applyFlowScript] Recovery failed:", warning);
+					return {
+						...result,
+						diagnostics: [...result.diagnostics, warning],
+					};
+				}
+				const suppressToast =
+					options.suppressBlockedToast === true &&
+					result.diagnostics[0]?.startsWith("FlowScript edit would delete ");
+				if (suppressToast) return result;
+				toastError(
+					`FlowScript apply blocked: ${result.diagnostics[0]}`,
+					<XIcon />,
+				);
+			}
+
+			return Number.isSafeInteger(finalBoardNodeCount)
+				? { ...result, final_board_node_count: finalBoardNodeCount }
+				: result;
 		},
-		[board.refetch, appId, boardId, pushCommands, stampHistory, version],
+		[
+			appId,
+			boardId,
+			preserveApplyErrorAfterRefetch,
+			pushCommands,
+			refetchBoardAndStampHistory,
+			settleCommittedMutation,
+			version,
+		],
 	);
 
 	const applyFlowIrCommit = useCallback(
-		async (token: FlowIrCommitToken): Promise<IApplyFlowIrCommitResponse> => {
+		async (
+			token: FlowIrCommitToken,
+			deliveryId?: string,
+			historyMode: BoardEditReceiptHistoryMode = "append",
+		): Promise<IApplyFlowIrCommitResponse> => {
 			const backend = useBackendStore.getState().backend;
 			if (!backend?.boardState.applyFlowIrCommit) {
 				throw new Error(
@@ -229,35 +332,54 @@ export function useCommandExecution({
 			if (typeof version !== "undefined") {
 				throw new Error("Cannot change an old board version");
 			}
-			const result = await backend.boardState.applyFlowIrCommit(appId, token);
-			if (result.status === "applied" && result.commands.length > 0) {
-				// The native transaction has already persisted and acknowledged the exact
-				// retained compiled workflow batch. Renderer bookkeeping must never turn that
-				// success into a retry/dismiss path: collect refresh/history failures as
-				// recoverable warnings.
-				const followups = await Promise.allSettled([
-					pushCommands(result.commands),
-					board.refetch(),
-				]);
-				awarenessRef.current?.setLocalStateField("boardUpdate", Date.now());
-				const followupErrors = followups.flatMap((followup) =>
-					followup.status === "rejected"
-						? [getErrorMessage(followup.reason, "Unknown renderer error")]
-						: [],
+			const effectiveDeliveryId = flowIrCommitDeliveryId(token);
+			if (deliveryId && deliveryId !== effectiveDeliveryId) {
+				throw new Error(
+					"Compiled workflow delivery identity must match its immutable claim id",
 				);
-				const [pushResult, refetchResult] = followups;
-				if (
-					pushResult.status === "fulfilled" &&
-					refetchResult.status === "fulfilled"
-				) {
-					try {
-						await stampHistory(boardFingerprint(refetchResult.value.data));
-					} catch (error) {
-						followupErrors.push(
-							getErrorMessage(error, "Unknown renderer error"),
-						);
-					}
-				}
+			}
+			let result: IApplyFlowIrCommitResponse;
+			try {
+				result = await backend.boardState.applyFlowIrCommit(
+					appId,
+					token,
+					effectiveDeliveryId,
+				);
+			} catch (error) {
+				throw await preserveApplyErrorAfterRefetch(
+					"Compiled workflow apply",
+					error,
+				);
+			}
+			if (result.status === "applied" && result.commands.length > 0) {
+				const effectiveHistoryMode = result.replayed
+					? "invalidate"
+					: historyMode;
+				// The native mutation is already committed, but its delivery job must remain
+				// retryable until both remote/outbox handoff and the idempotent history marker
+				// are durable. Refresh failure is visible but does not invalidate those writes.
+				const history = await Promise.resolve(
+					pushCommandsOnce(
+						result.commands,
+						effectiveDeliveryId,
+						effectiveHistoryMode,
+					),
+				).then(
+					() => ({ ok: true as const }),
+					(error) => ({ ok: false as const, error }),
+				);
+				const refresh = await Promise.resolve(
+					refetchBoardAndStampHistory(),
+				).then(
+					() => ({ ok: true as const }),
+					(error) => ({ ok: false as const, error }),
+				);
+				awarenessRef.current?.setLocalStateField("boardUpdate", Date.now());
+				const followupErrors = [history, refresh].flatMap((followup) =>
+					followup.ok
+						? []
+						: [getErrorMessage(followup.error, "Unknown renderer error")],
+				);
 				if (followupErrors.length > 0) {
 					const warning = `The workflow was applied, but local history or refresh bookkeeping needs recovery: ${followupErrors.join("; ")}`;
 					console.error(
@@ -267,13 +389,35 @@ export function useCommandExecution({
 					toastWarning(warning, <AlertTriangleIcon />);
 					return {
 						...result,
+						delivery_complete: result.delivery_complete === true && history.ok,
+						diagnostics: [...result.diagnostics, warning],
+					};
+				}
+				return {
+					...result,
+					delivery_complete: result.delivery_complete === true,
+				};
+			} else {
+				try {
+					await refetchBoardAndStampHistory();
+				} catch (refreshError) {
+					const warning = `Board refetch after the compiled workflow apply did not complete: ${getErrorMessage(refreshError, "Unknown recovery error")}`;
+					console.error("[applyFlowIrCommit] Recovery failed:", warning);
+					return {
+						...result,
 						diagnostics: [...result.diagnostics, warning],
 					};
 				}
 			}
 			return result;
 		},
-		[appId, board.refetch, pushCommands, stampHistory, version],
+		[
+			appId,
+			preserveApplyErrorAfterRefetch,
+			pushCommandsOnce,
+			refetchBoardAndStampHistory,
+			version,
+		],
 	);
 
 	return {

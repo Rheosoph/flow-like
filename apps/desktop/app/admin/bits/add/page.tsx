@@ -8,6 +8,8 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
+	type HuggingFaceGgufSelectionOptions,
+	type HuggingFaceModelImport,
 	type IBit,
 	IBitTypes,
 	type IEmbeddingModelParameters,
@@ -33,9 +35,16 @@ import {
 	SelectValue,
 	Separator,
 	Textarea,
+	applyHuggingFaceMlxImportToBit,
+	buildMlxModelRootBit,
+	createHuggingFaceGgufAdminDraft,
+	createHuggingFaceMlxAssetBits,
+	inferMlxAssetBitType,
 	nowSystemTime,
+	prepareMlxAssetBit,
 	useBackend,
 	useInvoke,
+	validateMlxModelAssets,
 } from "@flow-like/flow-like-ui";
 import { createId } from "@paralleldrive/cuid2";
 import {
@@ -72,6 +81,7 @@ import { DependencyConfiguration } from "./dependency";
 import { EmbeddingConfiguration } from "./embedding";
 import { LLMConfiguration } from "./llm";
 import { MetaConfiguration } from "./meta";
+import { HuggingFaceModelImporter, MlxAssetsConfiguration } from "./mlx-assets";
 import {
 	STTConfiguration,
 	type SttAssetDraft,
@@ -225,6 +235,17 @@ const DEFAULT_BIT: IBit = {
 	license: "",
 	version: "0.0.1",
 };
+
+function getDefaultMlxAssetBit(fileName = ""): IBit {
+	return {
+		...DEFAULT_BIT,
+		id: createId(),
+		type: inferMlxAssetBitType(fileName),
+		download_link: "",
+		file_name: fileName,
+		parameters: {},
+	};
+}
 
 // ── HostedLLMForm ──────────────────────────────────────────────────────────
 
@@ -711,6 +732,9 @@ export default function Page() {
 	>(undefined);
 	const [ttsAssets, setTtsAssets] = useState<TtsAssetDraft[]>([]);
 	const [sttAssets, setSttAssets] = useState<SttAssetDraft[]>([]);
+	const [mlxAssets, setMlxAssets] = useState<IBit[]>([]);
+	const skipNextModeResetRef = useRef(false);
+	const importedGgufDownloadRef = useRef<string | null>(null);
 	const [progress, setProgress] = useState(0);
 	const [progressDownloaded, setProgressDownloaded] = useState<number | null>(
 		null,
@@ -741,6 +765,10 @@ export default function Page() {
 		isHostedProviderName(
 			(bit.parameters as ILlmParameters | undefined)?.provider?.provider_name,
 		);
+	const isMlxModel =
+		(bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm) &&
+		(bit.parameters as ILlmParameters | undefined)?.provider?.provider_name ===
+			"MLX";
 
 	function getDefaultBit(type: IBitTypes): IBit {
 		return {
@@ -771,6 +799,47 @@ export default function Page() {
 			parameters: {},
 		};
 	}
+
+	const applyHuggingFaceRepositoryImport = useCallback(
+		(
+			imported: HuggingFaceModelImport,
+			options?: HuggingFaceGgufSelectionOptions,
+		) => {
+			if (imported.format === "gguf") {
+				const importedDraft = createHuggingFaceGgufAdminDraft(
+					bit,
+					imported,
+					() => getDefaultBit(IBitTypes.Projection),
+					options,
+				);
+				const targetMode: BitMode =
+					importedDraft.selection.kind === "vlm" ? "vlm" : "local-llm";
+				if (mode !== targetMode) {
+					skipNextModeResetRef.current = true;
+					setMode(targetMode);
+				}
+				importedGgufDownloadRef.current =
+					importedDraft.root.download_link ?? null;
+				setBit(importedDraft.root);
+				setProjection(importedDraft.projection);
+				setMlxAssets([]);
+				return;
+			}
+
+			const targetMode: BitMode = imported.kind === "vlm" ? "vlm" : "local-llm";
+			if (mode !== targetMode) {
+				skipNextModeResetRef.current = true;
+				setMode(targetMode);
+			}
+			importedGgufDownloadRef.current = null;
+			setBit((current) => applyHuggingFaceMlxImportToBit(current, imported));
+			setMlxAssets(
+				createHuggingFaceMlxAssetBits(imported, getDefaultMlxAssetBit),
+			);
+			setProjection(undefined);
+		},
+		[bit, mode],
+	);
 
 	// ── upload helper ──────────────────────────────────────────────────────
 
@@ -852,8 +921,13 @@ export default function Page() {
 	// ── prefill helpers ────────────────────────────────────────────────────
 
 	const prefillLLM = useCallback(async () => {
+		if (importedGgufDownloadRef.current) {
+			if (importedGgufDownloadRef.current === bit.download_link) return;
+			importedGgufDownloadRef.current = null;
+		}
 		if (
 			isHostedModel ||
+			isMlxModel ||
 			!bit.download_link ||
 			bit.download_link === "" ||
 			(bit.type !== IBitTypes.Llm &&
@@ -899,7 +973,7 @@ export default function Page() {
 		} finally {
 			setLoading(false);
 		}
-	}, [bit, isHostedModel]);
+	}, [bit, isHostedModel, isMlxModel]);
 
 	const prefillEmbeddingModel = useCallback(async () => {
 		if (
@@ -1068,6 +1142,11 @@ export default function Page() {
 	}
 
 	useEffect(() => {
+		if (skipNextModeResetRef.current) {
+			skipNextModeResetRef.current = false;
+			return;
+		}
+		importedGgufDownloadRef.current = null;
 		const providerName = isHostedMode ? "Hosted" : "Local";
 		const ttsAssetLayout =
 			bitType === IBitTypes.Tts
@@ -1126,9 +1205,37 @@ export default function Page() {
 		});
 		if (bitType === IBitTypes.Tts) setTtsAssets(ttsAssetLayout);
 		if (isLocalStt) setSttAssets(sttAssetLayout);
+		setMlxAssets([]);
 		setDefaultDependencies(bitType);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [mode]);
+
+	useEffect(() => {
+		if (!isMlxModel) return;
+		setMlxAssets((current) => {
+			if (current.length > 0) return current;
+			const requiredFiles = [
+				"config.json",
+				"tokenizer.json",
+				"tokenizer_config.json",
+				"model.safetensors",
+				...(bit.type === IBitTypes.Vlm ? ["preprocessor_config.json"] : []),
+			];
+			return requiredFiles.map(getDefaultMlxAssetBit);
+		});
+		// MLX model roots never carry an artifact of their own.
+		setBit((current) =>
+			current.download_link || current.file_name || current.size
+				? {
+						...current,
+						download_link: "",
+						file_name: "",
+						size: 0,
+					}
+				: current,
+		);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [isMlxModel, bit.type]);
 
 	useEffect(() => {
 		const isLocalSttBit =
@@ -1171,6 +1278,36 @@ export default function Page() {
 				bit.type === IBitTypes.Stt &&
 				(bit.parameters as ILlmParameters | undefined)?.provider
 					?.provider_name === "local:any-speech-to-text";
+
+			if (isMlxModel) {
+				const manifestErrors = validateMlxModelAssets(
+					mlxAssets,
+					bit.type === IBitTypes.Vlm,
+				);
+				if (manifestErrors.length > 0) {
+					throw new Error(manifestErrors.join(". "));
+				}
+
+				for (const [assetIndex, asset] of mlxAssets.entries()) {
+					setProgress(0);
+					setProgressDownloaded(null);
+					setProgressTotal(asset.size ?? null);
+					setProgressLabel(
+						`Uploading MLX file ${assetIndex + 1} of ${mlxAssets.length}: ${asset.file_name}`,
+					);
+					setProgressBit(asset);
+					lastSampleRef.current = null;
+					setSpeedBps(0);
+					setEtaSec(null);
+					const registered = await uploadBit(prepareMlxAssetBit(asset, bit));
+					dependencies.push(registered);
+					setMlxAssets((current) =>
+						current.map((currentAsset) =>
+							currentAsset.id === asset.id ? registered : currentAsset,
+						),
+					);
+				}
+			}
 
 			if (bit.type === IBitTypes.Embedding) {
 				if (!tokenizer || !tokenizerConfig || !specialTokensMap || !config) {
@@ -1257,7 +1394,7 @@ export default function Page() {
 				);
 			}
 
-			if (bit.type === IBitTypes.Vlm) {
+			if (bit.type === IBitTypes.Vlm && !isMlxModel) {
 				if (!projection) throw new Error("Projection is required for VLM");
 				const projReg = await uploadBit({
 					...projection,
@@ -1365,10 +1502,17 @@ export default function Page() {
 				bit.type === IBitTypes.Llm ||
 				(bit.type === IBitTypes.Stt && !isLocalSttBit)
 			) {
-				const response = await uploadBit({
-					...bit,
-					dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
-				});
+				const bitToUpload = isMlxModel
+					? buildMlxModelRootBit(bit, dependencies)
+					: {
+							...bit,
+							dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
+						};
+				if (isMlxModel) {
+					setProgressLabel("Registering the virtual MLX model");
+					setProgressBit(bit);
+				}
+				const response = await uploadBit(bitToUpload);
 				await backend.apiState.put(
 					profile.data,
 					`admin/bit/${response.id}/en`,
@@ -1388,6 +1532,7 @@ export default function Page() {
 			setTextEmbeddingModel(undefined);
 			setTtsAssets([]);
 			setSttAssets([]);
+			setMlxAssets([]);
 		} catch (error: unknown) {
 			toast.error(
 				`Failed to add bit: ${error instanceof Error ? error.message : error}`,
@@ -1401,6 +1546,8 @@ export default function Page() {
 		config,
 		imageEmbeddingConfig,
 		imageEmbeddingPreprocessor,
+		isMlxModel,
+		mlxAssets,
 		profile.data,
 		projection,
 		specialTokensMap,
@@ -1461,8 +1608,18 @@ export default function Page() {
 						/>
 					) : (
 						<>
+							{mode === "local-llm" || mode === "vlm" ? (
+								<>
+									<HuggingFaceModelImporter
+										disabled={loading}
+										onImported={applyHuggingFaceRepositoryImport}
+									/>
+									<Separator className="my-4" />
+								</>
+							) : null}
+
 							{/* download link for non-hosted file-backed models */}
-							{bit.type !== IBitTypes.Tts && !isLocalStt ? (
+							{bit.type !== IBitTypes.Tts && !isLocalStt && !isMlxModel ? (
 								<div className="flex flex-row items-center gap-2 max-w-3xl">
 									{loading ? (
 										<Loader2Icon className="w-4 h-4 animate-spin shrink-0" />
@@ -1494,7 +1651,17 @@ export default function Page() {
 									<Separator className="my-4" />
 								</>
 							) : null}
-							{bit.type === IBitTypes.Vlm && projection ? (
+							{isMlxModel ? (
+								<>
+									<MlxAssetsConfiguration
+										assets={mlxAssets}
+										setAssets={setMlxAssets}
+										createAsset={getDefaultMlxAssetBit}
+									/>
+									<Separator className="my-4" />
+								</>
+							) : null}
+							{bit.type === IBitTypes.Vlm && projection && !isMlxModel ? (
 								<>
 									<DependencyConfiguration
 										defaultBit={getDefaultBit(IBitTypes.Projection)}
@@ -1617,7 +1784,7 @@ export default function Page() {
 								{loading ? (
 									<Loader2Icon className="w-4 h-4 animate-spin mr-2" />
 								) : null}
-								Add Bit
+								{isMlxModel ? "Upload MLX model" : "Add Bit"}
 							</Button>
 						</>
 					)}

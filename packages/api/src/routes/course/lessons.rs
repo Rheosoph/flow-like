@@ -145,7 +145,7 @@ pub async fn get_lesson(
         let path = course_asset_storage_path(&asset.course_id, &asset.storage_key);
         let signed_url = match state
             .content_bucket
-            .sign(
+            .sign_cached(
                 "GET",
                 &path,
                 Duration::from_secs(LESSON_ASSET_SIGNED_URL_TTL_SECS),

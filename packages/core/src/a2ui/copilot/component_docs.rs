@@ -37,17 +37,21 @@ pub const COMPONENT_CATALOG: &str = r##"
 - `skeleton` - Loading placeholder
 
 ### Interactive Components
-- `button` - Clickable button
-- `textField` - Text input
-- `select` - Dropdown selection
-- `slider` - Range slider
-- `checkbox` - Boolean toggle
-- `switch` - Toggle switch
-- `radioGroup` - Radio buttons
-- `dateTimeInput` - Date/time picker
-- `fileInput` - File upload
-- `imageInput` - Image upload with preview
-- `link` - Navigation link
+- `button` - Clickable button (variants, sizes, loading state, icon)
+- `textField` - Plain text input; set `multiline` (+ `rows`) for textarea-style long text; `debounceMs` tunes the pause before the "input" event fires
+- `richText` - Formatted document editor (headings, lists, tables, code, images). `value` is the editor's `plate_json::` string, NOT markdown - convert it with the Rich Text to Markdown (`utils_md_plate_to_md`) or Rich Text to HTML (`utils_md_plate_to_html`) node before using it elsewhere. Pasted and dropped images upload into app storage under `uploadPrefix`
+- `select` - Dropdown selection (single value from `options`)
+- `slider` - Numeric range slider (min/max/step)
+- `checkbox` - Boolean checkbox
+- `switch` - Toggle switch (on/off setting)
+- `radioGroup` - Radio buttons (single choice among few visible options)
+- `dateTimeInput` - Date/time picker (`mode`: date | time | datetime)
+- `fileInput` - File upload (`accept`, `multiple`, `maxSize`, `maxFiles`)
+- `imageInput` - Image upload with preview (`aspectRatio`, `showPreview`)
+- `voiceInput` - Microphone recording / dictation - THE component for every record-audio, voice-note, speech or push-to-talk request (full docs in the Voice Input section)
+- `feedback` - Rating input: thumbs up/down (default) or a numeric 0-5 button scale (`mode`: "rating"/"scale" with `positiveRating`/`negativeRating`), optional comment dialog - the only rating component (no star rating exists)
+- `appLink` - Button-styled navigation that opens an app/event (`appId`, `eventId`, `target`)
+- `link` - Plain hyperlink navigation (href/route + query params)
 
 ### Container Components
 - `card` - Content card
@@ -62,6 +66,8 @@ pub const COMPONENT_CATALOG: &str = r##"
 - `table` - Data table with sorting/pagination
 - `plotlyChart` - Plotly.js charts (line, bar, scatter, pie, area, histogram)
 - `nivoChart` - Nivo charts (25+ chart types)
+- `graph` - Node/edge network graph on a WebGL canvas with legend, search and inspectors (props: nodes, edges, labelStyles, showToolbar, showSearch, showLegend, showInspector, height)
+- `ontologyGraph` - Live explorer for one of the project's ontologies: real data, neighbour expansion, path finding and governed ontology actions (props: ontologyId, appId, limit, allowExpand, allowSearch, allowPaths, allowActions, allowCypher, allowStyleEdit, allowLimitChange, showToolbar, showLegend, height)
 
 ### Planning Components
 - `calendar` - Interactive calendar (month/week/day/agenda) with detail/edit dialogs and right-click menus; fires create/update/move/resize/open/delete actions (props: events, view, date, title, density, editable, selectable, ...)
@@ -70,6 +76,7 @@ pub const COMPONENT_CATALOG: &str = r##"
 ### Media Components
 - `iframe` - Embedded external content or HTML preview (supports src URL and srcdoc HTML)
 - `filePreview` - Generic file preview
+- `geoMap` - Interactive map with markers, routes and viewport control
 
 ### Computer Vision / ML
 - `boundingBoxOverlay` - Display bounding boxes on images
@@ -91,23 +98,126 @@ pub const COMPONENT_CATALOG: &str = r##"
 
 ### Widget System
 - `widgetInstance` - Reusable widget component instance
+- An INTERACTIVE widget (rows/cards with buttons the user acts on) MUST declare its named actions
+  at the WIDGET level inside its `inlineWidgetDef` — a widget with an empty `actions` list cannot
+  be bound to any workflow. Use the exact action names the request asks for as the action ids:
+  `"inlineWidgetDef": { ..., "actions": [{ "id": "approve", "label": "Approve", "contextSchema": [{ "name": "itemId", "label": "Item Id", "fieldType": "string", "defaultPath": "$.item.id" }] }] }`
+  Components INSIDE the widget trigger a declared action with `widget_event`, passing the action id
+  in `context.actionId`. The action `name` is ALWAYS the literal `"widget_event"` — an action named
+  after the action id (or after a board node) is not dispatched and the click does nothing:
+  `"actions": [{ "name": "widget_event", "context": { "actionId": "approve" } }]`
+  The board binds `eventsWidgetAction` handlers to these declared widget action ids.
+
+## Choosing the Right Component (intent -> type)
+Match the user's intent to the purpose-built component. Rebuilding one of these from generic
+parts (a button + fileInput standing in for voiceInput, a hand-made tab bar, a div-drawn rating)
+is a defect:
+- record audio / voice memo / dictation / push-to-talk / talk to the app -> `voiceInput`
+- play a workflow's audio response (conversational voice loop) -> `voiceInput` with `resultMode: "autoplay"`
+- short or multi-line plain text -> `textField` with `multiline: true`
+- a formatted document, article, note or anything needing headings/lists/images -> `richText`
+- thumbs, like/dislike, "was this helpful", 0-5 score -> `feedback` (thumbs or numeric scale mode + comment; no star-rating component exists)
+- choose one of few visible options -> `radioGroup`; one of many -> `select`; on/off setting -> `switch`; form consent/multi-pick -> `checkbox`
+- upload images -> `imageInput`; other files -> `fileInput` (no camera-capture component exists - say so rather than faking one)
+- date, time, or both -> `dateTimeInput` (`mode`)
+- navigate to another app or trigger its event -> `appLink`; plain URL/route -> `link`
+- user draws/edits boxes ON an image (annotation input) -> `imageLabeler`; SHOW detection results -> `boundingBoxOverlay`; predefined clickable regions -> `imageHotspot`
+- maps/geodata -> `geoMap`; schedules/bookings -> `calendar`; project timelines -> `gantt`
+- values over time/categories -> `nivoChart` or `plotlyChart`; row-and-column records -> `table`
+- things connected to things (networks, relationships, dependency maps) -> `graph` with your own nodes/edges; the project's OWN ontology/knowledge graph -> `ontologyGraph` with its `ontologyId` (it loads live data itself — never re-fetch the ontology into a `graph`)
+- loading placeholder shaped like the layout -> `skeleton`; inline waiting -> `spinner`; known fraction -> `progress`
+Only types from this catalog exist. Never invent a type; if nothing fits, compose layout +
+display + input primitives and say in your summary what was approximated.
+
+## Voice Input (voiceInput) - audio capture
+The only audio-capture component: voice memos, dictation, voice commands, conversational voice
+assistants. Any request mentioning record, microphone, speech, dictate, or audio input maps here.
+- `value` - binding path where the result lands: {name, size, type, duration, url, flowPath, transcript}
+- `mode` - "record" (default): captures audio and uploads it; the workflow receives the file
+  reference and does its own transcription. "stt": browser speech-to-text delivering {transcript}
+  text only; support depends on the runtime and it silently falls back to record, so prefer
+  "record" + workflow-side transcription for anything that must work everywhere.
+- `invoke` - "manual" (tap start/stop) | "hold" (push-to-talk) | "auto" (tap once, stops on silence)
+- `variant` - visualizer style: "conservative" | "waveform" | "orb" | "vortex" | "shader" |
+  "aurora" | "pulse". Pick one that serves the design direction ("orb"/"aurora"/"shader" for
+  expressive surfaces, "conservative"/"waveform" for dense tools). The old `visualizer` prop is
+  deprecated - do not use it.
+- `size` - "sm" | "md" | "lg"; `color` / `recordingColor` - CSS accent colors for idle/recording
+- `resultMode` - "player" (playback of the user's recording) | "summary" (compact name/duration
+  row) | "autoplay" (plays audio the WORKFLOW pushes to `src` - the voice-assistant reply loop)
+- `maxDuration` (seconds, default 300), `autoStop`, `silenceThreshold`, `silenceDuration`,
+  `label`, `helperText`, `disabled`
+
+Example:
+{
+  "id": "voice-note",
+  "component": {
+    "type": "voiceInput",
+    "label": { "literalString": "Record a note" },
+    "value": { "path": "$.data.voiceNote" },
+    "mode": { "literalString": "record" },
+    "invoke": { "literalString": "hold" },
+    "variant": { "literalString": "waveform" },
+    "resultMode": { "literalString": "player" },
+    "actions": [{ "name": "workflow_event", "context": { "nodeId": "<transcribe-note-event-id>" } }]
+  }
+}
+The bound workflow event fetches the recording itself (Get Element Value); transcription,
+storage, and AI processing happen in the flow.
 
 ## Wiring UI to Workflows
 
 ### Actions -> named board events
 Interactive components carry actions INSIDE the component object:
 `"actions": [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]`
-(actions[0] fires on the component's primary interaction).
+(legacy fallback: only actions[0] fires when no named handler exists).
+
+An action `name` is a FIXED verb from this closed set — it is never a board node name, an event
+name, a handler name, or a widget action id. Those identifiers belong in `context`. There is no
+"custom action" escape hatch: an unrecognized name is silently dropped at runtime, so the control
+renders but does nothing, and `emit_ui` now rejects it outright.
+| name | required context | use for |
+| --- | --- | --- |
+| `workflow_event` | `nodeId` (optional `boardId`, `appId`) | run a board event entry node |
+| `widget_event` | `actionId` | run a widget action declared on the enclosing widget |
+| `navigate_page` | `route` (optional `queryParams`) | go to another page in this app |
+| `external_link` | `url` | open an external URL |
+| `navigate_app_config` | optional `appId` | open the app's config screen |
+| `navigate_app_overview` | optional `appId`, `eventId` | open the app's store/overview screen |
+| `submit_feedback` | `rating`, optional `comment` | record feedback on the current event |
+
+Wiring a button to a workflow is TWO artifacts, not one: the board needs an event entry node
+(`eventsSimple`/`eventsGeneric`), and the action needs that node's id in `context.nodeId`. Emitting
+the action alone leaves a dead button.
+- Components with multiple interactions use `eventHandlers`, keyed by the documented event name:
+  `"eventHandlers": { "open": [{ "name": "workflow_event", "context": { "nodeId": "<open-event>" } }], "delete": [{ "name": "workflow_event", "context": { "nodeId": "<delete-event>" } }] }`.
+  Each list executes in order. An exact named list overrides `actions[0]`; an explicit empty list
+  disables that event without falling back. Keep `actions` intact when updating older surfaces.
 - Create ONE named board event per purpose (e.g. dashboard-load, add-target, refresh-status).
   Never route several buttons through one generic catch-all event.
 - The action context carries routing ids ONLY (nodeId, optional boardId/appId). Do NOT push
   element values, form payloads, or target ids through the context: the event body fetches
   current element state itself at runtime via Get Element (`a2uiGetElement`), Get Element Value
   (`a2uiGetElementValue`), and Get File Input Files (`a2uiGetFileInputFiles`).
+- Events beyond a component's original one require an EXACT `eventHandlers` entry. They are not
+  reached by `actions[0]` or by a `"*"` handler:
+  - `textField`: "change" (committed on blur or Enter, and only when the value moved),
+    "input" (the user paused while typing - debounced by the `debounceMs` prop, 400 ms default,
+    100 ms floor), "submit" (Enter, or Cmd/Ctrl+Enter in a multiline field; context carries
+    `via`), "focus", "blur". Use "input" for search-as-you-type, "submit" for composers and
+    search boxes, "change" for form fields that should settle before running.
+  - `slider`: "change" (committed at the end of the drag), "input" (paused mid-drag, debounced).
+  - `select`: "change", "open", "close".
+  - `richText`: "change" (the author paused for `debounceMs`, 600 ms default; context carries the
+    `plate_json::` value), "blur", "imageUploaded" (context carries `path`, `url`, `name`, `size`,
+    `type`), "imageUploadError" (context carries `name`, `message`).
+  - `table`: "rowClick", "cellClick" (both carry the source row and its index in the unsorted
+    data), "selectionChange" (needs `selectable`), "sortChange".
+  - `nivoChart` / `plotlyChart`: "pointClick".
 - Other built-in action names: "navigate_page" (context.route, optional context.queryParams)
   and "external_link" (context.url).
-- A board can set or re-point an element's action later with Set Element Action
-  (`a2uiSetElementAction`, action_type "workflow_event" + node_id).
+- A board can set or re-point an element's default or named action later with Set Element Action
+  (`a2uiSetElementAction`, optional event_name + action_type "workflow_event" + node_id).
 
 ### Displaying workflow data -> element-level setters
 When a workflow must change what a component SHOWS, target the element directly:
@@ -119,8 +229,11 @@ When a workflow must change what a component SHOWS, target the element directly:
 - chart: Push Data to Chart (`a2uiPushCsvToChart`), styled via `a2uiSetNivoConfig` /
   `a2uiSetChartLayout`
 - progress: Set Progress (`a2uiSetProgress`)
-Data Update (`a2uiDataUpdate`) is almost never the right node for display updates - reach for an
-element-level setter first and reserve it for a `$.data.*` binding no setter covers.
+- package widget: Instantiate Widget (`a2uiInstantiateWidget`) with the record's fields on its
+  generated `dyn*` inputs, pushed in with Push Child (`a2uiPushChild`); Update Widget Inputs
+  (`a2uiWidgetUpdateInputs`) to patch a mounted instance
+Data Update (`a2uiDataUpdate`) is never the right node for display updates - a `$.data.*` write is
+not observed by elements or widget instances, so use the setters and widget nodes above.
 
 "##;
 
@@ -642,9 +755,60 @@ Hotspot Format:
 "##;
 
 pub const STYLE_GUIDE: &str = r##"
-# A2UI Styling Guide
+# A2UI Design & Styling Guide
 
-## Theme Colors (Always Use These)
+## Design Reflection (BEFORE emitting)
+Declare a design tuple (macro / surface / type / density - see the DESIGN CONTRACT below the
+catalog), then hold every decision to it:
+1. Mood - what should this surface FEEL like? Calm analytics, playful game, dense admin tool,
+   warm onboarding, futuristic console. Name it; let every choice serve it.
+2. Direction - the declared tuple IS the direction. Different apps get different tuples; reaching
+   for the same white-card grid every time is a design failure. Worked recipes below.
+3. Hierarchy - one focal element per screen. Everything else is subordinate through smaller
+   size, lighter weight, and muted color. If everything is bold, nothing is.
+4. Rhythm - one spacing unit (a 4px multiple) applied consistently. Related items sit close;
+   groups are separated by 2-3x the base gap. Aligned edges everywhere.
+5. Signature moment - EXACTLY ONE deliberate flourish, and only when the treatment earns it. A
+   utilitarian surface earns none; its craft is information design.
+6. Responsive plan - how columns collapse, what hides on small screens, how touch targets grow.
+
+Plain default cards in a plain grid with default padding, no typographic hierarchy, and no
+intentional structure is a DEFECT even when the data wiring is correct. So is a gradient hero on
+a settings screen.
+
+## What Actually Renders - the three styling channels
+1. `style.className` (Tailwind utilities): only STANDARD utilities exist at runtime. The
+   stylesheet is compiled ahead of time and there is NO runtime Tailwind engine, so arbitrary
+   values (`w-[437px]`, `bg-[#ff00aa]`) and exotic variants silently render NOTHING - an
+   arbitrary value only works if that exact literal happens to exist in first-party source,
+   which you cannot rely on. Use standard-scale utilities and the theme tokens below; for any
+   custom value use channel 2 or 3.
+   Shadow gotcha: the standard `shadow-sm`/`shadow-md`/`shadow-lg` utilities are TRANSPARENT in
+   this theme (alpha 0 by design) and render no elevation. For real shadows use the
+   `shadow-floating` token, the typed `shadow` style field, or customCss box-shadow.
+2. Typed `style` fields: always render (inline CSS). Use them for every value outside the
+   standard scale: custom gradients, exact sizes, bespoke shadows, filters, animation values.
+   Available fields: background, border, shadow, padding, margin, width/height (+ min/max),
+   position, zIndex, transform, opacity, overflow, filter, backdropFilter, transition,
+   animation, aspectRatio, display, gap, flex/grid placement, typography (color, fontSize,
+   fontWeight, fontFamily, lineHeight, letterSpacing, textAlign, textTransform), and
+   responsiveOverrides. Key shapes:
+   "background": { "gradient": { "type": "linear", "angle": 135, "stops": [
+     { "color": "color-mix(in oklab, var(--primary) 35%, transparent)", "position": 0 },
+     { "color": "transparent", "position": 100 } ] } }
+   "border": { "width": "1px", "style": "solid", "color": "var(--border)", "radius": "16px" }
+   "shadow": { "y": "12px", "blur": "40px", "color": "rgba(0,0,0,0.18)" }
+   "padding": { "top": "24px", "right": "24px", "bottom": "24px", "left": "24px" }
+   Gradient stop positions are percentages 0-100. Build custom colors on the theme variables
+   (`var(--primary)`, `var(--background)`, `var(--border)`, `var(--muted)`) so they stay
+   correct in both light and dark mode.
+3. `canvasSettings.customCss`: a scoped stylesheet for what the other two cannot do - keyframe
+   animations, hover/focus states, pseudo-elements (::before/::after), extra media queries.
+   Classes it defines apply only where a component's `className` references them. Never style
+   `:root` in it (it leaks outside this surface). Keep customCss under 12000 chars and any
+   single style string under 1000.
+
+## Theme Colors (default vocabulary - always correct in light AND dark mode)
 
 ### Backgrounds
 - bg-background - Main background
@@ -670,72 +834,207 @@ pub const STYLE_GUIDE: &str = r##"
 - border-destructive - Error border
 - ring-ring - Focus ring
 
+NEVER hardcoded palette classes (bg-white, text-black, bg-gray-*) - they break dark mode. When
+the design direction needs colors beyond the theme, use typed style fields or customCss with
+values built on the theme variables.
+
+## Typography (three real families already exist - use them)
+Custom webfonts are impossible (`@import` is stripped), and you do not need them. The theme ships
+three genuinely different faces, reachable by class or by typed `fontFamily`:
+- `font-serif` / `var(--font-serif)` - Playfair Display -> Didot -> Georgia. A real display serif.
+  Use it for ONE role (display headings, or a single pull quote). Never for body text.
+- `font-mono` / `var(--font-mono)` - JetBrains Mono -> Menlo. Metrics, IDs, timestamps, eyebrows,
+  table numerals, code.
+- `font-sans` / `var(--font-sans)` - Inter -> Open Sans. Body and UI.
+A surface that is 100% font-sans has skipped its type decision. Max two visible families (three
+only when mono is confined to numerals).
+
+Scale, then roles:
+- Display / hero: typed `fontSize` with clamp - `"fontSize": "clamp(2.25rem, 6vw, 4.5rem)"`,
+  `"lineHeight": "0.95"`, `"letterSpacing": "-0.03em"`. NOTE `text-5xl`/`text-6xl` are NOT
+  compiled - anything above `text-4xl` must go through typed `fontSize`.
+- Section heading: text-2xl font-semibold tracking-tight
+- Card title: text-lg font-semibold
+- Body: text-sm/text-base text-foreground, typed `"maxWidth": "68ch"` on prose
+- Eyebrow / meta: typed `{"fontFamily": "var(--font-mono)", "fontSize": "11px",
+  "textTransform": "uppercase", "letterSpacing": "0.16em", "color": "var(--muted-foreground)"}`
+- Big metric: font-mono + `.tnum` (see customCss) so digits align in columns
+Use extremes rather than the middle: weight 300 against 800, not 400 against 600; a 2.5x size jump,
+not 1.4x. Two levels of contrast minimum between focal and supporting text (size AND weight AND
+color).
+
 ## Spacing Scale
 - p-1 = 4px, p-2 = 8px, p-3 = 12px, p-4 = 16px
 - p-5 = 20px, p-6 = 24px, p-8 = 32px, p-10 = 40px
 - gap-1 through gap-10 (same scale)
 - m-1 through m-10 (margin, same scale)
+Generous beats cramped: sections p-6/p-8, cards p-4/p-6, grouped gaps gap-2/gap-3, section
+gaps gap-6/gap-8.
 
-## Responsive Breakpoints
-- sm: - >=640px (tablet)
-- md: - >=768px (small laptop)
-- lg: - >=1024px (desktop)
-- xl: - >=1280px (large desktop)
-- 2xl: - >=1536px (extra large)
+## Worked Direction Recipes
+Six tuples, each internally consistent and mutually distinct on at least three axes. Use them as
+worked examples, not as a menu to mix - and never ship two neighbouring surfaces from the same one.
+The taxonomy has 8x6x4x3 combinations; these are six of them.
 
-Example: grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4
+### INSTRUMENT - macro=dense-board surface=hairline-flat type=mono-led density=dense
+Ops dashboards, monitoring, queues. Utilitarian: no shadow, no gradient, no display type.
+- Grid: `className: "grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-px bg-border"` - the
+  hairlines ARE the gaps
+- Panel: `className: "bg-card"`, typed `{"border": {"radius": "0px"}}`
+- Label: typed `{"fontFamily": "var(--font-mono)", "fontSize": "11px", "textTransform":
+  "uppercase", "letterSpacing": "0.16em", "color": "var(--muted-foreground)"}`
+- Metric: `className: "font-mono tnum"`, typed `{"fontSize": "38px", "fontWeight": "500",
+  "letterSpacing": "-0.02em"}`
+- Accent: one 2px primary rule on the single focal panel
 
-## Common Patterns
+### LEDGER - macro=single-column-doc surface=paper-tint type=serif-display density=airy
+Reports, summaries, changelogs, narrative onboarding. No cards anywhere.
+- Root: `className: "min-h-screen px-5 py-16 md:py-24"`, typed
+  `{"background": {"color": "color-mix(in oklab, var(--primary) 3%, var(--background))"}}`
+- Column: typed `{"maxWidth": "70ch", "margin": {"left": "auto", "right": "auto"}}`
+- Display: typed `{"fontFamily": "var(--font-serif)", "fontSize": "clamp(2.5rem, 6.5vw, 4.75rem)",
+  "fontWeight": "400", "lineHeight": "0.95", "letterSpacing": "-0.03em"}`
+- Body: `className: "text-muted-foreground"`, typed `{"fontSize": "17px", "lineHeight": "1.72"}`
+- Section breaks: `className: "border-t border-border"` - rules, not boxes
 
-### Card with hover effect
-className: "bg-card border border-border rounded-lg p-4 hover:shadow-lg transition-shadow"
+### LUMEN - macro=stacked-panels surface=translucent-layered type=sans-weight-extremes density=standard
+Assistant shells, live consoles, media/AI surfaces. Expressive.
+- Root atmosphere (typed background on the ROOT component, with `className: "min-h-screen"`):
+  `{"background": {"gradient": {"type": "radial", "direction": "120% 90% at 18% -10%", "stops": [
+    {"color": "color-mix(in oklab, var(--primary) 24%, transparent)", "position": 0},
+    {"color": "color-mix(in oklab, var(--tertiary) 10%, transparent)", "position": 38},
+    {"color": "transparent", "position": 72}]}}}`
+- Panel: `className: "rise bg-card/55 border border-border/50"`, typed `{"border": {"radius":
+  "18px"}}` - the /55 fill must carry it alone where backdrop blur is disabled
+- Type: display `{"fontWeight": "800", "letterSpacing": "-0.035em"}` against body
+  `{"fontWeight": "300", "color": "var(--muted-foreground)"}`
+- The ONE flourish: a staggered page-load reveal. Delay goes in the typed `animation` shorthand
+  (there is no animationDelay field): `{"animation": "rise .55s cubic-bezier(.2,.8,.2,1) .09s both"}`
 
-### Gradient text
-className: "bg-gradient-to-r from-primary to-purple-500 bg-clip-text text-transparent"
+### ATELIER - macro=split-pane surface=tinted-fill-no-border type=sans-weight-extremes density=airy
+Onboarding, profile, settings-as-product. Soft and borderless - no borders at all.
+- Surface: typed `{"background": {"color": "color-mix(in oklab, var(--muted) 72%,
+  var(--background))"}, "border": {"radius": "22px"}, "shadow": {"y": "18px", "blur": "48px",
+  "spread": "-20px", "color": "color-mix(in oklab, var(--foreground) 20%, transparent)"}}`
+- Rhythm: `className: "p-8 gap-8"` at section level, `gap-3` within groups
+- Accent: exactly one filled `bg-primary` button; everything else neutral
 
-### Glass effect
-className: "bg-background/80 backdrop-blur-lg border border-border/50"
+### BLUEPRINT - macro=tab-workbench surface=hairline-flat type=uppercase-tracked-lead density=standard
+Technical tools, schema/config editors, labeling surfaces.
+- Root: `className: "grid-paper min-h-screen bg-background"` (texture in customCss below)
+- Panels: transparent, `className: "border border-border"`, typed `{"border": {"radius": "0px"}}`
+- Section lead: typed `{"fontSize": "12px", "fontWeight": "600", "textTransform": "uppercase",
+  "letterSpacing": "0.2em"}` over a hairline `border-t border-border`
+- Values: `className: "font-mono tnum text-sm"`; accent is a single 2px underline on the active tab
 
-### Subtle shadow
-className: "shadow-sm hover:shadow-md transition-shadow"
+### MARQUEE - macro=marquee-band surface=full-bleed-gradient type=serif-display density=standard
+Launch/campaign pages, app landing shells. Expressive only.
+- Band: typed `{"background": {"gradient": {"type": "linear", "angle": 104, "stops": [
+    {"color": "color-mix(in oklab, var(--primary) 92%, var(--background))", "position": 0},
+    {"color": "color-mix(in oklab, var(--tertiary) 78%, var(--background))", "position": 58},
+    {"color": "color-mix(in oklab, var(--background) 88%, var(--primary))", "position": 100}]}},
+   "minHeight": "58vh"}`
+- Display, deliberately NOT centered: container `className: "flex flex-col items-start justify-end
+  p-6 md:p-12"`, typed `{"fontFamily": "var(--font-serif)", "fontSize": "clamp(3rem, 10vw, 7.5rem)",
+  "fontWeight": "700", "lineHeight": "0.88", "letterSpacing": "-0.045em",
+  "color": "var(--primary-foreground)"}`
+- Below the band: plain `bg-background`, indented against the band's full bleed - that contrast IS
+  the structure
 
 ## Custom CSS Patterns (use in canvasSettings.customCss)
+The FIRST line of customCss is always the design stamp:
+`/* fp-design: macro=... surface=... type=... density=... */`
 
-### Animated gradient background
-.gradient-bg {
-  background: linear-gradient(135deg, var(--primary) 0%, purple 100%);
-  animation: gradient 3s ease infinite;
-  background-size: 200% 200%;
-}
-@keyframes gradient {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
-}
+These are NOT a menu to apply all at once - each belongs to a surface language. Pick the ones your
+declared tuple calls for and leave the rest out. Never `:root` (it is not scoped and leaks into the
+host app); `@import` is stripped, so no webfonts.
 
-### Glow effect
-.glow {
-  box-shadow: 0 0 20px rgba(102, 126, 234, 0.5);
+### Always safe - aligned numerals (any tuple with metrics or tables)
+.tnum { font-variant-numeric: tabular-nums; }
+
+### Always safe - focus ring for custom interactive elements
+.focus-card:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
-### Pulse animation
-.pulse {
-  animation: pulse 2s infinite;
-}
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-### Hover lift
-.hover-lift {
-  transition: transform 0.2s, box-shadow 0.2s;
-}
-.hover-lift:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+### hairline-flat - inset rim instead of a drop shadow
+.panel { position: relative; }
+.panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--foreground) 7%, transparent);
 }
 
+### hairline-flat / blueprint - engineering grid texture
+.grid-paper {
+  background-image:
+    linear-gradient(color-mix(in oklab, var(--foreground) 6%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in oklab, var(--foreground) 6%, transparent) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: -1px -1px;
+}
+
+### translucent-layered - ONE orchestrated page-load reveal (stagger via the typed animation delay)
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rise { animation: none !important; }
+}
+
+### translucent-layered - focal glow (ONE element, never a set)
+.bloom {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--primary) 28%, transparent),
+    0 18px 60px -20px color-mix(in oklab, var(--primary) 55%, transparent);
+}
+
+### elevated-soft / tinted-fill - hover lift (layered shadow needs customCss, not the typed field)
+.lift { transition: transform .26s cubic-bezier(.2,.8,.2,1), box-shadow .26s ease; }
+.lift:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 26px 60px -22px color-mix(in oklab, var(--foreground) 26%, transparent);
+}
+@media (prefers-reduced-motion: reduce) { .lift { transition: none; } }
+
+### paper-tint - editorial drop cap (serif-display only)
+.lede::first-letter {
+  float: left;
+  font-family: var(--font-serif);
+  font-size: 4.1em;
+  line-height: 0.78;
+  padding-right: 0.07em;
+  color: var(--primary);
+}
+@media (max-width: 480px) { .lede::first-letter { font-size: 3.1em; } }
+
+### Loading shimmer (pair with `skeleton`, not with content)
+.shimmer {
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--foreground) 8%, transparent), transparent);
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease infinite;
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) { .shimmer { animation: none; } }
+
+## Responsive Design (every surface, mobile-first)
+Breakpoints: sm >=640px, md >=768px, lg >=1024px, xl >=1280px, 2xl >=1536px (viewport-based).
+- className route (standard utilities): grid-cols-1 sm:grid-cols-2 lg:grid-cols-3,
+  flex-col md:flex-row, hidden md:block, p-4 md:p-6 lg:p-8, text-sm md:text-base
+- Guaranteed typed route (per component, breakpoint keys sm/md/lg/xl/xxl):
+  "responsiveOverrides": { "md": { "gridCols": 2 }, "xl": { "gridCols": 4 } }
+  Per-breakpoint fields: className, display, flexDirection, justifyContent, alignItems, gap,
+  gridCols, width, height, padding, margin, hidden, fontSize, textAlign, order.
+- Media queries inside customCss are scoped to the surface and work normally.
+Base styles are the MOBILE layout; the surface must stay usable at 360px wide, with touch
+targets at least 40px tall.
 "##;
 
 /// Get the full component documentation for AI copilot
@@ -759,5 +1058,52 @@ pub fn get_documentation_section(section: &str) -> Option<&'static str> {
         "ml" | "vision" | "cv" | "detection" => Some(ML_VISION_DOCUMENTATION),
         "style" | "styling" | "css" | "theme" => Some(STYLE_GUIDE),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::COMPONENT_CATALOG;
+
+    /// Keep in sync with `executeAction` in packages/ui/components/a2ui/ActionHandler.tsx.
+    const BUILTIN_ACTION_NAMES: &[&str] = &[
+        "workflow_event",
+        "widget_event",
+        "navigate_page",
+        "external_link",
+        "navigate_app_config",
+        "navigate_app_overview",
+        "submit_feedback",
+    ];
+
+    #[test]
+    fn widget_actions_are_documented_as_widget_event_with_an_action_id() {
+        // The regression this guards: the catalog used to teach
+        // `"actions": [{ "name": "approve" }]` — an action named after the widget action id.
+        // ActionHandler.tsx has no such case, so those buttons rendered and did nothing.
+        assert!(
+            COMPONENT_CATALOG.contains(
+                r#""actions": [{ "name": "widget_event", "context": { "actionId": "approve" } }]"#
+            ),
+            "the widget section must document the widget_event contract"
+        );
+        assert!(
+            !COMPONENT_CATALOG.contains(r#""actions": [{ "name": "approve" }]"#),
+            "the widget section must not teach an action named after the action id"
+        );
+    }
+
+    #[test]
+    fn the_action_name_allowlist_is_documented() {
+        for name in BUILTIN_ACTION_NAMES {
+            assert!(
+                COMPONENT_CATALOG.contains(name),
+                "built-in action '{name}' is missing from the action documentation"
+            );
+        }
+        assert!(
+            COMPONENT_CATALOG.contains("never a board node name"),
+            "the docs must state that an action name is not an identifier"
+        );
     }
 }

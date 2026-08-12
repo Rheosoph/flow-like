@@ -22,6 +22,7 @@ import { Calendar } from "./ui/calendar";
 import { Card } from "./ui/card";
 import {
 	Dialog,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
 	DialogFooter,
@@ -102,7 +103,7 @@ function TokenRow({
 							</Badge>
 						)}
 					</div>
-					<div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
+					<div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground mt-0.5">
 						<span>{getPermissionLabel(pat.permission)}</span>
 						<span className="text-border">|</span>
 						<span>
@@ -126,11 +127,11 @@ function TokenRow({
 				</div>
 			</div>
 
-			<div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+			<div className="flex items-center gap-1 shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
 				<Button
 					variant="ghost"
 					size="icon"
-					className="h-8 w-8"
+					className="h-10 w-10 md:h-8 md:w-8"
 					onClick={copyId}
 				>
 					{copied ? (
@@ -142,7 +143,7 @@ function TokenRow({
 				<Button
 					variant="ghost"
 					size="icon"
-					className="h-8 w-8 text-destructive hover:text-destructive"
+					className="h-10 w-10 md:h-8 md:w-8 text-destructive hover:text-destructive"
 					onClick={() => onDelete(pat.id, pat.name)}
 				>
 					<Trash2Icon className="h-3.5 w-3.5" />
@@ -286,7 +287,7 @@ function CreateTokenDialog({
 					</DialogDescription>
 				</DialogHeader>
 
-				<div className="space-y-4">
+				<DialogBody className="space-y-4">
 					<div className="space-y-1.5">
 						<Label htmlFor="pat-name" className="text-sm">
 							Name
@@ -362,7 +363,7 @@ function CreateTokenDialog({
 							</PopoverContent>
 						</Popover>
 					</div>
-				</div>
+				</DialogBody>
 
 				<DialogFooter>
 					<Button

@@ -1,4 +1,7 @@
-import type { IPageState } from "@flow-like/flow-like-ui";
+import {
+	type IPageState,
+	normalizePageForPersistence,
+} from "@flow-like/flow-like-ui";
 import type {
 	IPage,
 	PageListItem,
@@ -20,16 +23,50 @@ export class WebPageState implements IPageState {
 		}
 	}
 
+	private pageUrl(
+		appId: string,
+		pageId: string,
+		boardId?: string,
+		version?: [number, number, number],
+	): string {
+		const query = new URLSearchParams();
+		if (boardId) query.set("board_id", boardId);
+		if (version) query.set("version", version.join("_"));
+		const params = query.size > 0 ? `?${query.toString()}` : "";
+		return `apps/${appId}/pages/${pageId}${params}`;
+	}
+
 	async getPage(
 		appId: string,
 		pageId: string,
 		boardId?: string,
+		version?: [number, number, number],
 	): Promise<IPage> {
-		const params = boardId ? `?board_id=${boardId}` : "";
-		return apiGet<IPage>(
-			`apps/${appId}/pages/${pageId}${params}`,
-			this.backend.auth,
-		);
+		if (!version) {
+			return apiGet<IPage>(
+				this.pageUrl(appId, pageId, boardId),
+				this.backend.auth,
+			);
+		}
+
+		try {
+			return await apiGet<IPage>(
+				this.pageUrl(appId, pageId, boardId, version),
+				this.backend.auth,
+			);
+		} catch (error) {
+			// Board versions published before pages were snapshotted have no page of
+			// their own. The current page is the only thing left to show, and it beats
+			// failing an interface that used to render.
+			console.warn(
+				`[WebPageState] Version ${version.join(".")} of page ${pageId} is unavailable; serving the current page instead:`,
+				error,
+			);
+			return apiGet<IPage>(
+				this.pageUrl(appId, pageId, boardId),
+				this.backend.auth,
+			);
+		}
 	}
 
 	async createPage(
@@ -62,7 +99,12 @@ export class WebPageState implements IPageState {
 	}
 
 	async updatePage(appId: string, page: IPage): Promise<void> {
-		await apiPut(`apps/${appId}/pages/${page.id}`, { page }, this.backend.auth);
+		const normalizedPage = normalizePageForPersistence(page);
+		await apiPut(
+			`apps/${appId}/pages/${page.id}`,
+			{ page: normalizedPage },
+			this.backend.auth,
+		);
 	}
 
 	async deletePage(

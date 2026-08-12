@@ -1,0 +1,244 @@
+{
+	"schema": "flow-like.doc-screenshot-plan/v1",
+	"app": "desktop",
+	"outputDir": "apps/docs/src/assets",
+	"tauriFixture": "../fixtures/docs-apps.tauri.json",
+	"defaults": {
+		"viewport": {
+			"width": 1624,
+			"height": 1060,
+			"deviceScaleFactor": 2
+		},
+		"theme": "dark",
+		"format": "webp",
+		"timeoutMs": 120000,
+		"settleMs": 500,
+		"disableAnimations": true,
+		"hideScrollbars": true
+	},
+	"scenarios": [
+		{
+			"name": "data-studio-overview",
+			"path": "/library/config/explore",
+			"query": {
+				"id": "docs-app",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Your semantic layer"
+				},
+				{
+					"type": "waitFor",
+					"text": "Customer Operations"
+				},
+				{
+					"type": "capture",
+					"name": "DataStudioOverview",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "ontology-object-explorer",
+			"path": "/library/config/explore",
+			"query": {
+				"id": "docs-app",
+				"view": "objects",
+				"source": "customer-operations",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Avery Morgan"
+				},
+				{
+					"type": "capture",
+					"name": "OntologyObjects",
+					"mode": "viewport"
+				},
+				{
+					"type": "click",
+					"selector": "button[aria-label=\"Open Customer Avery Morgan\"]"
+				},
+				{
+					"type": "waitFor",
+					"text": "North America"
+				},
+				{
+					"type": "capture",
+					"name": "OntologyObjectInspector",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "ontology-model",
+			"path": "/library/config/explore",
+			"query": {
+				"id": "docs-app",
+				"view": "model",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Explore data graph"
+				},
+				{
+					"type": "waitFor",
+					"text": "Support Ticket"
+				},
+				{
+					"type": "capture",
+					"name": "OntologyModel",
+					"mode": "viewport"
+				},
+				{
+					"type": "scroll",
+					"selector": "[data-slot=\"tabs-content\"][data-state=\"active\"]",
+					"y": 900
+				},
+				{
+					"type": "delay",
+					"ms": 300
+				},
+				{
+					"type": "capture",
+					"name": "OntologyRelationships",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "ontology-actions",
+			"path": "/library/config/explore",
+			"viewport": {
+				"height": 1240
+			},
+			"query": {
+				"id": "docs-app",
+				"view": "actions",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Triage support ticket"
+				},
+				{
+					"type": "waitFor",
+					"text": "Customer Support Automation"
+				},
+				{
+					"type": "capture",
+					"name": "OntologyActions",
+					"mode": "viewport"
+				},
+				{
+					"type": "click",
+					"selector": "[data-slot=\"tabs-content\"][data-state=\"active\"] [data-slot=\"card\"] button",
+					"index": 0
+				},
+				{
+					"type": "waitFor",
+					"text": "Edit ontology action"
+				},
+				{
+					"type": "capture",
+					"name": "OntologyActionEditor",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "ontology-sharing",
+			"path": "/library/config/explore",
+			"query": {
+				"id": "docs-app",
+				"view": "sharing",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Product Knowledge"
+				},
+				{
+					"type": "waitFor",
+					"text": "Installed bindings"
+				},
+				{
+					"type": "capture",
+					"name": "OntologySharing",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "ontology-knowledge-graph",
+			"path": "/library/config/explore",
+			"query": {
+				"id": "docs-app",
+				"overlay": "customer-operations",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "19 nodes · 21 edges"
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-sigma canvas",
+					"state": "visible"
+				},
+				{
+					"type": "delay",
+					"ms": 2500
+				},
+				{
+					"type": "click",
+					"selector": "button[title=\"Fit to view\"]"
+				},
+				{
+					"type": "click",
+					"selector": "button[title=\"Zoom out\"]"
+				},
+				{
+					"type": "delay",
+					"ms": 400
+				},
+				{
+					"type": "capture",
+					"name": "OntologyKnowledgeGraph",
+					"mode": "viewport"
+				},
+				{
+					"type": "fill",
+					"selector": "input[placeholder=\"Search loaded nodes, then fallback to full graph...\"]",
+					"value": "Avery Morgan"
+				},
+				{
+					"type": "waitFor",
+					"text": "1 loaded match"
+				},
+				{
+					"type": "waitFor",
+					"text": "North America"
+				},
+				{
+					"type": "delay",
+					"ms": 400
+				},
+				{
+					"type": "capture",
+					"name": "OntologyGraphInspector",
+					"mode": "viewport"
+				}
+			]
+		}
+	]
+}

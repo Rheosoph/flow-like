@@ -1,0 +1,47 @@
+---
+import FlowPilotUseCase from "../components/showcase/flowpilot-usecase";
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const localized = translations[lang] as Record<string, string>;
+  const english = translations.en as Record<string, string>;
+  return localized?.[key] ?? english[key] ?? key;
+};
+---
+
+<section id="flowpilot" class="dark v5-flowpilot pilot-section" style="color-scheme:dark">
+  <div class="aura" aria-hidden="true"></div>
+  <div class="pilot-heading">
+    <span class="eyebrow">03 / FLOWPILOT</span>
+    <h2>{t("v5.flowpilot.title.l1")}<br /><em>{t("v5.flowpilot.title.em")}</em><br />{t("v5.flowpilot.title.l3")}</h2>
+    <p>{t("v5.flowpilot.body")}</p>
+  </div>
+  <div class="pilot-stage">
+    <FlowPilotUseCase client:only="react" className="h-[32rem]" />
+  </div>
+</section>
+
+<style>
+  .eyebrow { font: 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .16em; color: var(--muted-foreground); }
+
+  .pilot-section { position: relative; min-height: 100vh; display: grid; grid-template-columns: .8fr 1.2fr; gap: clamp(60px, 8vw, 154px); align-items: center; overflow: hidden; padding: 140px var(--website-content-edge); border-top: 1px solid var(--border); background: var(--background); color: var(--foreground); }
+  .aura { position: absolute; top: 0; left: -25%; width: 800px; height: 800px; border-radius: 50%; background: radial-gradient(circle, color-mix(in oklab, var(--primary) 25%, transparent), transparent 65%); filter: blur(20px); }
+  .pilot-heading { position: relative; z-index: 2; }
+  .pilot-heading h2 { margin: 24px 0 35px; font-size: clamp(52px, 6vw, 92px); line-height: .92; letter-spacing: -.065em; }
+  .pilot-heading h2 em { color: var(--muted-foreground); font-style: normal; font-weight: 400; }
+  .pilot-heading > p { max-width: 470px; color: var(--muted-foreground); font-size: 15px; line-height: 1.65; }
+
+  .pilot-stage { position: relative; z-index: 2; min-width: 0; }
+
+  @media (max-width: 1050px) {
+    .pilot-section { grid-template-columns: 1fr; gap: 60px; }
+    .pilot-stage { max-width: 760px; width: 100%; justify-self: center; }
+  }
+  @media (max-width: 800px) {
+    .pilot-section { padding: 110px 22px; }
+    .pilot-heading h2 { font-size: 56px; }
+  }
+</style>

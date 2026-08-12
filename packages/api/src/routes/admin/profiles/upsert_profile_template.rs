@@ -11,7 +11,10 @@ use flow_like_types::create_id;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, to_value};
 
-#[tracing::instrument(name = "PUT /admin/profiles/{profile_id}", skip(state, user))]
+#[tracing::instrument(
+    name = "PUT /admin/profiles/{profile_id}",
+    skip(state, user, profile_data)
+)]
 pub async fn upsert_profile_template(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

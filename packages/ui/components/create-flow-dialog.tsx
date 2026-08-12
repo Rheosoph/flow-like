@@ -3,6 +3,7 @@
 import { ExternalLink, Globe, Loader2, Sparkles, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useId, useState } from "react";
 import { isTauri } from "../lib/platform";
+import { handleUpgradeRequiredError } from "../state/upgrade-dialog-state";
 import { AutoPlayNewProjectIcon } from "./animated-icons/animated-plus-autoplay";
 import { Button } from "./ui/button";
 import {
@@ -72,6 +73,10 @@ export function CreateFlowDialog({
 			setIsOnline(defaultOnline && isAuthenticated);
 		} catch (error) {
 			console.error("Failed to create project:", error);
+			if (handleUpgradeRequiredError(error, "project-limit")) {
+				onOpenChange(false);
+				return;
+			}
 			toast.error(
 				error instanceof Error ? error.message : "Failed to create project",
 			);

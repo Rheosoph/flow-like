@@ -16,6 +16,9 @@ import type {
 } from "../../lib";
 import type { IJwks, IRealtimeAccess } from "../../lib";
 import type {
+	BoardEditJob,
+	BoardEditJobDeliveryClaim,
+	BoardEditJobResolution,
 	ChatImage,
 	CopilotScope,
 	CopilotToolContext,
@@ -32,6 +35,8 @@ import type { IPrerunBoardResponse } from "./types";
 export interface IApplyFlowScriptResponse {
 	commands: IGenericCommand[];
 	board_commands: BoardCommand[];
+	/** Non-blocking source repairs; reload canonical FlowScript when present. */
+	corrections?: string[];
 	diagnostics: string[];
 	/** Aggregate-only authoritative count after the host refreshes the applied board. */
 	final_board_node_count?: number;
@@ -41,6 +46,10 @@ export interface IApplyFlowIrCommitResponse extends IApplyFlowScriptResponse {
 	status: "applied" | "stale" | "error";
 	code?: string;
 	message: string;
+	/** True when native Apply returned a persisted receipt without mutating now. */
+	replayed?: boolean;
+	/** True only after durable remote/outbox sync and idempotent renderer history recording. */
+	delivery_complete?: boolean;
 }
 
 export interface IFlowScriptDiagnostic {
@@ -50,6 +59,50 @@ export interface IFlowScriptDiagnostic {
 	/** 1-based column number. */
 	col: number;
 	severity: "error" | "warning";
+}
+
+export interface ICheckFlowScriptReconcileResponse {
+	parse_valid: boolean;
+	reconcile_valid: boolean;
+	idempotent: boolean;
+	command_count: number;
+	corrections: string[];
+	diagnostics: string[];
+}
+
+/** One queued batch, described well enough for a user to decide whether to discard it. */
+export interface IBoardSyncQueueEntry {
+	commandId: string;
+	createdAt: string;
+	commandCount: number;
+	/** The server already accepted part of this batch. */
+	partiallyDelivered: boolean;
+	blockedReason?: string;
+	failedAttempts?: number;
+	lastFailureStatus?: number;
+	lastFailureMessage?: string;
+	/** Why this batch cannot drain through the currently signed-in account/Hub. */
+	ownershipMismatch?: string;
+	remoteProfileId?: string;
+	remoteHub?: string;
+}
+
+export interface IBoardSyncStatus {
+	/** False on backends without an offline queue — the UI hides itself entirely. */
+	supported: boolean;
+	pendingBatches: number;
+	blockedBatches: number;
+	partiallyDeliveredBatches: number;
+	/** Set when at least one queued batch belongs to another account, profile or Hub. */
+	ownershipMismatch?: string;
+	entries: IBoardSyncQueueEntry[];
+}
+
+export interface IBoardServerResetResult {
+	board: IBoard;
+	discardedBatches: number;
+	/** Batches pushed to the server before anything was discarded. */
+	pushedBatches: number;
 }
 
 export interface IBoardState {
@@ -80,6 +133,29 @@ export interface IBoardState {
 	getBoardSettings(): Promise<IConnectionMode>;
 	ensureAppPackagesInstalledForExecution?(appId: string): Promise<void>;
 
+	/** Undelivered local edits for one board. Absent on backends without an offline queue. */
+	getBoardSyncStatus?(
+		appId: string,
+		boardId: string,
+	): Promise<IBoardSyncStatus>;
+	retryOfflineSync?(
+		appId: string,
+		boardId: string,
+	): Promise<{ pushedBatches: number; remainingBatches: number }>;
+	/**
+	 * Take the server's board as authoritative.
+	 *
+	 * Delivers whatever the queue can still deliver first. Batches the server refuses are only
+	 * dropped with `discardQueuedEdits`; without it this rejects rather than destroying an edit.
+	 */
+	resetBoardFromServer?(
+		appId: string,
+		boardId: string,
+		options: { discardQueuedEdits: boolean },
+	): Promise<IBoardServerResetResult>;
+	/** Batches removed by earlier resets, for export before they are pruned. */
+	exportBoardSyncArchive?(appId: string, boardId: string): Promise<unknown[]>;
+
 	executeBoard(
 		appId: string,
 		boardId: string,
@@ -89,6 +165,12 @@ export interface IBoardState {
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
 	): Promise<ILogMetadata | undefined>;
+
+	/** Deliver a live micro-widget query result to the run awaiting it. */
+	respondWidgetQuery?(
+		requestId: string,
+		response: { ok: boolean; value?: unknown; error?: string },
+	): Promise<boolean>;
 
 	executeBoardRemote?(
 		appId: string,
@@ -180,6 +262,16 @@ export interface IBoardState {
 	 */
 	lintFlowScript?(flowscript: string): Promise<IFlowScriptDiagnostic[]>;
 
+	/**
+	 * Compile FlowScript against the authoritative live board and app-scoped catalog without
+	 * applying it. Desktop-only; intended for post-generation validation and diagnostics.
+	 */
+	checkFlowScriptReconcile?(
+		appId: string,
+		boardId: string,
+		flowscript: string,
+	): Promise<ICheckFlowScriptReconcileResponse>;
+
 	getExecutionElements(
 		appId: string,
 		boardId: string,
@@ -240,7 +332,46 @@ export interface IBoardState {
 	applyFlowIrCommit?(
 		appId: string,
 		token: FlowIrCommitToken,
+		/** Stable native job id used to deduplicate renderer/server receipt replay. */
+		deliveryId?: string,
 	): Promise<IApplyFlowIrCommitResponse>;
+
+	/** Create/recover a provider-neutral host review for an exact compiled workflow batch. */
+	createBoardEditJob?(
+		appId: string,
+		requestId: string | undefined,
+		token: FlowIrCommitToken,
+	): Promise<BoardEditJob>;
+
+	/** Rehydrate unresolved reviews after a panel navigation or renderer reload. */
+	listBoardEditJobs?(
+		appId?: string,
+		boardId?: string,
+		includeTerminal?: boolean,
+	): Promise<BoardEditJob[]>;
+
+	/** Read one native review job, primarily for idempotent resolution polling. */
+	getBoardEditJob?(jobId: string): Promise<BoardEditJob | undefined>;
+
+	/**
+	 * Apply or deny the exact retained batch owned by the native job. `destructivePreapproved`
+	 * reports that the user already accepted the destructive review here (approval card or auto
+	 * mode), so the host skips its duplicate confirmation without relaxing any batch check.
+	 */
+	resolveBoardEditJob?(
+		jobId: string,
+		approved: boolean,
+		destructivePreapproved?: boolean,
+	): Promise<BoardEditJobResolution>;
+
+	/** Claim one renderer delivery of an already-applied native receipt. */
+	claimBoardEditJobDelivery?(jobId: string): Promise<BoardEditJobDeliveryClaim>;
+
+	/** Mark renderer sync/history replay complete for the exact delivery lease. */
+	ackBoardEditJobDelivery?(
+		jobId: string,
+		deliveryLeaseId: string,
+	): Promise<BoardEditJob>;
 
 	/** Pre-run analysis: get required runtime variables and OAuth for a board */
 	prerunBoard?(

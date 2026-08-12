@@ -38,7 +38,7 @@
 //! | Memory | `ResourceLimiter` caps linear memory growth |
 //! | Packages | Allowlist enforced in `bootstrap.py` |
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -50,7 +50,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use wasmtime::{Linker, Module, Store};
 use wasmtime_wasi::{
-    DirPerms, FilePerms, WasiCtxBuilder,
+    DirPerms, FilePerms,
     p1::{self, WasiP1Ctx},
     p2::pipe::MemoryOutputPipe,
 };
@@ -60,7 +60,7 @@ use flow_like_storage::{
     object_store::{ObjectStore, PutPayload},
 };
 use flow_like_types::Bytes;
-use flow_like_wasm::{AotCache, WasmConfig, WasmEngine};
+use flow_like_wasm::{AotCache, WasmConfig, WasmEngine, isolated_wasi_ctx_builder};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -194,6 +194,36 @@ impl wasmtime::ResourceLimiter for MemoryLimiter {
 struct StoreData {
     wasi: WasiP1Ctx,
     limiter: MemoryLimiter,
+}
+
+/// Build the WASI Preview 1 context used by every Python sandbox execution.
+///
+/// Host environment variables are deliberately not inherited. Wasmtime starts
+/// with an empty guest environment, and this function must only add individual,
+/// non-secret guest values if the runtime ever gains an explicit guest-env API.
+fn build_sandbox_wasi_context(
+    exec_path: &Path,
+    stdout_pipe: MemoryOutputPipe,
+    stderr_pipe: MemoryOutputPipe,
+    network_enabled: bool,
+) -> Result<WasiP1Ctx> {
+    let mut builder = isolated_wasi_ctx_builder();
+    builder
+        .stdout(stdout_pipe)
+        .stderr(stderr_pipe)
+        .args(&["python3", "/flow/bootstrap.py"]);
+
+    // Only /flow is preopened — workspace access is via the API, not POSIX I/O.
+    builder
+        .preopened_dir(exec_path, "/flow", DirPerms::all(), FilePerms::all())
+        .map_err(|e| anyhow::anyhow!("{e:#}"))
+        .context("preopened /flow")?;
+
+    if network_enabled {
+        builder.inherit_network();
+    }
+
+    Ok(builder.build_p1())
 }
 
 // ─── Workspace file server ────────────────────────────────────────────────────
@@ -609,21 +639,12 @@ impl PyodideRuntime {
         let stdout_pipe = MemoryOutputPipe::new(MAX_STDOUT_BYTES);
         let stderr_pipe = MemoryOutputPipe::new(MAX_STDERR_BYTES);
 
-        let mut wb = WasiCtxBuilder::new();
-        wb.stdout(stdout_pipe.clone())
-            .stderr(stderr_pipe.clone())
-            .args(&["python3", "/flow/bootstrap.py"]);
-
-        // Only /flow is preopened — workspace access is via the API, not POSIX I/O.
-        wb.preopened_dir(&exec_path, "/flow", DirPerms::all(), FilePerms::all())
-            .map_err(|e| anyhow::anyhow!("{e:#}"))
-            .context("preopened /flow")?;
-
-        if req.network_enabled {
-            wb.inherit_network();
-        }
-
-        let wasi: WasiP1Ctx = wb.build_p1();
+        let wasi = build_sandbox_wasi_context(
+            &exec_path,
+            stdout_pipe.clone(),
+            stderr_pipe.clone(),
+            req.network_enabled,
+        )?;
 
         // ── Create Wasmtime store ─────────────────────────────────────────
         let store_data = StoreData {
@@ -734,6 +755,79 @@ impl PyodideRuntime {
                 success: false,
             },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview1_guest_cannot_see_the_host_environment() {
+        assert!(
+            std::env::var_os("PATH").is_some(),
+            "the test host needs a non-empty environment sentinel"
+        );
+
+        let wasm = wat::parse_str(
+            r#"
+                (module
+                    (import "wasi_snapshot_preview1" "environ_sizes_get"
+                        (func $environ_sizes_get (param i32 i32) (result i32)))
+                    (memory (export "memory") 1)
+                    (data (i32.const 0) "\ff\ff\ff\ff\ff\ff\ff\ff")
+                    (func (export "environment_sizes") (result i32 i32 i32)
+                        (local $errno i32)
+                        i32.const 0
+                        i32.const 4
+                        call $environ_sizes_get
+                        local.set $errno
+                        local.get $errno
+                        i32.const 0
+                        i32.load
+                        i32.const 4
+                        i32.load))
+            "#,
+        )
+        .expect("environment probe should compile from WAT");
+
+        let engine = wasmtime::Engine::default();
+        let module = Module::new(&engine, wasm).expect("environment probe should compile");
+        let exec_dir = tempfile::tempdir().expect("sandbox directory should be created");
+        let wasi = build_sandbox_wasi_context(
+            exec_dir.path(),
+            MemoryOutputPipe::new(1024),
+            MemoryOutputPipe::new(1024),
+            false,
+        )
+        .expect("sandbox WASI context should build");
+
+        let mut linker: Linker<StoreData> = Linker::new(&engine);
+        p1::add_to_linker_sync(&mut linker, |data: &mut StoreData| &mut data.wasi)
+            .expect("WASI Preview 1 should link");
+        let mut store = Store::new(
+            &engine,
+            StoreData {
+                wasi,
+                limiter: MemoryLimiter {
+                    max_bytes: usize::MAX,
+                },
+            },
+        );
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("environment probe should instantiate");
+        let environment_sizes = instance
+            .get_typed_func::<(), (i32, i32, i32)>(&mut store, "environment_sizes")
+            .expect("environment probe export should exist")
+            .call(&mut store, ())
+            .expect("environment probe should run");
+
+        assert_eq!(
+            environment_sizes,
+            (0, 0, 0),
+            "Python WASM inherited variables from the credential-bearing host process (errno, count, bytes)"
+        );
     }
 }
 

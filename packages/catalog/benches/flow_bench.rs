@@ -2,6 +2,13 @@
 //!
 //! This benchmark focuses on measuring the raw execution time of workflows,
 //! useful for profiling and identifying bottlenecks in the execution engine.
+//!
+//! Run with the allocator used by shipping Flow-Like binaries:
+//!   cargo bench -p flow-like-catalog --bench flow_bench --features mimalloc
+
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use flow_like::{
@@ -17,7 +24,10 @@ use flow_like_storage::{
     Path,
     files::store::{FlowLikeStore, local_store::LocalObjectStore},
 };
-use flow_like_types::{intercom::BufferedInterComHandler, tokio};
+use flow_like_types::{
+    intercom::{BufferedInterComHandler, InterComCallback},
+    tokio,
+};
 use std::collections::HashMap;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
@@ -53,14 +63,13 @@ async fn open_board(id: &str, state: Arc<FlowLikeState>) -> Board {
     Board::load(path, id, state, None).await.unwrap()
 }
 
-async fn run_once(board: Arc<Board>, state: Arc<FlowLikeState>, profile: &Profile, start_id: &str) {
-    let buffered_sender = Arc::new(BufferedInterComHandler::new(
-        Arc::new(move |_event| Box::pin(async move { Ok(()) })),
-        Some(100),
-        Some(400),
-        Some(true),
-    ));
-
+async fn run_once(
+    board: Arc<Board>,
+    state: Arc<FlowLikeState>,
+    profile: &Profile,
+    start_id: &str,
+    callback: InterComCallback,
+) {
     let payload = RunPayload {
         id: start_id.to_string(),
         payload: None,
@@ -75,7 +84,7 @@ async fn run_once(board: Arc<Board>, state: Arc<FlowLikeState>, profile: &Profil
         profile,
         &payload,
         false,
-        buffered_sender.clone().into_callback(),
+        callback,
         None,
         None,
         HashMap::new(),
@@ -91,11 +100,29 @@ fn criterion_benchmark(c: &mut Criterion) {
     let state = rt.block_on(default_state());
     let board = Arc::new(rt.block_on(open_board(BOARD_ID, state.clone())));
     let profile = Profile::default();
+    // Construct the handler while the runtime is entered (it spawns an idle-flush task), then
+    // retain it for the full benchmark so samples do not accumulate background tasks.
+    let buffered_sender = rt.block_on(async {
+        BufferedInterComHandler::new(
+            Arc::new(move |_event| Box::pin(async move { Ok(()) })),
+            Some(100),
+            Some(400),
+            Some(true),
+        )
+    });
+    let callback = buffered_sender.into_callback();
 
     // Warmup
     rt.block_on(async {
         for _ in 0..50 {
-            run_once(board.clone(), state.clone(), &profile, START_ID).await;
+            run_once(
+                board.clone(),
+                state.clone(),
+                &profile,
+                START_ID,
+                callback.clone(),
+            )
+            .await;
         }
     });
 
@@ -109,8 +136,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             let board = board.clone();
             let state = state.clone();
             let profile = profile.clone();
+            let callback = callback.clone();
             async move {
-                run_once(board, state, &profile, START_ID).await;
+                run_once(board, state, &profile, START_ID, callback).await;
             }
         });
     });

@@ -13,6 +13,11 @@ import { useBackend } from "../../state/backend-state";
 import { BoardBridgeResponder } from "../learn/board-bridge-responder";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
+import {
+	FOLDER_DROP_EVENT,
+	type IFolderDropDetail,
+	parseFolderDroppableId,
+} from "./category-tree";
 import { FlowBoard } from "./flow-board";
 
 export function FlowWrapper({
@@ -92,51 +97,40 @@ export function FlowWrapper({
 				const data = event.active.data.current;
 				if (!data) return;
 
-				// Function layer dropped on the canvas -> place CallFunction node directly
-				if (data.type === "function-layer" && overId === "flow") {
-					const pointerEvent = event.activatorEvent as
-						| MouseEvent
-						| PointerEvent;
-					document.dispatchEvent(
-						new CustomEvent("flow-drop", {
-							detail: {
-								type: "function-layer",
-								layerId: data.layerId,
-								screenPosition: {
-									x: pointerEvent.screenX + event.delta.x,
-									y: pointerEvent.screenY + event.delta.y,
-								},
-							},
-						}),
-					);
-					return;
-				}
-
-				const variable = data as IVariable | undefined;
-				if (!variable) return;
-
-				// Dropped on the canvas -> ask user whether to Get/Set
 				if (overId === "flow") {
 					const pointerEvent = event.activatorEvent as
 						| MouseEvent
 						| PointerEvent;
-					setDetail({
-						variable,
-						screenPosition: {
-							x: pointerEvent.screenX + event.delta.x,
-							y: pointerEvent.screenY + event.delta.y,
-						},
-					});
+					const screenPosition = {
+						x: pointerEvent.screenX + event.delta.x,
+						y: pointerEvent.screenY + event.delta.y,
+					};
+
+					// Function layer dropped on the canvas -> place CallFunction node directly
+					if (data.type === "function-layer") {
+						document.dispatchEvent(
+							new CustomEvent("flow-drop", {
+								detail: {
+									type: "function-layer",
+									layerId: data.layerId,
+									screenPosition,
+								},
+							}),
+						);
+						return;
+					}
+
+					// Variable dropped on the canvas -> ask user whether to Get/Set
+					setDetail({ variable: data as IVariable, screenPosition });
 					return;
 				}
 
-				// Dropped on a folder or root -> broadcast to VariablesMenu
+				// Dropped on a folder or tree root -> broadcast to the owning menu
+				const target = parseFolderDroppableId(overId);
+				if (!target) return;
 				document.dispatchEvent(
-					new CustomEvent("variables-folder-drop", {
-						detail: {
-							variable,
-							targetPath: overId, // "__root" for top-level
-						},
+					new CustomEvent<IFolderDropDetail>(FOLDER_DROP_EVENT, {
+						detail: { ...target, item: data },
 					}),
 				);
 			}}

@@ -12,10 +12,12 @@ import {
 	MailOpen,
 	RefreshCcw,
 	Trash2,
+	TriangleAlert,
 	UserPlus,
 	Workflow,
 	X,
 } from "lucide-react";
+import { DynamicIcon, type IconName } from "lucide-react/dynamic";
 import { useRouter } from "next/navigation";
 import { type ReactNode, useCallback, useState } from "react";
 import { useAuth } from "react-oidc-context";
@@ -26,7 +28,9 @@ import {
 	useInvoke,
 } from "../../hooks/use-invoke";
 import { addAppToProfile } from "../../lib/add-app-to-profile";
+import { apiErrorMessage } from "../../lib/api-error";
 import { formatRelativeTime } from "../../lib/date";
+import { userDisplayName } from "../../lib/user-display";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import type { IInvite, INotification } from "../../state/backend-state/types";
@@ -56,6 +60,12 @@ function isImageIcon(icon: string): boolean {
 	);
 }
 
+// The backend sends Lucide icon names (e.g. "mail", "shopping-bag"), not glyphs.
+// A kebab-case ASCII token is a name to resolve; anything else (emoji) is text.
+function isLucideIconName(value: string): boolean {
+	return /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(value);
+}
+
 function NotificationIcon({
 	icon,
 	read,
@@ -75,6 +85,28 @@ function NotificationIcon({
 					image.dataset.fallbackIcon = "true";
 					image.src = FLOWLIKE_NOTIFICATION_ICON;
 				}}
+			/>
+		);
+	}
+
+	if (value && isLucideIconName(value)) {
+		return (
+			<DynamicIcon
+				name={value as IconName}
+				className={cn(
+					"size-6",
+					read ? "text-muted-foreground" : "text-primary",
+				)}
+				fallback={() => (
+					<span
+						className={cn(
+							"flex size-6 items-center justify-center text-base leading-none",
+							dimmed,
+						)}
+					>
+						{value}
+					</span>
+				)}
 			/>
 		);
 	}
@@ -151,6 +183,9 @@ export function NotificationsPageScreen() {
 	const isFetchingMore =
 		notificationsQuery.isFetchingNextPage ||
 		invitationsQuery.isFetchingNextPage;
+	const hasLoadError =
+		notificationsQuery.isError ||
+		(Boolean(auth?.isAuthenticated) && invitationsQuery.isError);
 
 	const totalCount = invitations.length + notifications.length;
 	const unreadCount = notifications.filter(
@@ -196,7 +231,15 @@ export function NotificationsPageScreen() {
 				await Promise.all([invitationsQuery.refetch(), syncOverview()]);
 			} catch (error) {
 				console.error(`Failed to ${action} invite:`, error);
-				toast.error(`Failed to ${action} invite. Please try again later.`);
+				toast.error(
+					apiErrorMessage(
+						error,
+						`Failed to ${action} invite. Please try again later.`,
+					),
+				);
+				// Re-sync so an invite that is already gone (revoked, app deleted,
+				// or accepted elsewhere) drops off the list instead of lingering.
+				await Promise.allSettled([invitationsQuery.refetch(), syncOverview()]);
 			}
 		},
 		[backend, invalidate, invitationsQuery, syncOverview],
@@ -416,6 +459,11 @@ export function NotificationsPageScreen() {
 							<AnimatePresence mode="popLayout">
 								{showAllSkeleton ? (
 									<NotificationsListSkeleton variant="all" />
+								) : totalCount === 0 && hasLoadError ? (
+									<NotificationsErrorState
+										onRetry={() => void handleRefresh()}
+										retrying={isRefreshing}
+									/>
 								) : totalCount === 0 ? (
 									<NotificationsEmptyState
 										title="No activity just yet"
@@ -505,6 +553,11 @@ export function NotificationsPageScreen() {
 							<AnimatePresence mode="popLayout">
 								{showNotificationsSkeleton ? (
 									<NotificationsListSkeleton variant="notifications" />
+								) : notifications.length === 0 && notificationsQuery.isError ? (
+									<NotificationsErrorState
+										onRetry={() => void handleRefresh()}
+										retrying={isRefreshing}
+									/>
 								) : notifications.length === 0 ? (
 									<NotificationsEmptyState
 										title="No workflow updates"
@@ -605,6 +658,49 @@ function NotificationsEmptyState({
 	);
 }
 
+function NotificationsErrorState({
+	onRetry,
+	retrying,
+}: {
+	onRetry: () => void;
+	retrying: boolean;
+}) {
+	return (
+		<motion.div
+			initial={{ opacity: 0, scale: 0.98 }}
+			animate={{ opacity: 1, scale: 1 }}
+			exit={{ opacity: 0, scale: 0.98 }}
+			transition={{ duration: 0.2 }}
+			className="flex min-h-48 items-center justify-center"
+		>
+			<div className="flex flex-col items-center gap-3 text-center">
+				<div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3">
+					<TriangleAlert className="size-6 text-destructive" />
+				</div>
+				<div className="space-y-1">
+					<h3 className="text-sm font-medium text-foreground">
+						Couldn't load your notifications
+					</h3>
+					<p className="text-xs text-muted-foreground">
+						Something went wrong reaching the server. Check your connection and
+						try again.
+					</p>
+				</div>
+				<Button
+					variant="outline"
+					size="sm"
+					onClick={onRetry}
+					disabled={retrying}
+					className="gap-1.5"
+				>
+					<RefreshCcw className={cn("size-3.5", retrying && "animate-spin")} />
+					Retry
+				</Button>
+			</div>
+		</motion.div>
+	);
+}
+
 function NotificationsListSkeleton({
 	variant,
 }: {
@@ -677,11 +773,9 @@ function InvitationCard({
 		[invite.by_member_id],
 	);
 
-	const inviterLabel =
-		userLookup.data?.name ??
-		userLookup.data?.username ??
-		userLookup.data?.email ??
-		null;
+	const inviterLabel = userLookup.data
+		? userDisplayName(userLookup.data)
+		: null;
 
 	return (
 		<motion.div
@@ -719,8 +813,12 @@ function InvitationCard({
 								<span className="font-medium text-foreground/80">
 									{inviterLabel}
 								</span>
-							) : (
+							) : userLookup.isLoading ? (
 								<Skeleton className="h-3 w-16" />
+							) : (
+								<span className="font-medium text-foreground/80">
+									a teammate
+								</span>
 							)}
 						</div>
 
@@ -730,11 +828,11 @@ function InvitationCard({
 							</p>
 						)}
 
-						<div className="mt-2 flex gap-2">
+						<div className="mt-2 flex flex-wrap gap-2">
 							<Button
 								onClick={() => onAction(invite.id, "accept")}
 								size="sm"
-								className="h-7 gap-1.5 px-3 text-xs"
+								className="h-9 gap-1.5 px-3 text-xs md:h-7"
 							>
 								<Check className="size-3" />
 								Accept
@@ -743,7 +841,7 @@ function InvitationCard({
 								onClick={() => onAction(invite.id, "decline")}
 								variant="ghost"
 								size="sm"
-								className="h-7 gap-1.5 px-3 text-xs"
+								className="h-9 gap-1.5 px-3 text-xs md:h-7"
 							>
 								<X className="size-3" />
 								Decline
@@ -877,7 +975,7 @@ function NotificationCard({
 							</p>
 						)}
 
-						<div className="mt-2 flex gap-2">
+						<div className="mt-2 flex flex-wrap gap-2">
 							{notification.link && (
 								<Button
 									onClick={(event) => {
@@ -886,7 +984,7 @@ function NotificationCard({
 									}}
 									variant="outline"
 									size="sm"
-									className="h-7 gap-1.5 px-3 text-xs"
+									className="h-9 gap-1.5 px-3 text-xs md:h-7"
 								>
 									<ExternalLink className="size-3" />
 									View
@@ -901,7 +999,7 @@ function NotificationCard({
 									}}
 									variant="ghost"
 									size="sm"
-									className="h-7 gap-1.5 px-3 text-xs"
+									className="h-9 gap-1.5 px-3 text-xs md:h-7"
 								>
 									<Check className="size-3" />
 									Read
@@ -915,7 +1013,7 @@ function NotificationCard({
 								}}
 								variant="ghost"
 								size="sm"
-								className="h-7 gap-1.5 px-3 text-xs text-destructive hover:text-destructive"
+								className="ml-auto h-9 gap-1.5 px-3 text-xs text-destructive hover:text-destructive md:h-7"
 							>
 								<Trash2 className="size-3" />
 								Delete

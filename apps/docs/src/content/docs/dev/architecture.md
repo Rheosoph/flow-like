@@ -1,212 +1,160 @@
 ---
 title: Flow-Like Architecture
-description: Deep Dive into Flow-Like's Architecture
+description: How the clients, shared UI, Rust packages, storage, and runtimes fit together
 sidebar:
   order: 11
 ---
-Flow-Like is a modular, type-safe workflow automation platform built primarily in Rust with a TypeScript/React frontend. This document covers the high-level architecture and how the different components fit together.
 
-## High-Level Overview
+Flow-Like is a monorepo with Next.js/React clients and a modular Rust workspace. The clients share one UI package and a set of backend-state interfaces; adapters connect those interfaces to local browser/Tauri state or remote services.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Desktop App (Tauri)                         │
-│                    apps/desktop (React + Vite)                       │
-└────────────────────────────────┬────────────────────────────────────┘
-                                 │
-                    ┌────────────┴────────────┐
-                    │     Tauri Commands      │
-                    │   (src-tauri/src/*.rs)  │
-                    └────────────┬────────────┘
-                                 │
-┌────────────────────────────────┴────────────────────────────────────┐
-│                        Core Rust Packages                            │
-│                                                                      │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐   │
-│  │  flow-like   │  │ flow-like-   │  │   flow-like-catalog      │   │
-│  │   (core)     │──│   storage    │──│   (node implementations) │   │
-│  └──────────────┘  └──────────────┘  └──────────────────────────┘   │
-│         │                │                        │                  │
-│  ┌──────┴──────┐  ┌──────┴──────┐  ┌─────────────┴───────────┐     │
-│  │ flow-like-  │  │ flow-like-  │  │   Sub-catalogs:         │     │
-│  │   types     │  │   bits      │  │   core, std, data, web, │     │
-│  └─────────────┘  └─────────────┘  │   media, ml, onnx, llm, │     │
-│                                    │   processing            │     │
-│                                    └─────────────────────────┘     │
-└─────────────────────────────────────────────────────────────────────┘
-                                 │
-┌────────────────────────────────┴────────────────────────────────────┐
-│                         Backend Services                             │
-│                                                                      │
-│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐   │
-│  │   flow-like-api  │  │ flow-like-       │  │   Deployment     │   │
-│  │   (REST API)     │  │ executor         │  │   Backends       │   │
-│  └──────────────────┘  └──────────────────┘  └──────────────────┘   │
-│                                                                      │
-│  Deployable via: Docker Compose, Kubernetes, AWS Lambda             │
-└─────────────────────────────────────────────────────────────────────┘
-```
+![The current Flow-Like repository architecture](../../../assets/RepositoryArchitecture.svg)
 
-## Package Structure
+## Repository Layers
 
-Flow-Like uses a monorepo structure with Cargo workspaces for Rust and Bun workspaces for TypeScript.
+### Applications
 
-### Core Rust Packages (`packages/`)
+| Directory | Responsibility |
+| --- | --- |
+| `apps/desktop` | Next.js client hosted by Tauri for local and desktop-capable operation |
+| `apps/web` | Next.js web client |
+| `apps/embedded` | Embeddable app experiences |
+| `apps/extension` | Browser extension |
+| `apps/backend/local` | Local API and runtime binaries |
+| `apps/backend/docker-compose` | Single-stack services, proxy, runtime, compiler, signaling, and monitoring |
+| `apps/backend/kubernetes` | API, executor, compiler, sink trigger, Helm chart, and deployment utilities |
+| `apps/backend/aws` | AWS API, executor, compiler, event bridge, and supporting functions |
+| `apps/backend/signaling` | Shared signaling service |
+| `apps/docs` / `apps/website` | Documentation and public website |
+| `apps/schema-gen` / `apps/utils` | Schema and repository utilities |
 
-| Package | Description |
-|---------|-------------|
-| `flow-like` (core) | Core library for workflow execution, board management, credentials, and state |
-| `flow-like-types` | Shared type definitions, protobuf schemas, and utility types |
-| `flow-like-storage` | Storage abstraction layer supporting S3, Azure Blob, GCS, and LanceDB for vectors |
-| `flow-like-bits` | Reusable workflow components ("bits") |
-| `flow-like-model-provider` | AI/ML model integrations (embeddings, LLMs, local inference) |
-| `flow-like-api` | REST API with authentication, multi-tenancy, and execution backends |
-| `flow-like-executor` | Environment-agnostic workflow execution runtime |
-| `flow-like-catalog` | Node implementations for the visual workflow editor |
-| `flow-like-catalog-macros` | Procedural macros for node registration |
+The root Cargo workspace contains the Rust applications and packages. The root Bun workspace contains `apps/*`, `packages/*`, and `libs/*/*`.
 
-### Node Catalog Sub-packages (`packages/catalog/`)
+### Shared Frontend
 
-The catalog is split into domain-specific sub-crates:
+`packages/ui` contains the reusable React layer:
 
-| Sub-package | Description |
-|-------------|-------------|
-| `core` | Core execution types and traits |
-| `std` | Standard nodes: control flow, math, variables, logging |
-| `data` | Data manipulation, events, transformations |
-| `web` | HTTP requests, webhooks, email |
-| `media` | Image processing, bits for media files |
-| `ml` | Machine learning: classification, clustering, regression |
-| `onnx` | ONNX model inference |
-| `llm` | LLM integrations: generative AI, embeddings, agents |
-| `processing` | Document processing, text extraction |
+- the XYFlow-based visual workflow editor;
+- A2UI renderer, Page/Widget builder, and app interfaces;
+- settings and library components;
+- backend-state contracts and their browser-backed implementations;
+- query, assistant, execution-service, and global state integrations.
 
-### Applications (`apps/`)
+The state interfaces are the important boundary. A component can request Pages, routes, Events, boards, storage, or executions without hard-coding whether the data comes from IndexedDB, a Tauri command, or an API-backed adapter.
 
-| Application | Description |
-|-------------|-------------|
-| `desktop` | Tauri desktop app with React/Vite frontend |
-| `backend/docker-compose` | Docker Compose deployment for self-hosting |
-| `backend/kubernetes` | Kubernetes deployment with Helm charts |
-| `backend/aws` | AWS Lambda deployment |
-| `backend/local` | Local development API server |
-| `docs` | Documentation website (Astro/Starlight) |
-| `website` | Marketing website (Astro) |
-| `embedded` | Embeddable widget (Next.js) |
-| `web-app` | Web-based workflow editor (Next.js) |
-| `schema-gen` | JSON schema generation utility |
+### Core Packages and Contracts
 
-## Data Flow
+| Package group | Responsibility |
+| --- | --- |
+| `packages/core` | Boards, nodes, pins, variables, app state, execution context, and Flow-Like domain logic |
+| `packages/catalog` and `packages/catalog/*` | Node registration and implementations split by domain |
+| `packages/types` / `packages/schema` | Shared contracts and schemas |
+| `packages/ast` | FlowScript text-domain model, parsing, rendering, linting, and signatures |
+| `packages/storage` | Local, memory, cloud, and generic object-store abstraction |
+| `packages/secrets` | Secret-management integrations |
+| `packages/sinks` | Event sinks and triggers |
+| `packages/api` | Remote API, authentication/authorization boundaries, execution dispatch, and service state |
+| `packages/executor` | Environment-neutral remote execution runtime with callback and streaming modes |
+| `packages/compiler` / `packages/wasm` | WASM compilation and custom-node runtime |
+| `packages/model-provider` | Model-provider and local inference integrations |
+| `packages/bits` | Auxiliary Bit workspace crate; the current Bit domain model lives in `packages/core` |
+| `packages/catalog-macros` / `packages/catalog-build-helper` | Catalog registration and build support |
+| `packages/dexie-tauri-adapter` | Desktop adapter for browser/Dexie-backed data |
 
-### Workflow Execution
+The catalog currently includes domain crates for automation, core, data, geo, LLM, media, ML, ONNX, processing, standard nodes, and web operations.
 
-```
-1. User creates workflow in visual editor (Desktop/Web App)
-                    │
-                    ▼
-2. Workflow saved as "Board" (JSON) → Storage (S3/Local)
-                    │
-                    ▼
-3. Execution triggered via API or Desktop
-                    │
-                    ▼
-4. Executor loads Board + Catalog nodes
-                    │
-                    ▼
-5. ExecutionContext manages state per node
-                    │
-                    ▼
-6. Results stored back to Storage
-```
+## Client-to-Runtime Boundary
 
-### Type System
+The same frontend package can operate in different environments:
 
-Flow-Like workflows are **fully typed**. Every pin on every node has a defined type:
+| Environment | Typical path |
+| --- | --- |
+| **Desktop/local** | React component → backend-state interface → IndexedDB/Dexie or Tauri command → local Rust state/runtime |
+| **Remote/web** | React component → backend-state interface → API client → `flow-like-api` → storage, dispatch, or remote executor |
+| **Embedded** | Shared use interface with app, route, and Event context supplied by its host |
 
-- **Execution pins**: Control flow triggers
-- **Data pins**: Boolean, Integer, Float, String, Struct, Array, Generic
-- **Struct pins**: Can enforce JSON Schema validation
+This split is why a feature should normally be added to the interface first, then implemented by each adapter that supports it.
 
-This enables compile-time-like safety in a visual editor.
+## Workflow Execution
 
-## Storage Architecture
+![The current workflow execution path](../../../assets/WorkflowExecutionArchitecture.svg)
 
-Flow-Like uses a two-bucket model:
+1. An author edits a Board made of nodes, pins, variables, and connections.
+2. Flow-Like persists the Board and its app metadata. Versioned runs can select a specific Board version.
+3. An app Event identifies the Board and entry node. Each Event runs in exactly one execution mode: `Local` or `Remote`.
+4. The selected environment loads the Board, node catalog, payload, variables, user/OAuth context, and scoped credentials.
+5. `ExecutionContext` evaluates data pins and follows execution pins through the connected graph.
+6. The run emits logs, progress, state, A2UI messages, and results; artifacts and run data are persisted through the configured stores.
 
-| Bucket | Purpose |
-|--------|---------|
-| Meta | Small, frequent reads (board definitions, user configs) — S3 Express One Zone recommended |
-| Content | Large objects (bits, media, ML models) — Standard S3 |
+The `packages/executor` crate provides the remote runtime independently of a specific deployment target. It supports streaming responses and callback delivery, while deployment applications provide the surrounding HTTP, queue, container, or function environment.
 
-Supported backends:
-- AWS S3 (with STS temporary credentials)
-- Azure Blob Storage (ADLS Gen2 with Directory SAS)
-- Google Cloud Storage
-- Cloudflare R2
-- MinIO (S3-compatible)
+## Type and Graph Model
 
-## Execution Backends
+Every pin has:
 
-Flow-Like supports multiple execution backends:
+- a direction (`Input` or `Output`);
+- a data type, including `Execution`, scalar values, structures, and generic values;
+- a value shape such as a normal value, array, or set;
+- optional schema and default-value information.
 
-| Backend | Isolation | Use Case |
-|---------|-----------|----------|
-| Local (Desktop) | Process | Single-user, offline |
-| HTTP Warm Pool | Container/Pod | Trusted workloads |
-| Lambda | MicroVM | Multi-tenant SaaS |
-| Kubernetes Job | Pod (Kata optional) | Untrusted code |
+Execution pins control graph traversal. Non-execution pins carry values and are evaluated through the execution context. Struct values can carry schema information, and FlowPilot/FlowScript validation uses the same typed model to reject invalid connections before runtime.
 
-→ See [Execution Backends](/self-hosting/execution-backends/) for details.
+The visual graph uses `@xyflow/react`; Flow-Like adds its typed node, pin, catalog, validation, layout, and execution behavior on top.
 
-## Authentication & Multi-Tenancy
+## Storage Planes
 
-The API package (`flow-like-api`) supports:
+Flow-Like does not assume one physical storage provider. Its storage and credential layers expose logical stores for different workloads:
 
-- **Cognito** (AWS)
-- **JWT validation**
-- **Scoped credentials** (per-user storage paths)
-- **Stripe integration** for billing
+| Store | Typical contents |
+| --- | --- |
+| **Metadata** | App and Board records, configuration, and small frequently read objects |
+| **Content** | Uploads, generated files, media, model artifacts, and larger objects |
+| **Logs** | Run logs and execution records |
 
-## Frontend Architecture
+The concrete `FlowLikeStore` supports local, in-memory, AWS/S3-compatible, Azure, Google Cloud Storage, and generic object-store implementations. Remote runtime credentials can scope metadata, content, and log access separately, including mixed-provider deployments.
 
-The desktop app uses:
+Deployment-specific configuration may add a CDN store or database services around these core planes. Follow the relevant self-hosting guide instead of copying provider variables from another deployment target.
 
-- **Tauri**: Rust backend with webview frontend
-- **React**: UI components
-- **Vite**: Build tooling
-- **Tailwind CSS**: Styling
-- **shadcn/ui**: Component library
-- **Zustand/React Query**: State management
+## Event and UI Architecture
 
-The visual workflow editor is built with custom canvas rendering and node connection logic.
+Events are the bridge between external invocation and a Board:
 
-## Feature Flags
+- an Event selects a Board, node, version, and Local/Remote mode;
+- UI-capable Event types provide Chat, form, or other built-in interfaces;
+- a Page-target Event uses `default_page_id`;
+- a route maps only `path → eventId`;
+- a running Event can stream A2UI messages to the active surface.
 
-Many packages support feature flags for conditional compilation:
+See [A2UI in Flow-Like](/dev/a2ui/overview/) and [Routes](/dev/a2ui/routes/) for those frontend contracts.
 
-```toml
-# flow-like (core)
-[features]
-tauri = ["flow-like-storage/tauri"]
-local-ml = ["flow-like-model-provider/local-ml"]
-flow = ["flow-runtime"]
-hub = []
-bit = ["hub"]
-model = ["bit"]
-app = ["bit", "model", "hub"]
+## Deployment Shapes
 
-# flow-like-api
-[features]
-aws = ["aws-config", "aws-sdk-sts"]
-azure = ["hmac", "sha2", "base64", "urlencoding"]
-gcp = ["sha2", "base64", "rsa", "urlencoding"]
-kubernetes = ["kube", "k8s-openapi"]
-lambda = ["aws-config", "aws-sdk-lambda"]
-cognito = ["aws-sdk-cognitoidentityprovider"]
-```
+The repository currently contains four backend shapes:
 
-## Next Steps
+| Shape | Repository location | Intended role |
+| --- | --- | --- |
+| Local | `apps/backend/local` | Local API/runtime development and desktop-adjacent execution |
+| Docker Compose | `apps/backend/docker-compose` | Self-hosted service stack |
+| Kubernetes | `apps/backend/kubernetes` | Cluster API, compiler, executor, and sink services |
+| AWS | `apps/backend/aws` | AWS-native API, execution, compilation, and event services |
 
-- [Building from Source](/dev/build/) — Get the code running locally
-- [Writing Nodes](/dev/writing-nodes/) — Extend the node catalog
-- [Self-Hosting](/self-hosting/overview/) — Deploy on your infrastructure
+Deployment capabilities are not inferred from package feature names alone. Check each application's manifest and configuration because a provider or runtime may be enabled differently by each target.
+
+## Where to Make a Change
+
+| Change | Start here |
+| --- | --- |
+| Shared UI or app experience | `packages/ui` |
+| Desktop-only capability | `apps/desktop` and its Tauri crate |
+| Web-client host behavior | `apps/web` |
+| Domain model or local execution | `packages/core` |
+| Node implementation | the matching `packages/catalog/*` crate |
+| Remote request/authorization path | `packages/api` |
+| Remote execution transport | `packages/executor` and the deployment app |
+| Storage provider behavior | `packages/storage` plus deployment credentials/config |
+| Custom-node compilation/runtime | `packages/compiler` and `packages/wasm` |
+
+## Continue
+
+- [Building from Source](/dev/build/) — run the workspace locally
+- [Writing Nodes](/dev/writing-nodes/) — extend the catalog
+- [Self-Hosting](/self-hosting/overview/) — select a deployment shape

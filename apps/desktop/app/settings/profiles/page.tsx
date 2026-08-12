@@ -1,7 +1,5 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/core";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import {
 	type ISettingsProfile,
 	IThemes,
@@ -10,6 +8,8 @@ import {
 	useInvoke,
 } from "@flow-like/flow-like-ui";
 import { ProfileSettingsPage } from "@flow-like/flow-like-ui/components/settings/profile/profile-settings-page";
+import { invoke } from "@tauri-apps/api/core";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { useDebounce } from "@uidotdev/usehooks";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -213,7 +213,10 @@ export default function SettingsProfilesPage() {
 				);
 				if (!response.ok && response.status !== 404) {
 					const message = await response.text().catch(() => "");
-					console.warn("[ProfileDelete] Server delete failed:", response.status);
+					console.warn(
+						"[ProfileDelete] Server delete failed:",
+						response.status,
+					);
 					toast.error(message || "Failed to delete profile on the server");
 					return;
 				}

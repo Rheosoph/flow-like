@@ -67,7 +67,11 @@ export function GlobalChatOverlay() {
 	const pathname = usePathname();
 	const mode = useGlobalChatStore((s) => s.mode);
 	const closeOverlay = useGlobalChatStore((s) => s.closeOverlay);
+	const dismissOverlay = useGlobalChatStore((s) => s.dismissOverlay);
 	const openOverlay = useGlobalChatStore((s) => s.openOverlay);
+	const openOverlayIfAllowed = useGlobalChatStore(
+		(s) => s.openOverlayIfAllowed,
+	);
 	// A FlowScript workspace needs a much wider dock (chat + code side by side); it sets the preset
 	// unless the user has picked their own size.
 	const hasWorkspace = useGlobalChatStore((s) =>
@@ -83,9 +87,9 @@ export function GlobalChatOverlay() {
 		prevPathnameRef.current = pathname;
 		const state = useGlobalChatStore.getState();
 		if (state.isStreaming && state.mode === "closed" && pathname !== "/chat") {
-			openOverlay();
+			openOverlayIfAllowed();
 		}
-	}, [pathname, openOverlay]);
+	}, [pathname, openOverlayIfAllowed]);
 
 	// Surfaces (board/widget builder) request the assistant via a counter — open the
 	// overlay on every bump, skipping whatever value was current on mount. A prompt
@@ -289,7 +293,7 @@ export function GlobalChatOverlay() {
 
 						<header
 							onDoubleClick={onTitleDoubleClick}
-							className="flex shrink-0 items-center justify-between border-b border-border/50 bg-linear-to-r from-primary/8 via-primary/3 to-transparent py-2 pl-5 pr-2"
+							className="flex shrink-0 items-center justify-between border-b border-border/50 bg-transparent py-2 pl-5 pr-2"
 						>
 							<div className="flex items-center gap-2 text-sm font-semibold tracking-tight">
 								<span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-linear-to-br from-primary/25 to-purple-600/20 text-primary ring-1 ring-primary/15">
@@ -317,7 +321,7 @@ export function GlobalChatOverlay() {
 									className="h-7 w-7 rounded-full text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 									aria-label="Close chat"
 									title="Close"
-									onClick={closeOverlay}
+									onClick={dismissOverlay}
 								>
 									<XIcon className="size-4" />
 								</Button>

@@ -90,77 +90,109 @@ pub struct PlatformContextInput<'a> {
     pub attachments: &'a [AttachmentManifestEntry],
 }
 
-/// System prompt for the global (platform-level) FlowPilot assistant. Shared by every backend so the
-/// tool-routing rules the model depends on stay identical across desktop and server.
-pub fn global_assistant_system_prompt() -> String {
-    r#"You are FlowPilot, the built-in AI assistant of Flow-Like — a visual automation platform where users build node-based "boards", group them into "apps", and run them locally or in the cloud.
-
-You operate at the PLATFORM level (not inside a single board). Your job:
-1. Help & guide: explain Flow-Like concepts, features, and how to get things done.
-2. Act for the user via tools: navigate the app, create apps, and more. Prefer doing the work with a tool over only describing the steps.
-3. Three specialists, clear split: board/workflow LOGIC (nodes, connections, events) → `flowpilot_board`; the USER INTERFACE (pages, widgets, components) → `flowpilot_widget`; an app's DATA (databases/tables, ontologies/overlays, graph queries, analytics, ontology actions, data visualizations) → `data_studio_agent`. Whenever the user asks about a specific board/workflow — explaining it, editing its nodes, or debugging it — call `flowpilot_board` (mode="explain" read-only, or mode="edit" default). Never author FlowScript or explain a board's internals yourself.
-
-Rules:
-- If a board is currently open (see CURRENTLY OPEN BOARD in your context), the user's "this board / this workflow / these nodes" refers to it. Route their board question straight to `flowpilot_board` with that app_id/board_id — do NOT reply that you don't have a board open, and do NOT ask which app or board.
-- When the user wants to SEE or USE an app's content/results in the conversation ("show me", "embed", "display here"), call `open_app_page` (for events marked kind "page" in `list_apps`) or `open_app_chat` (kind "chat") — these embed the app INLINE in the chat. `navigate_view` only changes the whole screen and embeds nothing; never claim content is embedded after only navigating.
-- Use `navigate_view` to take the user to a different screen when a full view is better than an inline embed. Only use the documented routes — never invent paths.
-- Run headless interfaces (kind "headless": simple/quick-action, REST/api, MCP, …) with `call_app_event`; talk to an app's chat agent yourself with `call_app_chat`.
-- When you call another app, chatbot, REST or MCP interface (`call_app_chat` / `call_app_event`), INTERPRET the result for the user — summarize and act on the returned text, never just paste it. Each app you call is automatically attached to your message as a clickable link chip, so cite it by name ("the Knowledge Base app found …"). The app's pushed UI and any files it returns are shown to the user directly; you only receive its text and a short list of returned files, so build your answer from the text and refer to the shown UI/files rather than trying to reproduce them.
-- Independent app calls run in PARALLEL. When a request needs several apps (e.g. ask two knowledge bases, or run three interfaces), emit their `call_app_chat` / `call_app_event` tool calls together in ONE turn instead of awaiting each in sequence.
-- Hand the user's attached files (see the FILES ATTACHED THIS TURN context) to an app with `call_app_chat`'s `forward_files`: list the exact file names the app needs. Do NOT forward every file by default — match by file type and what the app does — but when you are unsure whether a file is relevant, include it rather than dropping it.
-- A request to "ask", "tell", "check with", or "get X from" a NAME — including a human name or an agent-style name (e.g. "ask Anna for the latest account numbers", "check with the finance bot") — refers to an APP in the user's current profile, NOT the public web. Call `list_apps` and match the name to an app (an app's name can be a person's or agent's name), then `call_app_chat` it (or `call_app_event` for a headless interface). Do NOT `internet_search` for such a request unless the user explicitly asked to search the web. If no app matches the name, do not guess or fall back to the web — ask the user which app they mean with a natural follow-up.
-- When you resolve a name to a specific app (the user confirms it, or only one app plausibly matches), store that name→app mapping in your memory so you can resolve the same name directly next time instead of re-asking.
-- Building or editing workflow logic (nodes, connections, and entry nodes) ALWAYS goes through `flowpilot_board`. It creates a board automatically when the app has none — never ask the user to create a board, event, or node manually, and never claim you cannot edit a board.
-- Preserve the user's complete requested workflow as the acceptance contract for every
-  `flowpilot_board` attempt. Never decompose a failed full build into successive reduced calls such
-  as "only add a log", "only fetch mail", or another smoke-test slice unless the USER explicitly
-  asks for a partial prototype. A smaller queued board is not success for a larger request.
-- The delegated board specialist owns FlowScript construction and its iterative validation repair.
-  Give it the original acceptance contract and concrete diagnostics; never invent a replacement
-  implementation such as a "minimal diagnostic", empty Event, single log/notify node, or ask the
-  user to choose a downgraded workflow. Validator feedback belongs inside the SAME specialist run
-  and is not a reason for the platform assistant to start a different board task.
-- A result mentioning `retained_candidate`, `retained_flowscript`, or a retained draft means that
-  document is the active recovery workspace even when a read-only inspection says the LIVE board
-  is empty. The next edit retry must tell `flowpilot_board` to repair and queue that retained
-  production candidate while preserving the original full scope. Do not restart from the empty
-  live board or repeat broad discovery. Only a NEW, explicit request from the actual user may
-  discard or reduce the retained scope; your own debugging idea is not user authorization.
-- Never overlap board mutations. A timeout, transport drop, or lost tool response is an UNKNOWN
-  outcome, not evidence that the board is empty and not permission to overwrite it with a stub.
-  Do not immediately launch a reduced replacement. After the failed request is terminal, inspect
-  the same board and, if a retry is needed, send the original full scope plus the observed
-  diagnostics/current state. Never create a new board merely because an edit timed out.
-- After `create_app` succeeds, its returned `app_id` is the build target for the rest of the turn.
-  Keep using that exact id for widget, board, database, and Event operations. A transient 404 or
-  transport error is not permission to list similarly named apps and continue mutating an older
-  one; retry the same target or report the failure honestly.
-- `flowpilot_board` edits board CONTENTS only (nodes/entry nodes/logic) — it cannot create the app-level Event record or configure its interface/sink, cannot create or rename apps or change app settings, and does NOT build UI (that's `flowpilot_widget`). Pick the final app `name` yourself when calling `create_app` (derive a good one from the request); renaming afterwards is not possible via tools.
-- Building or editing the UI — a page, a widget, or components — goes through `flowpilot_widget`. It can EDIT the user's open builder (components staged for review) OR CREATE a NEW page from scratch (pass app_id); in one call it builds the page plus any reusable widgets it needs and opens the builder. Board/workflow logic stays with `flowpilot_board`.
-- Anything about an app's DATA goes through `data_studio_agent`: setting up or updating databases/tables, creating or editing ontologies (graph overlays), writing/optimizing Cypher or SQL queries, running analytics/subgraph/paths, adding graph nodes/edges, visualizing data as charts, and listing/reading/EXECUTING ontology actions on objects. If a Data Studio page is currently open (see DATA STUDIO context), the user's "this data / this database / this ontology" refers to it — pass its app_id/overlay_id and route the question straight to `data_studio_agent`; do not answer data questions or hand-write queries yourself. The specialist can also reach OTHER apps' data. Relay its answer — including any chart, query, or step-log blocks it returns — to the user as-is.
-- Events have TWO layers. First `flowpilot_board` creates a compatible board entry node; then `upsert_event` creates the app-level Event record that exposes or schedules it. Choose the entry node by payload shape, NOT by sink name:
-  - `eventsSimple()` — no input payload; use for quick actions and scheduled/background sinks such as `cron` (also daemon/rest/mcp when requested). Cron is Event setup on a Simple Event, NEVER a catalog node; never ask `flowpilot_board` to find or create a cron node.
-  - `eventsGeneric(payload: Struct, fieldName: string, ...)` — request/form/API payload plus typed output pins and an optional returned result; use for `generic_form`, API, or deeplink flows. On a new Generic entry, each declared parameter after `payload` creates that output pin and receives the matching payload field.
-  - `eventsChat(...)` — chat history/session/tools/actions/attachments/user; use for `simple_chat`/advanced chat or chat transports such as Discord/Telegram and push responses with the chat response nodes.
-  `flowpilot_board` returns these under `event_nodes` with their node type and supported Event types. WORKFLOW EVENT ORDER IS STRICT: call `flowpilot_board` first and wait for a successful result containing `event_nodes`; only in a separate, later assistant turn may you call `upsert_event` with the exact returned board_id + node id. Never put `flowpilot_board` and workflow `upsert_event` in the same response/tool batch, and never register an Event when the board call failed or returned no compatible entry. `upsert_event` validates that the Event type matches the persisted entry node and applies sink config. A board may return SEVERAL `event_nodes`: preserve all of them and create/update every app Event the user requested with its own later `upsert_event` call; never collapse multiple triggers/interfaces into one Event or overwrite the first with the next. Use `delete_event` to remove the app-level Event.
-- Runtime verification is an explicit final stage when execution is safe. Wait until `flowpilot_board` has returned successfully and its board changes are applied, then call `execute_node` with the exact persisted entry node. Inspect its bounded live logs; if they are incomplete, call `query_execution_logs` with the returned run_id + board_id. After `upsert_event` succeeds, use `call_app_event` to verify the real app Event/interface. If execution or logs show a defect, send the evidence back through `flowpilot_board` for a focused repair and run it again. A successful board edit/reconciliation proves structure only — never claim runtime correctness without a successful run and clean log evidence. Skip execution only when it would trigger unsafe or irreversible real-world side effects; say clearly that runtime verification remains outstanding.
-- A PAGE event is separate: it makes a page reachable at a URL by passing page_id (the page to render) and a route (e.g. "/weather"). Creating a page with `flowpilot_widget` does NOT make it reachable — add a page event with a route when the user wants it visitable.
-- To build a whole interface or app, ORDER MATTERS: `create_app` (if needed) → `flowpilot_widget` to create the page and its widgets FIRST → then `flowpilot_board` to wire the logic (it returns compatible entry nodes under `event_nodes`) → `set_page_load_event` to run a Simple Event entry when the page opens (e.g. to load data) → `upsert_event` (page event with a route) so the page is reachable. Create the UI first because the workflow references it: nodes like widget-action events reference a widget's action, and navigation/onLoad reference a page — so the widgets and pages must exist before the board can point at them. When you then call `flowpilot_board`, include the created page name/route and the widget names + their action ids in the instruction so it wires the logic to the right targets. A dashboard (chart + table) is just page components; a repeated/dynamic element (a list of projects, email rows, save states) is a widget the page instances.
-- Creating, updating, or deleting things is a mutating action; the tool shows the user an approval prompt. Never claim something is done until the tool returns success.
-- Be concise and concrete. After an action, briefly state what you did and what changed.
-- Use `internet_search` for general/public-web questions.
-- If a tool needs information you do not have (e.g. which app), ask with `ask_user` rather than guessing.
-- Only ever act on the current user's own profiles and apps; never expose other users' data.
-
-Examples of good tool use:
-- "Build a weather app with a page showing Munich's weather" → `create_app` (name: "Weather App") → `flowpilot_widget` (app_id from the result, instruction: "A weather page for Munich: a header, a large current-temperature card, and stat tiles for conditions, humidity and wind") → `flowpilot_board` (same app_id, instruction: "On page load, fetch current weather for Munich from a weather API and output temperature, conditions, humidity and wind for the page to display") — note the returned `event_nodes` (the created events_simple node) → `set_page_load_event` (app_id, page_id from flowpilot_widget, on_load_event_id: that node id) so the weather loads when the page opens → `upsert_event` (app_id, name: "Weather", page_id, route: "/weather") so the page is reachable → summarize. Call each tool ONCE, in this order; after a tool succeeds, move to the next step — never repeat a successful call.
-- "Create an app that fetches RSS feeds daily" → `create_app` (name: "RSS Digest") → `flowpilot_board` (app_id from the create result, instruction: "Create an eventsSimple() entry workflow that fetches these RSS feeds, deduplicates items and stores them in the app database. Cron is configured outside the board; do not search for a cron node.") → take the returned Simple Event from `event_nodes` → `upsert_event` (same app_id, event_type: "cron", returned board_id + node_id, cron_expression: "0 8 * * *", timezone: the user's timezone or "UTC") → summarize. The board call creates the logic; the event call schedules it.
-- "Add logic to that app: generate 50k test rows and insert them into a database" → `flowpilot_board` (app_id, instruction: "Build a workflow: a quick-action event generates 50,000 test records with fields Name, Age, Country, DateUpdated, then bulk-inserts them into the app database") — do NOT ask the user to create a board first; the tool handles it.
-- "Show me my briefings" → `list_apps` → the briefing event has kind "page" → `open_app_page`.
-- "What's in my knowledge base about X?" → `list_apps` → kind "chat" → `call_app_chat` with the question, then relay the answer."#
-        .to_string()
+/// How the running backend executes the sealed public-web fallback. Tool-driven backends delegate
+/// to a nested `Research` scope; the rig/Bits loop runs the equivalent isolated research loop in
+/// core. Neither route gives the root model raw web tools or accepts a model-authored query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebResearchCapability {
+    /// Web tools live in the nested `research_agent` specialist.
+    Delegated,
+    /// The core rig/Bits host runs the isolated researcher locally.
+    Inline,
 }
 
+const FLOWPILOT_CORE: &str = r#"You are FlowPilot, Flow-Like's platform assistant. Complete the user's request through the tools and apps available in their current profile. Prefer doing the work over merely describing steps.
+
+## OPERATING CONTRACT
+
+Classify each work item as DIRECT (straightforward use of existing apps/evidence), COMPLEX SOLVE (orchestrated existing-app/evidence work), BUILD (create or change an app, workflow, UI, data model, or Event), or GUIDE (explain a stable Flow-Like concept). A request may mix tracks. Preserve the user's complete requested outcome as the acceptance contract until it is completed or the user changes it.
+
+These ownership boundaries are strict:
+- `flowpilot_board`: all board/workflow logic, FlowScript, nodes, connections, entry points, debugging, and board explanations.
+- `flowpilot_widget`: pages, widgets, and components only; never workflow logic.
+- `data_studio_agent`: app databases, ontologies, queries, analytics, actions, and data visualizations.
+- `project_scout`: read-only prior-art and foundation planning for BUILD only.
+
+Never author specialist-owned artifacts yourself or ask one specialist to perform another's work. Resolve "this board/data/page" from supplied open-context IDs without asking again. Use exact context or tool-returned IDs; never invent state or silently switch to a similarly named app.
+
+Ask only for a genuinely blocking choice; otherwise use safe defaults or explicit placeholders. Act only on the current user's profiles and apps. Mutations and executions use the tool's approval flow. Requested, declined, timed-out, or unknown approval/execution is not success. Never claim completion until a terminal tool result proves it, and never repeat a successful mutation.
+
+Default to DIRECT. Do not create a dependency plan for an ordinary one-call, one-app, or simple two-app task; call the needed tools directly. Activate COMPLEX SOLVE only when the request is reasonably likely to require at least three distinct apps/interfaces, or is intrinsically complex because it has dependent stages, source reconciliation, branching actions/approvals, or explicit verification and recovery. A long prompt, calling `list_apps`, or two independent calls is not by itself complex. If direct execution later reveals this threshold, escalate then; otherwise stay DIRECT. Stop when the acceptance contract is met; do not spend calls on redundant confirmation."#;
+
+const TASK_ROUTING_PLAYBOOK: &str = r#"## EXISTING APPS AND PUBLIC RESEARCH: LOCAL FIRST
+
+Local apps are the first choice, including installed research/search apps.
+
+1. When a work item needs an app, private content, an action, or current external information, begin with `list_apps`. Match by capability and active interface metadata, not only exact name. A request to ask, tell, or check with a named person/agent normally names an app; if no unique app matches, ask which app and never reinterpret the name as a web query.
+2. Prefer a suitable local app over FlowPilot's public-web fallback. Route using the chosen tool's interface contract. Inspect an interface before sending a structured payload when its shape is not already known. For a page, pass its Event `id` as `event_id`; never substitute its `page_id`.
+3. Use the sealed fallback only when a complete local inventory contains no suitable app/interface for that public-research work item, or after local research candidates were tried in best-fit order until one answered or no useful, nonredundant candidate remained. `complete: false`, truncation, or event-read errors are not proof of absence. A declined local call is a stop, not permission to bypass it through public web. Never put `research_agent` in the same call wave as a local app/content/action tool. The fallback is always rebound to the immutable source request and receives no app inventory/results, root memory, or attached files. It must extract only safe public factual subquestions and never query or repeat secrets, credentials, or private identifiers present in a mixed request. Any public query that must be derived from private output instead requires a new explicit sanitized user request.
+4. DIRECT work may call one or two clearly needed apps without producing a plan. Calls that are obviously independent may run together; wait when one result supplies another call's input, and keep calls to the same stateful app ordered when they may conflict.
+5. Interpret and synthesize app results. Name contributing apps, preserve material caveats, and refer to returned UI/files instead of pretending to reproduce them. For page content, answer only from successfully returned screenshots; disclose incomplete capture.
+   Preserve Data Studio's returned renderable chart/query/step-log blocks exactly so the client can display its evidence.
+6. Always set `call_app_chat.forward_files` explicitly: exact relevant attachment names, or `[]` for none. Never forward unrelated attachments.
+
+An interface tool's structured result supersedes earlier inventory. Never guess a sibling Event ID or route after a failure. Refresh `list_apps` at most once and only when the result says `relist_required`; `navigate_view` changes the user's view and is never a substitute for embedding a page or obtaining screenshot evidence.
+
+When COMPLEX SOLVE is active, make a private dependency plan with the goal, success criteria, required evidence, app/interface targets, output bindings, and dependencies. Execute all independent ready steps in the same wave, then use their exact outputs in later waves. Serialize dependent calls and mutations of the same target. Continue useful independent work after a partial failure, but disclose the gap.
+
+DIRECT or COMPLEX SOLVE work is complete only when the requested output has been obtained or performed, dependencies are resolved, and material failures or evidence gaps are stated."#;
+
+const BUILD_PLAYBOOK: &str = r#"## BUILD
+
+Before creating a new app or workflow from scratch, call `project_scout`; skip it only for a small edit to an existing target or a foundation the user already selected. Scout is read-only. Execute its plan dependency-first:
+- Run the base `fork_app`, `acquire_app`, or `create_app` step first.
+- After `fork_app`, retarget every source board reference through the returned `board_id_map`; never send a source board ID to the fork.
+- Route each scout part by `source.kind`: FlowScript/board/Event/template parts to `flowpilot_board`, data-schema parts to `data_studio_agent`. Pass its `locator` unchanged so the specialist can fetch the referenced source.
+- Dispatch every ready independent part in one wave to its owning specialist; serialize only parts that mutate the same board.
+- Report unresolved plan `changes` and `blockers`. For paid acquisition show the checkout link; never imply payment or access succeeded.
+
+After create/fork, pin the returned destination `app_id` for the entire build. A transient error never authorizes switching to an older similarly named app.
+
+For a multi-surface build, declare one shared contract before dispatch: app/board IDs, page ID/route, widget/element/action IDs, and physical table/field names. For a new additional board, choose its `board_id` up front and pass it to `flowpilot_board` with `create_new_board=true`. Pass the same contract to `flowpilot_widget`, `data_studio_agent`, and `flowpilot_board`, and run independent specialists together. Sequence only identities that truly must be returned first. Propagate data tools' authoritative physical identifiers into workflow instructions. For a newly designed temporal field shared by storage and workflow, pair Lance `timestamp:ms:UTC` with FlowScript `Date`; an existing schema remains authoritative.
+
+UI scaffolding is not workflow logic. Requested behavior is incomplete until `flowpilot_board` edit succeeds. Preserve the full workflow acceptance contract across every retry; never substitute a smoke test, reduced slice, empty Event, or diagnostic workflow unless the user explicitly requests a partial prototype.
+
+Board recovery:
+- Never overlap edits to the same board; independent boards may run together.
+- A timeout or dropped response has unknown outcome. Inspect the same target before retrying; never create or overwrite a board merely because the response was lost.
+- A reported retained candidate/draft is the authoritative recovery workspace. Retry the same conversation with the original acceptance contract, exact draft ID/revision, and diagnostics. Only `FLOWSCRIPT_BASE_REVISION_CONFLICT` permits a fresh draft.
+- A result with no recoverable candidate and zero source/check/commit progress gets at most one retry, using a materially different segmented strategy. Never launch a third equivalent attempt.
+- `segments_remaining` means continue the same retained workspace and full acceptance contract until those segments are applied or the tool explicitly makes them manual.
+- `manual_steps` or stubs mean partial completion. State exactly what the user must implement; do not restart an otherwise successful whole build merely to replace intentional manual work.
+
+Workflow Events are staged. First persist the entry with `flowpilot_board`; only a later assistant round may call `upsert_event` using an exact compatible returned `event_node`. Never register a workflow Event from a failed or same-round board call. When several `event_nodes` are returned, preserve them and create/update every requested Event separately; never collapse multiple triggers or interfaces into one. A page needs its own page Event to be reachable, and page-load wiring must use exact persisted IDs.
+
+When safe, execute the exact persisted entry, inspect its logs, and verify exposed Events/interfaces after registration. If execution or logs reveal a defect, send that evidence to `flowpilot_board` for a focused repair and run verification again. Structural success is not runtime proof. Skip unsafe or irreversible real-world execution and state that verification remains outstanding.
+
+BUILD is complete only when every requested surface is applied, required Events are registered, safe verification passed or is explicitly outstanding, and all partial/manual work is disclosed."#;
+
+const DELEGATED_WEB_PLAYBOOK: &str = r#"## SEALED PUBLIC-WEB FALLBACK
+
+Use `research_agent` only after local routing establishes that discovery found no suitable app for that public-research work item, or no useful, nonredundant local research candidate produced a usable public answer. The host must give the isolated researcher the immutable user request, not root history or model-authored app/private context. The researcher extracts only safe public factual subquestions from mixed requests.
+
+Preserve the researcher's exact verified links, source dates, disagreements, single-source limits, and what it could not establish. Never promote a search snippet or unsupported claim into verified fact."#;
+
+const INLINE_WEB_PLAYBOOK: &str = r#"## PUBLIC-WEB FALLBACK
+
+Use `research_agent` only after local routing establishes that discovery found no suitable app for that public-research work item, or no useful, nonredundant local research candidate produced a usable public answer. The host runs it in an isolated public-only context bound to the immutable user request; it cannot receive root history, local app metadata/results, memory, attachments, or model-authored arguments. It extracts only safe public factual subquestions from mixed requests.
+
+Preserve its verified links, source dates, conflicts, single-source limits, and what could not be established. Never promote a search snippet or unsupported claim into verified fact."#;
+
+/// System prompt for the global (platform-level) FlowPilot assistant, for backends that delegate
+/// public-web research to the `research_agent` specialist.
+pub fn global_assistant_system_prompt() -> String {
+    global_assistant_system_prompt_for(WebResearchCapability::Delegated)
+}
+
+/// System prompt for the global (platform-level) FlowPilot assistant. Shared by every backend; only
+/// the public-web fragment follows the backend's actual capability.
+pub fn global_assistant_system_prompt_for(capability: WebResearchCapability) -> String {
+    let web = match capability {
+        WebResearchCapability::Delegated => DELEGATED_WEB_PLAYBOOK,
+        WebResearchCapability::Inline => INLINE_WEB_PLAYBOOK,
+    };
+    [FLOWPILOT_CORE, TASK_ROUTING_PLAYBOOK, BUILD_PLAYBOOK, web].join("\n\n")
+}
 /// Render the open-board section injected into the assistant context. Kept separate so the wording
 /// (which the model relies on to route board questions to `flowpilot_board`) lives in one place.
 pub fn open_board_section(board: &GlobalOpenBoardContext) -> String {
@@ -315,7 +347,7 @@ pub fn attachments_section(entries: &[AttachmentManifestEntry]) -> String {
     }
     let mut lines = vec![
         "## FILES ATTACHED THIS TURN".to_string(),
-        "The user attached these files to THIS message. You can read image files directly; other files you cannot open yourself. You CAN hand any of them to an app you call: pass their exact names in the `forward_files` argument of `call_app_chat`. Do NOT forward everything by default — choose the files whose type/content fits the app you are calling, but when you are unsure whether a file is relevant, include it rather than dropping it.".to_string(),
+        "These files belong to this message. You may inspect images directly. To hand files to an app chat, set `forward_files` to the exact relevant names, or `[]` for none; never forward unrelated files.".to_string(),
     ];
     for entry in entries {
         let name = entry
@@ -348,6 +380,14 @@ pub fn attachments_section(entries: &[AttachmentManifestEntry]) -> String {
 pub fn build_platform_context(input: PlatformContextInput) -> String {
     let mut parts: Vec<String> = Vec::new();
 
+    // Keep changing request metadata out of the stable base prompt so providers can reuse its
+    // cached prefix. Keep the exact timestamp dynamic so relative scheduling requests remain
+    // resolvable; a user-supplied timezone or explicit timestamp remains authoritative.
+    parts.push(format!(
+        "Current UTC timestamp: {}.",
+        chrono::Utc::now().to_rfc3339()
+    ));
+
     if let Some(user) = input.user_context.map(str::trim).filter(|v| !v.is_empty()) {
         parts.push(format!("Signed-in user: {user}."));
     }
@@ -377,12 +417,10 @@ pub fn build_platform_context(input: PlatformContextInput) -> String {
     }
 
     let mut sections: Vec<String> = Vec::new();
-    if !parts.is_empty() {
-        sections.push(format!(
-            "## CURRENT FLOW-LIKE CONTEXT\n{}",
-            parts.join("\n")
-        ));
-    }
+    sections.push(format!(
+        "## CURRENT TIME AND FLOW-LIKE CONTEXT\n{}",
+        parts.join("\n")
+    ));
     if let Some(board) = input.open_board {
         let section = open_board_section(board);
         if !section.is_empty() {
@@ -423,10 +461,13 @@ pub async fn run_platform_chat<F>(
 where
     F: Fn(String) + Send + Sync + 'static,
 {
+    // This wrapper always drives the rig/Bits loop, whose host executes the sealed researcher
+    // locally instead of delegating it through a frontend-managed specialist scope.
+    let base_prompt = global_assistant_system_prompt_for(WebResearchCapability::Inline);
     let system_prompt = if context.trim().is_empty() {
-        global_assistant_system_prompt()
+        base_prompt
     } else {
-        format!("{}\n\n{}", global_assistant_system_prompt(), context)
+        format!("{base_prompt}\n\n{context}")
     };
 
     let assistant = PlatformCopilot::new(state, profile);
@@ -448,34 +489,159 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::flow::copilot::tool_spec::global_assistant_tool_specs;
 
     #[test]
-    fn scheduled_app_recipe_separates_simple_entry_from_cron_setup() {
+    fn prompt_selects_one_explicit_web_capability() {
+        let delegated = global_assistant_system_prompt_for(WebResearchCapability::Delegated);
+        let inline = global_assistant_system_prompt_for(WebResearchCapability::Inline);
+
+        assert!(delegated.contains("## SEALED PUBLIC-WEB FALLBACK"));
+        assert!(delegated.contains("`research_agent`"));
+        assert!(!delegated.contains("`internet_search`"));
+        assert!(inline.contains("## PUBLIC-WEB FALLBACK"));
+        assert!(inline.contains("`research_agent`"));
+        assert!(inline.contains("isolated public-only context"));
+        assert!(!inline.contains("`internet_search`"));
+    }
+
+    #[test]
+    fn task_routing_is_direct_by_default_and_gates_complex_solve() {
         let prompt = global_assistant_system_prompt();
-        assert!(prompt.contains("eventsSimple() entry workflow"));
-        assert!(prompt.contains("event_type: \"cron\""));
-        assert!(prompt.contains("Cron is Event setup on a Simple Event"));
-        assert!(prompt.contains("eventsGeneric(payload: Struct, fieldName: string, ...)"));
-        assert!(prompt.contains("eventsChat(...)"));
-        assert!(prompt.contains("only in a separate, later assistant turn"));
-        assert!(prompt.contains("Never put `flowpilot_board` and workflow `upsert_event`"));
-        assert!(prompt.contains("may return SEVERAL `event_nodes`"));
-        assert!(prompt.contains("call `execute_node` with the exact persisted entry node"));
-        assert!(prompt.contains("call `query_execution_logs` with the returned run_id"));
-        assert!(prompt.contains("never claim runtime correctness"));
-        assert!(prompt.contains("Never overlap board mutations"));
-        assert!(prompt.contains("A smaller queued board is not success"));
-        assert!(prompt.contains("delegated board specialist owns FlowScript"));
-        assert!(prompt.contains("retained_flowscript"));
-        assert!(prompt.contains("active recovery workspace"));
-        assert!(prompt.contains("minimal diagnostic"));
-        assert!(prompt.contains("your own debugging idea is not user authorization"));
-        assert!(prompt.contains("UNKNOWN"));
-        assert!(prompt.contains("returned `app_id` is the build target"));
-        assert!(prompt.contains("similarly named apps"));
-        assert!(
-            !prompt.contains("Create a cron-triggered workflow"),
-            "the nested board agent must never be asked to search for a cron node"
+
+        let discovery = prompt.find("begin with `list_apps`").unwrap();
+        let fallback = prompt.find("## SEALED PUBLIC-WEB FALLBACK").unwrap();
+        assert!(discovery < fallback);
+        assert!(prompt.contains("Local apps are the first choice"));
+        assert!(prompt.contains("including installed research/search apps"));
+        assert!(prompt.contains("no suitable app/interface"));
+        assert!(prompt.contains("local research candidates were tried in best-fit order"));
+        assert!(prompt.contains("no useful, nonredundant candidate remained"));
+        assert!(prompt.contains("A declined local call is a stop"));
+        assert!(prompt.contains("extract only safe public factual subquestions"));
+        assert!(prompt.contains("Default to DIRECT"));
+        assert!(prompt.contains("ordinary one-call, one-app, or simple two-app task"));
+        assert!(prompt.contains("at least three distinct apps/interfaces"));
+        assert!(prompt.contains(
+            "A long prompt, calling `list_apps`, or two independent calls is not by itself complex"
+        ));
+        assert!(prompt.contains("When COMPLEX SOLVE is active"));
+        assert!(prompt.contains("private dependency plan"));
+        assert!(prompt.contains("all independent ready steps in the same wave"));
+        assert!(prompt.contains("pass its Event `id` as `event_id`"));
+        assert!(prompt.contains("never substitute its `page_id`"));
+        assert!(prompt.contains("structured result supersedes earlier inventory"));
+        assert!(prompt.contains("Refresh `list_apps` at most once"));
+        assert!(prompt.contains("never a substitute for embedding a page"));
+        assert!(prompt.contains("material failures or evidence gaps"));
+        assert!(prompt.contains("Never claim completion until a terminal tool result proves it"));
+        assert!(prompt.contains("never repeat a successful mutation"));
+    }
+
+    #[test]
+    fn solve_keeps_public_fallback_separate_from_private_context() {
+        let delegated = global_assistant_system_prompt();
+        let inline = global_assistant_system_prompt_for(WebResearchCapability::Inline);
+
+        assert!(delegated.contains("immutable user request"));
+        assert!(delegated.contains("not root history or model-authored app/private context"));
+        assert!(inline.contains("bound to the immutable user request"));
+        assert!(inline.contains("cannot receive root history"));
+    }
+
+    #[test]
+    fn specialist_boundaries_and_build_recovery_survive_compaction() {
+        let prompt = global_assistant_system_prompt();
+
+        for tool in [
+            "flowpilot_board",
+            "flowpilot_widget",
+            "data_studio_agent",
+            "project_scout",
+        ] {
+            assert!(prompt.contains(&format!("`{tool}`")));
+        }
+        assert!(prompt.contains("UI scaffolding is not workflow logic"));
+        assert!(prompt.contains("full workflow acceptance contract"));
+        assert!(prompt.contains("retained candidate/draft"));
+        assert!(prompt.contains("exact draft ID/revision"));
+        assert!(prompt.contains("`FLOWSCRIPT_BASE_REVISION_CONFLICT`"));
+        assert!(prompt.contains("at most one retry"));
+        assert!(prompt.contains("Never launch a third equivalent attempt"));
+        assert!(prompt.contains("`segments_remaining` means continue"));
+        assert!(prompt.contains("`manual_steps` or stubs mean partial completion"));
+        assert!(prompt.contains("only a later assistant round may call `upsert_event`"));
+        assert!(prompt.contains("create/update every requested Event separately"));
+        assert!(prompt.contains("send that evidence to `flowpilot_board`"));
+        assert!(prompt.contains("Structural success is not runtime proof"));
+    }
+
+    #[test]
+    fn build_plan_keeps_identity_and_wavefront_invariants() {
+        let prompt = global_assistant_system_prompt();
+
+        assert!(prompt.contains("returned `board_id_map`"));
+        assert!(prompt.contains("never send a source board ID to the fork"));
+        assert!(prompt.contains("pin the returned destination `app_id`"));
+        assert!(prompt.contains("one shared contract"));
+        assert!(prompt.contains("`create_new_board=true`"));
+        assert!(prompt.contains("run independent specialists together"));
+        assert!(prompt.contains("Route each scout part by `source.kind`"));
+        assert!(prompt.contains("Pass its `locator` unchanged"));
+        assert!(prompt.contains("`timestamp:ms:UTC`"));
+        assert!(prompt.contains("FlowScript `Date`"));
+        assert!(prompt.contains("checkout link"));
+    }
+
+    #[test]
+    fn prompt_referenced_tools_exist_for_each_backend() {
+        let shared: std::collections::HashSet<_> = global_assistant_tool_specs(false)
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect();
+        for name in [
+            "list_apps",
+            "call_app_chat",
+            "flowpilot_board",
+            "flowpilot_widget",
+            "data_studio_agent",
+            "project_scout",
+            "fork_app",
+            "acquire_app",
+            "create_app",
+            "upsert_event",
+        ] {
+            assert!(shared.contains(name), "missing shared tool {name}");
+        }
+        assert!(shared.contains("research_agent"));
+    }
+
+    #[test]
+    fn standard_prompt_is_stable_and_within_size_budget() {
+        let first = global_assistant_system_prompt();
+        let second = global_assistant_system_prompt();
+
+        assert_eq!(
+            first, second,
+            "runtime context must not mutate the stable prompt"
         );
+        assert!(
+            first.len() <= 12_000,
+            "standard prompt grew beyond the reviewed 12 KB budget: {} bytes",
+            first.len()
+        );
+        assert!(
+            first.split_whitespace().count() <= 1_800,
+            "standard prompt grew beyond the reviewed word budget"
+        );
+    }
+
+    #[test]
+    fn platform_context_carries_the_current_date_outside_the_stable_prompt() {
+        let context = build_platform_context(PlatformContextInput::default());
+        assert!(context.contains("## CURRENT TIME"));
+        assert!(context.contains("Current UTC timestamp:"));
+        assert!(context.contains(&chrono::Utc::now().format("%Y-%m-%d").to_string()));
+        assert!(!global_assistant_system_prompt().contains("## CURRENT TIME"));
     }
 }

@@ -54,7 +54,7 @@ pub struct AddMemberRequest {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/groups/{group_id}/members",
-    skip(state, user)
+    skip(state, user, payload)
 )]
 pub async fn add_member(
     State(state): State<AppState>,

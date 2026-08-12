@@ -14,7 +14,8 @@ function parseNpmrc(source: string) {
 
 	for (const line of source.split(/\r?\n/)) {
 		const trimmed = line.trim();
-		if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";")) continue;
+		if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";"))
+			continue;
 
 		const equalsIndex = trimmed.indexOf("=");
 		if (equalsIndex === -1) continue;
@@ -56,7 +57,11 @@ describe("package manager supply-chain policy", () => {
 	test("bun install-script builder allowlist stays narrow", () => {
 		const packageJson = JSON.parse(readProjectFile("package.json"));
 
-		expect(packageJson.trustedDependencies).toEqual(["esbuild", "fsevents", "sharp"]);
+		expect(packageJson.trustedDependencies).toEqual([
+			"esbuild",
+			"fsevents",
+			"sharp",
+		]);
 	});
 
 	test("bun accepts the committed lockfile under the hardened config", () => {

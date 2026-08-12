@@ -3,22 +3,10 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
+import { consumeReturnUrl, sanitizeReturnUrl } from "../../lib/return-url";
 
 const AUTH_CHANNEL = "flow-like-auth";
-const RETURN_URL_KEY = "flow-like-return-url";
 const CALLBACK_TIMEOUT_MS = 8000;
-
-function getReturnUrl(): string | null {
-	return (
-		localStorage.getItem(RETURN_URL_KEY) ||
-		sessionStorage.getItem(RETURN_URL_KEY)
-	);
-}
-
-function clearReturnUrl() {
-	localStorage.removeItem(RETURN_URL_KEY);
-	sessionStorage.removeItem(RETURN_URL_KEY);
-}
 
 export default function CallbackPage() {
 	const auth = useAuth();
@@ -39,11 +27,14 @@ export default function CallbackPage() {
 				// BroadcastChannel not supported
 			}
 
-			const returnUrl = getReturnUrl();
-			clearReturnUrl();
+			// url_state survived the OAuth round trip in the state parameter;
+			// the stored copy is the fallback for logins that didn't carry it.
+			// Consume unconditionally so no stale key outlives this login.
+			const stored = consumeReturnUrl();
+			const returnUrl = sanitizeReturnUrl(auth.user?.url_state) ?? stored;
 			router.push(returnUrl || "/");
 		}
-	}, [auth.isAuthenticated, router]);
+	}, [auth.isAuthenticated, auth.user?.url_state, router]);
 
 	// Detect stuck state: not loading, not authenticated, no error
 	useEffect(() => {

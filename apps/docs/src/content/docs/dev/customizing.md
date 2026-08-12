@@ -1,217 +1,143 @@
 ---
 title: Customizing & White-Label
-description: Technical guide for customizing Flow-Like's appearance and behavior
+description: Current code locations for themes, branding, configuration, and UI customization
 sidebar:
   order: 30
 ---
 
-This guide covers the technical aspects of customizing Flow-Like — from simple theme changes to complete rebranding. For white-label licensing and business options, see [Enterprise White-Labeling](/enterprise/whitelabeling/).
+This page covers source-level customization. For licensing and supported
+customer deployments, see [Enterprise White-Labeling](/enterprise/whitelabeling/).
 
-:::tip[Looking for white-label licensing?]
-If you want to deploy Flow-Like under your own brand for customers, check out our [Enterprise White-Labeling](/enterprise/whitelabeling/) page for licensing options, pricing, and professional services.
-:::
+## Choose the layer you need
 
-## Quick Overview
+| Layer | Current source of truth |
+| --- | --- |
+| Default design tokens | `packages/ui/global.css` |
+| Profile theme schema and loader | `packages/ui/lib/theme.tsx` |
+| Built-in profile themes | `apps/desktop/app/settings/profiles/themes/` |
+| Desktop logo assets | `apps/desktop/public/` |
+| Tauri product metadata and installer icons | `apps/desktop/src-tauri/tauri.conf.json` and `apps/desktop/src-tauri/icons/` |
+| Hub name, domains, authentication, features, and legal links | `flow-like.config.json` |
+| Shared React components | `packages/ui/components/` |
 
-| Customization Level | Complexity | What You Can Change |
-|---------------------|------------|---------------------|
-| **Themes** | Low | Colors, fonts, light/dark mode |
-| **Branding** | Low | Logo, app name, metadata |
-| **Components** | Medium | UI elements, layouts |
-| **Node Editor** | Medium | Node appearance, canvas settings |
-| **Engine Embedding** | High | Integrate into your own product |
+## Themes
 
----
+Flow-Like uses semantic CSS variables with light and dark values. The current
+default palette is expressed in OKLCH in `packages/ui/global.css`; it is not an
+HSL-only theme.
 
-## Theming System
+Profile themes are JSON objects with `light` and `dark` maps:
 
-Flow-Like uses Tailwind CSS with CSS custom properties. The theme system supports:
-
-- Light and dark modes
-- Custom color palettes
-- Multiple built-in themes (Cosmic Night, Bubblegum, Neo Brutalism, etc.)
-
-### Theme Structure
-
-Themes are defined using CSS custom properties in HSL format:
-
-```css
-:root {
-  --background: 0 0% 100%;
-  --foreground: 222.2 84% 4.9%;
-  --primary: 222.2 47.4% 11.2%;
-  --primary-foreground: 210 40% 98%;
-  --accent: 210 40% 96.1%;
-  --muted: 210 40% 96.1%;
-  --border: 214.3 31.8% 91.4%;
-  --destructive: 0 84.2% 60.2%;
-  --ring: 222.2 84% 4.9%;
-  --radius: 0.5rem;
-}
-
-.dark {
-  --background: 222.2 84% 4.9%;
-  --foreground: 210 40% 98%;
-  /* ... dark mode overrides */
+```json
+{
+  "id": "My Theme",
+  "light": {
+    "background": "oklch(0.98 0.01 250)",
+    "foreground": "oklch(0.20 0.02 250)",
+    "primary": "oklch(0.62 0.18 260)",
+    "primaryForeground": "oklch(1 0 0)"
+  },
+  "dark": {
+    "background": "oklch(0.17 0.02 250)",
+    "foreground": "oklch(0.94 0.01 250)",
+    "primary": "oklch(0.72 0.15 260)",
+    "primaryForeground": "oklch(0.17 0.02 250)"
+  }
 }
 ```
 
-### Creating a Custom Theme
+`loadTheme()` converts the camel-case keys to CSS variables and merges missing
+values with the default theme. Built-in examples such as Cosmic Night,
+Bubblegum, and Neo Brutalism live beside the other profile themes.
 
-1. Define your color palette as HSL values
-2. Create CSS custom properties for each semantic color
-3. Add the theme to the theme selector in `packages/ui/components/theme-provider.tsx`
+For a CSS-first workflow, edit
+`apps/desktop/scripts/theme-input.css`, then run:
 
----
+```bash
+bun run --cwd apps/desktop ./scripts/generate-theme.ts
+```
+
+The generator writes `apps/desktop/scripts/generated-theme.json`. Review both
+light and dark modes before promoting that output into the built-in theme
+directory.
 
 ## Branding
 
-### Logo Files
+### Runtime and in-app assets
 
-Replace these files in `apps/desktop/public/`:
+The default in-app image is `apps/desktop/public/app-logo.webp`.
+`app-logo-light.webp` and `app-logo.png` are also available for surfaces that
+need those variants. Search for `/app-logo.webp` before replacing or renaming
+it: many components use that path as a fallback.
 
-| File | Usage |
-|------|-------|
-| `app-logo.webp` | Light mode logo |
-| `app-logo-light.webp` | Dark mode logo |
-| `favicon.ico` | Browser favicon |
-| `android-chrome-*.png` | Android icons |
-| `apple-touch-icon.png` | iOS icon |
+The browser favicon is `apps/desktop/app/favicon.ico`.
 
-### App Name & Metadata
+### Native application identity
 
-Update the app name in these locations:
+Update these fields in `apps/desktop/src-tauri/tauri.conf.json`:
 
 ```json
-// apps/desktop/src-tauri/tauri.conf.json
 {
-  "productName": "Your App Name",
-  "identifier": "com.yourcompany.yourapp"
+  "productName": "Your Product",
+  "identifier": "com.example.your-product"
 }
 ```
 
+Replace the native files under `apps/desktop/src-tauri/icons/` and keep the
+`bundle.icon` list synchronized. Platform-specific files under
+`apps/desktop/src-tauri/configs/` can override the base identifier, so inspect
+the configuration for every platform you ship.
+
+`apps/desktop/package.json` controls the JavaScript workspace package name; it
+does not contain a Tauri `productName` field.
+
+## Hub configuration
+
+`flow-like.config.json` configures the connected hub rather than the native
+application bundle. Relevant fields include:
+
 ```json
-// apps/desktop/package.json
 {
-  "name": "your-app-name",
-  "productName": "Your App Name"
+  "name": "Your Flow-Like Hub",
+  "domain": "api.example.com",
+  "secure": true,
+  "app": "app.example.com",
+  "web": "www.example.com"
 }
 ```
 
-```json
-// flow-like.config.json
-{
-  "appName": "Your App Name"
-}
-```
+The same file also holds authentication, feature, contact, legal, sink, and
+plan configuration. Start from the checked-in schema and configuration used by
+your deployment; do not add an `appName` field and assume clients consume it.
 
----
+## Components and editor surfaces
 
-## UI Components
+Shared shadcn-based components live in `packages/ui/components/ui/`. The Flow
+editor is under `packages/ui/components/flow/`, while the Page and Widget
+builders live under `packages/ui/components/builder/`.
 
-The UI is built on [shadcn/ui](https://ui.shadcn.com/) components in `packages/ui/components/ui/`.
+Prefer semantic tokens such as `bg-background`, `text-foreground`, and
+`border-border`. Hard-coded colors tend to break profile themes and dark mode.
+Flow-Like uses Lucide and Tabler icons in different surfaces, so follow the
+imports already used by the component you are editing.
 
-### Customization Levels
-
-1. **Global styles** — Modify `packages/ui/styles/globals.css`
-2. **Component variants** — Edit component files in `packages/ui/components/ui/`
-3. **Instance overrides** — Pass `className` props to components
-
-### Icon System
-
-Flow-Like uses [Lucide](https://lucide.dev/) icons:
-
-```tsx
-import { Plus, Settings, Workflow } from "lucide-react";
-
-<Plus className="h-4 w-4" />
-<Settings className="h-5 w-5 text-muted-foreground" />
-```
-
----
-
-## Node Editor Customization
-
-### Node Appearance
-
-Customize nodes in the visual editor:
-
-- **Category colors** — Defined per node category
-- **Icons** — SVG icons referenced in node definitions
-- **Pin styling** — Input/output pin appearance
-
-### Canvas Settings
-
-Configurable canvas options:
-
-| Setting | Location |
-|---------|----------|
-| Grid size | Editor settings |
-| Snap-to-grid | Editor settings |
-| Zoom limits | `packages/ui/components/flow/` |
-| Background pattern | Canvas component |
-| Connection line style | Edge components |
-
----
-
-## Engine Embedding
-
-For deeper integration, you can embed Flow-Like's workflow engine into your own product.
-
-### Rust Core
-
-Use `flow-like` as a Cargo dependency:
-
-```toml
-[dependencies]
-flow-like = { git = "https://github.com/Rheosoph/flow-like" }
-```
-
-### Visual Editor
-
-The React workflow editor can be embedded as a component. Contact us for integration guidance.
-
-### REST API
-
-Execute workflows via the API:
+## Validate a customization
 
 ```bash
-POST /api/v1/apps/{app_id}/events/{event_id}/invoke
-Content-Type: application/json
-
-{
-  "payload": { ... }
-}
+mise run dev:desktop
+mise run check
 ```
 
-→ For engine embedding and white-label licensing, see [Enterprise White-Labeling](/enterprise/whitelabeling/).
+At minimum, review:
 
----
-
-## Configuration Files
-
-| File | Purpose |
-|------|---------|
-| `flow-like.config.json` | Runtime configuration |
-| `apps/desktop/src-tauri/tauri.conf.json` | Desktop app settings |
-| `packages/ui/tailwind.config.ts` | Tailwind theme |
-| `packages/ui/styles/globals.css` | Global CSS |
-
----
-
-## Need Help?
-
-:::tip[Looking for White-Label or Professional Services?]
-We offer complete white-labeling with custom branding, deployment assistance, and priority support.
-
-📧 **[info@great-co.de](mailto:info@great-co.de)**
-
-→ [Enterprise White-Labeling](/enterprise/whitelabeling/)
-:::
+- onboarding, home, Flow editor, Page Builder, Widget Builder, and settings;
+- both light and dark modes;
+- common desktop window sizes and any mobile target you ship;
+- Tauri bundle metadata, icons, deep links, and update configuration;
+- hub login, logout, callbacks, legal links, and public URLs.
 
 ## Related
 
-- [Enterprise White-Labeling](/enterprise/whitelabeling/) — Licensing and business options
-- [Building from Source](/dev/build/) — Development setup
-- [Architecture](/dev/architecture/) — Technical overview
-- [Contribute](/dev/contribute/) — Submit customizations
+- [Enterprise White-Labeling](/enterprise/whitelabeling/)
+- [Building from Source](/dev/build/)
+- [Architecture](/dev/architecture/)

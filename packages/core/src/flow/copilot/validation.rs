@@ -117,6 +117,7 @@ pub fn validate_model_facing_emit_commands_scope(args: &EmitCommandsArgs) -> Emi
                     BoardCommand::CreateVariable { .. } => "CreateVariable",
                     BoardCommand::UpdateVariable { .. } => "UpdateVariable",
                     BoardCommand::RemoveVariable { .. } => "DeleteVariable",
+                    BoardCommand::UpdateLayerCache { .. } => "UpdateLayerCache",
                 };
 
                 Some(issue(
@@ -191,6 +192,12 @@ pub async fn validate_emit_commands(
     let mut known_layer_refs: HashSet<String> = graph_context
         .layers
         .iter()
+        .flat_map(|layer| [layer.id.clone(), layer.name.clone()])
+        .collect();
+    let mut function_layer_refs: HashSet<String> = graph_context
+        .layers
+        .iter()
+        .filter(|layer| layer.layer_type.eq_ignore_ascii_case("function"))
         .flat_map(|layer| [layer.id.clone(), layer.name.clone()])
         .collect();
     let known_variables: HashSet<String> = graph_context
@@ -723,6 +730,7 @@ pub async fn validate_emit_commands(
                 pins,
                 position,
                 target_layer,
+                cache,
                 summary,
                 ..
             } => {
@@ -760,6 +768,19 @@ pub async fn validate_emit_commands(
                 }
                 validate_target_layer(index, target_layer, &known_layer_refs, &mut errors);
                 validate_placeholder_pins(index, pins.as_deref(), &mut errors);
+                if cache.is_some()
+                    && !matches!(layer_type.as_deref(), Some("Function") | Some("function"))
+                {
+                    errors.push(issue(
+                        "error",
+                        "cache-requires-function-layer",
+                        Some(index),
+                        format!(
+                            "CreateLayer '{}' can only configure cache when layer_type is Function",
+                            name
+                        ),
+                    ));
+                }
 
                 let key = ref_id
                     .clone()
@@ -776,7 +797,10 @@ pub async fn validate_emit_commands(
                     known_layer_refs.insert(key.clone());
                     known_layer_refs.insert(name.clone());
                     layer_display.insert(key.clone(), name.clone());
-                    if matches!(layer_type.as_deref(), Some("Function")) {
+                    if matches!(layer_type.as_deref(), Some(kind) if kind.eq_ignore_ascii_case("function"))
+                    {
+                        function_layer_refs.insert(key.clone());
+                        function_layer_refs.insert(name.clone());
                         entities_to_check.insert(key);
                     }
                 }
@@ -788,6 +812,33 @@ pub async fn validate_emit_commands(
                         "unknown-layer",
                         Some(index),
                         format!("Cannot remove unknown layer '{}'", layer_id),
+                    ));
+                }
+            }
+            BoardCommand::UpdateLayerCache {
+                layer_id, summary, ..
+            } => {
+                if !known_layer_refs.contains(layer_id) {
+                    errors.push(issue(
+                        "error",
+                        "unknown-layer",
+                        Some(index),
+                        format!("Cannot update cache on unknown layer '{}'", layer_id),
+                    ));
+                } else if !function_layer_refs.contains(layer_id) {
+                    errors.push(issue(
+                        "error",
+                        "cache-requires-function-layer",
+                        Some(index),
+                        format!("Cannot update cache on non-Function layer '{}'", layer_id),
+                    ));
+                }
+                if summary.as_deref().unwrap_or_default().trim().is_empty() {
+                    warnings.push(issue(
+                        "warning",
+                        "missing-summary",
+                        Some(index),
+                        format!("UpdateLayerCache '{}' is missing a summary field", layer_id),
                     ));
                 }
             }
@@ -1425,7 +1476,7 @@ fn pin_not_found_message(
     let expected_pins: Vec<_> = entity
         .pins
         .iter()
-        .filter(|pin| expected_direction.map_or(true, |direction| pin.direction == direction))
+        .filter(|pin| expected_direction.is_none_or(|direction| pin.direction == direction))
         .map(|pin| pin.name.as_str())
         .collect();
 
@@ -1498,6 +1549,93 @@ fn issue(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct EmptyCatalogProvider;
+
+    #[flow_like_types::async_trait]
+    impl CatalogProvider for EmptyCatalogProvider {
+        async fn search(&self, _query: &str) -> Vec<super::super::types::NodeMetadata> {
+            Vec::new()
+        }
+
+        async fn search_by_pin_type(
+            &self,
+            _pin_type: &str,
+            _is_input: bool,
+        ) -> Vec<super::super::types::NodeMetadata> {
+            Vec::new()
+        }
+
+        async fn filter_by_category(
+            &self,
+            _category_prefix: &str,
+        ) -> Vec<super::super::types::NodeMetadata> {
+            Vec::new()
+        }
+
+        async fn get_node_metadata(
+            &self,
+            _node_type: &str,
+        ) -> Option<super::super::types::NodeMetadata> {
+            None
+        }
+
+        async fn get_all_nodes(&self) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    fn layer_context(
+        id: &str,
+        name: &str,
+        layer_type: &str,
+    ) -> super::super::context::LayerContext {
+        super::super::context::LayerContext {
+            id: id.to_string(),
+            name: name.to_string(),
+            layer_type: layer_type.to_string(),
+            parent_id: None,
+            node_ids: Vec::new(),
+            position: (0, 0),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            cache: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn cache_update_preflight_requires_a_function_layer() {
+        let context = GraphContext {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            layers: vec![
+                layer_context("function-layer", "Lookup", "Function"),
+                layer_context("group-layer", "Group", "Collapsed"),
+            ],
+            variables: Vec::new(),
+            selected_nodes: Vec::new(),
+        };
+        let commands = |layer_id: &str| EmitCommandsArgs {
+            commands: vec![BoardCommand::UpdateLayerCache {
+                layer_id: layer_id.to_string(),
+                cache: None,
+                summary: Some("Disable cache".to_string()),
+            }],
+            explanation: "Update function caching".to_string(),
+        };
+
+        let valid =
+            validate_emit_commands(&commands("function-layer"), &context, &EmptyCatalogProvider)
+                .await;
+        assert!(valid.errors.is_empty(), "{:?}", valid.errors);
+
+        let invalid =
+            validate_emit_commands(&commands("group-layer"), &context, &EmptyCatalogProvider).await;
+        assert!(invalid.errors.iter().any(|issue| {
+            issue.code == "cache-requires-function-layer"
+                && issue.message.contains("non-Function layer")
+        }));
+    }
 
     #[test]
     fn model_facing_emit_scope_requires_flowscript_for_executable_commands() {
@@ -1583,6 +1721,7 @@ mod tests {
                 position: None,
                 color: None,
                 target_layer: None,
+                cache: None,
                 summary: Some("Create helper".to_string()),
             }],
             explanation: "Create function structure".to_string(),

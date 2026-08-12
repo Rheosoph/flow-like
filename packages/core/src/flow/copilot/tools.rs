@@ -11,15 +11,22 @@ use flow_like_ast::model::{
 };
 
 use super::ir_tools::{
-    CheckFlowScriptArgs, CommitFlowScriptArgs, FlowIrAcceptanceBinding, FlowIrDraftStore,
-    PatchFlowScriptArgs, WriteFlowScriptArgs,
+    CheckFlowScriptArgs, CommitFlowScriptArgs, ExtendTimeBudgetArgs, FlowIrAcceptanceBinding,
+    FlowIrDraftStore, MAX_BOARD_SCOPE_SEGMENTS, PatchFlowScriptArgs, PlanBoardScopeArgs,
+    WriteFlowScriptArgs, accept_scope_plan,
 };
 use super::platform::PlatformToolBridge;
 #[cfg(test)]
 use super::provider::MAX_DECLARATION_PRIORITY_BLOCK_BYTES;
-use super::provider::{CatalogProvider, DECLARATION_PRIORITY_BEGIN, DECLARATION_PRIORITY_END};
+use super::provider::{
+    CatalogProvider, DECLARATION_PRIORITY_BEGIN, DECLARATION_PRIORITY_END,
+    parse_declaration_resolution_metadata,
+};
 use super::search::score_catalog_metadata;
-use super::tool_spec::{find_runtime_execution_tool_spec, missing_required_args};
+use super::stream::stream_frame;
+use super::tool_spec::{
+    find_runtime_execution_tool_spec, find_workflow_context_tool_spec, missing_required_args,
+};
 use super::types::{BoardCommand, RunContext, TemplateInfo};
 use crate::flow::ast::{
     ReconcileResult, RenderOptions, blocked_destructive_flowscript_message, board_to_flowscript,
@@ -250,7 +257,7 @@ const DECLARATION_PRIORITY_TRUNCATION_NOTICE: &str =
     "\n// [Additional matches omitted; priority declaration retained.]";
 const DECLARATION_SIGNATURE_TRUNCATION_NOTICE: &str =
     "\n// [Additional matches and usage notes omitted; exact declaration retained.]";
-const DECLARATION_OUTPUT_OMISSION_NOTICE: &str = "// [Exact declaration omitted because it exceeds the bounded batch response. Retry this capability in a separate focused get_declarations call.]";
+const DECLARATION_OUTPUT_OMISSION_NOTICE: &str = "// [Exact declaration omitted because it exceeds the bounded batch response. Call plan_board_scope exactly once unless the host already accepted a plan, then retain its active segment now; retry this capability in one focused get_declarations call only if a later compiler diagnostic still requires it.]";
 const MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES: usize = 48;
 
 fn declaration_query_key(query: &str) -> String {
@@ -389,13 +396,9 @@ fn declaration_priority_block(section: &str) -> Option<&str> {
 
 fn declaration_priority_projection(section: &str) -> Option<String> {
     let block = declaration_priority_block(section)?;
-    let identity_end = section
-        .find('\n')
-        .map(|index| index.saturating_add(1))
-        .unwrap_or_default();
-    let identity = section.get(..identity_end).unwrap_or_default();
+    let identity = declaration_section_identity_line(section);
     let identity = if identity.len() <= MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES {
-        identity.to_string()
+        identity
     } else {
         let retained = MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES.saturating_sub(4);
         let boundary = identity
@@ -417,13 +420,9 @@ fn declaration_exact_signature_line(section: &str) -> Option<&str> {
 }
 
 fn declaration_section_identity(section: &str) -> String {
-    let identity_end = section
-        .find('\n')
-        .map(|index| index.saturating_add(1))
-        .unwrap_or(section.len());
-    let identity = section.get(..identity_end).unwrap_or_default();
+    let identity = declaration_section_identity_line(section);
     if identity.len() <= MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES {
-        return identity.to_string();
+        return identity;
     }
     let retained = MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES.saturating_sub(4);
     let boundary = identity
@@ -433,6 +432,15 @@ fn declaration_section_identity(section: &str) -> String {
         .last()
         .unwrap_or_default();
     format!("{}...\n", &identity[..boundary])
+}
+
+fn declaration_section_identity_line(section: &str) -> String {
+    let line = section
+        .lines()
+        .find(|line| line.trim_start().starts_with("// declaration query:"))
+        .or_else(|| section.lines().next())
+        .unwrap_or_default();
+    format!("{line}\n")
 }
 
 fn declaration_exact_projection(section: &str) -> Option<String> {
@@ -487,12 +495,15 @@ fn bound_declaration_section_to(section: &str, max_bytes: usize) -> String {
         return section.to_string();
     }
     if let Some(mut priority_projection) = declaration_priority_projection(section)
-        && priority_projection
+        && priority_projection.len() <= max_bytes
+    {
+        if priority_projection
             .len()
             .saturating_add(DECLARATION_PRIORITY_TRUNCATION_NOTICE.len())
             <= max_bytes
-    {
-        priority_projection.push_str(DECLARATION_PRIORITY_TRUNCATION_NOTICE);
+        {
+            priority_projection.push_str(DECLARATION_PRIORITY_TRUNCATION_NOTICE);
+        }
         return priority_projection;
     }
     if let Some(mut exact_projection) = declaration_exact_projection(section)
@@ -540,11 +551,30 @@ fn declaration_batch_header(
     let mut matched_queries = Vec::new();
     let mut unmatched_queries = Vec::new();
     let mut output_omitted_queries = Vec::new();
+    let mut resolution_summaries = Vec::new();
     for (index, query) in batch.processed.iter().enumerate() {
-        let provider_matched = sections
+        let resolution = sections
             .get(index)
-            .and_then(|section| declaration_exact_signature_line(section))
-            .is_some();
+            .and_then(|section| parse_declaration_resolution_metadata(section));
+        let provider_matched = resolution
+            .as_ref()
+            .is_some_and(|resolution| resolution.status.is_confident());
+        resolution_summaries.push(match resolution {
+            Some(resolution) => json!({
+                "query": query,
+                "status": resolution.status,
+                "top_score": resolution.top_score,
+                "margin": resolution.margin,
+                "reason_codes": resolution.reason_codes,
+            }),
+            None => json!({
+                "query": query,
+                "status": "unresolved",
+                "top_score": null,
+                "margin": null,
+                "reason_codes": ["missing_resolution_metadata"],
+            }),
+        });
         if output_omitted.get(index).copied().unwrap_or_default() && provider_matched {
             output_omitted_queries.push(query.clone());
         } else if provider_matched {
@@ -564,6 +594,7 @@ fn declaration_batch_header(
         "matched_queries": matched_queries,
         "unmatched_count": unmatched_queries.len(),
         "unmatched_queries": unmatched_queries,
+        "resolutions": resolution_summaries,
         "output_omitted_count": output_omitted_queries.len(),
         "output_omitted_queries": output_omitted_queries,
         "complete": complete,
@@ -613,8 +644,8 @@ fn render_declaration_query_batch(batch: &DeclarationQueryBatch, sections: &[Str
         .map(|(index, _)| {
             sections
                 .get(index)
-                .and_then(|section| declaration_exact_signature_line(section))
-                .is_some()
+                .and_then(|section| parse_declaration_resolution_metadata(section))
+                .is_some_and(|resolution| resolution.status.is_confident())
         })
         .collect::<Vec<_>>();
     let mut output_omitted = vec![false; batch.processed.len()];
@@ -750,7 +781,7 @@ impl Tool for CatalogTool {
             description: r#"Search the node catalog by functionality or name for read-only exploration and debugging.
 
 WHEN TO USE: Explore catalog metadata when explaining a board or investigating a declaration issue.
-FOR WORKFLOW EDITS: Prefer get_declarations, then write_flowscript → patch_flowscript as needed → check_flowscript → commit_flowscript. get_declarations is backed by embedded .flow.d files and returns exact camelCase function signatures.
+FOR WORKFLOW EDITS: Prefer get_declarations → plan_board_scope exactly once unless already accepted → write_flowscript → patch_flowscript as needed → check_flowscript → commit_flowscript. get_declarations is backed by embedded .flow.d files and returns exact camelCase function signatures.
 EXAMPLE QUERIES: "http request", "parse json", "loop array", "condition if", "open database""#.to_string(),
             parameters: json!({
                 "type": "object",
@@ -982,7 +1013,8 @@ RETURNS:
 WORKFLOW:
 1. list_board_nodes → see all nodes and positions
 2. get_node_details on relevant node → get pin names
-3. get_declarations → find signatures, then write/patch/check/commit FlowScript for behavior;
+3. get_declarations → find signatures, then plan_board_scope exactly once unless already accepted,
+   then write/patch/check/commit FlowScript for behavior;
    emit_commands is only for position-only MoveNode and canvas comments"#
                     .to_string(),
             parameters: json!({
@@ -1345,7 +1377,9 @@ impl Tool for EmitCommandsTool {
             description: r#"Execute low-level graph modifications. Commands are batched and applied atomically with undo support.
 
 PRIMARY WORKFLOW EDIT PATH:
-Use get_declarations to search embedded .flow.d signatures, then write_flowscript, repair with patch_flowscript, check_flowscript, and commit_flowscript.
+Use get_declarations to search embedded .flow.d signatures, call plan_board_scope exactly once
+unless the host already accepted a plan, then write_flowscript, repair with patch_flowscript,
+check_flowscript, and commit_flowscript.
 
 LOW-LEVEL FALLBACK WORKFLOW:
 1. Use catalog_search to get exact node_type
@@ -1707,6 +1741,82 @@ REF_IDS: Use '$0', '$1', etc. to reference nodes in same batch"#.to_string(),
 // Runtime Verification Tools (desktop bridge)
 // ============================================================================
 
+fn workflow_context_tool_definition(name: &str) -> ToolDefinition {
+    find_workflow_context_tool_spec(name)
+        .expect("workflow context tool spec must exist")
+        .to_tool_definition()
+}
+
+async fn call_workflow_context_tool(
+    bridge: &Arc<dyn PlatformToolBridge>,
+    name: &str,
+    arguments: Value,
+) -> Result<String, RuntimeVerificationToolError> {
+    let spec = find_workflow_context_tool_spec(name)
+        .ok_or_else(|| RuntimeVerificationToolError(format!("missing tool spec for {name}")))?;
+    if let Some(error) = missing_required_args(&spec, &arguments) {
+        return Err(RuntimeVerificationToolError(error));
+    }
+    Ok(bridge.call(name, arguments).await)
+}
+
+pub struct DatabaseContextTool {
+    pub bridge: Arc<dyn PlatformToolBridge>,
+}
+
+impl Tool for DatabaseContextTool {
+    const NAME: &'static str = "database_tool";
+    type Error = RuntimeVerificationToolError;
+    type Args = Value;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        workflow_context_tool_definition(Self::NAME)
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        call_workflow_context_tool(&self.bridge, Self::NAME, args).await
+    }
+}
+
+pub struct StorageContextTool {
+    pub bridge: Arc<dyn PlatformToolBridge>,
+}
+
+impl Tool for StorageContextTool {
+    const NAME: &'static str = "storage_tool";
+    type Error = RuntimeVerificationToolError;
+    type Args = Value;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        workflow_context_tool_definition(Self::NAME)
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        call_workflow_context_tool(&self.bridge, Self::NAME, args).await
+    }
+}
+
+pub struct UiInspectContextTool {
+    pub bridge: Arc<dyn PlatformToolBridge>,
+}
+
+impl Tool for UiInspectContextTool {
+    const NAME: &'static str = "ui_inspect";
+    type Error = RuntimeVerificationToolError;
+    type Args = Value;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        workflow_context_tool_definition(Self::NAME)
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        call_workflow_context_tool(&self.bridge, Self::NAME, args).await
+    }
+}
+
 fn runtime_tool_definition(name: &str) -> ToolDefinition {
     find_runtime_execution_tool_spec(name)
         .expect("runtime execution tool spec must exist")
@@ -1966,9 +2076,13 @@ impl Tool for GetCurrentFlowScriptTool {
 
 Use this once before starting a new retained draft for an existing board. The returned document is
 the source you must edit and submit in full to `write_flowscript`; preserve all `//@n:<id>` anchors
-on statements you keep. After a write/check diagnostic, do NOT read the unchanged live board again:
-continue from the retained source and revision with patch_flowscript/check_flowscript/
-commit_flowscript."#
+and every `@cache` decorator on functions you keep. Cache settings use
+`@cache({ namespace: "...", ttlSeconds: 3600, scope: "user" })`; bare `@cache` defaults to the
+`global` namespace, a 300-second lifetime, and app scope. Use `ttlSeconds: 0` for no expiry.
+If existing context reports `ttl_seconds: null`, it is a permanent cache; preserve it as
+explicit `ttlSeconds: 0` rather than applying the new omission default.
+After a write/check diagnostic, do NOT read the unchanged live board again: continue from the
+retained source and revision with patch_flowscript/check_flowscript/commit_flowscript."#
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -2007,7 +2121,7 @@ impl Tool for GetDeclarationsTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "get_declarations".to_string(),
-            description: r#"Look up FlowScript node declarations (.flow.d) by intent. BATCH-FIRST: pass ALL the searches your plan needs in ONE call via `queries`.
+            description: r#"Look up FlowScript node declarations (.flow.d) by intent. The initial pass is ONE bounded, focused batch (at most 32 queries) for the highest-leverage catalog calls needed to establish the workflow's end-to-end shape — not an inventory of every utility operation.
 
 Returns a compact ranked list of exact `declare function <camelCaseNodeType>({ pin: type, ... })`
 signatures per query, plus an `// impure` marker for side-effecting / control-flow nodes. Exact live
@@ -2019,11 +2133,15 @@ validation later names a failing node/pin or a comparison/type-conversion mismat
 repair lookup for that diagnostic. Empty queries intentionally return guidance only, not the full
 catalog.
 
-WORKFLOW: sketch the whole flow first, list every node capability it needs, then make ONE
-get_declarations call with all of those searches in `queries`. Keep each search focused on one
-concrete node capability rather than combining an entire subsystem into one query, e.g.
+WORKFLOW: plan the complete requested scope, then query the highest-leverage concrete catalog calls
+that establish its critical path. Keep each search focused on one concrete node capability rather
+than combining an entire subsystem into one query, e.g.
 {"queries": ["open local database", "datafusion sql query", "for each loop", "instantiate widget",
-"string format", "http fetch"]}. Only call again for signatures that were genuinely missing.
+"string format", "http fetch"]}. After ANY usable response, call `plan_board_scope` exactly once
+unless the host already retained an accepted plan, then immediately call `write_flowscript` and
+retain its ACTIVE SEGMENT, even when compiler repairs are expected. Do not make a second broad
+declaration batch or chase `omitted_queries` / `unmatched_queries` before the first write. Defer
+those searches until compiler diagnostics identify a concrete gap, then use one narrow repair lookup.
 
 Use this BEFORE writing FlowScript so you call nodes by their exact camelCase name with correctly
 typed arguments. This covers every package in the project's catalog, including third-party ones."#
@@ -2040,11 +2158,11 @@ typed arguments. This covers every package in the project's catalog, including t
                         "minItems": 1,
                         "maxItems": MAX_DECLARATION_QUERIES,
                         "uniqueItems": true,
-                        "description": "REQUIRED. Every focused declaration search needed by the planned flow, answered in this one call — one entry per node capability. The result reports matched_queries, unmatched_queries, complete, and omitted_queries explicitly. Good entries: 'gmail imap fetch mail', 'smtp send email', 'open local database batch insert', 'datafusion sql register lance', 'hybrid vector search build index'."
+                        "description": "REQUIRED. One bounded initial batch of the highest-leverage concrete catalog calls needed to establish the end-to-end workflow shape; do not enumerate every utility operation. After any usable response, call plan_board_scope exactly once unless the host already accepted a plan, then write its active segment immediately and defer omitted/unmatched searches until compiler diagnostics. The result reports matched_queries, unmatched_queries, complete, and omitted_queries explicitly. Good entries: 'gmail imap fetch mail', 'smtp send email', 'open local database batch insert', 'datafusion sql register lance', 'hybrid vector search build index'."
                     },
                     "query": {
                         "type": "string",
-                        "description": "Single-search fallback. Prefer `queries` with every needed search batched into one call.",
+                        "description": "Single-search fallback. Prefer one bounded `queries` batch for the highest-leverage initial calls, or one compiler-directed repair lookup after a draft exists.",
                         "maxLength": MAX_DECLARATION_QUERY_BYTES
                     }
                 },
@@ -2116,10 +2234,61 @@ pub fn flowscript_workspace_envelope(flowscript: &str, status: &str) -> String {
 }
 
 pub fn flowscript_workspace_tag(flowscript: &str, status: &str) -> String {
-    format!(
-        "<flowscript_workspace>{}</flowscript_workspace>",
-        flowscript_workspace_envelope(flowscript, status)
+    stream_frame(
+        "flowscript_workspace",
+        &json!({
+            "source": flowscript,
+            "status": status,
+        }),
     )
+}
+
+/// Replace double-quoted string literal contents with spaces so stub-marker scanning cannot trip
+/// on legitimate user-facing text (labels, prompts, messages). Escapes are honored; comments and
+/// code stay scannable.
+fn strip_flowscript_string_literals(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '"' {
+            out.push(ch);
+            continue;
+        }
+        out.push(' ');
+        while let Some(inner) = chars.next() {
+            match inner {
+                '\\' => {
+                    let _ = chars.next();
+                }
+                '"' => break,
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// True when `marker` occurs in `haystack` with non-alphanumeric characters on both sides, so a
+/// short marker like "todo" cannot match inside identifiers such as `todoList`.
+fn contains_stub_marker(haystack: &str, marker: &str) -> bool {
+    let mut search_from = 0;
+    while let Some(offset) = haystack[search_from..].find(marker) {
+        let start = search_from + offset;
+        let end = start + marker.len();
+        let bounded_left = haystack[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !ch.is_alphanumeric());
+        let bounded_right = haystack[end..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !ch.is_alphanumeric());
+        if bounded_left && bounded_right {
+            return true;
+        }
+        search_from = end;
+    }
+    false
 }
 
 fn edit_flowscript_actionability_feedback(
@@ -2127,7 +2296,7 @@ fn edit_flowscript_actionability_feedback(
     board_is_empty: bool,
     diagnostics: &[String],
 ) -> Option<String> {
-    let lower = flowscript.to_lowercase();
+    let lower = strip_flowscript_string_literals(flowscript).to_lowercase();
     let stub_markers = [
         "implementation plan",
         "implementation notes",
@@ -2146,7 +2315,10 @@ fn edit_flowscript_actionability_feedback(
         "clear wiring plan",
     ];
 
-    if stub_markers.iter().any(|marker| lower.contains(marker)) {
+    if stub_markers
+        .iter()
+        .any(|marker| contains_stub_marker(&lower, marker))
+    {
         return Some(
             "This edit looks like a plan/stub, not actionable FlowScript. `edit_flowscript` only creates board changes from real catalog calls. Do not submit TODOs, stub comments, lists of node names, or \"replace with\" instructions; call `get_declarations` for the missing signatures and submit concrete calls inside a function/event block."
                 .to_string(),
@@ -2939,8 +3111,36 @@ pub fn render_edit_flowscript_result(
     board_is_empty: bool,
     allow_deletions: bool,
 ) -> String {
-    let mut rendered =
-        render_edit_flowscript_result_legacy(flowscript, result, board_is_empty, allow_deletions);
+    render_edit_flowscript_result_inner(flowscript, result, board_is_empty, allow_deletions, true)
+}
+
+/// Render a commit the draft store already validated at an exact revision. The pre-commit
+/// actionability scan must not run here: a false positive (e.g. a stub marker inside a string
+/// literal) would report "Nothing was queued." for a commit whose pending claim the store already
+/// holds — a wedged state no agent effort can escape.
+pub fn render_committed_flowscript_result(
+    flowscript: &str,
+    result: &ReconcileResult,
+    board_is_empty: bool,
+    allow_deletions: bool,
+) -> String {
+    render_edit_flowscript_result_inner(flowscript, result, board_is_empty, allow_deletions, false)
+}
+
+fn render_edit_flowscript_result_inner(
+    flowscript: &str,
+    result: &ReconcileResult,
+    board_is_empty: bool,
+    allow_deletions: bool,
+    enforce_actionability: bool,
+) -> String {
+    let mut rendered = render_edit_flowscript_result_legacy(
+        flowscript,
+        result,
+        board_is_empty,
+        allow_deletions,
+        enforce_actionability,
+    );
     if !result.corrections.is_empty() {
         let payload = serde_json::to_string(&result.corrections).unwrap_or_else(|_| "[]".into());
         rendered.push_str(&format!(
@@ -2960,12 +3160,14 @@ fn render_edit_flowscript_result_legacy(
     result: &ReconcileResult,
     board_is_empty: bool,
     allow_deletions: bool,
+    enforce_actionability: bool,
 ) -> String {
     // Run this before inspecting commands: an empty Event entry itself reconciles to AddNode, but
     // accepting that shell on a new board lets a failed rich draft collapse into a one-node
     // "success" and stops the repair loop.
-    if let Some(feedback) =
-        edit_flowscript_actionability_feedback(flowscript, board_is_empty, &result.diagnostics)
+    if enforce_actionability
+        && let Some(feedback) =
+            edit_flowscript_actionability_feedback(flowscript, board_is_empty, &result.diagnostics)
     {
         let mut msg = format!("{feedback}\n\nNothing was queued.");
         if !result.diagnostics.is_empty() {
@@ -3117,6 +3319,12 @@ and catalog declarations, then produces minimal changes:
   resolvable FlowScript references/nested calls.
 - A new unanchored `function name(...) { ... }` declaration → creates a Function layer, places
   body nodes inside it, creates boundary pins from params/returns, and wires `return` values.
+- `@cache({ namespace: "...", ttlSeconds: 3600, scope: "user" })` immediately above a function
+  configures its result cache; bare `@cache` uses the `global` namespace, a 300-second lifetime,
+  and app scope. Set `ttlSeconds: 0` explicitly for a permanent entry. A hit skips the entire
+  function body and its side effects, so cache only input-determined functions.
+- Existing context may report `ttl_seconds: null` for a permanent cache. Preserve that as
+  explicit `ttlSeconds: 0`; omission on newly authored cache settings means 300 seconds.
 
 RULES:
 - PRESERVE every `//@n:<id>` anchor comment on statements you keep, exactly as given.
@@ -3214,6 +3422,67 @@ RULES:
     }
 }
 
+pub struct ExtendTimeBudgetTool;
+
+impl Tool for ExtendTimeBudgetTool {
+    const NAME: &'static str = "extend_time_budget";
+
+    type Error = FlowScriptToolError;
+    type Args = ExtendTimeBudgetArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Ask for more wall clock on a long build. Call this when the run is genuinely still advancing and the remaining segments need more time than the current budget allows. The host decides from its own record of what actually moved — segments committed, revisions that checked valid, the retained document growing, new compiler states reached — not from what you write here, so an accurate account costs nothing and an optimistic one buys nothing. A run that is repairing the same diagnostics or rewriting the same document is refused and should stop and report instead. You do not have to call this to survive a deadline: the host also extends automatically at the boundary whenever the same evidence of progress is present. Use it when you already know the next segment is large."
+                .to_string(),
+            parameters: serde_json::to_value(schema_for!(ExtendTimeBudgetArgs))
+                .unwrap_or_else(|_| json!({ "type": "object" })),
+        }
+    }
+
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        // The budget lives in the host run loop, which intercepts this call before dispatch. Only a
+        // surface with no such loop (the in-process rig path) ever reaches this body.
+        let payload = json!({
+            "status": "time_budget_unavailable",
+            "retryable": false,
+            "next_action": "continue_building",
+            "message": "This run has no extendable host time budget; continue within the budget you have.",
+        });
+        Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string()))
+    }
+}
+
+pub struct PlanBoardScopeTool;
+
+impl Tool for PlanBoardScopeTool {
+    const NAME: &'static str = "plan_board_scope";
+
+    type Error = FlowScriptToolError;
+    type Args = PlanBoardScopeArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: format!(
+                "Declare how the requested behavior will be built, after the declaration lookup and before the first source write. Split the request into ordered segments that are each executable on their own, and pick how they reach the board: \"single\" for one segment (an ordinary edit — this is the common case and costs nothing extra), \"staged\" to grow one draft segment by segment and commit once atomically, \"incremental\" to commit each segment separately when the whole build is too large to reach one commit, or \"multi_board\" when the segments are genuinely independent entry points that each deserve their own board. Segments are NOT stubs: each must fully feed the required inputs of the nodes it adds, and describe concrete behavior rather than deferred work. Unfinished exec tails between segments are expected and do not block validation. At most {MAX_BOARD_SCOPE_SEGMENTS} segments; dependencies must point at earlier segments."
+            ),
+            parameters: serde_json::to_value(schema_for!(PlanBoardScopeArgs))
+                .unwrap_or_else(|_| json!({ "type": "object" })),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let payload = match accept_scope_plan(args) {
+            Ok(plan) => plan.acceptance_payload(),
+            Err(rejection) => rejection.payload(),
+        };
+        Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string()))
+    }
+}
+
 impl Tool for WriteFlowScriptTool {
     const NAME: &'static str = "write_flowscript";
 
@@ -3224,7 +3493,7 @@ impl Tool for WriteFlowScriptTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Start a retained code-first FlowScript draft. Write the complete source document; the host binds it to the immutable user request, parses it into internal BoardAst, returns structured source diagnostics, and preserves the exact text for inline preview and later patches. When a retained draft already exists for this same request (a follow-up repair run), do NOT start a new draft: reuse the SAME draft_id and exact expected_revision and repair it in place. Function returns accept node outputs, params, literals, and mutable `let` bindings (one return value per declared return pin). A `let` reassigned across if/for promotes to a board variable with its initializer preserved; never reassign a `const` inside a branch arm — declare it with `let`. Catalog-related diagnostics automatically include exact live signatures or bounded candidates in fix.catalog_declarations and structural context in fix.companion_declarations; use those before another lookup. Defaults to additive scope. Use replace mode only for an intentional complete-board document."
+            description: "Start a retained code-first FlowScript draft. Write the complete source document; the host binds it to the immutable user request, parses it into internal BoardAst, returns structured source diagnostics, and preserves the exact text for inline preview and later patches. When a retained draft already exists for this same request (a follow-up repair run), do NOT start a new draft: reuse the SAME draft_id and exact expected_revision and repair it in place. Preserve existing function cache decorators. To cache an input-determined function, place `@cache({ namespace: \"...\", ttlSeconds: 3600, scope: \"user\" })` immediately above it; bare `@cache` defaults to the `global` namespace, 300 seconds, and app scope, while `ttlSeconds: 0` is permanent. A cache hit skips the entire body and all side effects. Function returns accept node outputs, params, literals, and mutable `let` bindings (one return value per declared return pin). A `let` reassigned across if/for promotes to a board variable with its initializer preserved; never reassign a `const` inside a branch arm — declare it with `let`. Catalog-related diagnostics automatically include exact live signatures or bounded candidates in fix.catalog_declarations and structural context in fix.companion_declarations; use those before another lookup. Defaults to additive scope. Use replace mode only for an intentional complete-board document."
                 .to_string(),
             parameters: serde_json::to_value(schema_for!(WriteFlowScriptArgs))
                 .unwrap_or_else(|_| json!({ "type": "object" })),
@@ -3256,7 +3525,7 @@ impl Tool for PatchFlowScriptTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Patch one exact, uniquely occurring text range in a retained FlowScript draft using revision compare-and-swap. This is the way to resume a retained draft in a follow-up repair run: keep its SAME draft_id and exact expected_revision instead of rewriting from scratch. The full updated source and structured diagnostics are returned inline. Function returns accept node outputs, params, literals, and mutable `let` bindings; a `let` reassigned across if/for promotes to a board variable — never reassign a `const` inside a branch arm. Catalog-related diagnostics automatically include repair signatures in fix.catalog_declarations and structural context in fix.companion_declarations; use those before another lookup. Ambiguous, stale, replayed, or scope-collapsing patches do not mutate the draft."
+            description: "Patch one exact, uniquely occurring text range in a retained FlowScript draft using revision compare-and-swap. This is the way to resume a retained draft in a follow-up repair run: keep its SAME draft_id and exact expected_revision instead of rewriting from scratch. The full updated source and structured diagnostics are returned inline. Preserve an existing function `@cache` decorator during unrelated repairs; the canonical configured form is `@cache({ namespace: \"...\", ttlSeconds: 3600, scope: \"user\" })`. Bare `@cache` defaults to the `global` namespace, 300 seconds, and app scope; `ttlSeconds: 0` is permanent. A cache hit skips the body and its side effects. Function returns accept node outputs, params, literals, and mutable `let` bindings; a `let` reassigned across if/for promotes to a board variable — never reassign a `const` inside a branch arm. Catalog-related diagnostics automatically include repair signatures in fix.catalog_declarations and structural context in fix.companion_declarations; use those before another lookup. Ambiguous, stale, replayed, or scope-collapsing patches do not mutate the draft."
                 .to_string(),
             parameters: serde_json::to_value(schema_for!(PatchFlowScriptArgs))
                 .unwrap_or_else(|_| json!({ "type": "object" })),
@@ -3348,7 +3617,7 @@ impl Tool for CommitFlowScriptTool {
 
 pub fn build_list_board_nodes_output(graph_context: &GraphContext) -> String {
     if graph_context.nodes.is_empty() && graph_context.layers.is_empty() {
-        return "The board is empty - no nodes found. Use get_declarations to find FlowScript signatures, then write_flowscript, check_flowscript, and commit_flowscript. Use patch_flowscript for any diagnostic repairs."
+        return "The board is empty - no nodes found. Use get_declarations to find FlowScript signatures, call plan_board_scope exactly once unless the host already accepted a plan, then write_flowscript, check_flowscript, and commit_flowscript. Use patch_flowscript for any diagnostic repairs."
             .to_string();
     }
 
@@ -3371,14 +3640,30 @@ pub fn build_list_board_nodes_output(graph_context: &GraphContext) -> String {
         lines.push(format!("\nLayers ({}):", graph_context.layers.len()));
         for layer in &graph_context.layers {
             let parent = layer.parent_id.as_deref().unwrap_or("root");
+            let cache = layer.cache.as_ref().map_or_else(String::new, |cache| {
+                let ttl = cache
+                    .ttl_seconds
+                    .filter(|seconds| *seconds > 0)
+                    .map(|seconds| format!("{seconds}s"))
+                    .unwrap_or_else(|| "no-expiry".to_string());
+                format!(
+                    " | cache:{} namespace:{:?} ttl:{} scope:{}",
+                    if cache.enabled { "on" } else { "off" },
+                    cache.namespace,
+                    ttl,
+                    cache.scope,
+                )
+            });
             lines.push(format!(
-                "- {} | {} | parent:{} | nodes:{} | pos:({},{})",
+                "- {} | {} | type:{} | parent:{} | nodes:{} | pos:({},{}){}",
                 layer.id,
                 layer.name,
+                layer.layer_type,
                 parent,
                 layer.node_ids.len(),
                 layer.position.0,
                 layer.position.1,
+                cache,
             ));
         }
     }
@@ -3646,6 +3931,30 @@ mod tests {
         batch_calls: AtomicUsize,
     }
 
+    fn declaration_resolution_test_section(
+        query: &str,
+        status: &str,
+        body: impl AsRef<str>,
+    ) -> String {
+        format!(
+            "// flowpilot.declaration-resolution/v1 {}\n{}",
+            json!({
+                "query": query,
+                "status": status,
+                "top_score": if matches!(status, "exact" | "resolved") { Some(200) } else { None },
+                "runner_up_score": null,
+                "margin": if matches!(status, "exact" | "resolved") { Some(200) } else { None },
+                "reason_codes": if matches!(status, "exact" | "resolved") {
+                    vec!["test_confident_resolution"]
+                } else {
+                    vec!["test_resolver_abstained"]
+                },
+                "candidates": [],
+            }),
+            body.as_ref()
+        )
+    }
+
     #[async_trait::async_trait]
     impl CatalogProvider for BatchDispatchProvider {
         async fn search(&self, _query: &str) -> Vec<super::super::types::NodeMetadata> {
@@ -3688,10 +3997,133 @@ mod tests {
                 .iter()
                 .map(|query| {
                     let function_name = query.replace(' ', "");
-                    format!("declare function {function_name}(): void;")
+                    declaration_resolution_test_section(
+                        query,
+                        "resolved",
+                        format!("declare function {function_name}(): void;"),
+                    )
                 })
                 .collect()
         }
+    }
+
+    #[tokio::test]
+    async fn active_flowscript_tools_document_function_cache_decorators() {
+        let board = Arc::new(Board::new_detached(
+            Some("cache-tool-docs".to_string()),
+            flow_like_storage::Path::default(),
+        ));
+        let provider: Arc<dyn CatalogProvider> = Arc::new(BatchDispatchProvider::default());
+        let store = Arc::new(FlowIrDraftStore::new());
+        let acceptance_binding =
+            store.bind_request_acceptance_contract(&board.id, "cache calculatePricing");
+
+        let current_description = GetCurrentFlowScriptTool {
+            board: board.clone(),
+        }
+        .definition(String::new())
+        .await
+        .description;
+        let write_description = WriteFlowScriptTool {
+            board: board.clone(),
+            provider: provider.clone(),
+            store: store.clone(),
+            acceptance_binding: acceptance_binding.clone(),
+        }
+        .definition(String::new())
+        .await
+        .description;
+        let patch_description = PatchFlowScriptTool {
+            board,
+            provider,
+            store,
+            acceptance_binding,
+        }
+        .definition(String::new())
+        .await
+        .description;
+
+        for description in [
+            current_description.as_str(),
+            write_description.as_str(),
+            patch_description.as_str(),
+        ] {
+            assert!(description.contains("@cache"));
+            assert!(description.contains("namespace"));
+            assert!(description.contains("ttlSeconds"));
+            assert!(description.contains("scope"));
+            assert!(description.contains("global"));
+            assert!(description.contains("300"));
+            assert!(description.contains("ttlSeconds: 0"));
+        }
+        assert!(current_description.contains("ttl_seconds: null"));
+        assert!(write_description.contains("skips the entire body and all side effects"));
+    }
+
+    #[test]
+    fn board_listing_exposes_default_function_cache_settings() {
+        use super::super::context::{LayerCacheContext, LayerContext};
+
+        let graph = GraphContext {
+            nodes: vec![],
+            edges: vec![],
+            layers: vec![LayerContext {
+                id: "pricing-layer".to_string(),
+                name: "calculatePricing".to_string(),
+                layer_type: "Function".to_string(),
+                parent_id: None,
+                node_ids: vec![],
+                position: (10, 20),
+                inputs: vec![],
+                outputs: vec![],
+                cache: Some(LayerCacheContext {
+                    enabled: true,
+                    namespace: "global".to_string(),
+                    ttl_seconds: Some(300),
+                    scope: "app".to_string(),
+                }),
+            }],
+            variables: vec![],
+            selected_nodes: vec![],
+        };
+
+        let listing = build_list_board_nodes_output(&graph);
+        assert!(listing.contains("cache:on"));
+        assert!(listing.contains("namespace:\"global\""));
+        assert!(listing.contains("ttl:300s"));
+        assert!(listing.contains("scope:app"));
+    }
+
+    #[test]
+    fn board_listing_reports_zero_cache_ttl_as_no_expiry() {
+        use super::super::context::{LayerCacheContext, LayerContext};
+
+        let graph = GraphContext {
+            nodes: vec![],
+            edges: vec![],
+            layers: vec![LayerContext {
+                id: "pricing-layer".to_string(),
+                name: "calculatePricing".to_string(),
+                layer_type: "Function".to_string(),
+                parent_id: None,
+                node_ids: vec![],
+                position: (10, 20),
+                inputs: vec![],
+                outputs: vec![],
+                cache: Some(LayerCacheContext {
+                    enabled: true,
+                    namespace: "pricing".to_string(),
+                    ttl_seconds: Some(0),
+                    scope: "app".to_string(),
+                }),
+            }],
+            variables: vec![],
+            selected_nodes: vec![],
+        };
+
+        let listing = build_list_board_nodes_output(&graph);
+        assert!(listing.contains("ttl:no-expiry"));
+        assert!(!listing.contains("ttl:0s"));
     }
 
     #[test]
@@ -4018,6 +4450,59 @@ eventsSimple() {
     }
 
     #[test]
+    fn stub_markers_ignore_string_literals_and_identifier_substrings() {
+        let result = ReconcileResult {
+            commands: vec![BoardCommand::AddNode {
+                node_type: "log".to_string(),
+                ref_id: Some("$0".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            }],
+            corrections: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        // "Todo" lives in a user-facing label literal and "todoList" is an identifier; neither is
+        // a stub. Before literal-stripping + word boundaries this rendered "Nothing was queued."
+        let source = "eventsSimple() {\n    const todoList = listCreate({ label: \"Todo entries\" })\n    logInfo({ message: \"Replace with care\" })\n}\n";
+        let output = render_edit_flowscript_result(source, &result, false, false);
+        assert!(!output.contains("Nothing was queued."), "{output}");
+        assert!(output.contains("<commands>"), "{output}");
+
+        // A genuine stub comment must still be caught.
+        let stub_source = "eventsSimple() {\n    // TODO: wire with the fetcher\n    logInfo({ message: \"x\" })\n}\n";
+        let stub_output = render_edit_flowscript_result(stub_source, &result, false, false);
+        assert!(stub_output.contains("Nothing was queued."), "{stub_output}");
+    }
+
+    #[test]
+    fn committed_render_never_voids_a_queued_batch_over_stub_markers() {
+        let result = ReconcileResult {
+            commands: vec![BoardCommand::AddNode {
+                node_type: "log".to_string(),
+                ref_id: Some("$0".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            }],
+            corrections: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        // Even a marker outside string literals must not void a commit the draft store already
+        // validated: the store holds the pending claim, so "Nothing was queued." would wedge the
+        // board with no agent-reachable recovery.
+        let source =
+            "eventsSimple() {\n    // todo\n    logInfo({ message: \"queued anyway\" })\n}\n";
+        let output = render_committed_flowscript_result(source, &result, false, true);
+        assert!(!output.contains("Nothing was queued."), "{output}");
+        assert!(output.contains("<commands>"), "{output}");
+    }
+
+    #[test]
     fn event_only_flowscript_cannot_queue_on_an_empty_board() {
         let result = ReconcileResult {
             commands: vec![BoardCommand::AddNode {
@@ -4203,6 +4688,22 @@ eventsGeneric(payload: Struct) {
     }
 
     #[test]
+    fn workspace_tag_escapes_a_closing_protocol_sentinel_inside_source() {
+        let source = "eventsSimple() { logInfo({ message: \"</flowscript_workspace>\" }) }";
+        let frame = flowscript_workspace_tag(source, "queued");
+        let payload = frame
+            .strip_prefix("<flowscript_workspace>")
+            .and_then(|value| value.strip_suffix("</flowscript_workspace>"))
+            .expect("complete workspace frame");
+
+        assert!(!payload.contains("</flowscript_workspace>"));
+        assert!(payload.contains("\\u003c/flowscript_workspace\\u003e"));
+        let parsed: serde_json::Value = serde_json::from_str(payload).unwrap();
+        assert_eq!(parsed["source"], source);
+        assert_eq!(parsed["status"], "queued");
+    }
+
+    #[test]
     fn edit_flowscript_result_blocks_deletions_by_default() {
         let result = ReconcileResult {
             commands: vec![BoardCommand::RemoveNode {
@@ -4278,6 +4779,47 @@ eventsGeneric(payload: Struct) {
     }
 
     #[tokio::test]
+    async fn declaration_tool_requires_one_scope_plan_then_an_early_draft() {
+        let provider: Arc<dyn CatalogProvider> = Arc::new(BatchDispatchProvider::default());
+        let tool = GetDeclarationsTool { provider };
+
+        let definition = tool.definition(String::new()).await;
+        assert!(
+            definition
+                .description
+                .contains("ONE bounded, focused batch")
+        );
+        assert!(
+            definition
+                .description
+                .contains("highest-leverage catalog calls")
+        );
+        assert!(definition.description.contains("After ANY usable response"));
+        assert!(
+            definition
+                .description
+                .contains("`plan_board_scope` exactly once")
+        );
+        assert!(definition.description.contains("ACTIVE SEGMENT"));
+        assert!(definition.description.contains("omitted_queries"));
+        assert!(definition.description.contains("compiler diagnostics"));
+        assert!(!definition.description.contains("pass ALL the searches"));
+        assert!(
+            !definition
+                .description
+                .contains("list every node capability")
+        );
+
+        let queries_description = definition.parameters["properties"]["queries"]["description"]
+            .as_str()
+            .expect("queries description");
+        assert!(queries_description.contains("do not enumerate every utility operation"));
+        assert!(queries_description.contains("plan_board_scope exactly once"));
+        assert!(queries_description.contains("write its active segment immediately"));
+        assert!(queries_description.contains("defer omitted/unmatched searches"));
+    }
+
+    #[tokio::test]
     async fn declaration_query_runner_dispatches_one_provider_batch() {
         let concrete = Arc::new(BatchDispatchProvider::default());
         let provider: Arc<dyn CatalogProvider> = concrete.clone();
@@ -4311,7 +4853,13 @@ eventsGeneric(payload: Struct) {
         let sections = batch
             .processed
             .iter()
-            .map(|query| format!("declare function {query}(): void;"))
+            .map(|query| {
+                declaration_resolution_test_section(
+                    query,
+                    "resolved",
+                    format!("declare function {query}(): void;"),
+                )
+            })
             .collect::<Vec<_>>();
         let result = render_declaration_query_batch(&batch, &sections);
         assert!(result.contains("flowpilot.declaration-batch/v1"));
@@ -4332,8 +4880,16 @@ eventsGeneric(payload: Struct) {
         };
         let batch = declaration_query_batch(&args);
         let sections = vec![
-            "// result\n  declare function boolOr({ boolean?: bool }): bool;".to_string(),
-            "// No FlowScript declarations matched this query.".to_string(),
+            declaration_resolution_test_section(
+                "boolean or",
+                "resolved",
+                "// result\n  declare function boolOr({ boolean?: bool }): bool;",
+            ),
+            declaration_resolution_test_section(
+                "unknown package capability",
+                "unresolved",
+                "// No FlowScript declarations matched this query.",
+            ),
         ];
 
         let result = render_declaration_query_batch(&batch, &sections);
@@ -4346,6 +4902,24 @@ eventsGeneric(payload: Struct) {
     }
 
     #[test]
+    fn declaration_batch_does_not_count_an_unclassified_signature_as_matched() {
+        let args = GetDeclarationsArgs {
+            query: "integer compare".to_string(),
+            queries: Vec::new(),
+        };
+        let batch = declaration_query_batch(&args);
+        let sections =
+            vec!["declare function fakerInteger({ min?: int, max?: int }): int;".to_string()];
+
+        let result = render_declaration_query_batch(&batch, &sections);
+
+        assert!(result.contains("\"matched_count\":0"));
+        assert!(result.contains("\"unmatched_count\":1"));
+        assert!(result.contains("missing_resolution_metadata"));
+        assert!(result.contains("\"complete\":false"));
+    }
+
+    #[test]
     fn declaration_batch_is_complete_only_when_every_requested_query_matches() {
         let args = GetDeclarationsArgs {
             query: "boolean or".to_string(),
@@ -4353,8 +4927,16 @@ eventsGeneric(payload: Struct) {
         };
         let batch = declaration_query_batch(&args);
         let sections = vec![
-            "declare function boolOr({ boolean?: bool }): bool;".to_string(),
-            "declare function emailSmtpSend({ connection: Struct }): void;".to_string(),
+            declaration_resolution_test_section(
+                "boolean or",
+                "resolved",
+                "declare function boolOr({ boolean?: bool }): bool;",
+            ),
+            declaration_resolution_test_section(
+                "smtp send email",
+                "resolved",
+                "declare function emailSmtpSend({ connection: Struct }): void;",
+            ),
         ];
 
         let result = render_declaration_query_batch(&batch, &sections);
@@ -4373,10 +4955,12 @@ eventsGeneric(payload: Struct) {
         let batch = declaration_query_batch(&args);
         let signature =
             format!("declare function largeLiveDeclaration({{ payload: Struct }}): string;");
-        let section = format!(
+        let body = format!(
             "// declaration query: large live declaration\n{DECLARATION_PRIORITY_BEGIN}{signature}\n// {}\n{DECLARATION_PRIORITY_END}",
             "usage".repeat(MAX_DECLARATION_RESPONSE_BYTES)
         );
+        let section =
+            declaration_resolution_test_section("large live declaration", "resolved", body);
 
         let result = render_declaration_query_batch(&batch, &[section]);
 
@@ -4397,9 +4981,11 @@ eventsGeneric(payload: Struct) {
             "declare function impossiblyLargeDeclaration({{ {} }}): void;",
             "payload: string, ".repeat(MAX_DECLARATION_RESPONSE_BYTES)
         );
-        let section = format!(
+        let body = format!(
             "// declaration query: impossibly large declaration\n{DECLARATION_PRIORITY_BEGIN}{signature}\n{DECLARATION_PRIORITY_END}"
         );
+        let section =
+            declaration_resolution_test_section("impossibly large declaration", "resolved", body);
 
         let result = render_declaration_query_batch(&batch, &[section]);
 
@@ -4410,6 +4996,9 @@ eventsGeneric(payload: Struct) {
         assert!(result.contains("\"matched_count\":0"));
         assert!(result.contains("\"complete\":false"));
         assert!(result.contains("Exact declaration omitted"));
+        assert!(result.contains("Call plan_board_scope exactly once"));
+        assert!(result.contains("retain its active segment now"));
+        assert!(result.contains("only if a later compiler diagnostic still requires it"));
     }
 
     #[test]
@@ -4480,9 +5069,13 @@ eventsGeneric(payload: Struct) {
             .iter()
             .enumerate()
             .map(|(index, query)| {
-                format!(
-                    "// declaration query: {query}\n{priority}// query-{index}\n{}",
-                    "x".repeat(10_000)
+                declaration_resolution_test_section(
+                    query,
+                    "resolved",
+                    format!(
+                        "// declaration query: {query}\n{priority}// query-{index}\n{}",
+                        "x".repeat(10_000)
+                    ),
                 )
             })
             .collect::<Vec<_>>();

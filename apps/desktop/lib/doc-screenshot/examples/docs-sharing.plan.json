@@ -1,0 +1,79 @@
+{
+	"schema": "flow-like.doc-screenshot-plan/v1",
+	"app": "desktop",
+	"outputDir": "apps/docs/src/assets",
+	"tauriFixture": "../fixtures/docs-sharing.tauri.json",
+	"defaults": {
+		"viewport": {
+			"width": 1624,
+			"height": 1060,
+			"deviceScaleFactor": 2
+		},
+		"theme": "dark",
+		"format": "webp",
+		"timeoutMs": 120000,
+		"settleMs": 500,
+		"disableAnimations": true,
+		"hideScrollbars": true
+	},
+	"scenarios": [
+		{
+			"name": "visibility",
+			"path": "/library/config",
+			"query": {
+				"id": "docs-app",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Customer Support Copilot"
+				},
+				{
+					"type": "click",
+					"selector": "[data-slot=\"tabs-list\"] > [data-slot=\"tabs-trigger\"]",
+					"index": 1
+				},
+				{
+					"type": "waitFor",
+					"text": "Visibility Status"
+				},
+				{
+					"type": "capture",
+					"name": "AppVisibilitySettings",
+					"mode": "element",
+					"selector": "[data-slot=\"tabs-content\"][data-state=\"active\"] > [data-slot=\"card\"]:first-child",
+					"padding": 0
+				}
+			]
+		},
+		{
+			"name": "team-access",
+			"path": "/library/config/team",
+			"query": {
+				"id": "docs-app",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Access & Relationships"
+				},
+				{
+					"type": "click",
+					"selector": "[data-slot=\"tabs-list\"] [data-slot=\"tabs-trigger\"]",
+					"index": 1
+				},
+				{
+					"type": "waitFor",
+					"text": "Direct Invite"
+				},
+				{
+					"type": "capture",
+					"name": "ShareApps",
+					"mode": "viewport"
+				}
+			]
+		}
+	]
+}

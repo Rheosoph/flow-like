@@ -18,7 +18,7 @@ import type {
 	IHub,
 	ISupportedSinks,
 } from "@flow-like/flow-like-ui/lib/schema/hub/hub";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 
 /** Map event types to their corresponding sink type for hub lookup */
 const EVENT_TYPE_TO_SINK_MAP: Record<string, keyof ISupportedSinks> = {
@@ -217,6 +217,7 @@ export function EventTranslation({
 	eventId,
 	canExecuteLocally,
 	eventExecutionMode,
+	section,
 }: Readonly<{
 	appId: string;
 	eventConfig: IEventMapping;
@@ -230,9 +231,12 @@ export function EventTranslation({
 	eventId?: string;
 	canExecuteLocally?: boolean;
 	eventExecutionMode?: IEventExecutionMode;
+	/** Slice of the config to render — see IConfigInterfaceProps.section. */
+	section?: string;
 }>) {
-	const [intermediateConfig, setIntermediateConfig] =
-		useState<Partial<IEventPayload>>(config);
+	// Fully controlled by `config`. Holding a local copy meant a parent reset —
+	// Discard, or reloading the saved event — never reached the fields, so the
+	// form kept showing edits the event no longer had.
 	const node: INode | undefined = board.nodes[nodeId ?? ""];
 
 	const foundEventConfig = useMemo(() => {
@@ -249,25 +253,23 @@ export function EventTranslation({
 			isEditing: editing,
 			appId,
 			boardId: board.id,
-			config: intermediateConfig,
+			config,
 			node: node,
 			nodeId: nodeId ?? "",
 			hub,
 			eventId,
 			canExecuteLocally,
 			eventExecutionMode,
+			section,
 			onConfigUpdate: (payload: Partial<IEventPayload>) => {
-				setIntermediateConfig(payload);
-				if (onUpdate) {
-					onUpdate(payload);
-				}
+				onUpdate?.(payload);
 			},
 		}),
 		[
 			editing,
 			board.app_id,
 			board.id,
-			intermediateConfig,
+			config,
 			node,
 			nodeId,
 			onUpdate,
@@ -275,6 +277,7 @@ export function EventTranslation({
 			eventId,
 			canExecuteLocally,
 			eventExecutionMode,
+			section,
 		],
 	);
 

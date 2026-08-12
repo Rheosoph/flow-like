@@ -391,10 +391,46 @@
           "markdownDescription": "Denies the blob_store_batch command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for the blob offload plugin – allows all commands.\n#### This default permission set includes:\n\n- `allow-blob-store`\n- `allow-blob-get`\n- `allow-blob-store-batch`\n- `allow-blob-get-batch`\n- `allow-blob-delete`\n- `allow-blob-configure`\n- `allow-blob-inc-refs`\n- `allow-blob-dec-refs`",
+          "description": "Enables the sql_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sql-close",
+          "markdownDescription": "Enables the sql_close command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sql_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sql-close",
+          "markdownDescription": "Denies the sql_close command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the sql_exec command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sql-exec",
+          "markdownDescription": "Enables the sql_exec command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sql_exec command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sql-exec",
+          "markdownDescription": "Denies the sql_exec command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the sql_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sql-open",
+          "markdownDescription": "Enables the sql_open command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sql_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sql-open",
+          "markdownDescription": "Denies the sql_open command without any pre-configured scope."
+        },
+        {
+          "description": "Default permissions for the blob offload plugin – allows all commands.\n#### This default permission set includes:\n\n- `allow-blob-store`\n- `allow-blob-get`\n- `allow-blob-store-batch`\n- `allow-blob-get-batch`\n- `allow-blob-delete`\n- `allow-blob-configure`\n- `allow-blob-inc-refs`\n- `allow-blob-dec-refs`\n- `allow-sql-open`\n- `allow-sql-exec`\n- `allow-sql-close`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default permissions for the blob offload plugin – allows all commands.\n#### This default permission set includes:\n\n- `allow-blob-store`\n- `allow-blob-get`\n- `allow-blob-store-batch`\n- `allow-blob-get-batch`\n- `allow-blob-delete`\n- `allow-blob-configure`\n- `allow-blob-inc-refs`\n- `allow-blob-dec-refs`"
+          "markdownDescription": "Default permissions for the blob offload plugin – allows all commands.\n#### This default permission set includes:\n\n- `allow-blob-store`\n- `allow-blob-get`\n- `allow-blob-store-batch`\n- `allow-blob-get-batch`\n- `allow-blob-delete`\n- `allow-blob-configure`\n- `allow-blob-inc-refs`\n- `allow-blob-dec-refs`\n- `allow-sql-open`\n- `allow-sql-exec`\n- `allow-sql-close`"
         }
       ]
     }

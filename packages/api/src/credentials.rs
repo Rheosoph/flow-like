@@ -152,6 +152,12 @@ pub enum RuntimeCredentials {
 }
 
 impl RuntimeCredentials {
+    fn configured_provider_name() -> String {
+        std::env::var("RUNTIME_CREDENTIALS_PROVIDER")
+            .or_else(|_| std::env::var("STORAGE_PROVIDER"))
+            .unwrap_or_else(|_| mixed_credentials::default_provider_name().to_string())
+    }
+
     pub fn is_azure(&self) -> bool {
         #[cfg(feature = "azure")]
         {
@@ -177,8 +183,10 @@ impl RuntimeCredentials {
             ));
         }
 
+        let provider = Self::configured_provider_name();
+
         #[cfg(feature = "r2")]
-        if matches!(mode, CredentialsAccess::ServerExecute) {
+        if provider.eq_ignore_ascii_case("r2") && matches!(mode, CredentialsAccess::ServerExecute) {
             return Ok(RuntimeCredentials::Mixed(
                 R2RuntimeCredentials::from_env()
                     .scoped_server_execute_credentials(sub, app_id)
@@ -186,46 +194,8 @@ impl RuntimeCredentials {
             ));
         }
 
-        #[cfg(feature = "r2")]
-        return Ok(RuntimeCredentials::R2(
-            R2RuntimeCredentials::from_env()
-                .scoped_credentials(sub, app_id, state, mode)
-                .await?,
-        ));
-
-        #[cfg(all(feature = "aws", not(feature = "r2")))]
-        return Ok(RuntimeCredentials::Aws(
-            AwsRuntimeCredentials::from_env()
-                .scoped_credentials(sub, app_id, state, mode)
-                .await?,
-        ));
-
-        #[cfg(all(feature = "azure", not(feature = "aws"), not(feature = "r2")))]
-        return Ok(RuntimeCredentials::Azure(
-            AzureRuntimeCredentials::from_env()
-                .scoped_credentials(sub, app_id, state, mode)
-                .await?,
-        ));
-
-        #[cfg(all(
-            feature = "gcp",
-            not(feature = "aws"),
-            not(feature = "azure"),
-            not(feature = "r2")
-        ))]
-        return Ok(RuntimeCredentials::Gcp(
-            GcpRuntimeCredentials::from_env()
-                .scoped_credentials(sub, app_id, state, mode)
-                .await?,
-        ));
-
-        #[cfg(not(any(feature = "aws", feature = "azure", feature = "gcp", feature = "r2")))]
-        {
-            let _ = (sub, app_id, state, mode);
-            Err(flow_like_types::anyhow!(
-                "No storage backend feature enabled"
-            ))
-        }
+        let credentials = mixed_credentials::provider_to_runtime_credentials(&provider)?;
+        mixed_credentials::scope_inner(&credentials, sub, app_id, state, mode).await
     }
 
     pub async fn master_credentials() -> Result<Self> {
@@ -234,37 +204,9 @@ impl RuntimeCredentials {
             return Ok(RuntimeCredentials::Mixed(mixed.master_credentials().await?));
         }
 
-        #[cfg(feature = "r2")]
-        return Ok(RuntimeCredentials::R2(
-            R2RuntimeCredentials::from_env().master_credentials().await,
-        ));
-
-        #[cfg(all(feature = "aws", not(feature = "r2")))]
-        return Ok(RuntimeCredentials::Aws(
-            AwsRuntimeCredentials::from_env().master_credentials().await,
-        ));
-
-        #[cfg(all(feature = "azure", not(feature = "aws"), not(feature = "r2")))]
-        return Ok(RuntimeCredentials::Azure(
-            AzureRuntimeCredentials::from_env()
-                .master_credentials()
-                .await,
-        ));
-
-        #[cfg(all(
-            feature = "gcp",
-            not(feature = "aws"),
-            not(feature = "azure"),
-            not(feature = "r2")
-        ))]
-        return Ok(RuntimeCredentials::Gcp(
-            GcpRuntimeCredentials::from_env().master_credentials().await,
-        ));
-
-        #[cfg(not(any(feature = "aws", feature = "azure", feature = "gcp", feature = "r2")))]
-        Err(flow_like_types::anyhow!(
-            "No storage backend feature enabled"
-        ))
+        let provider = Self::configured_provider_name();
+        let credentials = mixed_credentials::provider_to_runtime_credentials(&provider)?;
+        mixed_credentials::master_inner(&credentials).await
     }
 
     pub async fn to_store(&self, meta: bool) -> Result<FlowLikeStore> {
@@ -315,7 +257,8 @@ impl RuntimeCredentials {
 
     #[instrument(skip(self, state), level = "debug")]
     pub async fn to_state(&self, state: AppState) -> Result<FlowLikeState> {
-        match self {
+        let package_widget_source = state.wasm_registry.clone();
+        let flow_state = match self {
             #[cfg(feature = "aws")]
             RuntimeCredentials::Aws(aws) => aws.to_state(state).await,
             #[cfg(feature = "azure")]
@@ -325,7 +268,15 @@ impl RuntimeCredentials {
             #[cfg(feature = "r2")]
             RuntimeCredentials::R2(r2) => r2.to_state(state).await,
             RuntimeCredentials::Mixed(mixed) => mixed.to_state(state).await,
+        }?;
+
+        if let Some(package_widget_source) = package_widget_source {
+            flow_state
+                .register_package_widget_source(package_widget_source)
+                .await;
         }
+
+        Ok(flow_state)
     }
 
     #[instrument(skip(self), level = "debug")]

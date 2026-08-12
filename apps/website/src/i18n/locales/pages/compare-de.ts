@@ -1,6 +1,7 @@
 export const deCompare = {
 	// Meta
-	"compare.meta.title": "Flow-Like vs Alternativen | Daten, AI, Automation & Apps",
+	"compare.meta.title":
+		"Flow-Like vs Alternativen | Daten, AI, Automation & Apps",
 	"compare.meta.description":
 		"Sehen Sie, wie Flow-Like bei Workflow-Automatisierung, Enterprise-Data-Layern, AI Agents, BI und App-Entwicklung abschneidet. Eine gesteuerte Plattform für unternehmensweite Lösungen.",
 
@@ -43,7 +44,8 @@ export const deCompare = {
 	"compare.category.enterprise_data": "Enterprise-Datenplattformen",
 	"compare.category.enterprise_data.desc":
 		"Ontologie- und ERP-getriebene Plattformen rund um proprietäre Unternehmensdatenmodelle. Mächtig für Großkonzerne, aber langsam einzuführen, teuer und an einen Hersteller gebunden.",
-	"compare.category.enterprise_automation": "Enterprise-Automatisierungs-Suiten",
+	"compare.category.enterprise_automation":
+		"Enterprise-Automatisierungs-Suiten",
 	"compare.category.enterprise_automation.desc":
 		"Prozess- und Workflow-Suiten rund um CRM, Service-Management oder KI-Agenten. Stark für spezifische Geschäftsabläufe, aber SaaS-gebunden, mit teurer Lizenzierung und geringer Portabilität.",
 	"compare.category.rpa": "Robotic Process Automation",
@@ -143,8 +145,10 @@ export const deCompare = {
 	"compare.matrix.plot.axis.production_scale.low": "Bricht unter Last",
 	"compare.matrix.plot.axis.production_scale.high": "Replay + hoher Durchsatz",
 	"compare.matrix.plot.axis.customer_distribution": "Auslieferung an Kunden",
-	"compare.matrix.plot.axis.customer_distribution.low": "Nur interne Browser-Tools",
-	"compare.matrix.plot.axis.customer_distribution.high": "Desktop, Mobile, Offline",
+	"compare.matrix.plot.axis.customer_distribution.low":
+		"Nur interne Browser-Tools",
+	"compare.matrix.plot.axis.customer_distribution.high":
+		"Desktop, Mobile, Offline",
 	"compare.matrix.plot.axis.ai_native": "KI-native Tiefe",
 	"compare.matrix.plot.axis.ai_native.low": "KI nur angehängt",
 	"compare.matrix.plot.axis.ai_native.high": "Agenten + daten-nativ",
@@ -153,7 +157,8 @@ export const deCompare = {
 	"compare.matrix.plot.axis.agent_safety.high": "Sandbox + Transaktionen",
 	"compare.matrix.plot.axis.production_readiness": "Produktionsreife",
 	"compare.matrix.plot.axis.production_readiness.low": "Prototyp-Niveau",
-	"compare.matrix.plot.axis.production_readiness.high": "Kompiliert & wiederholbar",
+	"compare.matrix.plot.axis.production_readiness.high":
+		"Kompiliert & wiederholbar",
 
 	// Category Overview
 	"compare.overview.tagline": "Auf einen Blick",
@@ -330,7 +335,8 @@ export const deCompare = {
 	"compare.explain.sandbox_isolation.flow":
 		"Jeder Flow-Like-Knoten läuft in einer WASM-Sandbox mit explizit vergebenen Rechten. Ein Agent kann nur die Dateien lesen, die Sie ausdrücklich freigeben. Er kann nicht unerwartet Shell-Befehle ausführen, ins Netzwerk gehen oder die Ausführungsgrenze verlassen.",
 
-	"compare.explain.concurrent_state.title": "Sicherer Zustand bei Parallelzugriff",
+	"compare.explain.concurrent_state.title":
+		"Sicherer Zustand bei Parallelzugriff",
 	"compare.explain.concurrent_state.what":
 		"Können mehrere Agenten oder Flow-Instanzen gleichzeitig Zustand schreiben, ohne sich gegenseitig zu beschädigen?",
 	"compare.explain.concurrent_state.flow":
@@ -348,10 +354,13 @@ export const deCompare = {
 	"compare.insight.card.ui.body": "Können Oberflächen bauen",
 	"compare.insight.card.enterprise_data.title": "Enterprise-Daten",
 	"compare.insight.card.enterprise_data.body1": "Ontologie- / ERP-zentriert.",
-	"compare.insight.card.enterprise_data.body2": "Mächtig, schwergewichtig, lock-in-lastig.",
+	"compare.insight.card.enterprise_data.body2":
+		"Mächtig, schwergewichtig, lock-in-lastig.",
 	"compare.insight.card.enterprise_automation.title": "Enterprise-Automation",
-	"compare.insight.card.enterprise_automation.body1": "CRM / Service / Agenten.",
-	"compare.insight.card.enterprise_automation.body2": "SaaS-gebunden & pro Nutzer bepreist.",
+	"compare.insight.card.enterprise_automation.body1":
+		"CRM / Service / Agenten.",
+	"compare.insight.card.enterprise_automation.body2":
+		"SaaS-gebunden & pro Nutzer bepreist.",
 	"compare.insight.flowlike.badge": "Alles davon",
 	"compare.insight.flowlike.cap.workflows": "Workflows",
 	"compare.insight.flowlike.cap.ui_builder": "UI-Builder",

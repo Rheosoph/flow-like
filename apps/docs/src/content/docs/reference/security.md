@@ -1,6 +1,6 @@
 ---
 title: Security Architecture
-description: How Flow-Like protects your data, executes untrusted code safely, and handles authentication
+description: Current trust boundaries, sandbox controls, authentication, authorization, and self-hosting responsibilities
 sidebar:
   order: 0
   badge:
@@ -8,259 +8,267 @@ sidebar:
     variant: caution
 ---
 
-Flow-Like is designed with a defense-in-depth approach. Every layer — from the WASM execution sandbox to the API authentication stack — is built to minimize attack surface and protect user data.
+Flow-Like combines a Rust application core, a Wasmtime boundary for external
+WASM nodes, authenticated APIs, app-scoped authorization, and deployment-level
+controls. These layers reduce risk, but they do not make an untrusted workflow
+or an incorrectly exposed deployment safe by themselves.
 
-## Design Principles
+![A third-party node inside the WASM boundary, with only approved paths to network, scoped storage, and configured models](../../../assets/WasmSandbox.webp)
 
-| Principle | Implementation |
-|-----------|---------------|
-| **Local-first** | Data stays on your hardware. No cloud dependency unless you choose to deploy remotely. |
-| **Least privilege** | WASM nodes get zero capabilities by default. Every permission must be explicitly declared and approved. |
-| **Memory safety** | The core engine is written in Rust — no buffer overflows, use-after-free, or data races. |
-| **Defense in depth** | Multiple independent layers: sandbox isolation, capability enforcement, authentication, RBAC, TLS. |
-| **Auditability** | Complete data lineage, typed execution traces, and structured logging. |
+## Security boundaries
 
----
+| Boundary | Enforced by | Operator or author responsibility |
+| --- | --- | --- |
+| External WASM node | Wasmtime memory isolation, fuel, epoch interruption, resource limits, capability-aware host functions | Review requested permissions and package provenance |
+| Workflow and app data | Scoped storage paths, runtime credentials, app roles | Configure storage and identities with least privilege |
+| Public API | OIDC, API keys, PATs, internal JWTs, route-level permission checks | Protect credentials and expose the API only through an appropriate network boundary |
+| Service-to-service calls | Audience-specific ES256 backend JWTs | Share one valid backend keypair across replicas and rotate it deliberately |
+| Network transport | Reverse proxy, load balancer, ingress, and network policy | Configure TLS, trusted forwarding, egress, and internal segmentation |
+| Third-party services | Explicit network/model/OAuth use by workflows | Understand what data leaves the deployment and which provider receives it |
 
-## WASM Sandbox
+## WASM execution
 
-All third-party nodes run inside isolated [Wasmtime](https://wasmtime.dev/) sandboxes. This is the primary security boundary between untrusted code and your system.
+Flow-Like uses [Wasmtime](https://wasmtime.dev/) for external WASM nodes. Core
+modules and Component Model binaries use different ABI adapters, then converge
+on the same Flow-Like capability and resource boundary.
 
-### Isolation Guarantees
+### Isolation and interruption
 
-Each WASM node instance receives:
+- Each instance has WebAssembly linear memory separate from host memory.
+- WASI is disabled by the normal security configurations unless explicitly
+  enabled.
+- Host process environment variables are never inherited by WASM guests,
+  including permissive and runtime execution profiles. Any guest environment
+  value must be supplied individually through explicit guest configuration.
+- Fuel metering limits instruction execution.
+- Epoch interruption enforces a wall-clock deadline.
+- Memory, tables, memories, table elements, instances, and stack depth are
+  bounded by the selected `WasmLimits`.
+- Host functions check the granted capabilities before performing protected
+  work.
 
-- **Separate linear memory** — the node cannot read or write host process memory
-- **No filesystem access** — WASI is disabled by default (`allow_wasi: false`)
-- **No network access** — WASI networking is disabled by default (`allow_wasi_network: false`)
-- **No OS peripheral access** — no clipboard, camera, microphone, or other hardware
-- **No inter-node visibility** — a node can only see its own inputs and memory
+These controls limit a module's direct authority. They do not prove that a
+permitted HTTP request is trustworthy, that returned data is safe to use, or
+that a high resource limit cannot affect overall capacity.
 
-### Resource Limits
+### Resource profiles
 
-The runtime enforces hard limits on every WASM execution:
+There are two related configuration paths:
 
-| Resource | Default | Restrictive | Permissive |
-|----------|---------|------------|------------|
-| **Memory** | 64 MB | 16 MB | 4 GB |
-| **CPU fuel** | 10B instructions (~10s) | 1B (~1s) | 100B (~100s) |
-| **Timeout** | 30s | 10s | 300s |
-| **Stack depth** | Configurable | Reduced | Increased |
-| **Tables/memories** | Bounded | Minimal | Extended |
+1. A package manifest selects memory and timeout tiers.
+2. Node-level permissions can be converted directly into a security
+   configuration that uses the runtime defaults.
 
-Fuel metering and epoch-based interruption ensure that runaway loops or deliberate resource abuse cannot impact the host system. When a limit is exceeded, the execution is terminated immediately.
+Current package-manifest defaults are:
 
-### Capability System
+| Setting | Default tier |
+| --- | --- |
+| Memory | Standard, 64 MiB |
+| Timeout | Standard, 30 seconds |
 
-Rather than granting blanket access, Flow-Like uses a bitflag-based capability system. A node's declared permissions map to specific capability bits that are checked at every host function call:
+The general `WasmLimits::default()` used by direct node-permission conversion
+currently allows 256 MiB, 120 seconds, and 100 billion fuel units. The
+restrictive preset uses 16 MiB, 10 seconds, and 1 billion fuel units. Do not
+assume one table describes every package: inspect the manifest and the
+execution path used by the deployment.
 
-| Capability | What it controls |
-|-----------|-----------------|
-| `STORAGE_READ` | Read from storage backends |
-| `STORAGE_WRITE` | Write to storage backends |
-| `STORAGE_DELETE` | Delete from storage |
-| `HTTP_GET` | Make outbound HTTP GET requests |
-| `HTTP_WRITE` | Make outbound HTTP POST/PUT/DELETE requests |
-| `WEBSOCKET` | Open persistent WebSocket connections |
-| `TCP` | Open TCP socket connections |
-| `UDP` | Open UDP socket connections |
-| `DNS` | Perform DNS lookups |
-| `VARIABLES_READ` | Read workflow variables |
-| `VARIABLES_WRITE` | Write workflow variables |
-| `CACHE_READ` / `CACHE_WRITE` | Use the execution cache |
-| `STREAMING` | Stream incremental output |
-| `A2UI` | Generate dynamic UI |
-| `MODELS` | Invoke AI/ML model inference |
-| `OAUTH` / `TOKEN` | Use authentication flows |
-| `FUNCTIONS` | Call registered host functions |
+Fuel is an instruction budget, not a portable duration. Its wall-clock cost
+depends on the module and host.
 
-**Default capability set (`STANDARD`):** `STORAGE_READ | HTTP_GET | VARIABLES_READ | CACHE_ALL`
+### Node permissions
 
-**Compound capabilities:**
-- `NETWORK_ALL` = `HTTP_GET | HTTP_WRITE | WEBSOCKET | TCP | UDP | DNS`
-- `STORAGE_ALL` = `STORAGE_READ | STORAGE_WRITE | STORAGE_DELETE`
-- `AUTH_ALL` = `OAUTH | TOKEN`
+External nodes declare permissions with these serialized names:
 
-Anything not in the default set must be explicitly requested by the node and approved by the user.
+| Permission | Capability granted |
+| --- | --- |
+| `network:http` | Outbound HTTP operations |
+| `network:websocket` | WebSocket connections |
+| `network:tcp` | TCP sockets |
+| `network:udp` | UDP sockets |
+| `network:dns` | DNS lookups |
+| `storage:read` | Read from the host-provided storage scope |
+| `storage:write` | Write and delete within the host-provided storage scope |
+| `variables` | Read and write execution variables |
+| `cache` | Read and write the execution cache |
+| `streaming` | Stream incremental output |
+| `models` | Use configured model providers |
+| `a2ui` | Use dynamic A2UI operations |
+| `oauth` | Access configured OAuth flows |
+| `functions` | Call registered functions or subflows |
 
-### Security Configuration
+The node-permission conversion begins with no capabilities and adds the
+declared set. Package manifests can also specify network host allowlists and
+resource tiers.
 
-The `WasmSecurityConfig` struct brings all sandbox controls together:
+:::caution
+An empty `allowed_hosts` list means unrestricted hosts when HTTP is enabled in
+the package manifest. Use an explicit allowlist when a package only needs known
+services.
+:::
 
-- **`limits`** — resource constraints (memory, CPU, timeout)
-- **`capabilities`** — bitflag permission set
-- **`allow_wasi`** — filesystem/environment access (default: off)
-- **`allow_wasi_network`** — WASI networking (default: off)
-- **`allowed_hosts`** — optional allowlist for HTTP targets
-
-For details on how permissions appear to end users, see [Sandboxing & Permissions](/dev/wasm-nodes/sandboxing/).
-
----
+See [Sandboxing and permissions](/dev/wasm-nodes/sandboxing/) for the author
+and user workflow.
 
 ## Authentication
 
-Flow-Like supports multiple authentication methods depending on the deployment context.
+The API supports several identities for different callers.
 
-### User Authentication (OIDC / OAuth2)
+### Interactive users
 
-For interactive users, Flow-Like delegates authentication to an external OpenID Connect provider. The API proxies the standard OIDC endpoints:
+The deployment delegates interactive authentication to a configured OpenID
+Connect provider. Under the API v1 prefix, Flow-Like exposes:
 
-- `/auth/discovery` — OpenID configuration
-- `/auth/jwks` — JSON Web Key Set
-- `/auth/authorize` — Authorization endpoint
-- `/auth/token` — Token exchange
-- `/auth/userinfo` — User info lookup
-- `/auth/revoke` — Token revocation
+| Endpoint | Behavior |
+| --- | --- |
+| `/api/v1/auth/openid` | Return the configured OpenID client information |
+| `/api/v1/auth/discovery` | Redirect to the provider discovery URL |
+| `/api/v1/auth/jwks` | Redirect to the provider JWKS URL |
+| `/api/v1/auth/authorize` | Proxy authorization requests |
+| `/api/v1/auth/token` | Proxy token exchange |
+| `/api/v1/auth/userinfo` | Proxy user-info requests |
+| `/api/v1/auth/revoke` | Proxy revocation requests |
 
-The JWT middleware validates every request, resolves the user against the database, and loads their role memberships.
+Bearer tokens are validated before protected routes resolve the caller and
+their app membership.
 
-### API Keys
+### API keys and PATs
 
-For service-to-service or automation use cases, API keys are supported via the `X-API-Key` header. These are associated with technical users that have explicit role assignments.
+- Technical users authenticate with `X-API-Key: <key>`.
+- Personal Access Tokens use `Authorization: PAT <token>`.
 
-### Personal Access Tokens (PAT)
+Authentication identifies the caller; route and app permission checks still
+decide what that caller may do. Treat both values as secrets, use narrow roles,
+and revoke credentials that are no longer needed.
 
-For programmatic access by human users, PATs are supported via the `Authorization: PAT <token>` header. These carry the same permissions as the issuing user.
+### Backend JWTs
 
-### Executor JWT (Internal)
+Internal services use a shared ES256 P-256 keypair configured through
+`BACKEND_KEY`, `BACKEND_PUB`, and optional `BACKEND_KID`. Tokens include a
+type-specific audience. Current audiences cover executors, compilers, users,
+realtime collaboration, interaction responders, and app connections.
 
-The executor (which runs workflows) authenticates to the API using ES256 (ECDSA P-256) JWTs. These tokens are:
+Verification checks the ES256 algorithm, issuer, expected audience, and token
+time claims. All horizontally scaled API instances must use the same active
+keypair while tokens signed by it remain valid.
 
-- **Short-lived** — include `exp`, `nbf`, and `iat` claims
-- **Scoped** — contain `run_id`, `app_id`, `board_id`, and `event_id`
-- **Audience-restricted** — validated against `flow-like-executor`
-- **Issuer-verified** — must come from `flow-like`
+## Authorization
 
-Public keys are distributed via environment variables or fetched from the API's JWKS endpoint.
+App roles are bitflags evaluated at protected routes. `Owner` and `Admin`
+imply the other permissions.
 
----
+| Area | Permissions |
+| --- | --- |
+| Team and roles | `ReadTeam`, `ReadRoles` |
+| Files | `ReadFiles`, `WriteFiles` |
+| Databases | `ReadDatabase`, `WriteDatabase` |
+| Boards | `ReadBoards`, `ExecuteBoards`, `WriteBoards` |
+| Events | `ListEvents`, `ReadEvents`, `ExecuteEvents`, `WriteEvents` |
+| Observability | `ReadLogs`, `ReadAnalytics` |
+| App configuration | `ReadConfig`, `WriteConfig` |
+| Reusable content | `ReadTemplates`, `WriteTemplates`, `ReadCourses`, `WriteCourses`, `ReadWidgets`, `WriteWidgets` |
+| Routes and metadata | `WriteRoutes`, `WriteMeta` |
+| API invocation | `InvokeApi` |
 
-## Authorization (RBAC)
+`ReadFiles` and `WriteFiles` also imply the corresponding database access for
+backward compatibility. Prefer the database-only permissions when a role does
+not need file access.
 
-Flow-Like implements role-based access control with 25+ granular permissions organized into logical groups:
+## Storage and credentials
 
-| Group | Permissions |
-|-------|------------|
-| **Admin** | `Owner`, `Admin` (implicitly grant all others) |
-| **Team** | `ReadTeam`, `ReadRoles` |
-| **Files** | `ReadFiles`, `WriteFiles` |
-| **API** | `InvokeApi` |
-| **Boards** | `ReadBoards`, `ExecuteBoards`, `WriteBoards` |
-| **Events** | `ListEvents`, `ReadEvents`, `ExecuteEvents`, `WriteEvents` |
-| **Observability** | `ReadLogs`, `ReadAnalytics` |
-| **Configuration** | `ReadConfig`, `WriteConfig` |
-| **Content** | `ReadTemplates`, `WriteTemplates`, `ReadCourses`, `WriteCourses`, `ReadWidgets`, `WriteWidgets`, `WriteRoutes` |
-| **Meta** | `WriteMeta` |
+Desktop-local, Docker Compose, Kubernetes, and managed deployments do not have
+the same storage boundary.
 
-Permissions are stored as bitflags for efficient evaluation. A user's effective permissions are the union of all their role assignments.
+- Local desktop data is stored on the user's machine unless a configured
+  workflow, model provider, connection, or hosted feature sends it elsewhere.
+- Hosted APIs use the configured object-store provider and app/user-scoped
+  paths.
+- Runtime credentials may be scoped for the executing user and app, depending
+  on the configured provider.
+- A WASM storage capability grants access only through host functions; it does
+  not mount the host filesystem into the module.
 
----
+Do not put credentials in board definitions, documentation examples, route
+query parameters, or screenshot fixtures.
 
-## Transport Security
+For Kubernetes, prefer workload identity or an external secret manager where
+the provider supports it. Kubernetes Secrets are not encrypted merely because
+their manifest values are base64 encoded. Restrict Secret access with RBAC and
+enable encryption at rest in the cluster.
 
-- **TLS everywhere** — all HTTP traffic uses [rustls](https://github.com/rustls/rustls), a memory-safe TLS implementation written in Rust. There is no OpenSSL dependency.
-- **HTTP/2 support** — the API server supports HTTP/2 via Axum
-- **No plaintext fallback** — production deployments must use TLS-terminated ingress
+For Docker Compose, `.env` and interpolated environment values are deployment
+configuration, not a secret-management system. Limit file permissions and use
+a dedicated secret mechanism when the environment requires one.
 
----
+## Transport and network controls
 
-## Data Protection
+The self-hosted API and supporting services expose HTTP endpoints inside their
+deployment network. Production TLS is normally terminated by an ingress,
+reverse proxy, or cloud load balancer.
 
-### Local-First Architecture
+Operators must:
 
-By default, all data remains on the user's machine:
+- serve public traffic over HTTPS;
+- configure trusted proxy and forwarding behavior correctly;
+- avoid exposing Redis, databases, metrics, compiler, or runtime ports
+  publicly;
+- restrict executor and sink egress to required destinations;
+- apply Kubernetes NetworkPolicies or equivalent network controls;
+- separate public ingress from internal service authentication.
 
-- Workflow definitions, execution state, and outputs are stored locally
-- AI models can run entirely on-device (llama.cpp, ONNX Runtime, Candle)
-- No data is sent to external services without explicit user action
+There is no application-level statement that can compensate for publishing an
+internal port directly to an untrusted network.
 
-### Storage Scoping
-
-WASM nodes access storage through controlled host functions. Each storage operation is bound to a specific scope:
-
-| Scope | Access |
-|-------|--------|
-| **Board storage** | Shared across nodes in the same board |
-| **Node-scoped storage** | Private to a specific node instance |
-| **User-scoped storage** | Tied to the authenticated user |
-| **Upload directory** | Controlled ingress path for user-provided files |
-| **Cache directory** | Optionally node-scoped and/or user-scoped |
-
-A node cannot access storage outside its declared scope, regardless of what it attempts.
-
-### Credential Handling
-
-- Secrets and API keys are stored in backend configuration, not in workflow definitions
-- In Kubernetes deployments, credentials should use workload identity (IRSA / GKE Workload Identity / AKS federated identity) over static keys
-- Static keys should be stored in Kubernetes Secrets with RBAC restrictions
-- OAuth tokens for third-party services are stored in memory and scoped to sessions
-
----
-
-## Supply Chain Security
-
-Flow-Like takes several measures to secure its dependency chain:
-
-- **Dependency auditing** — Rust dependencies are auditable via `cargo-audit`
-- **License inventory** — complete third-party license information is maintained in the [`thirdparty/`](https://github.com/Rheosoph/flow-like/tree/dev/thirdparty) directory
-- **Minimal containers** — production container images use minimal base images
-- **Image pinning** — container images can be pinned by digest
-- **Image signing** — compatible with [cosign](https://docs.sigstore.dev/cosign/overview/) for image verification
-- **TLS stack** — uses rustls across the board, eliminating OpenSSL as an attack vector
-- **Observability** — Prometheus metrics, OpenTelemetry tracing, and Sentry error tracking for anomaly detection
-
----
-
-## Deployment Hardening
+## Deployment hardening
 
 ### Kubernetes
 
-For production Kubernetes deployments:
+- Use separate service accounts for API, compiler, runtime, and sink
+  components.
+- Apply least-privilege RBAC and NetworkPolicies.
+- Set requests, limits, disruption budgets, and autoscaling for the expected
+  workload.
+- Pin reviewed images by immutable digest when release processes permit it.
+- Use a compatible sandboxed `runtimeClass` only after verifying the cluster
+  supports it.
+- Protect metrics, logs, and tracing endpoints as operational data.
 
-- **Kata Containers** — run workflows in lightweight VM boundaries via `runtimeClass`
-- **Network policies** — restrict executor egress to storage endpoints only
-- **Workload identity** — avoid static S3 credentials; use cloud-native identity
-- **RBAC** — limit access to Kubernetes secrets
-- **Admission policies** — enforce image signatures
-
-See [Kubernetes Security Notes](/self-hosting/kubernetes/security/) for detailed configuration.
+See [Kubernetes security](/self-hosting/kubernetes/security/).
 
 ### Docker Compose
 
-For Docker Compose deployments:
+- Bind public ports only where required.
+- Place internal services on private networks.
+- Replace development credentials and signing keys.
+- Terminate TLS before public traffic reaches the API.
+- Back up object storage and persistent service volumes.
+- Keep images and configuration under change control.
 
-- Keep services on an internal network
-- Use environment variables or Docker secrets for credentials
-- Pin image versions
-- Monitor with the built-in Prometheus/Grafana stack
+See [Docker Compose configuration](/self-hosting/docker-compose/configuration/)
+and [troubleshooting](/self-hosting/docker-compose/troubleshooting/).
 
----
+## Dependency and package trust
 
-## Reporting Vulnerabilities
+The repository checks in Rust and Bun lockfiles and maintains third-party
+license inventories under `thirdparty/`. Container images can be pinned by
+digest. These mechanisms improve reviewability but do not replace vulnerability
+scanning, update policy, provenance checks, or deployment-specific image
+verification.
 
-**Do not open a public GitHub issue for security vulnerabilities.**
+External WASM packages add another supply-chain boundary. Review the package
+source and requested permissions, use the narrowest trust duration available,
+and review updates before relying on an existing package identity.
 
-Report privately to [security@great-co.de](mailto:security@great-co.de).
+## Reporting vulnerabilities
 
-| Step | Timeline |
-|------|----------|
-| Acknowledgment | Within 48 hours |
-| Initial assessment | Within 5 business days |
-| Regular updates | Until resolved |
-| Credit in release notes | Unless you prefer anonymity |
+Do not open a public GitHub issue for a suspected vulnerability. Follow the
+repository [security policy](https://github.com/Rheosoph/flow-like/security/policy)
+and report privately to
+[security@great-co.de](mailto:security@great-co.de).
 
-### In Scope
+Include:
 
-- WASM sandbox escapes or privilege escalation
-- Authentication or authorization bypasses
-- Injection vulnerabilities (SQL, command, path traversal)
-- Sensitive data exposure (credentials, tokens, PII)
-- Denial-of-service in the executor or API
-- Supply chain issues in dependencies
-
-### Out of Scope
-
-- Vulnerabilities in third-party WASM nodes (report to the node author)
-- Social engineering attacks
-- Physical access attacks
-- Issues in deprecated or unsupported versions
+- the affected component and version or commit;
+- reproduction steps or a proof of concept;
+- expected and observed behavior;
+- potential impact;
+- any relevant deployment assumptions.

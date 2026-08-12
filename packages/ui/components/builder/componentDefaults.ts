@@ -18,6 +18,8 @@ export const options = (value: SelectOption[]): BoundValue => ({
 export const COMPONENT_STYLE_DEFAULTS: Record<string, Partial<Style>> = {
 	stack: { className: "min-h-[200px] min-w-[200px]" },
 	scrollArea: { className: "h-[300px]" },
+	graph: { className: "min-h-[320px] w-full" },
+	ontologyGraph: { className: "min-h-[320px] w-full" },
 	modal: { className: "" },
 	drawer: { className: "" },
 };
@@ -249,6 +251,15 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 		multiline: bool(false),
 		disabled: bool(false),
 		required: bool(false),
+	},
+	richText: {
+		value: str(""),
+		label: str("Document"),
+		placeholder: str("Start writing..."),
+		uploadScope: str("app"),
+		minHeight: str("16rem"),
+		disabled: bool(false),
+		readOnly: bool(false),
 	},
 	select: {
 		value: str(""),
@@ -508,6 +519,51 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 		showFullscreen: bool(false),
 		interactive: bool(true),
 		controlPosition: str("bottom-right"),
+	},
+	graph: {
+		nodes: {
+			literalJson: JSON.stringify([
+				{ id: "Person:1", label: "Person", caption: "Ada", props: {} },
+				{ id: "Person:2", label: "Person", caption: "Grace", props: {} },
+				{ id: "Team:1", label: "Team", caption: "Research", props: {} },
+			]),
+		},
+		edges: {
+			literalJson: JSON.stringify([
+				{
+					id: "e1",
+					source: "Person:1",
+					target: "Team:1",
+					label: "MEMBER_OF",
+					props: {},
+				},
+				{
+					id: "e2",
+					source: "Person:2",
+					target: "Team:1",
+					label: "MEMBER_OF",
+					props: {},
+				},
+			]),
+		},
+		showToolbar: bool(true),
+		showSearch: bool(true),
+		showLegend: bool(true),
+		showInspector: bool(true),
+		height: str("480px"),
+	},
+	ontologyGraph: {
+		ontologyId: str(""),
+		allowExpand: bool(true),
+		allowSearch: bool(true),
+		allowPaths: bool(true),
+		allowActions: bool(true),
+		allowCypher: bool(false),
+		allowStyleEdit: bool(false),
+		allowLimitChange: bool(true),
+		showToolbar: bool(true),
+		showLegend: bool(true),
+		height: str("480px"),
 	},
 	calendar: {
 		events: {

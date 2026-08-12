@@ -21,7 +21,7 @@ RUN lib_dir="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)" \
     && test -e "$lib_dir/libOpenCL.so"
 
 RUN curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --default-toolchain 1.93.0 -q
+    | sh -s -- -y --default-toolchain 1.97.1 -q
 
 ENV PATH="/root/.cargo/bin:${PATH}"
 

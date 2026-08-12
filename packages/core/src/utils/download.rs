@@ -39,7 +39,14 @@ fn global_download_semaphore() -> &'static Semaphore {
 }
 
 async fn get_remote_size(client: &Client, url: &str) -> flow_like_types::Result<u64> {
-    let res = client.head(url).send().await?;
+    // Transfer compression hides the real artifact length: a Brotli/gzip
+    // response carries no content-length, and byte ranges would refer to the
+    // encoded stream instead of the stored file.
+    let res = client
+        .head(url)
+        .header(reqwest::header::ACCEPT_ENCODING, "identity")
+        .send()
+        .await?;
     if res.status().is_server_error() {
         bail!(
             "Server responded with {} to HEAD request for {}",
@@ -66,7 +73,7 @@ async fn publish_progress(
     path: &Path,
 ) -> flow_like_types::Result<()> {
     let event = InterComEvent::with_type(
-        format!("download:{}", &bit.hash),
+        format!("download:{}", bit.hash),
         BitDownloadEvent {
             hash: bit.hash.to_string(),
             max: bit.size.unwrap_or(0),
@@ -192,7 +199,7 @@ async fn process_download_bit(
         let err = remote_size.unwrap_err();
         println!(
             "Error getting remote size for {}: {}. Falling back to cached files if available.",
-            &url, err
+            url, err
         );
         let _rem = remove_download(bit, &app_state).await;
         let _ = async_fs::remove_file(&temp_path).await;
@@ -261,7 +268,7 @@ async fn process_download_bit(
             feed_hasher_with_existing(&temp_path, &mut hasher).await?;
             println!(
                 "Resuming download: {} to {} ({} bytes already present)",
-                &url,
+                url,
                 temp_path.display(),
                 partial_size
             );
@@ -270,10 +277,13 @@ async fn process_download_bit(
         let _ = async_fs::remove_file(&temp_path).await;
     }
 
-    println!("Downloading: {} to {}", &url, store_path);
+    println!("Downloading: {} to {}", url, store_path);
 
     // now use range header to resume download
     let mut headers = reqwest::header::HeaderMap::new();
+    // Keep the response identical to the stored artifact so byte offsets,
+    // resume ranges and the size check all describe the same stream.
+    headers.insert(reqwest::header::ACCEPT_ENCODING, "identity".parse()?);
 
     if resume {
         headers.insert("Range", format!("bytes={}-", downloaded).parse()?);
@@ -376,7 +386,19 @@ async fn process_download_bit(
     let _rem = remove_download(bit, &app_state).await;
 
     let file_hash = hasher.finalize().to_hex().to_string().to_lowercase();
-    if file_hash != bit.hash.to_lowercase() {
+    // User-created custom bits don't know their artifact hash upfront. Legacy
+    // roots use `hash == id`; newer GGUF roots use a source-derived identity so
+    // edits to pinned URLs select a fresh cache target. Recompute the latter
+    // from the Bit before accepting it as trust-on-first-use.
+    let unverified_user_bit =
+        bit.hash == bit.id || bit.has_matching_user_source_artifact_identity();
+    if unverified_user_bit {
+        println!(
+            "Skipping hash verification for user bit {} (computed blake3: {})",
+            bit.id, file_hash
+        );
+    }
+    if !unverified_user_bit && file_hash != bit.hash.to_lowercase() {
         println!(
             "Error downloading file, hash does not match, deleting __ {} != {}",
             file_hash, bit.hash

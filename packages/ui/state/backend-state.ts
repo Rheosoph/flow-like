@@ -17,7 +17,11 @@ import type { IBitState } from "./backend-state/bit-state";
 import type {
 	IApplyFlowIrCommitResponse,
 	IApplyFlowScriptResponse,
+	IBoardServerResetResult,
 	IBoardState,
+	IBoardSyncQueueEntry,
+	IBoardSyncStatus,
+	ICheckFlowScriptReconcileResponse,
 	IFlowScriptDiagnostic,
 } from "./backend-state/board-state";
 import type { IDatabaseState } from "./backend-state/db-state";
@@ -86,8 +90,12 @@ export type {
 	IAppRouteState,
 	IBitState,
 	IBoardState,
+	IBoardServerResetResult,
+	IBoardSyncQueueEntry,
+	IBoardSyncStatus,
 	IApplyFlowIrCommitResponse,
 	IApplyFlowScriptResponse,
+	ICheckFlowScriptReconcileResponse,
 	IFlowScriptDiagnostic,
 	IEventState,
 	IHelperState,
@@ -112,6 +120,7 @@ export type {
 export type { SinkType } from "./backend-state/sink-state";
 
 export type {
+	IGetPageOptions,
 	IPage,
 	IWidgetRef,
 	PageContent,
@@ -196,6 +205,7 @@ export type {
 export interface ICapabilities {
 	needsSignIn: boolean;
 	canHostLlamaCPP: boolean;
+	canHostMLX: boolean;
 	canHostEmbeddings: boolean;
 	canExecuteLocally: boolean;
 }
@@ -293,6 +303,7 @@ const serverBackend: IBackendState = {
 	capabilities: () => ({
 		needsSignIn: false,
 		canHostLlamaCPP: false,
+		canHostMLX: false,
 		canHostEmbeddings: false,
 		canExecuteLocally: false,
 	}),

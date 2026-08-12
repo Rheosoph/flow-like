@@ -2474,6 +2474,17 @@ fn pack_ptr_len(ptr: u32, len: u32) -> u64 {
     ((ptr as u64) << 32) | (len as u64)
 }
 
+fn write_wasi_u32(caller: &mut Caller<'_, StoreData>, ptr: i32, value: u32) -> Result<(), ()> {
+    let offset = usize::try_from(ptr).map_err(|_| ())?;
+    let memory = caller
+        .get_export("memory")
+        .and_then(|export| export.into_memory())
+        .ok_or(())?;
+    memory
+        .write(caller, offset, &value.to_le_bytes())
+        .map_err(|_| ())
+}
+
 /// Register WASI snapshot_preview1 stubs for TinyGo/Go WASM modules
 fn register_wasi_stubs(linker: &mut Linker<StoreData>) -> WasmResult<()> {
     linker
@@ -2540,7 +2551,14 @@ fn register_wasi_stubs(linker: &mut Linker<StoreData>) -> WasmResult<()> {
         .func_wrap(
             "wasi_snapshot_preview1",
             "environ_sizes_get",
-            |_caller: Caller<'_, StoreData>, _count: i32, _buf_size: i32| -> i32 { 0 },
+            |mut caller: Caller<'_, StoreData>, count: i32, buf_size: i32| -> i32 {
+                if write_wasi_u32(&mut caller, count, 0).is_err()
+                    || write_wasi_u32(&mut caller, buf_size, 0).is_err()
+                {
+                    return 21; // __WASI_ERRNO_FAULT
+                }
+                0
+            },
         )
         .map_err(|e| {
             WasmError::Initialization(format!(

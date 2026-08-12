@@ -15,6 +15,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.97.1
           targets: wasm32-wasip2
 
       - uses: actions/cache@v4
