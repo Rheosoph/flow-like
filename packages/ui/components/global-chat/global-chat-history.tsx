@@ -1,42 +1,54 @@
 "use client";
 
 import { useLiveQuery } from "dexie-react-hooks";
-import { HistoryIcon, SquarePenIcon, Trash2Icon } from "lucide-react";
-import { useCallback, useState } from "react";
-import {
-	Button,
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-	Tooltip,
-	TooltipContent,
-	TooltipTrigger,
-} from "../../index";
+import { HistoryIcon, SquarePenIcon } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+import { useIsMobile } from "../../hooks/use-mobile";
+import { cn } from "../../lib/utils";
 import {
 	GLOBAL_CHAT_APP_ID,
 	globalChatDb,
 } from "../../state/global-chat/global-chat-db";
 import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
-import { restoreGlobalChatConversation } from "../../state/global-chat/global-chat-stream";
+import {
+	deleteGlobalChatConversation,
+	renameGlobalChatSession,
+	restoreGlobalChatConversation,
+	setGlobalChatSessionPinned,
+} from "../../state/global-chat/global-chat-stream";
+import { ChatHistoryList } from "../chat-history/chat-history-list";
+import type { IHistoryEntry } from "../chat-history/chat-history-types";
+import { buildSearchCorpus } from "../chat-history/use-history-search";
+import { Button } from "../ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import {
+	Sheet,
+	SheetContent,
+	SheetHeader,
+	SheetTitle,
+	SheetTrigger,
+} from "../ui/sheet";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
-function relativeTime(timestamp: number): string {
-	const delta = Date.now() - timestamp;
-	const minutes = Math.floor(delta / 60_000);
-	if (minutes < 1) return "just now";
-	if (minutes < 60) return `${minutes}m ago`;
-	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return `${hours}h ago`;
-	const days = Math.floor(hours / 24);
-	if (days < 7) return `${days}d ago`;
-	return new Date(timestamp).toLocaleDateString();
+/** Recency window for unpinned conversations. Pinned rows are fetched separately and never cut. */
+const RECENT_LIMIT = 200;
+
+interface GlobalChatHistoryProps {
+	className?: string;
 }
 
 /**
- * Global chat history: a New-chat action plus a popover listing persisted conversations
- * (from the GlobalChat Dexie DB) with resume and delete.
+ * Global chat history: a New-chat action plus a searchable, pinnable conversation list.
+ *
+ * The list renders in a Popover on pointer devices and a bottom Sheet on touch, since a 320px
+ * popover anchored to a header button is unusable with a thumb.
  */
-export function GlobalChatHistory() {
+export function GlobalChatHistory({
+	className,
+}: Readonly<GlobalChatHistoryProps>) {
 	const [open, setOpen] = useState(false);
+	const isMobile = useIsMobile();
+
 	// Switching chats no longer blocks on a live turn: runs are keyed by run id and keep streaming
 	// (and finalizing into IndexedDB) in whatever conversation they belong to, reappearing in place
 	// when the user comes back.
@@ -44,39 +56,135 @@ export function GlobalChatHistory() {
 		(s) => s.activeConversationId,
 	);
 	const newConversation = useGlobalChatStore((s) => s.newConversation);
+	// A comma-joined key, not the `runs` record: `runs` gets a fresh identity on every streamed
+	// chunk, which would re-derive `entries` and rebuild the whole MiniSearch index per token.
+	// This string only changes when a conversation actually starts or finishes a run.
+	const streamingKey = useGlobalChatStore((s) =>
+		Array.from(new Set(Object.values(s.runs).map((run) => run.conversationId)))
+			.sort()
+			.join(","),
+	);
 
-	const sessions = useLiveQuery(
+	// Two queries rather than one: a single `limit()` would be applied before the appId filter (so
+	// migrated board/ui rows eat slots) and would drop pinned-but-old conversations entirely.
+	const pinnedSessions = useLiveQuery(
+		() => globalChatDb.sessions.where("pinnedAt").above(0).toArray(),
+		[],
+	);
+	const recentSessions = useLiveQuery(
 		() =>
-			globalChatDb.sessions.orderBy("updatedAt").reverse().limit(50).toArray(),
+			globalChatDb.sessions
+				.orderBy("updatedAt")
+				.reverse()
+				.filter((session) => session.appId === GLOBAL_CHAT_APP_ID)
+				.limit(RECENT_LIMIT)
+				.toArray(),
 		[],
 	);
 
+	const sessions = useMemo(() => {
+		if (!pinnedSessions || !recentSessions) return undefined;
+		const pinned = pinnedSessions.filter(
+			(session) => session.appId === GLOBAL_CHAT_APP_ID,
+		);
+		const pinnedIds = new Set(pinned.map((session) => session.id));
+		return [
+			...pinned,
+			...recentSessions.filter((session) => !pinnedIds.has(session.id)),
+		];
+	}, [pinnedSessions, recentSessions]);
+
+	const sessionIds = useMemo(
+		() => (sessions ?? []).map((session) => session.id),
+		[sessions],
+	);
+	const sessionIdKey = sessionIds.join(",");
+
+	// One indexed range scan over every listed conversation, not one query per row — on desktop each
+	// IndexedDB op goes through the SQLite shim, so an N+1 here would be felt directly. Gated on the
+	// user actually searching, so merely opening the panel never pulls every message it has.
+	const [searching, setSearching] = useState(false);
+	const [renaming, setRenaming] = useState(false);
+	const messages = useLiveQuery(
+		() =>
+			searching && sessionIds.length > 0
+				? globalChatDb.messages.where("sessionId").anyOf(sessionIds).toArray()
+				: [],
+		[searching, sessionIdKey],
+	);
+
+	const streamingIds = useMemo(
+		() => new Set(streamingKey ? streamingKey.split(",") : []),
+		[streamingKey],
+	);
+
+	const entries = useMemo<IHistoryEntry[] | undefined>(() => {
+		if (!sessions) return undefined;
+		const corpus = buildSearchCorpus(messages);
+		return sessions.map((session) => ({
+			id: session.id,
+			title: session.summarization || "Untitled conversation",
+			updatedAt: session.updatedAt,
+			pinnedAt: session.pinnedAt,
+			streaming: streamingIds.has(session.id),
+			searchBody: corpus.get(session.id) ?? "",
+		}));
+	}, [sessions, messages, streamingIds]);
+
 	// Shared restore path: settles stale mid-stream checkpoints (no eternal spinners) and
 	// re-attaches runs of this conversation that are still streaming in Rust.
-	const handleResume = useCallback(async (sessionId: string) => {
+	const handleSelect = useCallback(async (sessionId: string) => {
 		await restoreGlobalChatConversation(sessionId);
 		setOpen(false);
 	}, []);
 
-	const handleDelete = useCallback(
-		async (sessionId: string) => {
-			await globalChatDb.messages.where("sessionId").equals(sessionId).delete();
-			await globalChatDb.sessions.delete(sessionId);
-			if (sessionId === useGlobalChatStore.getState().activeConversationId) {
-				newConversation();
-			}
-		},
-		[newConversation],
+	const handleNew = useCallback(() => {
+		newConversation();
+		setOpen(false);
+	}, [newConversation]);
+
+	const list = (
+		<ChatHistoryList
+			entries={entries}
+			activeId={activeConversationId}
+			onSelect={handleSelect}
+			onNew={handleNew}
+			onTogglePin={setGlobalChatSessionPinned}
+			onRename={renameGlobalChatSession}
+			onDelete={deleteGlobalChatConversation}
+			density={isMobile ? "comfortable" : "compact"}
+			onSearchActiveChange={setSearching}
+			onRenamingChange={setRenaming}
+			emptyDescription="Ask FlowPilot something and the conversation shows up here."
+			className={isMobile ? "h-full" : "max-h-[min(70vh,480px)]"}
+		/>
+	);
+
+	// Radix dismisses on Escape from a document capture listener, which fires before the rename
+	// input's own handler — without this the key would tear down the whole surface mid-rename.
+	const guardEscape = (event: KeyboardEvent) => {
+		if (renaming) event.preventDefault();
+	};
+
+	const trigger = (
+		<Button
+			variant="ghost"
+			size="icon"
+			className="h-9 w-9 rounded-lg md:h-8 md:w-8"
+			aria-label="Chat history"
+		>
+			<HistoryIcon className="size-4" />
+		</Button>
 	);
 
 	return (
-		<div className="flex items-center gap-0.5 ml-auto shrink-0">
+		<div className={cn("flex shrink-0 items-center gap-0.5", className)}>
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<Button
 						variant="ghost"
 						size="icon"
-						className="h-9 w-9 md:h-8 md:w-8 rounded-lg"
+						className="h-9 w-9 rounded-lg md:h-8 md:w-8"
 						aria-label="New chat"
 						onClick={newConversation}
 					>
@@ -88,71 +196,44 @@ export function GlobalChatHistory() {
 				</TooltipContent>
 			</Tooltip>
 
-			<Popover open={open} onOpenChange={setOpen}>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<PopoverTrigger asChild>
-							<Button
-								variant="ghost"
-								size="icon"
-								className="h-9 w-9 md:h-8 md:w-8 rounded-lg"
-								aria-label="Chat history"
-							>
-								<HistoryIcon className="size-4" />
-							</Button>
-						</PopoverTrigger>
-					</TooltipTrigger>
-					<TooltipContent side="bottom" className="text-xs">
-						History
-					</TooltipContent>
-				</Tooltip>
-				<PopoverContent align="end" className="w-80 p-1.5 z-[10000]">
-					<p className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-						Conversations
-					</p>
-					<div className="max-h-80 overflow-y-auto">
-						{(sessions?.filter((s) => s.appId === GLOBAL_CHAT_APP_ID) ?? [])
-							.length === 0 && (
-							<p className="px-2 py-6 text-center text-sm text-muted-foreground">
-								No conversations yet.
-							</p>
-						)}
-						{sessions
-							?.filter((session) => session.appId === GLOBAL_CHAT_APP_ID)
-							.map((session) => {
-								const active = session.id === activeConversationId;
-								return (
-									<div
-										key={session.id}
-										className={`group flex items-center gap-1 rounded-lg ${active ? "bg-primary/10" : "hover:bg-muted/60"}`}
-									>
-										<button
-											type="button"
-											className="flex-1 min-w-0 px-2 py-2 text-left"
-											onClick={() => void handleResume(session.id)}
-										>
-											<span className="block text-sm truncate">
-												{session.summarization || "Untitled conversation"}
-											</span>
-											<span className="block text-[11px] text-muted-foreground">
-												{relativeTime(session.updatedAt)}
-											</span>
-										</button>
-										<Button
-											variant="ghost"
-											size="icon"
-											className="h-7 w-7 mr-1 rounded-md opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
-											aria-label="Delete conversation"
-											onClick={() => void handleDelete(session.id)}
-										>
-											<Trash2Icon className="size-3.5" />
-										</Button>
-									</div>
-								);
-							})}
-					</div>
-				</PopoverContent>
-			</Popover>
+			{isMobile ? (
+				<Sheet open={open} onOpenChange={setOpen}>
+					<SheetTrigger asChild>{trigger}</SheetTrigger>
+					{/* The docked chat overlay sits at z-9999, so the Sheet and its backdrop have to
+					    be raised explicitly or they render behind it. */}
+					<SheetContent
+						side="bottom"
+						overlayClassName="z-[10000]"
+						onEscapeKeyDown={guardEscape}
+						className="z-[10001] flex h-[85dvh] max-h-[85dvh] flex-col overflow-hidden rounded-t-2xl p-0"
+					>
+						<SheetHeader className="shrink-0 px-4 pb-0 pt-4">
+							<SheetTitle className="text-base">Conversations</SheetTitle>
+						</SheetHeader>
+						{/* SheetContent wraps children in a flex column; without min-h-0 this never scrolls. */}
+						<div className="flex min-h-0 flex-1 flex-col">{list}</div>
+					</SheetContent>
+				</Sheet>
+			) : (
+				<Popover open={open} onOpenChange={setOpen}>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<PopoverTrigger asChild>{trigger}</PopoverTrigger>
+						</TooltipTrigger>
+						<TooltipContent side="bottom" className="text-xs">
+							History
+						</TooltipContent>
+					</Tooltip>
+					<PopoverContent
+						align="end"
+						sideOffset={8}
+						onEscapeKeyDown={guardEscape}
+						className="z-[10000] w-[380px] max-w-[calc(100vw-2rem)] overflow-hidden p-0 shadow-floating"
+					>
+						{list}
+					</PopoverContent>
+				</Popover>
+			)}
 		</div>
 	);
 }

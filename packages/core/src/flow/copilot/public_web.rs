@@ -328,7 +328,7 @@ fn reserve_capped_call(counter: &AtomicUsize, limit: usize) -> bool {
         .is_ok()
 }
 
-fn public_urls_in_user_text(text: &str) -> Vec<String> {
+pub(crate) fn public_urls_in_user_text(text: &str) -> Vec<String> {
     let mut urls = Vec::new();
     let mut offset = 0usize;
     while offset < text.len() {

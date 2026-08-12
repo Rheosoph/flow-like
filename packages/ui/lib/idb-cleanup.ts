@@ -26,8 +26,15 @@ const DEFAULTS: Required<CleanupOptions> = {
 
 async function pruneOldChatMessages(maxAgeDays: number): Promise<number> {
 	const cutoff = Date.now() - maxAgeDays * DAY_MS;
+	// A pinned conversation is an explicit "keep this" from the user, so neither its messages nor
+	// its session row may be aged out — otherwise pinning quietly guarantees deletion instead.
+	const pinnedSessionIds = new Set(
+		(await chatDb.sessions.where("pinnedAt").above(0).primaryKeys()).map(
+			String,
+		),
+	);
 	const old = await chatDb.messages
-		.filter((m) => m.timestamp < cutoff)
+		.filter((m) => m.timestamp < cutoff && !pinnedSessionIds.has(m.sessionId))
 		.primaryKeys();
 	if (old.length > 0) await chatDb.messages.bulkDelete(old);
 
@@ -35,6 +42,7 @@ async function pruneOldChatMessages(maxAgeDays: number): Promise<number> {
 	const allSessions = await chatDb.sessions.toArray();
 	const orphanIds: string[] = [];
 	for (const session of allSessions) {
+		if (session.pinnedAt) continue;
 		const count = await chatDb.messages
 			.where("sessionId")
 			.equals(session.id)
@@ -49,7 +57,7 @@ async function pruneOldChatMessages(maxAgeDays: number): Promise<number> {
 async function pruneOldFlowpilotHistory(maxAgeDays: number): Promise<number> {
 	const cutoff = new Date(Date.now() - maxAgeDays * DAY_MS).toISOString();
 	const oldConversations = await flowpilotDB.conversations
-		.filter((c) => c.updatedAt < cutoff)
+		.filter((c) => c.updatedAt < cutoff && !c.pinnedAt)
 		.primaryKeys();
 
 	let deletedMessages = 0;

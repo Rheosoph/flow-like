@@ -1123,6 +1123,82 @@ function buildCallSnippet(info: FlowScriptNodeInfo): string {
 	return `${info.identifier}({ ${params} })`;
 }
 
+const CACHE_DECORATOR_MARKDOWN = `\`\`\`flowscript
+@cache
+@cache({})
+@cache({ namespace: "pricing", ttlSeconds: 0, scope: "user" })
+\`\`\`
+
+Caches a function's outputs by its layer and inputs. A cache hit replays the outputs and skips the entire function body, including side effects.
+
+Bare \`@cache\` and \`@cache({})\` use the \`"global"\` namespace, a 300-second lifetime, and app scope. Set \`ttlSeconds: 0\` explicitly for entries that remain until invalidated. Use user scope for private or user-dependent results. The decorator only applies to \`function\` declarations.`;
+
+const CACHE_FIELD_MARKDOWN: Record<string, string> = {
+	namespace:
+		'`namespace: string` — Groups cache entries for invalidation. Defaults to `"global"`.',
+	ttlSeconds:
+		"`ttlSeconds: int` — Non-negative cache lifetime in seconds. Defaults to `300`; use `0` for no expiry.",
+	scope:
+		'`scope: "app" | "user"` — `app` shares entries across the app; `user` isolates entries by triggering user.',
+};
+
+interface CacheDecoratorContext {
+	existingKeys: string[];
+	mode: "key" | "value";
+	activeField?: string;
+}
+
+/** Detects the cursor inside the settings object of an unfinished `@cache({ ... })`. */
+function analyzeCacheDecoratorContext(
+	maskedBefore: string,
+): CacheDecoratorContext | null {
+	const head = /@cache\s*\(\s*\{/g;
+	let match: RegExpExecArray | null = null;
+	for (
+		let candidate = head.exec(maskedBefore);
+		candidate;
+		candidate = head.exec(maskedBefore)
+	) {
+		match = candidate;
+	}
+	if (!match) return null;
+
+	const body = maskedBefore.slice(match.index + match[0].length);
+	const existingKeys: string[] = [];
+	let depth = 0;
+	let segment = "";
+	const flush = () => {
+		const field = /^\s*([A-Za-z_$][\w$]*)\s*:/.exec(segment);
+		if (field) existingKeys.push(field[1]);
+	};
+
+	for (const ch of body) {
+		if (ch === "{" || ch === "[" || ch === "(") {
+			depth++;
+		} else if (ch === "}" || ch === "]" || ch === ")") {
+			if (depth === 0) return null;
+			depth--;
+		}
+		if (depth === 0 && ch === ",") {
+			flush();
+			segment = "";
+		} else {
+			segment += ch;
+		}
+	}
+
+	const active = /^\s*([A-Za-z_$][\w$]*)\s*:([\s\S]*)$/.exec(segment);
+	if (active) {
+		existingKeys.push(active[1]);
+		return {
+			existingKeys,
+			mode: "value",
+			activeField: active[1],
+		};
+	}
+	return { existingKeys, mode: "key" };
+}
+
 /**
  * Registers completion, hover and signature-help providers for FlowScript, all backed by the
  * live catalog. Returns a single disposable that tears every provider down.
@@ -1134,7 +1210,7 @@ export function registerFlowScriptProviders(
 	const completion = monaco.languages.registerCompletionItemProvider(
 		FLOWSCRIPT_LANGUAGE_ID,
 		{
-			triggerCharacters: [".", "{", ",", " ", ":"],
+			triggerCharacters: [".", "{", ",", " ", ":", "@"],
 			provideCompletionItems: (model, position) => {
 				const index = getFlowScriptIndex(getCatalogNodes());
 				const word = model.getWordUntilPosition(position);
@@ -1147,6 +1223,105 @@ export function registerFlowScriptProviders(
 
 				const maskedFull = maskLiterals(model.getValue());
 				const offset = model.getOffsetAt(position);
+				const maskedBefore = maskedFull.slice(0, offset);
+				const decoratorToken = /@[A-Za-z_]*$/.exec(maskedBefore);
+				if (decoratorToken) {
+					const decoratorRange = {
+						...range,
+						startColumn: position.column - decoratorToken[0].length,
+					};
+					return {
+						suggestions: [
+							{
+								label: "@cache",
+								kind: monaco.languages.CompletionItemKind.Keyword,
+								detail: "Enable function result caching with defaults",
+								documentation: { value: CACHE_DECORATOR_MARKDOWN },
+								insertText: "@cache",
+								range: decoratorRange,
+								sortText: "0_cache_bare",
+							},
+							{
+								label: "@cache({ … })",
+								kind: monaco.languages.CompletionItemKind.Keyword,
+								detail: "Configure function result caching",
+								documentation: { value: CACHE_DECORATOR_MARKDOWN },
+								insertText:
+									'@cache({ namespace: "${1:global}", ttlSeconds: ${2:300}, scope: "${3|app,user|}" })',
+								insertTextRules:
+									monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+								range: decoratorRange,
+								sortText: "0_cache_configured",
+							},
+						],
+					};
+				}
+
+				const cacheContext = analyzeCacheDecoratorContext(maskedBefore);
+				if (cacheContext?.mode === "value") {
+					if (cacheContext.activeField !== "scope") {
+						return { suggestions: [] };
+					}
+					const quotedValue = /"[^"\n]*$/.exec(
+						model.getValue().slice(0, offset),
+					);
+					const scopeRange = quotedValue
+						? {
+								...range,
+								startColumn: position.column - quotedValue[0].length,
+							}
+						: range;
+					return {
+						suggestions: ["app", "user"].map((scope) => ({
+							label: `"${scope}"`,
+							kind: monaco.languages.CompletionItemKind.EnumMember,
+							detail:
+								scope === "app"
+									? "Shared across the app"
+									: "Isolated by triggering user",
+							insertText: `"${scope}"`,
+							range: scopeRange,
+							sortText: `0_${scope}`,
+						})),
+					};
+				}
+				if (cacheContext?.mode === "key") {
+					const present = new Set(cacheContext.existingKeys);
+					const fields = [
+						{
+							name: "namespace",
+							detail: "string (optional)",
+							insertText: 'namespace: "${1:global}"',
+						},
+						{
+							name: "ttlSeconds",
+							detail: "non-negative integer (optional)",
+							insertText: "ttlSeconds: ${1:300}",
+						},
+						{
+							name: "scope",
+							detail: '"app" | "user" (optional)',
+							insertText: 'scope: "${1|app,user|}"',
+						},
+					];
+					return {
+						suggestions: fields
+							.filter((field) => !present.has(field.name))
+							.map((field) => ({
+								label: field.name,
+								kind: monaco.languages.CompletionItemKind.Field,
+								detail: field.detail,
+								documentation: {
+									value: CACHE_FIELD_MARKDOWN[field.name],
+								},
+								insertText: field.insertText,
+								insertTextRules:
+									monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+								range,
+								sortText: `0_${field.name}`,
+							})),
+					};
+				}
 
 				// Dot notation → offer members: a node's output pins, or a struct's schema fields
 				// (following variable bindings, explicit outputs and nested $refs).
@@ -1313,6 +1488,28 @@ export function registerFlowScriptProviders(
 				startColumn: word.startColumn,
 				endColumn: word.endColumn,
 			};
+			const value = model.getValue();
+			const wordStartOffset = model.getOffsetAt({
+				lineNumber: position.lineNumber,
+				column: word.startColumn,
+			});
+			if (
+				word.word === "cache" &&
+				value.slice(0, wordStartOffset).endsWith("@")
+			) {
+				return { range, contents: [{ value: CACHE_DECORATOR_MARKDOWN }] };
+			}
+			if (
+				CACHE_FIELD_MARKDOWN[word.word] &&
+				analyzeCacheDecoratorContext(
+					maskLiterals(value.slice(0, wordStartOffset)),
+				)
+			) {
+				return {
+					range,
+					contents: [{ value: CACHE_FIELD_MARKDOWN[word.word] }],
+				};
+			}
 
 			const info = index.byName.get(word.word);
 			if (info) {
@@ -1758,7 +1955,7 @@ export function computeFlowScriptDiagnostics(
 		const name = match[1];
 		const nameStart = match.index;
 		const prev = masked.slice(0, nameStart).trimEnd();
-		if (prev.endsWith(".")) continue; // member access, not a node call
+		if (prev.endsWith(".") || prev.endsWith("@")) continue; // member access/decorator, not a node call
 		if (KEYWORD_SET.has(name)) continue;
 
 		const info = index.byName.get(name);

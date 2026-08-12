@@ -9,8 +9,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use flow_like_ast::model::{
-    Arg, Block, BoardAst, BranchArm, Call, Container, EventBlock, Expr, FnDecl, InterfaceDecl,
-    Literal, ObjectField, Param, Stmt, TypeRef, VarDecl,
+    Arg, Block, BoardAst, BranchArm, Call, Container, DEFAULT_FUNCTION_CACHE_NAMESPACE,
+    DEFAULT_FUNCTION_CACHE_TTL_SECONDS, EventBlock, Expr, FnDecl, FunctionCache,
+    FunctionCacheScope, InterfaceDecl, Literal, ObjectField, Param, Stmt, TypeRef, VarDecl,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -117,6 +118,50 @@ pub struct FlowIrParam {
     pub value_type: FlowIrType,
 }
 
+/// Result-cache settings for a typed FlowPilot function module.
+///
+/// The cache key includes the function layer and all function inputs. A hit skips the complete
+/// function body, including side effects, so this is only safe for input-determined functions.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FlowIrFunctionCache {
+    /// Namespace used to group entries for targeted invalidation. Defaults to `global`.
+    #[serde(default = "default_flow_ir_function_cache_namespace")]
+    pub namespace: String,
+    /// Entry lifetime in seconds. Omission defaults to 300; zero (and legacy `null`) is permanent.
+    #[serde(default = "default_flow_ir_function_cache_ttl_seconds")]
+    pub ttl_seconds: Option<u64>,
+    /// Whether cached results are shared by the app or isolated to the triggering user.
+    #[serde(default)]
+    pub scope: FlowIrFunctionCacheScope,
+}
+
+fn default_flow_ir_function_cache_namespace() -> String {
+    DEFAULT_FUNCTION_CACHE_NAMESPACE.to_string()
+}
+
+fn default_flow_ir_function_cache_ttl_seconds() -> Option<u64> {
+    Some(DEFAULT_FUNCTION_CACHE_TTL_SECONDS)
+}
+
+impl Default for FlowIrFunctionCache {
+    fn default() -> Self {
+        Self {
+            namespace: default_flow_ir_function_cache_namespace(),
+            ttl_seconds: default_flow_ir_function_cache_ttl_seconds(),
+            scope: FlowIrFunctionCacheScope::App,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowIrFunctionCacheScope {
+    #[default]
+    App,
+    User,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FlowIrModule {
@@ -126,6 +171,10 @@ pub enum FlowIrModule {
         params: Vec<FlowIrParam>,
         #[serde(default)]
         returns: Vec<FlowIrParam>,
+        /// Optional result-cache configuration. Omit it to leave the function uncached. A cache
+        /// hit skips the entire body and all side effects.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache: Option<FlowIrFunctionCache>,
         #[serde(default)]
         steps: Vec<FlowIrStep>,
         #[serde(default)]
@@ -1273,6 +1322,7 @@ pub fn compile_flow_ir(program: &FlowIrProgram, catalog: &[NodeMetadata]) -> Flo
                 name,
                 params,
                 returns,
+                cache,
                 anchor,
                 ..
             } => ast.functions.push(FnDecl {
@@ -1280,6 +1330,14 @@ pub fn compile_flow_ir(program: &FlowIrProgram, catalog: &[NodeMetadata]) -> Flo
                 params: params.iter().map(param_to_ast).collect(),
                 returns: returns.iter().map(param_to_ast).collect(),
                 body: block,
+                cache: cache.as_ref().map(|cache| FunctionCache {
+                    namespace: cache.namespace.clone(),
+                    ttl_seconds: cache.ttl_seconds,
+                    scope: match cache.scope {
+                        FlowIrFunctionCacheScope::App => FunctionCacheScope::App,
+                        FlowIrFunctionCacheScope::User => FunctionCacheScope::User,
+                    },
+                }),
                 anchor: anchor.clone(),
             }),
             FlowIrModule::Event {
@@ -4827,6 +4885,119 @@ mod tests {
     }
 
     #[test]
+    fn typed_ir_function_cache_compiles_to_flowscript_without_losing_settings() {
+        let module = FlowIrModule::Function {
+            name: "calculatePricing".to_string(),
+            params: Vec::new(),
+            returns: Vec::new(),
+            cache: Some(FlowIrFunctionCache {
+                namespace: "pricing".to_string(),
+                ttl_seconds: Some(3_600),
+                scope: FlowIrFunctionCacheScope::User,
+            }),
+            steps: Vec::new(),
+            anchor: None,
+        };
+        let serialized = serde_json::to_value(&module).expect("serialize function module");
+        assert_eq!(serialized["cache"]["namespace"], "pricing");
+        assert_eq!(serialized["cache"]["ttl_seconds"], 3_600);
+        assert_eq!(serialized["cache"]["scope"], "user");
+
+        let compiled = compile_flow_ir(
+            &FlowIrProgram {
+                modules: vec![module],
+                ..Default::default()
+            },
+            &[],
+        );
+        assert!(
+            compiled.diagnostics.is_empty(),
+            "{:?}",
+            compiled.diagnostics
+        );
+        let cache = compiled.ast.as_ref().unwrap().functions[0]
+            .cache
+            .as_ref()
+            .expect("compiled function cache");
+        assert_eq!(cache.namespace, "pricing");
+        assert_eq!(cache.ttl_seconds, Some(3_600));
+        assert_eq!(cache.scope, FunctionCacheScope::User);
+        assert!(
+            compiled
+                .flowscript
+                .contains(r#"@cache({ namespace: "pricing", ttlSeconds: 3600, scope: "user" })"#)
+        );
+        assert!(flow_like_ast::parse(&compiled.flowscript).is_ok());
+    }
+
+    #[test]
+    fn typed_ir_function_cache_defaults_and_explicit_permanent_ttl_are_unambiguous() {
+        let default_module: FlowIrModule = serde_json::from_value(serde_json::json!({
+            "kind": "function",
+            "name": "defaultCached",
+            "cache": {}
+        }))
+        .expect("empty cache object uses the typed IR defaults");
+        let FlowIrModule::Function {
+            cache: Some(default_cache),
+            ..
+        } = &default_module
+        else {
+            panic!("expected a cached function")
+        };
+        assert_eq!(default_cache, &FlowIrFunctionCache::default());
+        assert_eq!(default_cache.namespace, "global");
+        assert_eq!(default_cache.ttl_seconds, Some(300));
+        assert_eq!(default_cache.scope, FlowIrFunctionCacheScope::App);
+
+        let permanent_module: FlowIrModule = serde_json::from_value(serde_json::json!({
+            "kind": "function",
+            "name": "permanentCached",
+            "cache": { "ttl_seconds": 0 }
+        }))
+        .expect("zero is the explicit permanent-cache lifetime");
+        let compiled = compile_flow_ir(
+            &FlowIrProgram {
+                modules: vec![permanent_module],
+                ..Default::default()
+            },
+            &[],
+        );
+        assert!(
+            compiled.diagnostics.is_empty(),
+            "{:?}",
+            compiled.diagnostics
+        );
+        let cache = compiled.ast.as_ref().unwrap().functions[0]
+            .cache
+            .as_ref()
+            .expect("compiled cache metadata");
+        assert_eq!(cache.namespace, "global");
+        assert_eq!(cache.ttl_seconds, Some(0));
+        assert_eq!(cache.scope, FunctionCacheScope::App);
+
+        let legacy_permanent_module: FlowIrModule = serde_json::from_value(serde_json::json!({
+            "kind": "function",
+            "name": "legacyPermanentCached",
+            "cache": { "ttl_seconds": null }
+        }))
+        .expect("legacy null cache lifetime remains accepted as permanent");
+        let compiled = compile_flow_ir(
+            &FlowIrProgram {
+                modules: vec![legacy_permanent_module],
+                ..Default::default()
+            },
+            &[],
+        );
+        assert!(
+            compiled.diagnostics.is_empty(),
+            "{:?}",
+            compiled.diagnostics
+        );
+        assert!(compiled.flowscript.contains("@cache({ ttlSeconds: 0 })"));
+    }
+
+    #[test]
     fn typed_ir_rejects_generic_to_string_without_conversion() {
         let catalog = vec![
             node(
@@ -4863,6 +5034,7 @@ mod tests {
                 name: "classify".to_string(),
                 params: Vec::new(),
                 returns: Vec::new(),
+                cache: None,
                 steps: vec![
                     FlowIrStep::Node {
                         id: "sender".to_string(),
@@ -4938,6 +5110,7 @@ mod tests {
                 name: "writeValues".to_string(),
                 params: Vec::new(),
                 returns: Vec::new(),
+                cache: None,
                 steps: vec![FlowIrStep::Node {
                     id: "sink".to_string(),
                     node_type: "typed_sink".to_string(),
@@ -4986,6 +5159,7 @@ mod tests {
                 name: "futureValue".to_string(),
                 params: Vec::new(),
                 returns: Vec::new(),
+                cache: None,
                 steps: vec![FlowIrStep::Node {
                     id: "sink".to_string(),
                     node_type: "future_sink".to_string(),
@@ -5025,6 +5199,7 @@ mod tests {
             name: "duplicates".to_string(),
             params: Vec::new(),
             returns: Vec::new(),
+            cache: None,
             steps: vec![FlowIrStep::Node {
                 id: "pair".to_string(),
                 node_type: "duplicate_inputs".to_string(),
@@ -5206,6 +5381,7 @@ mod tests {
                 name: "nestedRequest".to_string(),
                 params: Vec::new(),
                 returns: Vec::new(),
+                cache: None,
                 steps: vec![
                     FlowIrStep::If {
                         id: "enabled".to_string(),
@@ -5614,6 +5790,7 @@ mod tests {
             name: "notify".to_string(),
             params: Vec::new(),
             returns: Vec::new(),
+            cache: None,
             steps: vec![FlowIrStep::Node {
                 id: "slack".to_string(),
                 node_type: "slack_send".to_string(),
@@ -5700,6 +5877,7 @@ mod tests {
                         name: "value".to_string(),
                         value_type: FlowIrType::scalar(FlowIrDataType::String),
                     }],
+                    cache: None,
                     steps: Vec::new(),
                     anchor: None,
                 }],
@@ -5790,6 +5968,7 @@ mod tests {
                 name: "request".to_string(),
                 params: Vec::new(),
                 returns: Vec::new(),
+                cache: None,
                 steps: vec![
                     FlowIrStep::Node {
                         id: "request".to_string(),
@@ -5901,6 +6080,7 @@ mod tests {
                         name: "message".to_string(),
                         value_type: FlowIrType::scalar(FlowIrDataType::String),
                     }],
+                    cache: None,
                     steps: vec![
                         format_step.clone(),
                         FlowIrStep::Return {
@@ -6012,6 +6192,7 @@ mod tests {
             name: "doWork".to_string(),
             params: Vec::new(),
             returns: Vec::new(),
+            cache: None,
             steps: vec![FlowIrStep::Node {
                 id: "work".to_string(),
                 node_type: "impure_action".to_string(),
@@ -6083,6 +6264,7 @@ mod tests {
                 name: "request".to_string(),
                 params: Vec::new(),
                 returns: Vec::new(),
+                cache: None,
                 steps: vec![FlowIrStep::Node {
                     id: "multi".to_string(),
                     node_type: "multi_action".to_string(),
@@ -6117,6 +6299,7 @@ mod tests {
                 name: "duplicates".to_string(),
                 params: Vec::new(),
                 returns: Vec::new(),
+                cache: None,
                 steps: vec![step("one"), step("two")],
                 anchor: None,
             }],
@@ -6153,6 +6336,7 @@ mod tests {
                     value_type: FlowIrType::scalar(FlowIrDataType::String),
                 }],
                 returns: Vec::new(),
+                cache: None,
                 steps: vec![
                     FlowIrStep::Return { values: Vec::new() },
                     FlowIrStep::Node {

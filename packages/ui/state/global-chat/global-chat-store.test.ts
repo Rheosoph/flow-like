@@ -79,6 +79,7 @@ describe("global chat overlay dismissal", () => {
 			selection,
 			label: runId,
 			message: null,
+			sourceAttachments: [],
 		});
 	};
 

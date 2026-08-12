@@ -435,7 +435,9 @@ pub fn parse_markdown(markdown: &str) -> Vec<Block> {
                     if !collected.is_empty() {
                         blocks.push(Block::ListItem {
                             depth: list_stack.len().max(1),
-                            marker: pending_marker.take().unwrap_or_else(|| "\u{2022}".to_string()),
+                            marker: pending_marker
+                                .take()
+                                .unwrap_or_else(|| "\u{2022}".to_string()),
                             spans: collected,
                         });
                     }
@@ -964,7 +966,9 @@ pub fn render_document(
     let content_width = layout.content_width();
 
     let mut blocks = blocks;
-    if metadata.cover && let Some(title) = metadata.title.as_deref() {
+    if metadata.cover
+        && let Some(title) = metadata.title.as_deref()
+    {
         draw_title_block(&mut writer, title, metadata.subject.as_deref(), layout);
         // A document usually opens with the same H1 the cover already sets. Printing both reads
         // as a mistake, so the duplicate is dropped rather than asking authors to strip it.
@@ -1131,7 +1135,15 @@ fn draw_title_block(
     let content_width = layout.content_width();
     let size = layout.base_font_size * 2.6;
 
-    writer.rounded_rect(left, writer.y + size * 0.55, 42.0, 3.5, 1.75, Some(ACCENT), None);
+    writer.rounded_rect(
+        left,
+        writer.y + size * 0.55,
+        42.0,
+        3.5,
+        1.75,
+        Some(ACCENT),
+        None,
+    );
     writer.y -= 14.0;
 
     for line in wrap_plain(title, content_width, Font::Bold, size) {
@@ -1142,7 +1154,12 @@ fn draw_title_block(
 
     if let Some(subject) = subject.filter(|s| !s.is_empty()) {
         writer.y -= 2.0;
-        for line in wrap_plain(subject, content_width, Font::Regular, layout.base_font_size * 1.1) {
+        for line in wrap_plain(
+            subject,
+            content_width,
+            Font::Regular,
+            layout.base_font_size * 1.1,
+        ) {
             let y = writer.y;
             writer.text(
                 Font::Regular,
@@ -1389,8 +1406,15 @@ fn is_numeric_cell(text: &str) -> bool {
     !cleaned.is_empty() && cleaned.parse::<f64>().is_ok()
 }
 
-fn draw_table(writer: &mut PageWriter, header: &[String], rows: &[Vec<String>], layout: &PdfLayout) {
-    let columns = header.len().max(rows.iter().map(Vec::len).max().unwrap_or(0));
+fn draw_table(
+    writer: &mut PageWriter,
+    header: &[String],
+    rows: &[Vec<String>],
+    layout: &PdfLayout,
+) {
+    let columns = header
+        .len()
+        .max(rows.iter().map(Vec::len).max().unwrap_or(0));
     if columns == 0 {
         return;
     }
@@ -1417,10 +1441,7 @@ fn draw_table(writer: &mut PageWriter, header: &[String], rows: &[Vec<String>], 
         weights[index] = head_width.max(body_width).max(size * 2.0) + padding * 2.0;
     }
     let total: f64 = weights.iter().sum();
-    let widths: Vec<f64> = weights
-        .iter()
-        .map(|w| w / total * content_width)
-        .collect();
+    let widths: Vec<f64> = weights.iter().map(|w| w / total * content_width).collect();
     let offsets: Vec<f64> = widths
         .iter()
         .scan(0.0, |acc, w| {
@@ -1474,7 +1495,14 @@ fn draw_table(writer: &mut PageWriter, header: &[String], rows: &[Vec<String>], 
                     &text,
                 );
             } else {
-                writer.text(Font::Bold, size, WHITE, left + offsets[index] + padding, y, &text);
+                writer.text(
+                    Font::Bold,
+                    size,
+                    WHITE,
+                    left + offsets[index] + padding,
+                    y,
+                    &text,
+                );
             }
         }
         writer.y = top - row_height - size;
@@ -1489,7 +1517,13 @@ fn draw_table(writer: &mut PageWriter, header: &[String], rows: &[Vec<String>], 
         }
         let top = writer.y + size;
         if row_index % 2 == 1 {
-            writer.rect(left, top - row_height, content_width, row_height, SURFACE_SOFT);
+            writer.rect(
+                left,
+                top - row_height,
+                content_width,
+                row_height,
+                SURFACE_SOFT,
+            );
         }
         for index in 0..columns {
             let cell = row.get(index).map(String::as_str).unwrap_or("");
@@ -1581,7 +1615,11 @@ fn series_color(index: usize, data: &OfficeChartData) -> Rgb {
 /// reserve less space than the chart it introduces actually takes.
 fn chart_card_height(data: &OfficeChartData, base: f64) -> f64 {
     let legend_rows = if data.series.len() > 1 { 1 } else { 0 };
-    let title_height = if data.title.is_some() { base * 2.0 } else { 0.0 };
+    let title_height = if data.title.is_some() {
+        base * 2.0
+    } else {
+        0.0
+    };
     title_height + CHART_PLOT_HEIGHT + 34.0 + legend_rows as f64 * (base * 1.8) + 20.0
 }
 
@@ -1593,7 +1631,11 @@ fn draw_chart(writer: &mut PageWriter, data: &OfficeChartData, layout: &PdfLayou
     let card_width = layout.content_width();
     let plot_height = CHART_PLOT_HEIGHT;
 
-    let title_height = if data.title.is_some() { base * 2.0 } else { 0.0 };
+    let title_height = if data.title.is_some() {
+        base * 2.0
+    } else {
+        0.0
+    };
     let card_height = chart_card_height(data, base);
 
     writer.require(card_height + base);
@@ -1721,7 +1763,14 @@ fn draw_cartesian(
         if horizontal {
             let gx = x + ratio * width;
             writer.line(gx, y, gx, y + height, GRID, 0.5);
-            writer.text_center(Font::Regular, tick_size, MUTED, gx, y - 12.0, &format_tick(tick));
+            writer.text_center(
+                Font::Regular,
+                tick_size,
+                MUTED,
+                gx,
+                y - 12.0,
+                &format_tick(tick),
+            );
         } else {
             let gy = y + ratio * height;
             writer.line(x, gy, x + width, gy, GRID, 0.5);
@@ -1839,14 +1888,34 @@ fn draw_cartesian(
                             - (category as f64 * band + pad)
                             - bar_width * if stacked { 1.0 } else { index as f64 + 1.0 };
                         let bx = x + if stacked { offset } else { 0.0 };
-                        writer.rounded_rect(bx, by, extent.max(0.6), bar_width * 0.9, 2.0, Some(color), None);
+                        writer.rounded_rect(
+                            bx,
+                            by,
+                            extent.max(0.6),
+                            bar_width * 0.9,
+                            2.0,
+                            Some(color),
+                            None,
+                        );
                     } else {
                         let bx = x
                             + category as f64 * band
                             + pad
-                            + if stacked { 0.0 } else { index as f64 * bar_width };
+                            + if stacked {
+                                0.0
+                            } else {
+                                index as f64 * bar_width
+                            };
                         let by = y + if stacked { offset } else { 0.0 };
-                        writer.rounded_rect(bx, by, bar_width * 0.9, extent.max(0.6), 2.0, Some(color), None);
+                        writer.rounded_rect(
+                            bx,
+                            by,
+                            bar_width * 0.9,
+                            extent.max(0.6),
+                            2.0,
+                            Some(color),
+                            None,
+                        );
                     }
                     if stacked {
                         offset += extent;
@@ -1951,7 +2020,12 @@ fn draw_pie(
             INK,
             legend_x + base * 1.2,
             legend_y,
-            &truncate_to_width(&text, x + width - legend_x - base * 1.5, Font::Regular, base * 0.82),
+            &truncate_to_width(
+                &text,
+                x + width - legend_x - base * 1.5,
+                Font::Regular,
+                base * 0.82,
+            ),
         );
         legend_y -= base * 1.5;
     }
@@ -1995,7 +2069,14 @@ fn draw_radar(
     }
     for index in 0..axes {
         let a = angle_at(index);
-        writer.line(cx, cy, cx + radius * a.cos(), cy + radius * a.sin(), GRID, 0.5);
+        writer.line(
+            cx,
+            cy,
+            cx + radius * a.cos(),
+            cy + radius * a.sin(),
+            GRID,
+            0.5,
+        );
     }
 
     for (series_index, series) in data.series.iter().enumerate() {
@@ -2473,9 +2554,7 @@ mod tests {
     #[test]
     fn every_chart_type_renders_without_panicking() {
         let layout = PdfLayout::default();
-        for kind in [
-            "bar", "line", "area", "scatter", "pie", "radar", "funnel",
-        ] {
+        for kind in ["bar", "line", "area", "scatter", "pie", "radar", "funnel"] {
             let markdown = format!(
                 "```nivo\ntype: {kind}\ntitle: {kind} chart\n---\nStage,Alpha,Beta\nOne,10,4\nTwo,26,12\nThree,18,9\n```\n"
             );
@@ -2596,8 +2675,8 @@ mod tests {
             ..Default::default()
         };
         let (pages, keys) = render_document(&blocks, &layout, &HashMap::new(), &metadata);
-        let bytes = build_pdf(pages, &keys, &HashMap::new(), &layout, &metadata)
-            .expect("build pdf");
+        let bytes =
+            build_pdf(pages, &keys, &HashMap::new(), &layout, &metadata).expect("build pdf");
         assert!(bytes.starts_with(b"%PDF-"));
         let reloaded = Document::load_mem(&bytes).expect("reload pdf");
         assert_eq!(reloaded.page_iter().count(), 1);

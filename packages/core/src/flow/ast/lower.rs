@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use flow_like_ast::model::*;
 
-use crate::flow::board::{Board, Layer, LayerType};
+use crate::flow::board::{Board, Layer, LayerCacheScope, LayerType};
 use crate::flow::node::Node;
 use crate::flow::pin::{Pin, PinType};
 use crate::flow::variable::{Variable, VariableType};
@@ -644,6 +644,21 @@ impl<'a> Lowering<'a> {
             params,
             returns,
             body,
+            cache: layer
+                .cache
+                .as_ref()
+                .filter(|cache| cache.enabled)
+                .map(|cache| FunctionCache {
+                    namespace: cache.prefix.clone(),
+                    // Persisted layer caches historically use either `None` or `0` for a
+                    // permanent entry. FlowScript omission now means five minutes, so lower both
+                    // permanent forms to an explicit zero to preserve behavior on round-trip.
+                    ttl_seconds: Some(cache.ttl_seconds.unwrap_or(0)),
+                    scope: match cache.scope {
+                        LayerCacheScope::App => FunctionCacheScope::App,
+                        LayerCacheScope::User => FunctionCacheScope::User,
+                    },
+                }),
             anchor: Some(layer.id.clone()),
         }
     }
@@ -2357,4 +2372,86 @@ fn event_alias(node: &Node) -> Option<String> {
 
     let alias = util::to_camel_case(friendly_name);
     (alias != event_type_name(node)).then_some(alias)
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use crate::flow::board::{LayerCache, LayerCacheScope};
+    use flow_like_storage::Path;
+
+    #[test]
+    fn enabled_function_layer_cache_lowers_to_function_metadata() {
+        let mut board = Board::new_detached(Some("board".to_string()), Path::from(""));
+        let mut layer = Layer::new(
+            "cached-layer".to_string(),
+            "Cached Lookup".to_string(),
+            LayerType::Function,
+        );
+        layer.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "pricing".to_string(),
+            ttl_seconds: Some(3600),
+            scope: LayerCacheScope::User,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+
+        let ast = lower_board(&board);
+        let cache = ast.functions[0]
+            .cache
+            .as_ref()
+            .expect("enabled layer cache should be represented in FlowScript");
+        assert_eq!(cache.namespace, "pricing");
+        assert_eq!(cache.ttl_seconds, Some(3600));
+        assert_eq!(cache.scope, FunctionCacheScope::User);
+    }
+
+    #[test]
+    fn permanent_layer_cache_lowers_with_explicit_zero_ttl() {
+        for (index, persisted_ttl) in [None, Some(0)].into_iter().enumerate() {
+            let mut board =
+                Board::new_detached(Some(format!("permanent-cache-{index}")), Path::from(""));
+            let mut layer = Layer::new(
+                format!("cached-layer-{index}"),
+                "Cached Lookup".to_string(),
+                LayerType::Function,
+            );
+            layer.cache = Some(LayerCache {
+                enabled: true,
+                prefix: "global".to_string(),
+                ttl_seconds: persisted_ttl,
+                scope: LayerCacheScope::App,
+            });
+            board.layers.insert(layer.id.clone(), layer);
+
+            let ast = lower_board(&board);
+            assert_eq!(
+                ast.functions[0].cache.as_ref().unwrap().ttl_seconds,
+                Some(0)
+            );
+            let source = flow_like_ast::render(&ast, &flow_like_ast::RenderOptions::default());
+            assert!(source.starts_with("@cache({ ttlSeconds: 0 })\n"));
+        }
+    }
+
+    #[test]
+    fn disabled_function_layer_cache_does_not_emit_a_decorator() {
+        let mut board = Board::new_detached(Some("board".to_string()), Path::from(""));
+        let mut layer = Layer::new(
+            "uncached-layer".to_string(),
+            "Uncached Lookup".to_string(),
+            LayerType::Function,
+        );
+        layer.cache = Some(LayerCache {
+            enabled: false,
+            prefix: "remembered-ui-value".to_string(),
+            ttl_seconds: Some(60),
+            scope: LayerCacheScope::User,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+
+        let ast = lower_board(&board);
+        assert_eq!(ast.functions.len(), 1);
+        assert!(ast.functions[0].cache.is_none());
+    }
 }

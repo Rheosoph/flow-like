@@ -7,3 +7,5 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ## [Unreleased]
 
 - Initial release
+- Add completion, hover, highlighting and lint support for function `@cache` decorators, including
+  the global-namespace, 300-second defaults and explicit permanent `ttlSeconds: 0` behavior.

@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use flow_like_ast::model::*;
 use flow_like_ast::to_camel_case;
 
-use crate::flow::board::{Board, LayerType};
+use crate::flow::board::{Board, Layer, LayerCache, LayerCacheScope, LayerType};
 use crate::flow::copilot::{
     BoardCommand, NodeMetadata, NodePosition, PinMetadata, PlaceholderPinDef, node_to_metadata,
 };
@@ -149,6 +149,13 @@ fn reconcile_inner(
     let variable_changes = reconcile_variables(existing, &board_ast, new, mode);
     result.commands.extend(variable_changes.commands);
     result.diagnostics.extend(variable_changes.diagnostics);
+
+    // Function cache decorators are layer metadata rather than graph nodes/pins, so reconcile
+    // them on both the conservative and catalog-aware paths. This also makes removing a decorator
+    // explicit: an active live cache becomes `cache: None` on the layer.
+    result
+        .commands
+        .extend(reconcile_function_caches(existing, new));
 
     // Anchored `base.path = value` writes carry no `&Call`, so synthesize the equivalent
     // `struct_set` calls the anchor-keyed collectors below diff against / delete. These arenas own
@@ -366,6 +373,69 @@ fn reconcile_inner(
     result.corrections.dedup();
 
     result
+}
+
+fn function_cache_to_layer_cache(cache: &FunctionCache) -> LayerCache {
+    LayerCache {
+        enabled: true,
+        prefix: cache.namespace.clone(),
+        ttl_seconds: cache.ttl_seconds,
+        scope: match cache.scope {
+            FunctionCacheScope::App => LayerCacheScope::App,
+            FunctionCacheScope::User => LayerCacheScope::User,
+        },
+    }
+}
+
+fn matching_function_layer<'a>(existing: &'a Board, func: &FnDecl) -> Option<&'a Layer> {
+    if let Some(anchor) = func.anchor.as_deref() {
+        return existing.layers.get(anchor).filter(|layer| {
+            matches!(layer.r#type, LayerType::Function)
+                && to_camel_case(&layer.name) == to_camel_case(&func.name)
+        });
+    }
+
+    let normalized_name = to_camel_case(&func.name);
+    let mut matches = existing.layers.values().filter(|layer| {
+        matches!(layer.r#type, LayerType::Function) && to_camel_case(&layer.name) == normalized_name
+    });
+    let only = matches.next()?;
+    matches.next().is_none().then_some(only)
+}
+
+fn reconcile_function_caches(existing: &Board, ast: &BoardAst) -> Vec<BoardCommand> {
+    ast.functions
+        .iter()
+        .filter_map(|func| {
+            let layer = matching_function_layer(existing, func)?;
+            let desired = func.cache.as_ref().map(function_cache_to_layer_cache);
+            // Disabled cache records are equivalent to an absent decorator. Preserve those dormant
+            // settings unless FlowScript explicitly enables caching, avoiding a no-op rewrite.
+            let current = layer
+                .cache
+                .as_ref()
+                .filter(|cache| cache.is_active())
+                .map(|cache| {
+                    let mut cache = cache.clone();
+                    // Persisted `None` and explicit zero are the same permanent policy. Lowering
+                    // spells both as `ttlSeconds: 0`, so compare their canonical forms here to
+                    // keep an unchanged board -> FlowScript -> board round-trip command-free.
+                    if cache.ttl_seconds.is_none() {
+                        cache.ttl_seconds = Some(0);
+                    }
+                    cache
+                });
+            (current != desired).then(|| BoardCommand::UpdateLayerCache {
+                layer_id: layer.id.clone(),
+                summary: Some(if desired.is_some() {
+                    format!("Update cache for function {}", func.name)
+                } else {
+                    format!("Disable cache for function {}", func.name)
+                }),
+                cache: desired,
+            })
+        })
+        .collect()
 }
 
 /// Reject semantic declarations that would otherwise collide in the planner's name/id maps.
@@ -5427,6 +5497,7 @@ impl<'a> StructuralPlanner<'a> {
             position: Some(position),
             color: None,
             target_layer: None,
+            cache: func.cache.as_ref().map(function_cache_to_layer_cache),
             summary: Some(format!("Create function {}", func.name)),
         });
         Some(NodeEntity::Layer { ref_id, pins })
@@ -9775,7 +9846,9 @@ pub fn reconcile_text_with_catalog_enriched(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::board::{Board, ExecutionMode, ExecutionStage, Layer, LayerType};
+    use crate::flow::board::{
+        Board, ExecutionMode, ExecutionStage, Layer, LayerCache, LayerCacheScope, LayerType,
+    };
 
     fn exec_pin(name: &str, index: u16) -> ExecPinCandidate {
         ExecPinCandidate {
@@ -13903,6 +13976,200 @@ eventsSimple() {
 
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         assert!(result.commands.is_empty(), "{:?}", result.commands);
+    }
+
+    #[test]
+    fn function_cache_decorator_updates_and_removes_existing_layer_cache() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "cached-function".to_string(),
+            "Cached Lookup".to_string(),
+            LayerType::Function,
+        );
+        layer.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "old".to_string(),
+            ttl_seconds: Some(60),
+            scope: LayerCacheScope::App,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+
+        let updated = flow_like_ast::parse(
+            "@cache({ namespace: \"pricing\", ttlSeconds: 3600, scope: \"user\" })\nfunction cachedLookup() {   //@l:cached-function\n}\n",
+        )
+        .expect("parse cached function");
+        let result = reconcile(&board, &updated);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateLayerCache {
+                layer_id,
+                cache: Some(LayerCache {
+                    enabled: true,
+                    prefix,
+                    ttl_seconds: Some(3600),
+                    scope: LayerCacheScope::User,
+                }),
+                ..
+            } if layer_id == "cached-function" && prefix == "pricing"
+        )));
+
+        let uncached =
+            flow_like_ast::parse("function cachedLookup() {   //@l:cached-function\n}\n")
+                .expect("parse uncached function");
+        let result = reconcile(&board, &uncached);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateLayerCache {
+                layer_id,
+                cache: None,
+                ..
+            } if layer_id == "cached-function"
+        )));
+    }
+
+    #[test]
+    fn permanent_cached_function_board_roundtrips_without_commands() {
+        for (index, persisted_ttl) in [None, Some(0)].into_iter().enumerate() {
+            let mut board = empty_board();
+            let mut layer = Layer::new(
+                format!("cached-function-{index}"),
+                "Cached Lookup".to_string(),
+                LayerType::Function,
+            );
+            layer.cache = Some(LayerCache {
+                enabled: true,
+                prefix: "pricing".to_string(),
+                ttl_seconds: persisted_ttl,
+                scope: LayerCacheScope::User,
+            });
+            board.layers.insert(layer.id.clone(), layer);
+
+            let ast = crate::flow::ast::lower_to_ast(&board);
+            let source = flow_like_ast::render(
+                &ast,
+                &flow_like_ast::RenderOptions {
+                    anchors: true,
+                    ..Default::default()
+                },
+            );
+            assert!(
+                source
+                    .contains("@cache({ namespace: \"pricing\", ttlSeconds: 0, scope: \"user\" })")
+            );
+            let parsed =
+                flow_like_ast::parse(&source).expect("canonical cached function should parse");
+            let result = reconcile(&board, &parsed);
+            assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+            assert!(
+                result.commands.is_empty(),
+                "permanent cache form {persisted_ttl:?} must round-trip as a no-op: {:?}",
+                result.commands
+            );
+        }
+    }
+
+    #[test]
+    fn default_cached_function_roundtrips_as_bare_decorator_without_commands() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "cached-function".to_string(),
+            "Cached Lookup".to_string(),
+            LayerType::Function,
+        );
+        layer.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "global".to_string(),
+            ttl_seconds: Some(300),
+            scope: LayerCacheScope::App,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+
+        let ast = crate::flow::ast::lower_to_ast(&board);
+        let source = flow_like_ast::render(
+            &ast,
+            &flow_like_ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+        assert!(source.starts_with("@cache\nfunction cachedLookup"));
+
+        let parsed = flow_like_ast::parse(&source).expect("default cache should parse");
+        let result = reconcile(&board, &parsed);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.is_empty(),
+            "semantic cache defaults must round-trip as a no-op: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn bare_cache_creates_a_function_layer_with_semantic_defaults() {
+        let catalog = vec![catalog_meta(
+            "log_info",
+            "Log Info",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("message", "String", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        )];
+        let ast = flow_like_ast::parse(
+            "@cache\nfunction cachedLookup() {\n    logInfo({ message: \"lookup\" })\n}\n",
+        )
+        .expect("bare cache should parse");
+        let result = reconcile_with_catalog(&empty_board(), &ast, &catalog);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::CreateLayer {
+                layer_type: Some(layer_type),
+                cache: Some(LayerCache {
+                    enabled: true,
+                    prefix,
+                    ttl_seconds: Some(300),
+                    scope: LayerCacheScope::App,
+                }),
+                ..
+            } if layer_type == "Function" && prefix == "global"
+        )));
+    }
+
+    #[test]
+    fn new_cached_function_carries_cache_on_create_layer() {
+        let catalog = vec![catalog_meta(
+            "log_info",
+            "Log Info",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("message", "String", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        )];
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "@cache({ namespace: \"pricing\", ttlSeconds: 15, scope: \"user\" })\nfunction cachedLookup() {\n    logInfo({ message: \"lookup\" })\n}\n",
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::CreateLayer {
+                layer_type: Some(layer_type),
+                cache: Some(LayerCache {
+                    enabled: true,
+                    prefix,
+                    ttl_seconds: Some(15),
+                    scope: LayerCacheScope::User,
+                }),
+                ..
+            } if layer_type == "Function" && prefix == "pricing"
+        )));
     }
 
     #[test]

@@ -1870,12 +1870,33 @@ impl InternalRun {
             .push_node_log(node_id, operation_id, message, LogLevel::Error);
     }
 
+    /// Records a best-effort operation warning after the originating node context has
+    /// finished. Unlike an error returned from a completion callback, this does not fail
+    /// the run.
+    pub async fn log_node_warning(
+        &self,
+        node_id: &str,
+        operation_id: Option<String>,
+        message: &str,
+    ) {
+        if LogLevel::Warn >= self.log_level {
+            self.run
+                .lock()
+                .await
+                .push_node_log(node_id, operation_id, message, LogLevel::Warn);
+        }
+    }
+
     /// Runs every completion callback and reports whether any failed.
     ///
-    /// Callbacks are cloned out of the registry before awaiting them so a
-    /// callback cannot deadlock by interacting with the registry itself.
+    /// Callbacks belong to one execution. Drain them before awaiting so a
+    /// callback cannot deadlock by interacting with the registry itself and
+    /// forked runs do not retain already-completed hooks.
     async fn trigger_completion_callbacks(&self) -> bool {
-        let callbacks = self.completion_callbacks.read().await.clone();
+        let callbacks = {
+            let mut callbacks = self.completion_callbacks.write().await;
+            std::mem::take(&mut *callbacks)
+        };
         let mut failed = false;
         for callback in callbacks {
             if let Err(err) = callback(self).await {
@@ -2266,6 +2287,10 @@ mod tests {
         run.execute(state).await;
 
         assert!(matches!(run.get_status().await, RunStatus::Failed));
+        assert!(
+            run.completion_callbacks.read().await.is_empty(),
+            "completion callbacks must not leak into a forked execution"
+        );
         let traces = run.get_traces().await;
         assert_eq!(traces.len(), 1);
         assert_eq!(traces[0].node_id.as_ref(), "writer-node");

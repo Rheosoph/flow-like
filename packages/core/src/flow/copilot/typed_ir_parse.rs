@@ -137,5 +137,13 @@ mod tests {
             payload["canonical_example"]["type_object"]["data_type"],
             "string"
         );
+        assert_eq!(
+            payload["canonical_example"]["function_cache"]["namespace"],
+            "global"
+        );
+        assert_eq!(
+            payload["canonical_example"]["function_cache"]["ttl_seconds"],
+            300
+        );
     }
 }

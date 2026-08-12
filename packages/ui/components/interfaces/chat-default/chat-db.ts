@@ -168,6 +168,11 @@ export interface ISession {
 	summarization: string;
 	createdAt: number;
 	updatedAt: number;
+	/**
+	 * Epoch millis the user pinned this conversation; absent means unpinned. A timestamp rather
+	 * than a boolean because booleans are not valid IndexedDB keys.
+	 */
+	pinnedAt?: number;
 }
 
 export interface ILocalChatState {
@@ -195,6 +200,13 @@ const chatDb = new Dexie("Chat-History") as Dexie & {
 // Schema declaration:
 chatDb.version(3).stores({
 	sessions: "id, appId, updatedAt, [updatedAt+appId]",
+	messages: "id, sessionId",
+	localStage: "sessionId, appId, eventId, [sessionId+eventId], timestamp",
+	globalState: "appId, eventId, [appId+eventId]",
+});
+
+chatDb.version(4).stores({
+	sessions: "id, appId, updatedAt, [updatedAt+appId], pinnedAt",
 	messages: "id, sessionId",
 	localStage: "sessionId, appId, eventId, [sessionId+eventId], timestamp",
 	globalState: "appId, eventId, [appId+eventId]",

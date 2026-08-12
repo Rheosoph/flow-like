@@ -139,6 +139,139 @@ fn rejects_missing_arg_on_valued_decorator() {
 }
 
 #[test]
+fn roundtrip_bare_function_cache_decorator() {
+    let text = "@cache\nfunction lookup(key: string): (value: string) {\n    return key\n}\n";
+    let ast = parse(text).expect("bare cache decorator should parse");
+    let cache = ast.functions[0]
+        .cache
+        .as_ref()
+        .expect("bare decorator should enable caching");
+    assert_eq!(cache.namespace, "global");
+    assert_eq!(cache.ttl_seconds, Some(300));
+    assert_eq!(cache.scope, flow_like_ast::FunctionCacheScope::App);
+    assert_eq!(render(&ast, &RenderOptions::default()), text);
+}
+
+#[test]
+fn empty_function_cache_settings_use_and_render_as_semantic_defaults() {
+    let ast =
+        parse("@cache({})\nfunction lookup() {\n}\n").expect("empty cache settings should parse");
+    assert_eq!(
+        ast.functions[0].cache,
+        Some(flow_like_ast::FunctionCache::default())
+    );
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "@cache\nfunction lookup() {\n}\n"
+    );
+}
+
+#[test]
+fn function_cache_fields_parse_in_any_order_and_render_canonically() {
+    use flow_like_ast::FunctionCacheScope;
+
+    let source = "@cache({ scope: \"user\", ttlSeconds: 3600, namespace: \"pricing\" })\nfunction quote() {\n}\n";
+    let expected = "@cache({ namespace: \"pricing\", ttlSeconds: 3600, scope: \"user\" })\nfunction quote() {\n}\n";
+    let ast = parse(source).expect("structured cache decorator should parse");
+    let cache = ast.functions[0]
+        .cache
+        .as_ref()
+        .expect("function should carry cache settings");
+    assert_eq!(cache.namespace, "pricing");
+    assert_eq!(cache.ttl_seconds, Some(3600));
+    assert_eq!(cache.scope, FunctionCacheScope::User);
+    assert_eq!(render(&ast, &RenderOptions::default()), expected);
+}
+
+#[test]
+fn explicit_function_cache_defaults_render_as_bare_decorator() {
+    let source = "@cache({ namespace: \"global\", ttlSeconds: 300, scope: \"app\" })\nfunction lookup() {\n}\n";
+    let ast = parse(source).expect("explicit defaults should parse");
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "@cache\nfunction lookup() {\n}\n"
+    );
+}
+
+#[test]
+fn explicit_zero_function_cache_ttl_remains_permanent() {
+    let source = "@cache({ ttlSeconds: 0 })\nfunction lookup() {\n}\n";
+    let ast = parse(source).expect("zero cache TTL should parse");
+    assert_eq!(
+        ast.functions[0].cache.as_ref().unwrap().ttl_seconds,
+        Some(0)
+    );
+    assert_eq!(render(&ast, &RenderOptions::default()), source);
+}
+
+#[test]
+fn deserialized_function_cache_uses_flowscript_semantic_defaults() {
+    let cache: flow_like_ast::FunctionCache =
+        serde_json::from_value(serde_json::json!({})).expect("cache JSON should deserialize");
+    assert_eq!(cache, flow_like_ast::FunctionCache::default());
+    assert_eq!(cache.namespace, "global");
+    assert_eq!(cache.ttl_seconds, Some(300));
+}
+
+#[test]
+fn function_cache_ttl_supports_the_full_persisted_u64_range() {
+    let source = format!(
+        "@cache({{ ttlSeconds: {} }})\nfunction lookup() {{\n}}\n",
+        u64::MAX
+    );
+    let ast = parse(&source).expect("the largest persisted cache TTL should parse");
+    assert_eq!(
+        ast.functions[0].cache.as_ref().unwrap().ttl_seconds,
+        Some(u64::MAX)
+    );
+    assert_eq!(render(&ast, &RenderOptions::default()), source);
+}
+
+#[test]
+fn rejects_duplicate_or_unknown_function_cache_fields() {
+    let duplicate =
+        parse("@cache({ namespace: \"a\", namespace: \"b\" })\nfunction lookup() {\n}\n")
+            .unwrap_err();
+    assert!(duplicate.message.contains("duplicate field `namespace`"));
+
+    let unknown = parse("@cache({ prefix: \"a\" })\nfunction lookup() {\n}\n").unwrap_err();
+    assert!(unknown.message.contains("unknown field `prefix`"));
+}
+
+#[test]
+fn rejects_invalid_function_cache_values_and_arguments() {
+    for (source, expected) in [
+        (
+            "@cache({ ttlSeconds: -1 })\nfunction lookup() {\n}\n",
+            "non-negative integer",
+        ),
+        (
+            "@cache({ ttlSeconds: 1.5 })\nfunction lookup() {\n}\n",
+            "non-negative integer",
+        ),
+        (
+            "@cache({ namespace: 7 })\nfunction lookup() {\n}\n",
+            "namespace` must be a string",
+        ),
+        (
+            "@cache({ scope: \"team\" })\nfunction lookup() {\n}\n",
+            "must be \"app\" or \"user\"",
+        ),
+        (
+            "@cache(\"pricing\")\nfunction lookup() {\n}\n",
+            "takes a settings object",
+        ),
+    ] {
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.message.contains(expected),
+            "expected {expected:?} in {:?}",
+            err.message
+        );
+    }
+}
+
+#[test]
 fn roundtrip_json_default_vs_struct_literal() {
     // Canonical compact JSON stays a JSON literal; spaced struct literal stays an Object.
     let text = "onStart() {\n    structSet({ structIn: {}, payload: {\"a\":1} })\n}\n";
@@ -805,6 +938,7 @@ fn field_assign_renders_from_hand_built_ast() {
             params: Vec::new(),
             returns: Vec::new(),
             body: Block { stmts: vec![stmt] },
+            cache: None,
             anchor: None,
         }],
         ..BoardAst::default()

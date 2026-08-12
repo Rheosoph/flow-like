@@ -18,7 +18,7 @@ use flow_like::flow::board::Board;
 use flow_like::flow::board::commands::GenericCommand;
 use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryStatus};
 use flow_like::flow::copilot::platform::PlatformToolBridge;
-use flow_like::flow::copilot::tool_spec::MAX_DELEGATED_RUN_DISPATCH_SECS;
+use flow_like::flow::copilot::tool_spec::{MAX_DELEGATED_RUN_DISPATCH_SECS, RESEARCH_AGENT_TOOL};
 use flow_like::flow::copilot::{
     AttachmentManifestEntry, BoardCommand, BoardContextManifest, BoardScopePlan, CatalogProvider,
     EmitCommandsArgs, FlowScriptCandidateRegression, FlowScriptPendingDelivery,
@@ -12611,6 +12611,11 @@ fn flowpilot_mcp_server_instructions<'a>(
         || names.contains("write_flowscript");
     let has_ui = names.contains("emit_ui");
     let has_data = names.contains("graph_overlay_tool") || names.contains("graph_query_tool");
+    let has_global = names.contains("list_apps") && names.contains("flowpilot_board");
+
+    if has_global {
+        return "You are the FlowPilot platform orchestrator. Search this server for tools in three modes. DIRECT: execute ordinary one-call, one-app, or simple two-app tasks without planning. COMPLEX SOLVE: make a dependency plan only when likely to need at least three apps/interfaces or intrinsic multi-stage, reconciliation, approval, verification, or recovery complexity. For either mode, begin app work with list_apps, prefer matching local chat/page/headless interfaces, and use the sealed no-argument research_agent only after a complete inventory has no suitable local app or useful local research candidates returned no answer. BUILD: use project_scout for prior art, then create/fork/acquire a base and coordinate flowpilot_widget, data_studio_agent, flowpilot_board, Events, and safe runtime verification by dependency wave. Board logic, UI, and data are strict specialist boundaries. Preserve exact returned IDs, approvals, partial/manual work, and the user's full acceptance contract; never claim success from a requested, declined, timed-out, or unknown operation. Do not use shell or file-edit tools for FlowPilot artifacts.";
+    }
 
     if workflow_mutation && has_ui {
         return "This is an explicit combined root FlowPilot surface, not a widget or board specialist. Keep UI changes in emit_ui and executable workflow behavior in the FlowScript lifecycle; never let UI generation author FlowScript or let board generation emit components. For the board portion, read get_current_flowscript once, make one bounded get_declarations batch for the highest-leverage catalog calls, call plan_board_scope exactly once, then retain the accepted active segment with write_flowscript. After a plan is accepted, do not call plan_board_scope again unless its tool result explicitly authorizes one revision. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript, use structured compiler diagnostics for focused declaration follow-ups, run check_flowscript, and finish with commit_flowscript at the latest revision. Before the first write, use at most six ancillary database/UI/storage inspections.";
@@ -13176,6 +13181,7 @@ struct ExternalAgentInvocation {
     prompt: String,
     final_output_path: Option<std::path::PathBuf>,
     envs: Vec<(String, String)>,
+    env_removals: Vec<String>,
 }
 
 /// Normalize the optional UI override. An omitted/blank value, or the explicit
@@ -13308,6 +13314,7 @@ impl ExternalAgentInvocation {
             prompt,
             final_output_path: None,
             envs: Vec::new(),
+            env_removals: Vec::new(),
         })
     }
 
@@ -13325,17 +13332,25 @@ impl ExternalAgentInvocation {
             "flowpilot-claude-mcp-{}.json",
             uuid::Uuid::new_v4()
         ));
+        // The global surface is large and includes the sealed research fallback. Let Claude's
+        // native MCP ToolSearch keep those schemas deferred. Small role-scoped specialists retain
+        // eager loading because their exact lifecycle tools are all immediately relevant.
+        let defer_tool_schemas = tool_names.iter().any(|name| name == RESEARCH_AGENT_TOOL);
+        let server_config = if defer_tool_schemas {
+            serde_json::json!({
+                "type": "http",
+                "url": mcp_url,
+            })
+        } else {
+            serde_json::json!({
+                "type": "http",
+                "url": mcp_url,
+                "alwaysLoad": true,
+            })
+        };
         let mcp_config = serde_json::json!({
             "mcpServers": {
-                "flowpilot": {
-                    "type": "http",
-                    "url": mcp_url,
-                    // This is a small, session-local reviewed toolset. Preload it so Claude does
-                    // not spend turns repeatedly invoking its built-in ToolSearch just to reveal
-                    // get_current_flowscript/get_declarations and the retained FlowScript source
-                    // lifecycle schemas.
-                    "alwaysLoad": true
-                }
+                "flowpilot": server_config
             }
         });
         std::fs::write(
@@ -13418,6 +13433,23 @@ impl ExternalAgentInvocation {
             line
         };
 
+        let mut envs = vec![
+            (
+                "MCP_TOOL_TIMEOUT".to_string(),
+                (MAX_DELEGATED_RUN_DISPATCH_SECS * 1000).to_string(),
+            ),
+            // Disable Claude's independent no-progress watchdog for long nested FlowPilot calls;
+            // FlowPilot still owns explicit cancellation and per-tool lifecycle bounds.
+            (
+                "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT".to_string(),
+                "0".to_string(),
+            ),
+        ];
+        if !defer_tool_schemas {
+            // Preserve the existing eager path for small role-scoped specialist surfaces.
+            envs.push(("ENABLE_TOOL_SEARCH".to_string(), "auto".to_string()));
+        }
+
         Ok(Self {
             backend,
             executable: cli.executable,
@@ -13431,26 +13463,12 @@ impl ExternalAgentInvocation {
             // Claude Code applies MCP_TOOL_TIMEOUT as the overall MCP-call bound. A delegated board
             // run earns wall clock by proving progress and can run for hours, so this tracks the
             // same shared dispatch ceiling as the Codex path above.
-            envs: vec![
-                (
-                    "MCP_TOOL_TIMEOUT".to_string(),
-                    (MAX_DELEGATED_RUN_DISPATCH_SECS * 1000).to_string(),
-                ),
-                // Claude Code also has an independent no-progress watchdog for MCP calls. A
-                // nested FlowPilot board run can legitimately stay silent while the delegated
-                // model reasons or waits for a frontend operation, so the 300s default would
-                // cancel a healthy request even though MCP_TOOL_TIMEOUT permits it. Disable this
-                // session-local idle watchdog; FlowPilot still owns explicit cancellation and
-                // its individual frontend/tool lifecycle bounds.
-                (
-                    "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT".to_string(),
-                    "0".to_string(),
-                ),
-                // Auto preloads tool definitions when they fit comfortably in context and falls
-                // back to ToolSearch only for genuinely large surfaces. `alwaysLoad` above keeps
-                // this session-local FlowPilot server on the preload path.
-                ("ENABLE_TOOL_SEARCH".to_string(), "auto".to_string()),
-            ],
+            envs,
+            // The global surface relies on Claude's supported-model default ToolSearch behavior.
+            // Do not let an ambient desktop/shell override force eager loading or disable it.
+            env_removals: defer_tool_schemas
+                .then(|| vec!["ENABLE_TOOL_SEARCH".to_string()])
+                .unwrap_or_default(),
             final_output_path: Some(mcp_config_path),
         })
     }
@@ -13920,6 +13938,9 @@ async fn run_external_agent_invocation(
         .kill_on_drop(true);
     for (key, value) in &invocation.envs {
         command.env(key, value);
+    }
+    for key in &invocation.env_removals {
+        command.env_remove(key);
     }
 
     let mut child = command.spawn().map_err(|e| {
@@ -15823,11 +15844,7 @@ impl FlowPilotAgentCapabilitySet {
     }
 
     fn add_global_orchestrator_tools(&mut self) {
-        self.tool_names.extend([
-            "internet_search".to_string(),
-            "open_url".to_string(),
-            "archive_lookup".to_string(),
-        ]);
+        self.tool_names.push(RESEARCH_AGENT_TOOL.to_string());
         self.tool_names.sort_unstable();
         self.tool_names.dedup();
     }
@@ -16108,7 +16125,12 @@ fn build_flowpilot_agent_surface(
             CopilotScope::Frontend => flow_like::copilot::prompts::frontend_sdk_system_prompt(),
             CopilotScope::DataStudio => flow_like::copilot::prompts::data_studio_system_prompt(""),
             CopilotScope::Scout => flow_like::copilot::prompts::scout_system_prompt(""),
-            CopilotScope::Research => flow_like::copilot::prompts::research_system_prompt(""),
+            CopilotScope::Research => {
+                flow_like::copilot::prompts::research_system_prompt(&format!(
+                    "Current UTC date: {}.",
+                    chrono::Utc::now().format("%Y-%m-%d")
+                ))
+            }
             CopilotScope::Both => match board_flowscript.as_deref() {
                 // flowscript_board_context embeds the shared guidance blocks itself; the lean
                 // header avoids duplicating them (~3.5k tokens).
@@ -25431,13 +25453,21 @@ eventsSimple() {
     }
 
     #[test]
-    fn global_agent_capability_set_advertises_public_web_tools() {
+    fn global_agent_capability_set_advertises_only_sealed_public_research() {
         let capabilities =
             FlowPilotAgentCapabilitySet::for_surface(CopilotScope::Both, true, true, true);
-        for tool in ["internet_search", "open_url", "archive_lookup"] {
+        assert!(
+            capabilities
+                .tool_names
+                .iter()
+                .any(|name| name == RESEARCH_AGENT_TOOL)
+        );
+        for raw_web_tool in ["internet_search", "open_url", "archive_lookup"] {
             assert!(
-                capabilities.tool_names.iter().any(|name| name == tool),
-                "global FlowPilot capabilities must advertise {tool}"
+                !capabilities
+                    .tool_names
+                    .iter()
+                    .any(|name| name == raw_web_tool)
             );
         }
 
@@ -25593,6 +25623,18 @@ eventsSimple() {
         assert!(board.contains("BOARD specialist"));
         assert!(board.contains("commit_flowscript"));
         assert!(board.contains("Cross-domain context tools are read-only"));
+
+        let global = flowpilot_mcp_server_instructions(
+            ["list_apps", "flowpilot_board", RESEARCH_AGENT_TOOL],
+            false,
+        );
+        assert!(global.contains("platform orchestrator"));
+        assert!(global.contains("DIRECT"));
+        assert!(global.contains("SOLVE"));
+        assert!(global.contains("at least three apps/interfaces"));
+        assert!(global.contains("BUILD"));
+        assert!(global.contains("sealed no-argument research_agent"));
+        assert!(global.len() < 2_000);
     }
 
     #[test]
@@ -26031,6 +26073,51 @@ eventsSimple() {
         assert!(config.contains("flowpilot"));
         assert!(config.contains("127.0.0.1:23456/mcp"));
         assert!(config.contains("\"alwaysLoad\": true"));
+        let _ = std::fs::remove_file(config_path);
+    }
+
+    #[test]
+    fn claude_global_surface_defers_mcp_tool_schemas() {
+        let invocation = ExternalAgentInvocation::new(
+            FlowPilotAgentBackendKind::ClaudeCode,
+            CliResolution::new(
+                std::path::PathBuf::from("/usr/bin/claude"),
+                CliResolutionSource::Path,
+            ),
+            "sonnet",
+            None,
+            "http://127.0.0.1:23456/mcp",
+            "hello".to_string(),
+            vec![
+                "list_apps".to_string(),
+                RESEARCH_AGENT_TOOL.to_string(),
+                "flowpilot_board".to_string(),
+            ],
+            &[],
+        )
+        .expect("global Claude invocation should build");
+
+        assert!(
+            !invocation
+                .envs
+                .iter()
+                .any(|(key, _)| key == "ENABLE_TOOL_SEARCH"),
+            "native Claude MCP deferral should use its default supported-model behavior"
+        );
+        assert!(
+            invocation
+                .env_removals
+                .iter()
+                .any(|key| key == "ENABLE_TOOL_SEARCH"),
+            "ambient tool-search overrides must not defeat global schema deferral"
+        );
+        let config_path = invocation
+            .final_output_path
+            .as_ref()
+            .expect("Claude invocation stores temp MCP config");
+        let config = std::fs::read_to_string(config_path).expect("temp MCP config is readable");
+        assert!(config.contains("flowpilot"));
+        assert!(!config.contains("alwaysLoad"));
         let _ = std::fs::remove_file(config_path);
     }
 

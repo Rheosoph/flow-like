@@ -36,7 +36,9 @@ fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
                 let candidate = candidate.trim();
                 candidate == "*"
                     || candidate == etag
-                    || candidate.strip_prefix("W/").is_some_and(|inner| inner == etag)
+                    || candidate
+                        .strip_prefix("W/")
+                        .is_some_and(|inner| inner == etag)
             })
         })
 }
@@ -210,7 +212,10 @@ mod tests {
     #[test]
     fn rejects_a_tag_from_different_content() {
         let etag = page_etag(b"payload");
-        assert!(!if_none_match_matches(&headers_with(&etag), &page_etag(b"other")));
+        assert!(!if_none_match_matches(
+            &headers_with(&etag),
+            &page_etag(b"other")
+        ));
         assert!(!if_none_match_matches(&HeaderMap::new(), &etag));
     }
 }

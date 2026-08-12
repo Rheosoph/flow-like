@@ -183,6 +183,9 @@ impl Writer<'_> {
     }
 
     fn fn_decl(&mut self, func: &FnDecl) {
+        if let Some(cache) = &func.cache {
+            self.function_cache_decorator(cache);
+        }
         self.indent();
         self.out.push_str("function ");
         self.out.push_str(&func.name);
@@ -200,6 +203,34 @@ impl Writer<'_> {
         self.block(&func.body);
         self.indent();
         self.out.push_str("}\n");
+    }
+
+    /// Render function caching in one stable field order. Default-valued fields are omitted; an
+    /// entirely default policy is the compact `@cache` flag.
+    fn function_cache_decorator(&mut self, cache: &FunctionCache) {
+        self.indent();
+        let mut fields = Vec::new();
+        if cache.namespace != DEFAULT_FUNCTION_CACHE_NAMESPACE {
+            fields.push(format!("namespace: {}", quote_string(&cache.namespace)));
+        }
+        match cache.ttl_seconds {
+            Some(DEFAULT_FUNCTION_CACHE_TTL_SECONDS) => {}
+            Some(ttl_seconds) => fields.push(format!("ttlSeconds: {ttl_seconds}")),
+            // Legacy/programmatic ASTs may still carry `None` for a permanent cache. FlowScript's
+            // omission now means five minutes, so preserve permanence with the explicit spelling.
+            None => fields.push("ttlSeconds: 0".to_string()),
+        }
+        if cache.scope != FunctionCacheScope::App {
+            fields.push(format!("scope: {}", quote_string(cache.scope.as_str())));
+        }
+
+        if fields.is_empty() {
+            self.out.push_str("@cache\n");
+        } else {
+            self.out.push_str("@cache({ ");
+            self.out.push_str(&fields.join(", "));
+            self.out.push_str(" })\n");
+        }
     }
 
     fn event_block(&mut self, event: &EventBlock) {

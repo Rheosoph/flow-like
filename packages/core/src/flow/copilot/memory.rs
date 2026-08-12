@@ -20,6 +20,19 @@ use flow_like_types::{Result, anyhow, bail, create_id};
 use crate::bit::Bit;
 use crate::state::FlowLikeState;
 
+const MAX_RECALLED_MEMORY_ITEM_CHARS: usize = 500;
+const MAX_RECALLED_MEMORY_PROMPT_CHARS: usize = 2_400;
+
+fn bounded_memory_text(value: &str, max_chars: usize) -> String {
+    let value = value.trim();
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut bounded: String = value.chars().take(max_chars.saturating_sub(1)).collect();
+    bounded.push('…');
+    bounded
+}
+
 /// Snapshot of a profile's memory table: how many observations it holds and which embedding model
 /// they were written with (so the UI can warn before switching to an incompatible model).
 #[derive(Debug, Clone, flow_like_types::json::Serialize)]
@@ -258,8 +271,18 @@ impl AssistantMemory {
             && !recalled.is_empty()
         {
             sections.push_str("\n\n## RELEVANT MEMORY\nFacts you remembered that may help:\n");
+            let mut remaining = MAX_RECALLED_MEMORY_PROMPT_CHARS;
             for item in &recalled {
-                sections.push_str(&format!("- {item}\n"));
+                if remaining == 0 {
+                    break;
+                }
+                let bounded =
+                    bounded_memory_text(item, MAX_RECALLED_MEMORY_ITEM_CHARS.min(remaining));
+                if bounded.is_empty() {
+                    continue;
+                }
+                remaining = remaining.saturating_sub(bounded.chars().count());
+                sections.push_str(&format!("- {bounded}\n"));
             }
         }
         sections.push_str(
@@ -310,5 +333,18 @@ impl AssistantMemory {
                     .map(str::to_string)
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recalled_memory_text_is_unicode_safe_and_bounded() {
+        assert_eq!(bounded_memory_text("  short fact  ", 20), "short fact");
+        let bounded = bounded_memory_text(&"🙂".repeat(20), 8);
+        assert_eq!(bounded.chars().count(), 8);
+        assert!(bounded.ends_with('…'));
     }
 }

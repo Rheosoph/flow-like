@@ -98,6 +98,12 @@ export function analyzeFlowDocument(
 
 	for (let i = 0; i < idents.length; i++) {
 		const tok = idents[i];
+		// Decorator names such as `cache` are followed by `(` but are metadata, not top-level
+		// event declarations or workflow calls. Keep them out of symbols/local names as well as
+		// unknown-function diagnostics.
+		if (previousNonWsChar(text, tok.offset) === "@") {
+			continue;
+		}
 		const next = nextNonWsChar(text, tok.offset + tok.text.length);
 		const depth = braceDepthAt(text, tok.offset);
 
@@ -449,6 +455,16 @@ function tokenizeIdentifiers(text: string): Tok[] {
 
 function nextNonWsChar(text: string, from: number): string | undefined {
 	for (let i = from; i < text.length; i++) {
+		const ch = text[i];
+		if (ch !== " " && ch !== "\t" && ch !== "\r" && ch !== "\n") {
+			return ch;
+		}
+	}
+	return undefined;
+}
+
+function previousNonWsChar(text: string, from: number): string | undefined {
+	for (let i = from - 1; i >= 0; i--) {
 		const ch = text[i];
 		if (ch !== " " && ch !== "\t" && ch !== "\r" && ch !== "\n") {
 			return ch;

@@ -11,6 +11,7 @@ use crate::model::*;
 use crate::parse::error::ParseError;
 use crate::parse::lexer::{Tok, Token, lex};
 use crate::schema::{apply_interface_schemas, schema_from_interface};
+use std::collections::HashSet;
 
 /// Parse FlowScript source into a [`BoardAst`].
 pub fn parse(src: &str) -> Result<BoardAst, ParseError> {
@@ -52,10 +53,15 @@ struct Parser<'a> {
     depth: usize,
 }
 
-/// A parsed `@decorator`, optionally carrying a single string argument.
+/// A parsed `@decorator`, optionally carrying a string or the structured `@cache` settings.
 struct Decorator {
     name: String,
-    arg: Option<String>,
+    arg: Option<DecoratorArg>,
+}
+
+enum DecoratorArg {
+    String(String),
+    Cache(FunctionCache),
 }
 
 impl Parser<'_> {
@@ -198,22 +204,23 @@ impl Parser<'_> {
 
     // ---- decorators -----------------------------------------------------------------------
 
-    /// Parse zero or more leading `@decorator` lines. Each is a bare flag (`@secret`) or carries
-    /// a single string argument (`@category("…")`).
+    /// Parse zero or more leading `@decorator` lines. Most carry either no argument (`@secret`)
+    /// or one string (`@category("…")`); `@cache` additionally accepts a settings object.
     fn decorators(&mut self) -> Result<Vec<Decorator>, ParseError> {
         let mut decorators = Vec::new();
         while matches!(self.cur(), Tok::At) {
             self.bump();
             let name = self.ident()?;
             let arg = if self.eat(&Tok::LParen) {
-                let value = match self.cur().clone() {
-                    Tok::Str(s) => {
+                let value = match (name.as_str(), self.cur().clone()) {
+                    ("cache", Tok::LBrace) => DecoratorArg::Cache(self.cache_decorator_settings()?),
+                    (_, Tok::Str(s)) => {
                         self.bump();
-                        s
+                        DecoratorArg::String(s)
                     }
                     other => {
                         return Err(self.err(format!(
-                            "expected string decorator argument, found `{other:?}`"
+                            "expected string decorator argument (or an object for `@cache`), found `{other:?}`"
                         )));
                     }
                 };
@@ -225,6 +232,82 @@ impl Parser<'_> {
             decorators.push(Decorator { name, arg });
         }
         Ok(decorators)
+    }
+
+    /// Parse the canonical cache settings object. Fields are deliberately parsed here instead of
+    /// as a general expression so duplicate/unknown keys and invalid policy values fail with a
+    /// precise decorator diagnostic.
+    fn cache_decorator_settings(&mut self) -> Result<FunctionCache, ParseError> {
+        self.expect(&Tok::LBrace)?;
+        let mut settings = FunctionCache::default();
+        let mut seen = HashSet::new();
+
+        while !matches!(self.cur(), Tok::RBrace) {
+            let field = self.arg_key()?;
+            if !seen.insert(field.clone()) {
+                return Err(self.err(format!("duplicate field `{field}` in `@cache` decorator")));
+            }
+            self.expect(&Tok::Colon)?;
+            match field.as_str() {
+                "namespace" => match self.cur().clone() {
+                    Tok::Str(value) => {
+                        self.bump();
+                        settings.namespace = value;
+                    }
+                    other => {
+                        return Err(self.err(format!(
+                            "`@cache` field `namespace` must be a string, found `{other:?}`"
+                        )));
+                    }
+                },
+                "ttlSeconds" => match self.cur().clone() {
+                    Tok::Int(value) if value >= 0 => {
+                        self.bump();
+                        settings.ttl_seconds = Some(value as u64);
+                    }
+                    Tok::UInt(value) => {
+                        self.bump();
+                        settings.ttl_seconds = Some(value);
+                    }
+                    other => {
+                        return Err(self.err(format!(
+                            "`@cache` field `ttlSeconds` must be a non-negative integer, found `{other:?}`"
+                        )));
+                    }
+                },
+                "scope" => match self.cur().clone() {
+                    Tok::Str(value) if value == "app" => {
+                        self.bump();
+                        settings.scope = FunctionCacheScope::App;
+                    }
+                    Tok::Str(value) if value == "user" => {
+                        self.bump();
+                        settings.scope = FunctionCacheScope::User;
+                    }
+                    Tok::Str(value) => {
+                        return Err(self.err(format!(
+                            "`@cache` field `scope` must be \"app\" or \"user\", found {value:?}"
+                        )));
+                    }
+                    other => {
+                        return Err(self.err(format!(
+                            "`@cache` field `scope` must be a string, found `{other:?}`"
+                        )));
+                    }
+                },
+                other => {
+                    return Err(self.err(format!(
+                        "unknown field `{other}` in `@cache` decorator; expected `namespace`, `ttlSeconds`, or `scope`"
+                    )));
+                }
+            }
+
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(&Tok::RBrace)?;
+        Ok(settings)
     }
 
     /// Apply parsed decorators to a variable declaration, erroring on unknown ones or argument
@@ -257,6 +340,36 @@ impl Parser<'_> {
         Ok(())
     }
 
+    /// Apply decorators that belong to a function declaration. Presence of `@cache` enables
+    /// caching; a bare decorator uses FlowScript's global, five-minute, app-scoped defaults.
+    fn apply_fn_decorators(
+        &self,
+        func: &mut FnDecl,
+        decorators: &[Decorator],
+    ) -> Result<(), ParseError> {
+        for dec in decorators {
+            match dec.name.as_str() {
+                "cache" => {
+                    if func.cache.is_some() {
+                        return Err(self.err("duplicate `@cache` decorator on function"));
+                    }
+                    func.cache = Some(match &dec.arg {
+                        None => FunctionCache::default(),
+                        Some(DecoratorArg::Cache(settings)) => settings.clone(),
+                        Some(DecoratorArg::String(_)) => {
+                            return Err(self
+                                .err("decorator `@cache` takes a settings object, not a string"));
+                        }
+                    });
+                }
+                other => {
+                    return Err(self.err(format!("unknown decorator `@{other}` on function")));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn expect_no_arg(&self, dec: &Decorator) -> Result<(), ParseError> {
         if dec.arg.is_some() {
             return Err(self.err(format!(
@@ -268,12 +381,17 @@ impl Parser<'_> {
     }
 
     fn expect_arg(&self, dec: &Decorator) -> Result<String, ParseError> {
-        dec.arg.clone().ok_or_else(|| {
-            self.err(format!(
+        match &dec.arg {
+            Some(DecoratorArg::String(value)) => Ok(value.clone()),
+            Some(DecoratorArg::Cache(_)) => Err(self.err(format!(
                 "decorator `@{}` requires a string argument",
                 dec.name
-            ))
-        })
+            ))),
+            None => Err(self.err(format!(
+                "decorator `@{}` requires a string argument",
+                dec.name
+            ))),
+        }
     }
 
     // ---- top level ------------------------------------------------------------------------
@@ -295,10 +413,9 @@ impl Parser<'_> {
                     ast.variables.push(var);
                 }
                 Tok::Ident(kw) if kw == "function" => {
-                    if !decorators.is_empty() {
-                        return Err(self.err("decorators on functions are not yet supported"));
-                    }
-                    ast.functions.push(self.fn_decl()?);
+                    let mut func = self.fn_decl()?;
+                    self.apply_fn_decorators(&mut func, &decorators)?;
+                    ast.functions.push(func);
                 }
                 Tok::Ident(_) => {
                     if !decorators.is_empty() {
@@ -416,6 +533,7 @@ impl Parser<'_> {
             params,
             returns,
             body,
+            cache: None,
             anchor,
         })
     }

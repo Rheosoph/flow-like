@@ -502,22 +502,29 @@ impl FlowScriptApplyPlanner {
                     position,
                     color,
                     target_layer,
+                    cache,
                     ..
                 } if node_ids.is_empty() || ref_id.is_some() || pins.is_some() => {
                     let layer_id = create_id();
-                    let mut layer = Layer::new(
-                        layer_id.clone(),
-                        name.clone(),
-                        layer_type_from_str(layer_type),
-                    );
+                    let resolved_layer_type = layer_type_from_str(layer_type);
+                    if cache.is_some() && !matches!(&resolved_layer_type, LayerType::Function) {
+                        return Err(flow_like_types::anyhow!(
+                            "Layer `{name}` is not a Function layer and cannot be cached"
+                        ));
+                    }
+                    let mut layer = Layer::new(layer_id.clone(), name.clone(), resolved_layer_type);
                     layer.coordinates = self.position_or_base(position.as_ref());
                     layer.color = color.clone();
                     layer.pins = layer_pins(pins.as_deref());
+                    layer.cache = cache.clone();
 
                     let mut command = UpsertLayerCommand::new(layer.clone());
                     command.current_layer =
                         self.target_layer_or_current(board, target_layer.as_deref())?;
 
+                    // Keep the staged view identical to what UpsertLayer will persist so later
+                    // setup commands can safely target this layer in the same batch.
+                    layer.parent_id = command.current_layer.clone();
                     self.staged_layers.insert(layer_id.clone(), layer);
                     let index_alias = format!("${}", self.next_node_index);
                     self.next_node_index += 1;
@@ -534,6 +541,32 @@ impl FlowScriptApplyPlanner {
                         &layer_id,
                     );
 
+                    generic_commands.push(GenericCommand::UpsertLayer(command));
+                }
+                BoardCommand::UpdateLayerCache {
+                    layer_id, cache, ..
+                } => {
+                    let layer_id = self.resolve_node_id(board, layer_id)?;
+                    let Some(existing_layer) = self
+                        .staged_layers
+                        .get(&layer_id)
+                        .or_else(|| board.layers.get(&layer_id))
+                    else {
+                        return Err(flow_like_types::anyhow!("Layer `{layer_id}` not found"));
+                    };
+                    if !matches!(&existing_layer.r#type, LayerType::Function) {
+                        return Err(flow_like_types::anyhow!(
+                            "Layer `{layer_id}` is not a Function layer and cannot be cached"
+                        ));
+                    }
+                    let mut layer = existing_layer.clone();
+                    layer.cache = cache.clone();
+
+                    let mut command = UpsertLayerCommand::new(layer.clone());
+                    // UpsertLayer assigns parent_id from current_layer during execute. Preserve the
+                    // existing hierarchy while changing only cache metadata.
+                    command.current_layer = layer.parent_id.clone();
+                    self.staged_layers.insert(layer_id, layer);
                     generic_commands.push(GenericCommand::UpsertLayer(command));
                 }
                 BoardCommand::CreateVariable {
@@ -765,7 +798,8 @@ impl FlowScriptApplyPlanner {
                 | BoardCommand::CreateVariable { .. }
                 | BoardCommand::UpdateVariable { .. }
                 | BoardCommand::UpdateNodePin { .. }
-                | BoardCommand::RenameNode { .. } => {}
+                | BoardCommand::RenameNode { .. }
+                | BoardCommand::UpdateLayerCache { .. } => {}
                 BoardCommand::RemoveNode { node_id, .. } => {
                     let node_id = self.resolve_node_id(board, node_id)?;
                     let node = self.resolve_node(board, &node_id)?.clone();
@@ -885,16 +919,23 @@ impl FlowScriptApplyPlanner {
                     position,
                     color,
                     target_layer,
+                    cache,
                     ..
                 } => {
                     if node_ids.is_empty() || ref_id.is_some() || pins.is_some() {
                         continue;
                     }
-                    let mut layer =
-                        Layer::new(create_id(), name.clone(), layer_type_from_str(layer_type));
+                    let resolved_layer_type = layer_type_from_str(layer_type);
+                    if cache.is_some() && !matches!(&resolved_layer_type, LayerType::Function) {
+                        return Err(flow_like_types::anyhow!(
+                            "Layer `{name}` is not a Function layer and cannot be cached"
+                        ));
+                    }
+                    let mut layer = Layer::new(create_id(), name.clone(), resolved_layer_type);
                     layer.coordinates = self.position_or_base(position.as_ref());
                     layer.color = color.clone();
                     layer.pins = layer_pins(pins.as_deref());
+                    layer.cache = cache.clone();
                     let node_ids = self.resolve_node_ids(board, node_ids)?;
                     let mut command = UpsertLayerCommand::new(layer);
                     command.node_ids = node_ids;
@@ -1612,7 +1653,7 @@ fn pin_type_from_str(value: &str) -> PinType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::board::{ExecutionMode, ExecutionStage};
+    use crate::flow::board::{ExecutionMode, ExecutionStage, LayerCache, LayerCacheScope};
     use crate::flow::execution::{LogLevel, context::ExecutionContext};
     use crate::flow::variable::VariableType;
     use crate::state::FlowLikeConfig;
@@ -2107,6 +2148,7 @@ mod tests {
                 position: None,
                 color: None,
                 target_layer: None,
+                cache: None,
                 summary: None,
             },
             BoardCommand::AddNode {
@@ -2152,6 +2194,206 @@ mod tests {
             Some(layer_id.as_str()),
             "pin-update staging must not clear function-layer membership"
         );
+    }
+
+    #[test]
+    fn setup_applies_cache_to_new_function_layer() {
+        let board = empty_board();
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let cache = LayerCache {
+            enabled: true,
+            prefix: "pricing".to_string(),
+            ttl_seconds: Some(300),
+            scope: LayerCacheScope::User,
+        };
+        let commands = vec![BoardCommand::CreateLayer {
+            name: "cachedLookup".to_string(),
+            ref_id: Some("$0".to_string()),
+            layer_type: Some("Function".to_string()),
+            node_ids: Vec::new(),
+            pins: Some(Vec::new()),
+            position: None,
+            color: None,
+            target_layer: None,
+            cache: Some(cache.clone()),
+            summary: None,
+        }];
+
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("cached layer should plan");
+        let [GenericCommand::UpsertLayer(command)] = setup.as_slice() else {
+            panic!("expected one layer upsert, got {} commands", setup.len());
+        };
+        assert_eq!(command.layer.cache.as_ref(), Some(&cache));
+    }
+
+    #[test]
+    fn setup_can_update_a_function_layer_created_earlier_in_the_batch() {
+        let mut board = empty_board();
+        let parent = Layer::new(
+            "parent-layer".to_string(),
+            "Functions".to_string(),
+            LayerType::Collapsed,
+        );
+        board.layers.insert(parent.id.clone(), parent);
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let cache = LayerCache {
+            enabled: true,
+            prefix: "pricing".to_string(),
+            ttl_seconds: Some(300),
+            scope: LayerCacheScope::User,
+        };
+        let commands = vec![
+            BoardCommand::CreateLayer {
+                name: "cachedLookup".to_string(),
+                ref_id: Some("$0".to_string()),
+                layer_type: Some("Function".to_string()),
+                node_ids: Vec::new(),
+                pins: Some(Vec::new()),
+                position: None,
+                color: None,
+                target_layer: Some("parent-layer".to_string()),
+                cache: None,
+                summary: None,
+            },
+            BoardCommand::UpdateLayerCache {
+                layer_id: "$0".to_string(),
+                cache: Some(cache.clone()),
+                summary: None,
+            },
+        ];
+
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("a newly created layer should accept a same-batch cache update");
+        let [
+            GenericCommand::UpsertLayer(created),
+            GenericCommand::UpsertLayer(updated),
+        ] = setup.as_slice()
+        else {
+            panic!("expected two layer upserts, got {} commands", setup.len());
+        };
+        assert_eq!(updated.layer.id, created.layer.id);
+        assert_eq!(updated.layer.cache.as_ref(), Some(&cache));
+        assert_eq!(updated.current_layer.as_deref(), Some("parent-layer"));
+    }
+
+    #[test]
+    fn setup_updates_existing_layer_cache_without_changing_parent() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "cached-function".to_string(),
+            "Cached Lookup".to_string(),
+            LayerType::Function,
+        );
+        layer.parent_id = Some("parent-layer".to_string());
+        layer.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "old".to_string(),
+            ttl_seconds: Some(60),
+            scope: LayerCacheScope::App,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let cache = LayerCache {
+            enabled: true,
+            prefix: "pricing".to_string(),
+            ttl_seconds: Some(300),
+            scope: LayerCacheScope::User,
+        };
+        let commands = vec![BoardCommand::UpdateLayerCache {
+            layer_id: "cached-function".to_string(),
+            cache: Some(cache.clone()),
+            summary: None,
+        }];
+
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("cache update should plan");
+        let [GenericCommand::UpsertLayer(command)] = setup.as_slice() else {
+            panic!("expected one layer upsert, got {} commands", setup.len());
+        };
+        assert_eq!(command.layer.cache.as_ref(), Some(&cache));
+        assert_eq!(command.current_layer.as_deref(), Some("parent-layer"));
+    }
+
+    #[test]
+    fn setup_removes_existing_layer_cache() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "cached-function".to_string(),
+            "Cached Lookup".to_string(),
+            LayerType::Function,
+        );
+        layer.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "pricing".to_string(),
+            ttl_seconds: Some(300),
+            scope: LayerCacheScope::User,
+        });
+        board.layers.insert(layer.id.clone(), layer);
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let commands = vec![BoardCommand::UpdateLayerCache {
+            layer_id: "cached-function".to_string(),
+            cache: None,
+            summary: None,
+        }];
+
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("cache removal should plan");
+        let [GenericCommand::UpsertLayer(command)] = setup.as_slice() else {
+            panic!("expected one layer upsert, got {} commands", setup.len());
+        };
+        assert!(command.layer.cache.is_none());
+    }
+
+    #[test]
+    fn setup_rejects_cache_updates_for_non_function_layers() {
+        let mut board = empty_board();
+        let layer = Layer::new(
+            "group-layer".to_string(),
+            "Group".to_string(),
+            LayerType::Collapsed,
+        );
+        board.layers.insert(layer.id.clone(), layer);
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let commands = vec![BoardCommand::UpdateLayerCache {
+            layer_id: "group-layer".to_string(),
+            cache: Some(LayerCache::default()),
+            summary: None,
+        }];
+
+        let error = match planner.build_setup_commands(&board, &commands) {
+            Ok(_) => panic!("only Function layers may carry result-cache settings"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("not a Function layer"));
+    }
+
+    #[test]
+    fn setup_rejects_cached_non_function_layer_creation() {
+        let board = empty_board();
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let commands = vec![BoardCommand::CreateLayer {
+            name: "Group".to_string(),
+            ref_id: Some("$0".to_string()),
+            layer_type: Some("Collapsed".to_string()),
+            node_ids: Vec::new(),
+            pins: Some(Vec::new()),
+            position: None,
+            color: None,
+            target_layer: None,
+            cache: Some(LayerCache::default()),
+            summary: None,
+        }];
+
+        let error = match planner.build_setup_commands(&board, &commands) {
+            Ok(_) => panic!("only Function layers may be created with cache settings"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("not a Function layer"));
     }
 
     #[test]
@@ -2222,6 +2464,7 @@ mod tests {
                 position: None,
                 color: None,
                 target_layer: None,
+                cache: None,
                 summary: None,
             },
             BoardCommand::AddNode {
@@ -2419,6 +2662,7 @@ mod tests {
                 position: None,
                 color: None,
                 target_layer: None,
+                cache: None,
                 summary: None,
             },
             BoardCommand::AddNode {

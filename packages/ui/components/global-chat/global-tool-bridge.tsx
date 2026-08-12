@@ -135,6 +135,12 @@ import type {
 import type { IAttachment, IMessage } from "../interfaces/chat-default/chat-db";
 import { processChatEvents } from "../interfaces/chat-default/event-processor";
 import {
+	activePageEventCandidates,
+	classifyAppEventInterface,
+	consumerToolForEventKind,
+	resolveOpenAppPageRequest,
+} from "./app-event-interface";
+import {
 	pageEventPersistenceReset,
 	resolveAppEventTarget,
 	resolveAppEventType,
@@ -328,6 +334,19 @@ function sourceUserPrompt(request: FrontendToolRequest): string | undefined {
 }
 
 /**
+ * Public research must be bound to the prompt captured by the owning host request. Unlike other
+ * delegated specialists, it may never infer a source from mutable global chat state: concurrent
+ * runs or later user turns could otherwise change the outbound research brief.
+ */
+function sealedSourceUserPrompt(
+	request: FrontendToolRequest,
+): string | undefined {
+	const owned =
+		request.context?.sourceUserPrompt ?? request.context?.source_user_prompt;
+	return owned?.trim() ? owned.trim() : undefined;
+}
+
+/**
  * Conversation id that scopes a delegated run's retained-draft identity. Prefer the id carried by
  * the owning request; fall back to the active conversation (the same source `sourceUserPrompt`
  * falls back to) so nested and follow-up repair runs of one conversation share identity while
@@ -465,18 +484,6 @@ function parseAsk(args: Record<string, unknown>): GlobalToolAsk {
 	};
 }
 
-type EventInterfaceKind = "chat" | "page" | "headless";
-
-/** How an event is consumed: inline chat, embeddable UI page, or headless execution. */
-function classifyEvent(event: {
-	event_type: string;
-	default_page_id?: string | null;
-}): EventInterfaceKind {
-	if (isChatEventType(event.event_type)) return "chat";
-	if (event.default_page_id) return "page";
-	return "headless";
-}
-
 /**
  * The chat run a tool call belongs to.
  *
@@ -514,6 +521,30 @@ export interface RunScope {
 	): void;
 	/** The provider/model/effort pinned by this run, for nested specialists. */
 	turnSelection(): GlobalChatAgentSelection;
+}
+
+interface SolveRoutingState {
+	appInventoryComplete: boolean;
+	sealedResearchUsed: boolean;
+}
+
+// Routing state is host-owned, not model-authored: public fallback is unavailable until a
+// complete local inventory has actually returned, and is one-shot afterwards. Keep it bounded so
+// abandoned run ids cannot accumulate for the lifetime of the desktop process.
+const solveRoutingStateByRun = new Map<string, SolveRoutingState>();
+const MAX_SOLVE_ROUTING_STATES = 256;
+
+function setSolveRoutingState(
+	runId: string | undefined,
+	state: SolveRoutingState,
+) {
+	if (!runId) return;
+	solveRoutingStateByRun.set(runId, state);
+	while (solveRoutingStateByRun.size > MAX_SOLVE_ROUTING_STATES) {
+		const oldest = solveRoutingStateByRun.keys().next().value;
+		if (typeof oldest !== "string") break;
+		solveRoutingStateByRun.delete(oldest);
+	}
 }
 
 function createRunScope(runId: string | undefined): RunScope {
@@ -2024,34 +2055,60 @@ export function GlobalToolBridge() {
 								name: string;
 								description: string;
 								event_type: string;
-								kind: EventInterfaceKind;
+								kind: ReturnType<typeof classifyAppEventInterface>;
+								consumer_tool?: string;
+								interface_error?: "page_target_missing";
+								page_id?: string;
+								route?: string;
 							}> = [];
+							let eventsStatus: "ok" | "error" = "ok";
 							try {
 								const appEvents = await backend.eventState.getEvents(app.id);
 								events = appEvents
 									.filter((event) => event.active)
-									.map((event) => ({
-										id: event.id,
-										name: event.name,
-										description: event.description,
-										event_type: event.event_type,
-										// Tells the agent which tool consumes this interface: open_app_chat /
-										// call_app_chat ("chat"), open_app_page ("page"), call_app_event ("headless").
-										kind: classifyEvent(event),
-									}));
+									.map((event) => {
+										const kind = classifyAppEventInterface(event);
+										const consumerTool = consumerToolForEventKind(kind);
+										const pageId = event.default_page_id?.trim();
+										const route = event.route?.trim();
+										return {
+											id: event.id,
+											name: event.name,
+											description: event.description,
+											event_type: event.event_type,
+											// The consumer and identifiers are explicit so event_id is never confused
+											// with the page record that the Event happens to render.
+											kind,
+											...(consumerTool ? { consumer_tool: consumerTool } : {}),
+											...(kind === "unavailable"
+												? { interface_error: "page_target_missing" as const }
+												: {}),
+											...(kind === "page" && pageId ? { page_id: pageId } : {}),
+											...(route ? { route } : {}),
+										};
+									});
 							} catch {
-								// ignore apps whose events cannot be listed
+								// An unreadable event inventory is not evidence that this app has no
+								// suitable interface. Surface it so the orchestrator cannot turn a
+								// partial catalog into a false "nothing found" web fallback.
+								eventsStatus = "error";
 							}
 							return {
 								app_id: app.id,
 								name: meta?.name ?? app.id,
 								description: meta?.description ?? "",
 								events,
+								events_status: eventsStatus,
 							};
 						}),
 					);
+					const eventInventoryComplete = detailed.every(
+						(app) => app.events_status === "ok",
+					);
+					const inventoryComplete = !truncated && eventInventoryComplete;
 					return {
 						status: "ok",
+						complete: inventoryComplete,
 						total: visible.length,
 						returned: detailed.length,
 						...(truncated
@@ -2106,6 +2163,8 @@ export function GlobalToolBridge() {
 					if (serialized.length > 12_000) {
 						config = { truncated: true, preview: serialized.slice(0, 12_000) };
 					}
+					const kind = classifyAppEventInterface(event);
+					const consumerTool = consumerToolForEventKind(kind);
 					return {
 						status: "ok",
 						event: {
@@ -2113,6 +2172,13 @@ export function GlobalToolBridge() {
 							name: event.name,
 							description: event.description,
 							event_type: event.event_type,
+							kind,
+							...(consumerTool ? { consumer_tool: consumerTool } : {}),
+							...(kind === "unavailable"
+								? { interface_error: "page_target_missing" }
+								: {}),
+							default_page_id: event.default_page_id ?? null,
+							route: event.route ?? null,
 							active: event.active,
 							inputs: event.inputs ?? [],
 						},
@@ -2335,19 +2401,64 @@ export function GlobalToolBridge() {
 						};
 					const eventId =
 						argString(args, "event_id") || argString(args, "eventId");
-					const events = await backend.eventState.getEvents(appId);
-					const isPageEvent = (event: (typeof events)[number]) =>
-						event.active && classifyEvent(event) === "page";
-					const pageEvent = eventId
-						? events.find((event) => event.id === eventId && isPageEvent(event))
-						: events.find(isPageEvent);
-					if (!pageEvent)
+					const inventoryUnavailable = (target?: string) => ({
+						status: "error",
+						code: "event_inventory_unavailable",
+						retryable: false,
+						same_call_retryable: false,
+						relist_required: true,
+						inventory_stale: true,
+						available_page_events: [],
+						message: `Could not refresh app '${appId}' Event metadata${target ? ` to verify Event '${target}'` : ""}, so page availability cannot be established. Do not guess an Event id or route; refresh list_apps once if the goal still requires this interface.`,
+					});
+					// Exact ids use the freshness-reconciled single-Event read. The injected
+					// resolver keeps it authoritative even if a later bulk snapshot drifts.
+					const lookup = await resolveOpenAppPageRequest(
+						eventId,
+						(targetEventId) =>
+							backend.eventState.getEvent(appId, targetEventId),
+						() => backend.eventState.getEvents(appId, true),
+					);
+					if (lookup.status === "inventory_unavailable") {
+						return inventoryUnavailable(eventId);
+					}
+					const resolution = lookup.resolution;
+					const candidateEvents = lookup.candidate_events;
+
+					if (!resolution.ok) {
+						const availablePageEvents =
+							activePageEventCandidates(candidateEvents);
+						const correctConsumer = resolution.actual_kind
+							? consumerToolForEventKind(resolution.actual_kind)
+							: undefined;
+						const message = (() => {
+							switch (resolution.code) {
+								case "event_not_found":
+									return `Event '${eventId}' no longer exists in app '${appId}', or the supplied id is neither an Event id nor a uniquely mapped page id.`;
+								case "event_inactive":
+									return `Event '${eventId}' is currently inactive and cannot be opened.`;
+								case "event_interface_changed":
+									return `Event '${eventId}' is currently '${resolution.actual_kind}', not an embeddable page. Its current interface state supersedes the earlier inventory.`;
+								case "page_target_missing":
+									return `Event '${eventId}' is marked as a page but has no persisted page target, so it cannot be embedded.`;
+								case "no_page_event":
+									return `App '${appId}' currently has no active embeddable page Event.`;
+							}
+						})();
 						return {
 							status: "error",
-							message: eventId
-								? `Event '${eventId}' in app '${appId}' is not an embeddable UI page. Use call_app_event for headless events or open_app_chat for chats.`
-								: `App '${appId}' has no embeddable UI page event.`,
+							code: resolution.code,
+							retryable: false,
+							same_call_retryable: false,
+							relist_required: resolution.relist_required,
+							inventory_stale: resolution.relist_required,
+							actual_kind: resolution.actual_kind,
+							correct_consumer_tool: correctConsumer,
+							available_page_events: availablePageEvents,
+							message: `${message} Do not guess another Event id or route, and do not use navigate_view as a substitute for embedding or page evidence.${resolution.relist_required ? " Refresh list_apps once if the original goal still requires this interface." : ""}`,
 						};
+					}
+					const pageEvent = resolution.event;
 					useGlobalChatStore.getState().addInlineAppPage({
 						appId,
 						eventId: pageEvent.id,
@@ -2417,6 +2528,14 @@ export function GlobalToolBridge() {
 						snapshot.complete && screenshotCount === snapshot.images.length;
 					return {
 						status: "ok",
+						event_id: pageEvent.id,
+						page_id: pageEvent.default_page_id,
+						...(resolution.canonicalized_from
+							? {
+									canonicalized_from: resolution.canonicalized_from,
+									requested_event_id: eventId,
+								}
+							: {}),
 						message:
 							screenshotCount > 0
 								? `Embedded the page '${pageEvent.name}' inline and attached ${screenshotCount} visual capture${screenshotCount === 1 ? "" : "s"} of its rendered content for inspection.`
@@ -3191,23 +3310,43 @@ export function GlobalToolBridge() {
 					}
 				}
 				case "research_agent": {
-					const question = argString(args, "question");
-					if (!question)
+					// This boundary is deliberately sealed. The root model has already seen local app
+					// metadata (and may have recalled memory), so accepting a model-authored question or
+					// context here would let it encode private text into an outbound query. Bind the
+					// researcher only to the immutable top-level user request carried by the host.
+					const routingState = scope.runId
+						? solveRoutingStateByRun.get(scope.runId)
+						: undefined;
+					if (!routingState?.appInventoryComplete)
 						return {
 							status: "error",
-							message: "research_agent requires a question.",
+							code: "local_app_discovery_required",
+							message:
+								"A complete list_apps result is required before sealed public research.",
 						};
-					const researchContext = argString(args, "context");
-					const recency = argString(args, "recency");
+					if (routingState.sealedResearchUsed)
+						return {
+							status: "error",
+							code: "sealed_research_already_used",
+							message:
+								"The sealed public researcher is one-shot for this run; synthesize its findings and disclose remaining gaps.",
+						};
 
-					const briefParts = [`Research question: ${question}`];
-					if (researchContext)
-						briefParts.push(`Background: ${researchContext}`);
-					if (recency) briefParts.push(`Recency requirement: ${recency}`);
-					const instruction = briefParts.join("\n");
+					const owningUserPrompt = sealedSourceUserPrompt(request);
+					if (!owningUserPrompt)
+						return {
+							status: "error",
+							code: "sealed_research_source_missing",
+							message:
+								"The immutable top-level user request is unavailable; sealed public research was not started.",
+						};
+					setSolveRoutingState(scope.runId, {
+						...routingState,
+						sealedResearchUsed: true,
+					});
+					const instruction = owningUserPrompt;
 
 					const turnSelection = scope.turnSelection();
-					const owningUserPrompt = sourceUserPrompt(request);
 					const owningConversationId = conversationScopeId(request);
 					const rawSpecialistPrompt = composeDelegatedRawUserPrompt(
 						owningUserPrompt,
@@ -3268,8 +3407,7 @@ export function GlobalToolBridge() {
 								provider: normalizeAIProvider(turnSelection.provider),
 								model_id: modelId,
 								reasoning_effort: turnSelection.reasoningEffort || undefined,
-								recency: recency || undefined,
-								question,
+								sealed_to_source_request: true,
 							},
 							summary: "Delegated web research started.",
 						}),
@@ -3299,10 +3437,12 @@ export function GlobalToolBridge() {
 							{
 								parentRequestId: request.requestId,
 								conversationId: owningConversationId,
-								runId: scope.runId,
-								// The researcher joins the turn's shared WebResearchSession, which is
-								// keyed on this prompt: parallel researchers then share one citation
-								// ledger and one search budget instead of each getting a fresh one.
+								// Use a sealed child authorization view. It is fresh even when a local
+								// research app already ran, but remains bound to the immutable source
+								// request and cannot receive that app's result.
+								runId: scope.runId
+									? `${scope.runId}:sealed-research`
+									: undefined,
 								sourceUserPrompt: owningUserPrompt,
 							},
 							nestedRunRequestId,
@@ -3312,7 +3452,7 @@ export function GlobalToolBridge() {
 						flushSubRun();
 						return {
 							status: "ok",
-							question,
+							sealed_to_source_request: true,
 							findings: response.message,
 						};
 					} catch (error) {
@@ -6068,22 +6208,19 @@ Completion contract: build complete helper logic first and add the Event entry l
 
 					// Hand the user's attached files to the app chat. The assistant selects which files
 					// via `forward_files` (exact names from the FILES ATTACHED THIS TURN manifest):
-					// omitted → forward all (safe default so a needed file is never silently dropped);
-					// an explicit list forwards only the named files; [] forwards none.
-					const currentTurnFiles = (() => {
-						const msgs = useGlobalChatStore.getState().messages;
-						for (let i = msgs.length - 1; i >= 0; i--) {
-							if (msgs[i]?.inner.role === IRole.User)
-								return msgs[i].files ?? [];
-						}
-						return [];
-					})();
+					// an explicit list forwards only the named files; omitted or [] forwards none.
+					// This fail-closed default prevents an underspecified tool call from disclosing every
+					// attachment to a local app.
+					const currentTurnFiles = scope.runId
+						? (useGlobalChatStore.getState().runs[scope.runId]
+								?.sourceAttachments ?? [])
+						: [];
 					const requestedFileNames = Array.isArray(args.forward_files)
 						? (args.forward_files as unknown[])
 								.filter((value): value is string => typeof value === "string")
 								.map((value) => value.trim().toLowerCase())
 								.filter((value) => value.length > 0)
-						: undefined;
+						: [];
 					const attachmentLabels = (file: IAttachment): string[] => {
 						const raw =
 							typeof file === "string"
@@ -6099,14 +6236,33 @@ Completion contract: build complete helper logic first and add the Event entry l
 						});
 						return withBasenames.map((value) => value.toLowerCase());
 					};
-					const forwardedAttachments =
-						requestedFileNames === undefined
-							? currentTurnFiles
-							: currentTurnFiles.filter((file) =>
-									attachmentLabels(file).some((label) =>
-										requestedFileNames.includes(label),
-									),
-								);
+					const forwardedAttachments: IAttachment[] = [];
+					const selectedIndexes = new Set<number>();
+					for (const requestedName of new Set(requestedFileNames)) {
+						const matches = currentTurnFiles
+							.map((file, index) => ({ file, index }))
+							.filter(({ file }) =>
+								attachmentLabels(file).includes(requestedName),
+							);
+						if (matches.length !== 1) {
+							return {
+								status: "error",
+								code:
+									matches.length === 0
+										? "forward_file_not_found"
+										: "forward_file_name_ambiguous",
+								message:
+									matches.length === 0
+										? `Attachment '${requestedName}' does not belong to this tool call's user turn.`
+										: `Attachment name '${requestedName}' matches more than one file in this user turn. Ask the user to rename or reattach the intended file; no file was forwarded.`,
+							};
+						}
+						const [{ file, index }] = matches;
+						if (!selectedIndexes.has(index)) {
+							selectedIndexes.add(index);
+							forwardedAttachments.push(file);
+						}
+					}
 
 					// Invoke the app's chat event through the SAME pipeline the simple chat uses
 					// (executeEvent + processChatEvents), so it runs with full app-chat behavior.
@@ -6568,6 +6724,25 @@ Completion contract: build complete helper logic first and add the Event entry l
 			if (timeoutId !== undefined) clearTimeout(timeoutId);
 
 			response = { ...response, requestId: request.requestId };
+			if (
+				request.toolName === "list_apps" &&
+				!requestExecutionFenceRef.current.isInvalidated(executionLease) &&
+				response.approved &&
+				!response.error
+			) {
+				const inventory =
+					response.result && typeof response.result === "object"
+						? (response.result as Record<string, unknown>)
+						: undefined;
+				const previousRoutingState = scope.runId
+					? solveRoutingStateByRun.get(scope.runId)
+					: undefined;
+				setSolveRoutingState(scope.runId, {
+					appInventoryComplete:
+						inventory?.status === "ok" && inventory?.complete === true,
+					sealedResearchUsed: previousRoutingState?.sealedResearchUsed ?? false,
+				});
+			}
 			boardRecoveryScopeByRequestRef.current.delete(request.requestId);
 			const resultRecord =
 				response.result && typeof response.result === "object"

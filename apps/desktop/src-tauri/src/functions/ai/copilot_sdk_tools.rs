@@ -764,6 +764,10 @@ pub fn create_board_support_tools(bridge: FrontendToolBridge) -> Vec<(Tool, Tool
 /// host-local tools: `internet_search` runs in-process, `open_url` and `archive_lookup` use the
 /// shared safe public-web readers, and the `_memory_*` tools run against the profile's
 /// `AssistantMemory`.
+fn frontend_tool_result_closes_public_web_phase(_tool_name: &str) -> bool {
+    true
+}
+
 pub fn sdk_tool_from_spec(
     spec: &PlatformToolSpec,
     bridge: FrontendToolBridge,
@@ -846,6 +850,13 @@ pub fn sdk_tool_from_spec(
                 ToolResultObject::text(result)
             }
             _ => {
+                if frontend_tool_result_closes_public_web_phase(spec.name)
+                    && let Some(session) = &web_research_session
+                {
+                    // Close before dispatch so a concurrent/same-round research request cannot
+                    // start after this private frontend operation has begun.
+                    session.close_public_web_phase();
+                }
                 let result = frontend_tool_result_with_timeout(
                     &bridge,
                     spec.name,
@@ -853,9 +864,9 @@ pub fn sdk_tool_from_spec(
                     approval_from_spec(&spec, args),
                     Duration::from_secs(spec.timeout_secs),
                 );
-                if let Some(session) = &web_research_session {
-                    session.close_public_web_phase();
-                }
+                // Close the parent's raw-web authorization before any frontend dispatch. The
+                // local-app-first fallback does not reopen it: `research_agent` receives a fresh
+                // sealed child view bound only to the immutable source request.
                 result
             }
         }
@@ -920,10 +931,10 @@ pub fn create_global_assistant_tools(
     user_prompt: &str,
     run_id: Option<&str>,
 ) -> Vec<(Tool, ToolHandler)> {
-    // The orchestrator no longer holds the public-web tools — `research_agent` does — but it still
-    // needs the turn's session. Its non-web tool calls close the public-web phase, and that closure
-    // has to reach the researchers: an orchestrator that has read private app data must not be able
-    // to launder a web request through a delegated researcher afterwards.
+    // The orchestrator no longer holds raw public-web tools. Keep a parent session so any
+    // accidentally surfaced raw handler still fails closed after local/private work. The sealed
+    // `research_agent` child uses a separate authorization view bound only to the immutable source
+    // request, so it can safely be the last fallback after a local research app returned no answer.
     let web_research_session = web_research_session_for_turn(user_prompt, run_id);
     global_assistant_tool_specs(memory.is_some())
         .iter()
@@ -2863,6 +2874,12 @@ and submit the FULL edited FlowScript source. Reconcile compares it to the live 
   resolvable FlowScript references/nested calls.
 - A new unanchored `function name(...) { ... }` declaration → creates a Function layer, places
   body nodes inside it, creates boundary pins from params/returns, and wires `return` values.
+- `@cache({ namespace: "...", ttlSeconds: 3600, scope: "user" })` immediately above a function
+  configures result caching; bare `@cache` defaults to the `global` namespace, a 300-second
+  lifetime, and app scope. Set `ttlSeconds: 0` explicitly for a permanent entry. A hit skips the
+  complete function body and all of its side effects, so preserve the decorator on unrelated edits
+  and use it only for functions whose outputs are determined by their inputs. Existing context may
+  report `ttl_seconds: null` for a permanent cache; preserve it as explicit `ttlSeconds: 0`.
 
 VALIDATION: This tool validates before queueing. If it reports parse errors or diagnostics,
 nothing was queued — revise the SAME submitted draft and call edit_flowscript again immediately.
@@ -4877,6 +4894,23 @@ mod tests {
         }
         assert!(DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES.contains(&"list_apps"));
         assert!(DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES.contains(&"describe_app_interface"));
+    }
+
+    #[test]
+    fn every_frontend_tool_closes_the_parent_raw_web_phase() {
+        for private_tool in [
+            "list_apps",
+            "describe_app_interface",
+            "call_app_chat",
+            "call_app_event",
+            "data_studio_agent",
+            MEMORY_SEARCH_TOOL,
+        ] {
+            assert!(
+                frontend_tool_result_closes_public_web_phase(private_tool),
+                "{private_tool} must close outbound public research"
+            );
+        }
     }
 
     #[test]

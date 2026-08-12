@@ -749,7 +749,7 @@ mod tests {
 
     use super::*;
     use crate::flow::copilot::{
-        EdgeContext, LayerContext, NodeContext, PinContext, VariableContext,
+        EdgeContext, LayerCacheContext, LayerContext, NodeContext, PinContext, VariableContext,
     };
 
     fn pin(name: &str) -> PinMetadata {
@@ -934,6 +934,48 @@ mod tests {
             build("Event a() {}\n").fingerprint,
             build("Event b() {}\n").fingerprint
         );
+    }
+
+    #[test]
+    fn function_cache_is_part_of_the_manifest_and_its_fingerprint() {
+        let build = |cache: Option<LayerCacheContext>| {
+            let mut graph = graph(false);
+            graph.layers.push(LayerContext {
+                id: "pricing-layer".to_string(),
+                name: "calculatePricing".to_string(),
+                layer_type: "Function".to_string(),
+                parent_id: None,
+                node_ids: vec![],
+                position: (0, 0),
+                inputs: vec![],
+                outputs: vec![],
+                cache,
+            });
+            BoardContextManifest::build(
+                board(graph),
+                &[],
+                ManifestSource::absent(),
+                audit(),
+                ManifestAugmentations::default(),
+                default_flowscript_module_templates(),
+            )
+            .expect("manifest")
+        };
+
+        let uncached = build(None);
+        let cached = build(Some(LayerCacheContext {
+            enabled: true,
+            namespace: "pricing".to_string(),
+            ttl_seconds: Some(3_600),
+            scope: "user".to_string(),
+        }));
+
+        assert_ne!(uncached.fingerprint, cached.fingerprint);
+        assert!(cached.verify_fingerprint().expect("verify fingerprint"));
+        let prompt = cached.render_prompt().expect("full manifest prompt");
+        assert!(prompt.contains("\"namespace\": \"pricing\""));
+        assert!(prompt.contains("\"ttl_seconds\": 3600"));
+        assert!(prompt.contains("\"scope\": \"user\""));
     }
 
     #[test]

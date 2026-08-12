@@ -15,6 +15,9 @@ pub enum Tok {
     Str(String),
     /// Integer literal.
     Int(i64),
+    /// Positive integer outside the signed literal range. FlowScript values remain `i64`, but
+    /// metadata such as a cache TTL uses the full `u64` range.
+    UInt(u64),
     /// Floating-point literal.
     Float(f64),
     /// `@` — decorator marker.
@@ -341,10 +344,14 @@ impl Lexer {
                     .map_err(|_| self.err(format!("invalid float `{text}`")))?,
             )
         } else {
-            Tok::Int(
-                text.parse()
-                    .map_err(|_| self.err(format!("invalid integer `{text}`")))?,
-            )
+            match text.parse::<i64>() {
+                Ok(value) => Tok::Int(value),
+                Err(_) if !text.starts_with('-') => Tok::UInt(
+                    text.parse()
+                        .map_err(|_| self.err(format!("invalid integer `{text}`")))?,
+                ),
+                Err(_) => return Err(self.err(format!("invalid integer `{text}`"))),
+            }
         };
         Ok(Token {
             tok,
@@ -413,7 +420,13 @@ fn signed_number_can_start_after(previous: Option<&Token>) -> bool {
     match previous.map(|token| &token.tok) {
         None => true,
         Some(
-            Tok::Str(_) | Tok::Int(_) | Tok::Float(_) | Tok::RParen | Tok::RBracket | Tok::RBrace,
+            Tok::Str(_)
+            | Tok::Int(_)
+            | Tok::UInt(_)
+            | Tok::Float(_)
+            | Tok::RParen
+            | Tok::RBracket
+            | Tok::RBrace,
         ) => false,
         Some(Tok::Ident(name)) => name == "return",
         Some(_) => true,

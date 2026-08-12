@@ -217,10 +217,7 @@ async fn resolve_images(
         let bytes = match fetch_image_bytes(context, &client, url).await {
             Ok(bytes) => bytes,
             Err(err) => {
-                context.log_message(
-                    &format!("Skipping image \"{url}\": {err}"),
-                    LogLevel::Warn,
-                );
+                context.log_message(&format!("Skipping image \"{url}\": {err}"), LogLevel::Warn);
                 continue;
             }
         };
