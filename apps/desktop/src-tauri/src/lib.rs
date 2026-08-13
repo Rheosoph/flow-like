@@ -37,8 +37,6 @@ use std::{sync::Arc, time::Duration};
 use tauri::Url;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
-#[cfg(desktop)]
-use tauri_plugin_updater::UpdaterExt;
 
 #[cfg(not(debug_assertions))]
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -1023,7 +1021,7 @@ pub fn run() {
             Some(idb_sql_dir),
         ))
         .invoke_handler(tauri::generate_handler![
-            update,
+            restart_app,
             deeplink::deeplink_replay_pending,
             functions::file::get_path_meta,
             functions::ai::invoke::stream_chat_completion,
@@ -1305,6 +1303,7 @@ pub fn run() {
             functions::telemetry::get_telemetry_settings,
             functions::telemetry::set_telemetry_enabled,
             functions::telemetry::queue_telemetry_event,
+            functions::telemetry::queue_updater_interruption,
             functions::telemetry::drain_telemetry_events,
             functions::telemetry::ack_telemetry_events,
             functions::telemetry::set_crash_reports_enabled,
@@ -1350,59 +1349,13 @@ fn handle_instance(app: &AppHandle, args: Vec<String>, _cwd: String) {
 }
 
 #[cfg(desktop)]
-#[tauri::command(async)]
-async fn update(app_handle: AppHandle) -> tauri_plugin_updater::Result<()> {
-    use tauri::window::{ProgressBarState, ProgressBarStatus};
-    if let Some(update) = app_handle.updater()?.check().await? {
-        if let Some(win) = app_handle.get_webview_window("main") {
-            let _ = win.set_progress_bar(ProgressBarState {
-                status: Some(ProgressBarStatus::Indeterminate),
-                progress: None,
-            });
-
-            let mut downloaded: u64 = 0;
-            let progress_win = win.clone();
-            let done_win = win.clone();
-
-            update
-                .download_and_install(
-                    move |chunk_len, content_len| {
-                        downloaded += chunk_len as u64;
-
-                        if let Some(total) = content_len {
-                            let pct = ((downloaded as f64 / total as f64) * 100.0).clamp(0.0, 100.0)
-                                as u64;
-
-                            let _ = progress_win.set_progress_bar(ProgressBarState {
-                                status: Some(ProgressBarStatus::Normal),
-                                progress: Some(pct),
-                            });
-                        } else {
-                            let _ = progress_win.set_progress_bar(ProgressBarState {
-                                status: Some(ProgressBarStatus::Indeterminate),
-                                progress: None,
-                            });
-                        }
-                    },
-                    move || {
-                        let _ = done_win.set_progress_bar(ProgressBarState {
-                            status: Some(ProgressBarStatus::None),
-                            progress: None,
-                        });
-                    },
-                )
-                .await?;
-        }
-
-        app_handle.restart();
-    }
-
-    Ok(())
+#[tauri::command]
+fn restart_app(app_handle: AppHandle) {
+    app_handle.restart();
 }
 
 #[cfg(not(desktop))]
-#[tauri::command(async)]
-async fn update(_app_handle: AppHandle) -> Result<(), String> {
-    // No-op on non-desktop targets (e.g., iOS)
-    Ok(())
+#[tauri::command]
+fn restart_app(_app_handle: AppHandle) {
+    // The updater is not registered on mobile targets.
 }
