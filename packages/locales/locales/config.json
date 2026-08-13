@@ -1,0 +1,25 @@
+{
+	"sourceLanguage": "en",
+	"defaultNamespace": "common",
+	"namespaces": [
+		"common",
+		"nav",
+		"settings",
+		"flow",
+		"store",
+		"chat",
+		"interfaces",
+		"admin"
+	],
+	"languages": [
+		"de",
+		"en",
+		"es",
+		"fr",
+		"ja",
+		"ko",
+		"pl",
+		"pt-BR",
+		"zh"
+	]
+}
