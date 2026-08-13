@@ -264,7 +264,20 @@ jobs:
           keychain_path="$RUNNER_TEMP/apple-signing.keychain-db"
           probe_path="$RUNNER_TEMP/flow-like-codesign-probe"
 
+          original_keychains=()
+          while IFS= read -r keychain; do
+            keychain="${keychain#*\"}"
+            keychain="${keychain%\"}"
+            [ -n "$keychain" ] && original_keychains+=("$keychain")
+          done < <(security list-keychains -d user)
+
+          if [ "${#original_keychains[@]}" -eq 0 ]; then
+            echo "::error::The runner user has no configured keychain search list."
+            exit 1
+          fi
+
           cleanup() {
+            security list-keychains -d user -s "${original_keychains[@]}" >/dev/null 2>&1 || true
             security delete-keychain "$keychain_path" >/dev/null 2>&1 || true
             rm -f "$certificate_path" "$probe_path"
           }
@@ -278,6 +291,7 @@ jobs:
           security set-keychain-settings -t 600 -u "$keychain_path"
           security import "$certificate_path" -k "$keychain_path" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path" "${original_keychains[@]}"
 
           matching_identities="$(
             security find-identity -v -p codesigning "$keychain_path" |
