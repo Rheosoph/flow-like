@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-labelledby="title desc">
+  <title id="title">The bounded agent loop in Flow-Like</title>
+  <desc id="desc">An agent cycles through plan, act, observe, and verify inside a bounded workspace made of permissions, limits, and an audit log. Only a verified result leaves the boundary as a grounded answer.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#17191f"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <marker id="coralArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#ff7656"/></marker>
+    <marker id="greenArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#34d399"/></marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.4px}.heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}.sub{fill:#a7adb8;font-size:17px}.lane{font-size:14px;font-weight:760;letter-spacing:1.8px}.stage{fill:#f7f8fa;font-size:18px;font-weight:700}.note{fill:#8f97a4;font-size:14px}.gate{fill:#fbbf77;font-size:13px;font-weight:740;letter-spacing:1.2px}
+    </style>
+  </defs>
+  <rect width="1440" height="720" rx="28" fill="url(#bg)"/><rect width="1440" height="720" rx="28" fill="url(#grid)"/>
+  <rect x="64" y="58" width="186" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/><circle cx="84" cy="75" r="5" fill="#ff7656"/><text x="99" y="81" class="kicker">AGENT LOOP</text>
+  <text x="64" y="136" class="heading">The agent loops. The boundary holds.</text>
+  <text x="64" y="169" class="sub">Plan, act, observe, verify — every cycle runs inside limits you define up front.</text>
+
+  <rect x="64" y="228" width="880" height="404" rx="26" fill="#191c22" stroke="#f59e0b" stroke-width="2" stroke-opacity=".85"/>
+
+  <g><rect x="216" y="212" width="150" height="32" rx="16" fill="#17191f" stroke="#f59e0b" stroke-opacity=".7"/><text x="291" y="233" text-anchor="middle" class="gate">PERMISSIONS</text></g>
+  <g><rect x="430" y="212" width="212" height="32" rx="16" fill="#17191f" stroke="#f59e0b" stroke-opacity=".7"/><text x="536" y="233" text-anchor="middle" class="gate">STEP &amp; BUDGET LIMITS</text></g>
+  <g><rect x="706" y="212" width="132" height="32" rx="16" fill="#17191f" stroke="#f59e0b" stroke-opacity=".7"/><text x="772" y="233" text-anchor="middle" class="gate">AUDIT LOG</text></g>
+
+  <path d="M600 316 C648 322 680 356 700 392" fill="none" stroke="#ff7656" stroke-width="4" stroke-linecap="round" marker-end="url(#coralArrow)"/>
+  <path d="M712 470 C692 508 654 540 606 552" fill="none" stroke="#ff7656" stroke-width="4" stroke-linecap="round" marker-end="url(#coralArrow)"/>
+  <path d="M404 556 C356 548 322 514 302 478" fill="none" stroke="#ff7656" stroke-width="4" stroke-linecap="round" marker-end="url(#coralArrow)"/>
+  <path d="M294 396 C314 358 350 328 396 316" fill="none" stroke="#ff7656" stroke-width="4" stroke-linecap="round" marker-end="url(#coralArrow)"/>
+
+  <g><rect x="406" y="272" width="196" height="72" rx="18" fill="#22252c" stroke="#464c57"/><text x="504" y="303" text-anchor="middle" class="stage">Plan</text><text x="504" y="328" text-anchor="middle" class="note">Pick the next step</text></g>
+  <g><rect x="672" y="394" width="196" height="72" rx="18" fill="#22252c" stroke="#464c57"/><text x="770" y="425" text-anchor="middle" class="stage">Act</text><text x="770" y="450" text-anchor="middle" class="note">Call one tool</text></g>
+  <g><rect x="406" y="516" width="196" height="72" rx="18" fill="#22252c" stroke="#464c57"/><text x="504" y="547" text-anchor="middle" class="stage">Observe</text><text x="504" y="572" text-anchor="middle" class="note">Read the result</text></g>
+  <g><rect x="140" y="394" width="196" height="72" rx="18" fill="#22252c" stroke="#464c57"/><text x="238" y="425" text-anchor="middle" class="stage">Verify</text><text x="238" y="450" text-anchor="middle" class="note">Done, or loop again?</text></g>
+
+  <circle cx="504" cy="430" r="4" fill="#565d6a"/>
+  <text x="504" y="410" text-anchor="middle" class="note">max loops · max cost</text>
+  <text x="504" y="458" text-anchor="middle" class="note">stop early on failure</text>
+
+  <path d="M944 430 H1046" fill="none" stroke="#34d399" stroke-width="4" stroke-linecap="round" stroke-dasharray="2 10" />
+  <path d="M1046 430 H1088" fill="none" stroke="#34d399" stroke-width="4" stroke-linecap="round" marker-end="url(#greenArrow)"/>
+  <g><rect x="1088" y="382" width="288" height="96" rx="22" fill="#1f2a27" stroke="#34d399" stroke-width="2"/><circle cx="1128" cy="430" r="20" fill="#34d399"/><path d="M1118 430l7 7 14-17" fill="none" stroke="#12201b" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><text x="1244" y="422" text-anchor="middle" class="stage">Verified result</text><text x="1244" y="449" text-anchor="middle" class="note">Evidence and logs attached</text></g>
+  <text x="1016" y="408" text-anchor="middle" class="note">only exit</text>
+
+  <text x="720" y="680" text-anchor="middle" class="sub">A check that fails stops the loop early — bounded agents cannot run away.</text>
+</svg>
