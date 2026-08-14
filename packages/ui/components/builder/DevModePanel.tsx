@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import { AlertCircle, Check, Code, Copy, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "../../lib";
@@ -12,6 +13,7 @@ export interface DevModePanelProps {
 }
 
 export function DevModePanel({ className }: DevModePanelProps) {
+	const { t } = useTranslation("flow");
 	const { devMode, setDevMode, getRawJson, setRawJson } = useBuilder();
 	const [json, setJson] = useState("");
 	const [error, setError] = useState<string | null>(null);
@@ -71,22 +73,22 @@ export function DevModePanel({ className }: DevModePanelProps) {
 				<div className="flex items-center justify-between px-4 py-3 border-b">
 					<div className="flex items-center gap-2">
 						<Code className="h-5 w-5" />
-						<h2 className="font-semibold">Dev Mode - Raw JSON Editor</h2>
+						<h2 className="font-semibold">{t('devModeRawJsonEditor', 'Dev Mode - Raw JSON Editor')}</h2>
 					</div>
 					<div className="flex items-center gap-2">
 						<Button variant="outline" size="sm" onClick={handleFormat}>
-							Format
+							{t('format', 'Format')}
 						</Button>
 						<Button variant="outline" size="sm" onClick={handleCopy}>
 							{copied ? (
 								<>
 									<Check className="h-4 w-4 mr-1" />
-									Copied
+									{t('copied', 'Copied')}
 								</>
 							) : (
 								<>
 									<Copy className="h-4 w-4 mr-1" />
-									Copy
+									{t('copy', 'Copy')}
 								</>
 							)}
 						</Button>
@@ -94,10 +96,10 @@ export function DevModePanel({ className }: DevModePanelProps) {
 							{saved ? (
 								<>
 									<Check className="h-4 w-4 mr-1" />
-									Saved
+									{t('saved', 'Saved')}
 								</>
 							) : (
-								"Apply Changes"
+								t('applyChanges', 'Apply Changes')
 							)}
 						</Button>
 						<Button
@@ -135,12 +137,9 @@ export function DevModePanel({ className }: DevModePanelProps) {
 				{/* Footer */}
 				<div className="px-4 py-2 border-t text-xs text-muted-foreground">
 					<p>
-						Edit the raw JSON structure of your widget. The structure includes{" "}
-						<code className="bg-muted px-1 rounded">components</code> (array of
-						SurfaceComponent) and{" "}
-						<code className="bg-muted px-1 rounded">widgetRefs</code> (widget
-						definitions).
-					</p>
+						{t('editTheRawJsonStructureOfYourWidgetTheStructureIncludes', 'Edit the raw JSON structure of your widget. The structure includes')}{" "}<Trans i18nKey="codeClassnamebgmutedPx1RoundedcomponentscodeArrayOfSurfacecomponentAnd"><code className="bg-muted px-1 rounded">components</code> (array of
+						SurfaceComponent) and</Trans>{" "}<Trans i18nKey="codeClassnamebgmutedPx1RoundedwidgetrefscodeWidgetDefinitions"><code className="bg-muted px-1 rounded">widgetRefs</code> (widget
+						definitions).</Trans></p>
 				</div>
 			</div>
 		</div>

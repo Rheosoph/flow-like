@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { GitForkIcon, ShieldIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -35,6 +36,7 @@ export function AllowForkingSwitcher({
 	onAllowForkingChange,
 	children,
 }: Readonly<AllowForkingSwitcherProps>) {
+	const { t } = useTranslation("settings");
 	const initial = Boolean(localApp.allow_forking);
 	const [allow, setAllow] = useState(initial);
 	const [pending, setPending] = useState(false);
@@ -57,8 +59,8 @@ export function AllowForkingSwitcher({
 				setAllow(previous);
 				toast.error(
 					err instanceof Error
-						? `Couldn't update forking setting: ${err.message}`
-						: "Couldn't update forking setting",
+						? t('couldntUpdateForkingSettingMessage', 'Couldn\'t update forking setting: {{message}}', { message: err.message })
+						: t('couldntUpdateForkingSetting', 'Couldn\'t update forking setting'),
 				);
 			} finally {
 				setPending(false);
@@ -75,12 +77,10 @@ export function AllowForkingSwitcher({
 				<div className="space-y-1">
 					<CardTitle className="flex items-center gap-2">
 						<GitForkIcon className="w-4 h-4" />
-						Forking
+						{t('forking2', 'Forking')}
 					</CardTitle>
 					<CardDescription>
-						Let other users with read access create their own copy of this app.
-						Off by default — secret variables, OAuth bindings and remote-event
-						tokens are stripped or replaced when a fork is created.
+						{t('letOtherUsersWithReadAccessCreateTheirOwnCopyOfThisAppOffByDefaultSecretVariablesOauthBindingsAndRemoteeventTokensAreStrippedOrReplacedWhenAForkIsCreated', "Let other users with read access create their own copy of this app. Off by default — secret variables, OAuth bindings and remote-event tokens are stripped or replaced when a fork is created.")}
 					</CardDescription>
 				</div>
 			</CardHeader>
@@ -88,17 +88,17 @@ export function AllowForkingSwitcher({
 				<div className="flex items-center justify-between rounded-md border p-4">
 					<div className="space-y-1 pr-4">
 						<Label htmlFor={inputId} className="text-sm font-medium">
-							Allow forking
+							{t('allowForking', 'Allow forking')}
 						</Label>
 						<p className="text-xs text-muted-foreground">
 							{allow
-								? "Members with read access can fork this app."
-								: "Forking is disabled. The Fork button is hidden for everyone."}
+								? t('membersWithReadAccessCanForkThisApp', 'Members with read access can fork this app.')
+								: t('forkingIsDisabledTheForkButtonIsHiddenForEveryone', 'Forking is disabled. The Fork button is hidden for everyone.')}
 						</p>
 						{!canEdit && (
 							<p className="text-xs text-muted-foreground flex items-center gap-1">
 								<ShieldIcon className="w-3 h-3" />
-								Only the app owner can change this.
+								{t('onlyTheAppOwnerCanChangeThis', 'Only the app owner can change this.')}
 							</p>
 						)}
 					</div>

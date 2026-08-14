@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next } from "@flow-like/locales";
 import { faker } from "@faker-js/faker";
 import { CopilotPlugin } from "@platejs/ai/react";
 import { serializeMd, stripMarkdown } from "@platejs/markdown";
@@ -90,10 +91,7 @@ export const createCopilotKit = (appId?: string) => [
 					value: [contextEntry[0] as TElement],
 				});
 
-				return `Continue the text up to the next punctuation mark:
-  """
-  ${prompt}
-  """`;
+				return i18next.t('continueTheTextUpToTheNextPunctuationMarkPrompt', "Continue the text up to the next punctuation mark: \"\"\" {{prompt}} \"\"\"", { prompt });
 			},
 		},
 		shortcuts: {

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import type { TLinkElement } from "platejs";
@@ -44,10 +45,11 @@ export function LinkFloatingToolbar({
 }: {
 	state?: LinkFloatingToolbarState;
 }) {
+	const { t } = useTranslation("common");
 	const activeCommentId = usePluginOption({ key: KEYS.comment }, "activeId");
 	const activeSuggestionId = usePluginOption(
 		{ key: KEYS.suggestion },
-		"activeId",
+		`activeId`,
 	);
 
 	const floatingOptions: UseVirtualFloatingOptions = React.useMemo(() => {
@@ -106,7 +108,7 @@ export function LinkFloatingToolbar({
 
 				<FloatingLinkUrlInput
 					className={inputVariants()}
-					placeholder="Paste link"
+					placeholder={t('pasteLink', 'Paste link')}
 					data-plate-focus
 				/>
 			</div>
@@ -117,7 +119,7 @@ export function LinkFloatingToolbar({
 				</div>
 				<input
 					className={inputVariants()}
-					placeholder="Text to display"
+					placeholder={t('textToDisplay', 'Text to display')}
 					data-plate-focus
 					{...textInputProps}
 				/>
@@ -134,7 +136,7 @@ export function LinkFloatingToolbar({
 				type="button"
 				{...editButtonProps}
 			>
-				Edit link
+				{t('editLink', 'Edit link')}
 			</button>
 
 			<Separator orientation="vertical" />
@@ -192,6 +194,7 @@ export function LinkFloatingToolbar({
 }
 
 function LinkOpenButton() {
+	const { t } = useTranslation("common");
 	const editor = useEditorRef();
 	const selection = useEditorSelection();
 
@@ -220,7 +223,7 @@ function LinkOpenButton() {
 			onMouseOver={(e) => {
 				e.stopPropagation();
 			}}
-			aria-label="Open link in a new tab"
+			aria-label={`Open link in a new tab`}
 			target="_blank"
 		>
 			<ExternalLink width={18} />

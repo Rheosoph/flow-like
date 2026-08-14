@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	ChevronDownIcon,
 	DownloadIcon,
@@ -90,6 +91,7 @@ function MediaTile({
 	overflowCount?: number;
 	className?: string;
 }>) {
+	const { t } = useTranslation("chat");
 	const [source, setSource] = useState(file.thumbnailUrl || file.url);
 	const [failed, setFailed] = useState(false);
 	const isVideo = file.type === "video";
@@ -113,8 +115,8 @@ function MediaTile({
 			title={file.displayName}
 			aria-label={
 				overflowCount
-					? `Show ${overflowCount} more attachments`
-					: `Open ${file.displayName}`
+					? t('showOverflowcountMoreAttachments', 'Show {{overflowCount}} more attachments', { overflowCount })
+					: t('openDisplayname', 'Open {{displayName}}', { displayName: file.displayName })
 			}
 			className={cn(
 				"group relative overflow-hidden rounded-lg border bg-muted/40 outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
@@ -161,9 +163,7 @@ function MediaTile({
 
 			{overflowCount ? (
 				<span className="absolute inset-0 grid place-content-center justify-items-center bg-black/65 text-white">
-					<span className="text-lg font-semibold leading-none">
-						+{overflowCount}
-					</span>
+					<span className="text-lg font-semibold leading-none">{`+${overflowCount}`}</span>
 					<span className="mt-0.5 text-[9px] font-medium uppercase tracking-widest opacity-85">
 						more
 					</span>
@@ -244,6 +244,7 @@ function AudioAttachment({
 	file: ProcessedAttachment;
 	onOpen: (file: ProcessedAttachment) => void;
 }>) {
+	const { t } = useTranslation("chat");
 	const audioRef = useRef<HTMLAudioElement>(null);
 	const [playing, setPlaying] = useState(false);
 	const [current, setCurrent] = useState(0);
@@ -315,7 +316,7 @@ function AudioAttachment({
 						step={0.1}
 						value={Math.min(current, duration || 0)}
 						disabled={!duration}
-						aria-label={`Seek ${file.displayName}`}
+						aria-label={t('seekDisplayname', 'Seek {{displayName}}', { displayName: file.displayName })}
 						onChange={(event) => {
 							const next = Number(event.target.value);
 							setCurrent(next);
@@ -408,6 +409,7 @@ function AttachmentManifest({
 	totalSize: number;
 	onExpand: () => void;
 }>) {
+	const { t } = useTranslation("chat");
 	return (
 		<button
 			type="button"
@@ -436,12 +438,10 @@ function AttachmentManifest({
 				))}
 			</span>
 			<span className="flex min-w-0 flex-1 flex-col">
-				<span className="text-[13px] font-medium">
-					{files.length} attachments
-				</span>
+				<span className="text-[13px] font-medium">{t('lengthAttachments', '{{length}} attachments', { length: files.length })}</span>
 				<span className="truncate font-mono text-[10px] text-muted-foreground">
 					{summariseKinds(files)}
-					{totalSize > 0 ? ` · ${humanFileSize(totalSize, true)}` : ""}
+					{totalSize > 0 ? `· ${humanFileSize(totalSize, true)}` : ""}
 				</span>
 			</span>
 			<ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
@@ -460,15 +460,16 @@ function StripHeader({
 	onShowAll?: () => void;
 	onCollapse?: () => void;
 }>) {
+	const { t } = useTranslation("chat");
 	const trailing = onCollapse
-		? { label: "Show less", action: onCollapse }
+		? { label: t('showLess', 'Show less'), action: onCollapse }
 		: onShowAll
-			? { label: "Show all", action: onShowAll }
+			? { label: t('showAll', 'Show all'), action: onShowAll }
 			: undefined;
 
 	return (
 		<div className="flex items-center gap-1.5 font-mono text-[10px] tracking-wide text-muted-foreground">
-			<span>{count} files</span>
+			<span>{t('countFiles', '{{count}} files', { count })}</span>
 			{totalSize > 0 && (
 				<>
 					<span className="opacity-60">·</span>
@@ -504,6 +505,7 @@ export function AttachmentStrip({
 	onFullscreen?: (file: ProcessedAttachment) => void;
 	onShowAll?: () => void;
 }>) {
+	const { t } = useTranslation("chat");
 	const { visuals, audio, chips, totalSize } = useMemo(() => {
 		const grouped = {
 			visuals: [] as ProcessedAttachment[],
@@ -581,9 +583,7 @@ export function AttachmentStrip({
 						type="button"
 						onClick={onShowAll}
 						className="h-9 rounded-[10px] border border-dashed px-2.5 font-mono text-[11px] text-muted-foreground outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-primary/50"
-					>
-						+{chipOverflow} more
-					</button>
+					>{t('chipoverflowMore', '+{{chipOverflow}} more', { chipOverflow })}</button>
 				)}
 			</div>,
 		);

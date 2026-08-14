@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { useDroppable } from "@dnd-kit/core";
 import html2canvas from "html2canvas-pro";
 import {
@@ -123,7 +124,7 @@ function createRootComponent(): SurfaceComponent {
 	return {
 		id: ROOT_ID,
 		style: {
-			className: "flex-1 h-full overflow-auto",
+			className: `flex-1 h-full overflow-auto`,
 		},
 		component: {
 			type: "column",
@@ -301,6 +302,7 @@ function WidgetBuilderContent({
 	onPageChange,
 	externalAssistant,
 }: WidgetBuilderContentProps) {
+	const { t } = useTranslation("flow");
 	const {
 		components,
 		selection,
@@ -525,7 +527,7 @@ function WidgetBuilderContent({
 							onClick={() => setCopilotOpen(!copilotOpen)}
 						>
 							<SparklesIcon className="h-4 w-4" />
-							<span className="text-xs">FlowPilot</span>
+							<span className="text-xs">{t('flowpilot', 'FlowPilot')}</span>
 						</Button>
 					)}
 				</div>
@@ -563,11 +565,11 @@ function WidgetBuilderContent({
 									<TabsList className="w-full justify-start rounded-none border-b bg-transparent px-2 shrink-0">
 										<TabsTrigger value="palette" className="gap-1.5">
 											<Palette className="h-4 w-4" />
-											<span className="hidden sm:inline">Components</span>
+											<span className="hidden sm:inline">{t('components', 'Components')}</span>
 										</TabsTrigger>
 										<TabsTrigger value="hierarchy" className="gap-1.5">
 											<Layers className="h-4 w-4" />
-											<span className="hidden sm:inline">Hierarchy</span>
+											<span className="hidden sm:inline">{t('hierarchy', 'Hierarchy')}</span>
 										</TabsTrigger>
 									</TabsList>
 									<TabsContent
@@ -671,13 +673,13 @@ function PendingComponentsBar({
 	onApply,
 	onDismiss,
 }: PendingComponentsBarProps) {
+	const { t } = useTranslation("flow");
 	return (
 		<div className="flex items-center justify-between px-4 py-2 bg-primary/5 border-b border-primary/20 shrink-0">
 			<div className="flex items-center gap-2">
 				<SparklesIcon className="h-4 w-4 text-primary" />
-				<span className="text-sm font-medium">
-					{components.length} component{components.length !== 1 ? "s" : ""}{" "}
-					ready to apply
+				<span className="text-sm font-medium">{t('countComponents', { defaultValue_one: '{{count}} component', defaultValue_other: '{{count}} components', count: components.length })}{" "}
+					{t('readyToApply', 'ready to apply')}
 				</span>
 			</div>
 			<div className="flex items-center gap-2">
@@ -688,10 +690,10 @@ function PendingComponentsBar({
 					className="h-7 px-2 text-muted-foreground hover:text-destructive"
 				>
 					<XIcon className="h-4 w-4 mr-1" />
-					Dismiss
+					{t('dismiss', 'Dismiss')}
 				</Button>
 				<Button size="sm" onClick={onApply} className="h-7 px-3">
-					Apply Changes
+					{t('applyChanges', 'Apply Changes')}
 				</Button>
 			</div>
 		</div>
@@ -700,6 +702,7 @@ function PendingComponentsBar({
 
 // Visual Canvas - shows live preview with drop overlays
 function VisualCanvas({ surfaceId }: { surfaceId: string }) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const {
 		components,
@@ -963,7 +966,7 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 
 			{/* Canvas header with breadcrumb */}
 			<div className="flex items-center gap-2 px-3 py-2 border-b bg-background text-xs text-muted-foreground shrink-0">
-				<span>Canvas</span>
+				<span>{t('canvas', 'Canvas')}</span>
 				{selection.componentIds.length > 0 &&
 					selection.componentIds[0] !== ROOT_ID && (
 						<>
@@ -1027,7 +1030,7 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 							<div className="text-center text-muted-foreground">
 								<Plus className="h-8 w-8 mx-auto mb-2 opacity-50" />
 								<p className="text-sm">
-									Drop components here to start building
+									{t('dropComponentsHereToStartBuilding', 'Drop components here to start building')}
 								</p>
 							</div>
 						</div>
@@ -1043,6 +1046,7 @@ interface BuilderPreviewProps {
 }
 
 function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
 	const { components, canvasSettings, actionContext, widgetRefs } =

@@ -10,6 +10,7 @@
  * existing imports and usage.
  */
 
+import { useTranslation } from "@flow-like/locales";
 import { memo, useMemo } from "react";
 import { FlowPilot } from "../../flowpilot";
 import type { FlowCopilotProps } from "./types";
@@ -30,6 +31,7 @@ function FlowCopilotWrapperImpl({
 	onClose,
 	onWorkspaceVisibleChange,
 }: FlowCopilotProps) {
+	const { t } = useTranslation("flow");
 	// Stabilize the runContext object identity so the memoized FlowPilot only
 	// re-renders when the underlying run actually changes. The parent passes a
 	// store-backed value, so its identity is already stable between run changes.
@@ -49,7 +51,7 @@ function FlowCopilotWrapperImpl({
 	return (
 		<FlowPilot
 			agentMode="board"
-			title="FlowPilot"
+			title={t('flowpilot', 'FlowPilot')}
 			appId={appId}
 			board={board}
 			catalogNodes={catalogNodes}

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useState } from "react";
 import { cn } from "../../../lib/utils";
 
@@ -9,6 +10,7 @@ interface InlineSpoilerProps {
 }
 
 export function InlineSpoiler({ text, className }: InlineSpoilerProps) {
+	const { t } = useTranslation("common");
 	const [revealed, setRevealed] = useState(false);
 
 	return (
@@ -40,7 +42,7 @@ export function InlineSpoiler({ text, className }: InlineSpoilerProps) {
 					setRevealed(true);
 				}
 			}}
-			aria-label={revealed ? text : "Hidden content. Click to reveal."}
+			aria-label={revealed ? text : t('hiddenContentClickToReveal', 'Hidden content. Click to reveal.')}
 		>
 			{text}
 			{!revealed && (

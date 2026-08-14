@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { TAudioElement } from "platejs";
 import type { PlateElementProps } from "platejs/react";
 
@@ -13,6 +14,7 @@ import { Caption, CaptionTextarea } from "./caption";
 export const AudioElement = withHOC(
 	ResizableProvider,
 	function AudioElement(props: PlateElementProps<TAudioElement>) {
+		const { t } = useTranslation("common");
 		const { align = "center", readOnly, unsafeUrl } = useMediaState();
 		const resolvedUrl = useEditorAssetUrl(unsafeUrl);
 
@@ -30,7 +32,7 @@ export const AudioElement = withHOC(
 						<CaptionTextarea
 							className="h-20"
 							readOnly={readOnly}
-							placeholder="Write a caption..."
+							placeholder={t('writeACaption', 'Write a caption...')}
 						/>
 					</Caption>
 				</figure>

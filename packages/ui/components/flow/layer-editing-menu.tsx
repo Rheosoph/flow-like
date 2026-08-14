@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	DndContext,
 	type DragEndEvent,
@@ -188,7 +189,7 @@ const buildInitialEdits = (
 
 		// Override description for payload pin on generic_event nodes
 		if (isGenericEvent && p?.name === "payload") {
-			description = "(Catch all for additional metadata)";
+			description = i18next.t('catchAllForAdditionalMetadata', '(Catch all for additional metadata)');
 		}
 
 		out[pin.id] = {
@@ -227,6 +228,7 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 	boardRef,
 	mode = "layer",
 }) => {
+	const { t } = useTranslation("flow");
 	const entity = layer ?? node;
 	const isNodeMode =
 		mode === "node" || (node !== undefined && layer === undefined);
@@ -461,12 +463,12 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
 						<SlidersHorizontalIcon className="h-5 w-5 text-primary" />
-						{isNodeMode ? "Edit Node Properties" : "Edit Layer Pins"}
+						{isNodeMode ? t('editNodeProperties', 'Edit Node Properties') : t('editLayerPins', 'Edit Layer Pins')}
 					</DialogTitle>
 					<DialogDescription>
 						{isNodeMode
-							? `Configure properties and pins for "${node?.friendly_name || "Node"}".`
-							: `Configure pin properties and ordering for "${layer?.name || "Layer"}".`}
+							? t('configurePropertiesAndPinsForVal', 'Configure properties and pins for "{{val}}".', { val: node?.friendly_name || "Node" })
+							: t('configurePinPropertiesAndOrderingForVal', 'Configure pin properties and ordering for "{{val}}".', { val: layer?.name || "Layer" })}
 					</DialogDescription>
 				</DialogHeader>
 				<Tabs
@@ -478,33 +480,33 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 						className={`grid w-full ${isGenericEvent ? "grid-cols-2" : isNodeMode ? "grid-cols-1" : isFunctionLayer ? "grid-cols-3" : "grid-cols-2"}`}
 					>
 						{isGenericEvent && (
-							<TabsTrigger value="metadata">Node Info</TabsTrigger>
+							<TabsTrigger value="metadata">{t('nodeInfo', 'Node Info')}</TabsTrigger>
 						)}
-						{!isNodeMode && <TabsTrigger value="inputs">Inputs</TabsTrigger>}
-						<TabsTrigger value="outputs">Outputs</TabsTrigger>
+						{!isNodeMode && <TabsTrigger value="inputs">{t('inputs', 'Inputs')}</TabsTrigger>}
+						<TabsTrigger value="outputs">{t('outputs', 'Outputs')}</TabsTrigger>
 						{isFunctionLayer && (
 							<TabsTrigger value="caching" className="gap-1.5">
 								<DatabaseIcon className="h-3.5 w-3.5" />
-								Caching
+								{t('caching', 'Caching')}
 							</TabsTrigger>
 						)}
 					</TabsList>
 					{isGenericEvent && (
 						<TabsContent value="metadata" className="mt-3 space-y-4">
 							<div className="space-y-2">
-								<label className="text-sm font-medium">Node Name</label>
+								<label className="text-sm font-medium">{t('nodeName', 'Node Name')}</label>
 								<Input
 									value={nodeName}
 									onChange={(e) => setNodeName(e.target.value)}
-									placeholder="Enter node name"
+									placeholder={t('enterNodeName', 'Enter node name')}
 								/>
 							</div>
 							<div className="space-y-2">
-								<label className="text-sm font-medium">Node Description</label>
+								<label className="text-sm font-medium">{t('nodeDescription', 'Node Description')}</label>
 								<Textarea
 									value={nodeDescription}
 									onChange={(e) => setNodeDescription(e.target.value)}
-									placeholder="Enter node description"
+									placeholder={t('enterNodeDescription', 'Enter node description')}
 									rows={4}
 								/>
 							</div>
@@ -518,7 +520,7 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 								className="gap-2"
 							>
 								<PlusIcon className="h-4 w-4" />
-								Add Input Pin
+								{t('addInputPin', 'Add Input Pin')}
 							</Button>
 						</div>
 						<PinList
@@ -539,7 +541,7 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 								className="gap-2"
 							>
 								<PlusIcon className="h-4 w-4" />
-								Add Output Pin
+								{t('addOutputPin', 'Add Output Pin')}
 							</Button>
 						</div>
 						<PinList
@@ -561,11 +563,11 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 				<Separator className="my-3" />
 				<DialogFooter className="gap-2">
 					<Button variant="secondary" onClick={() => onOpenChange(false)}>
-						Close
+						{t('close', 'Close')}
 					</Button>
 					<Button onClick={applyChanges} className="gap-2">
 						<SaveIcon className="h-4 w-4" />
-						Save
+						{t('save', 'Save')}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
@@ -577,6 +579,7 @@ const CacheSettings: React.FC<{
 	cache: ILayerCache;
 	onChange: (next: ILayerCache) => void;
 }> = ({ cache, onChange }) => {
+	const { t } = useTranslation("flow");
 	const enabled = Boolean(cache.enabled);
 	const patch = useCallback(
 		(next: Partial<ILayerCache>) => onChange({ ...cache, ...next }),
@@ -588,11 +591,10 @@ const CacheSettings: React.FC<{
 			<div className="flex items-start justify-between gap-4 rounded-md border p-3">
 				<div className="space-y-1">
 					<Label htmlFor="layer-cache-enabled" className="text-sm">
-						Cache results
+						{t('cacheResults', 'Cache results')}
 					</Label>
 					<p className="text-xs text-muted-foreground">
-						Reuse a previous result whenever this layer is called with the same
-						inputs.
+						{t('reuseAPreviousResultWheneverThisLayerIsCalledWithTheSameInputs', "Reuse a previous result whenever this layer is called with the same inputs.")}
 					</p>
 				</div>
 				<Switch
@@ -606,25 +608,22 @@ const CacheSettings: React.FC<{
 				className={`space-y-4 ${enabled ? "" : "pointer-events-none opacity-50"}`}
 			>
 				<div className="space-y-1.5">
-					<Label className="text-xs">Prefix</Label>
+					<Label className="text-xs">{t('prefix', 'Prefix')}</Label>
 					<Input
 						className="h-8"
 						value={cache.prefix ?? ""}
 						onChange={(e) => patch({ prefix: e.target.value })}
-						placeholder="e.g. pricing"
+						placeholder={t('egPricing', 'e.g. pricing')}
 						disabled={!enabled}
 					/>
 					<p className="text-xs text-muted-foreground">
-						Groups this layer's entries so they can be cleared in one go with
-						the Invalidate Cache Namespace node — without a prefix they can only
-						be deleted one key at a time. Changing it also drops everything
-						cached so far.
+						{t('groupsThisLayersEntriesSoTheyCanBeClearedInOneGoWithTheInvalidateCacheNamespaceNodeWithoutAPrefixTheyCanOnlyBeDeletedOneKeyAtATimeChangingItAlsoDropsEverythingCachedSoFar', "Groups this layer's entries so they can be cleared in one go with the Invalidate Cache Namespace node — without a prefix they can only be deleted one key at a time. Changing it also drops everything cached so far.")}
 					</p>
 				</div>
 
 				<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
 					<div className="space-y-1.5">
-						<Label className="text-xs">Lifetime (seconds)</Label>
+						<Label className="text-xs">{t('lifetimeSeconds', 'Lifetime (seconds)')}</Label>
 						<Input
 							className="h-8"
 							type="number"
@@ -647,7 +646,7 @@ const CacheSettings: React.FC<{
 					</div>
 
 					<div className="space-y-1.5">
-						<Label className="text-xs">Scope</Label>
+						<Label className="text-xs">{t('scope', 'Scope')}</Label>
 						<Select
 							value={cache.scope ?? ILayerCacheScope.App}
 							onValueChange={(value) =>
@@ -660,15 +659,15 @@ const CacheSettings: React.FC<{
 							</SelectTrigger>
 							<SelectContent>
 								<SelectItem value={ILayerCacheScope.App}>
-									App — shared by everyone
+									{t('appSharedByEveryone', 'App — shared by everyone')}
 								</SelectItem>
 								<SelectItem value={ILayerCacheScope.User}>
-									User — private per user
+									{t('userPrivatePerUser', 'User — private per user')}
 								</SelectItem>
 							</SelectContent>
 						</Select>
 						<p className="text-xs text-muted-foreground">
-							Pick User when the result depends on who triggered the run.
+							{t('pickUserWhenTheResultDependsOnWhoTriggeredTheRun', 'Pick User when the result depends on who triggered the run.')}
 						</p>
 					</div>
 				</div>
@@ -677,9 +676,7 @@ const CacheSettings: React.FC<{
 					<div className="flex gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs">
 						<InfoIcon className="h-4 w-4 shrink-0 text-destructive" />
 						<span className="text-muted-foreground">
-							A cache hit replaces the whole call — the layer's nodes never run,
-							so any side effects they have are skipped too. Only cache layers
-							whose outputs depend solely on their inputs.
+							{t('aCacheHitReplacesTheWholeCallTheLayersNodesNeverRunSoAnySideEffectsTheyHaveAreSkippedTooOnlyCacheLayersWhoseOutputsDependSolelyOnTheirInputs', "A cache hit replaces the whole call — the layer's nodes never run, so any side effects they have are skipped too. Only cache layers whose outputs depend solely on their inputs.")}
 						</span>
 					</div>
 				)}
@@ -713,6 +710,7 @@ const PinValueTypeDropdown: React.FC<{
 	onChange: (vt: IValueType) => void;
 	className?: string;
 }> = ({ value_type, data_type, onChange, className }) => {
+	const { t } = useTranslation("flow");
 	const color = typeToColor(data_type);
 	return (
 		<DropdownMenu>
@@ -720,7 +718,7 @@ const PinValueTypeDropdown: React.FC<{
 				<button
 					type="button"
 					className={`inline-flex items-center justify-center rounded p-1 hover:bg-accent/50 ${className ?? ""}`}
-					aria-label="Change value type"
+					aria-label={t('changeValueType', 'Change value type')}
 				>
 					<ValueTypeIcon value_type={value_type} data_type={data_type} />
 				</button>
@@ -729,33 +727,31 @@ const PinValueTypeDropdown: React.FC<{
 				<DropdownMenuItem
 					className="gap-2"
 					onClick={() => onChange(IValueType.Normal)}
-				>
-					<div
+				><Trans i18nKey="divClassnamew4H2RoundedfullStyleBackgroundcolorColorSingle"><div
 						className="w-4 h-2 rounded-full"
 						style={{ backgroundColor: color }}
 					/>
-					Single
-				</DropdownMenuItem>
+					Single</Trans></DropdownMenuItem>
 				<DropdownMenuItem
 					className="gap-2"
 					onClick={() => onChange(IValueType.Array)}
 				>
 					<GripIcon className="w-4 h-4" style={{ color }} />
-					Array
+					{t('array', 'Array')}
 				</DropdownMenuItem>
 				<DropdownMenuItem
 					className="gap-2"
 					onClick={() => onChange(IValueType.HashSet)}
 				>
 					<EllipsisVerticalIcon className="w-4 h-4" style={{ color }} />
-					Set
+					{t('set', 'Set')}
 				</DropdownMenuItem>
 				<DropdownMenuItem
 					className="gap-2"
 					onClick={() => onChange(IValueType.HashMap)}
 				>
 					<ListIcon className="w-4 h-4" style={{ color }} />
-					Map
+					{t('map', 'Map')}
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
@@ -767,13 +763,14 @@ const PinDataTypeSelectInline: React.FC<{
 	onChange: (dt: IVariableType) => void;
 	className?: string;
 }> = ({ value, onChange, className }) => {
+	const { t } = useTranslation("flow");
 	return (
 		<Select
 			value={value}
 			onValueChange={(val) => onChange(val as IVariableType)}
 		>
 			<SelectTrigger className={`h-7 w-[140px] text-xs ${className ?? ""}`}>
-				<SelectValue placeholder="Data Type" />
+				<SelectValue placeholder={t('dataType', 'Data Type')} />
 			</SelectTrigger>
 			<SelectContent>
 				<SelectItem value={IVariableType.Boolean}>
@@ -820,6 +817,7 @@ const PinList: React.FC<PinListProps> = ({
 	onReorder,
 	isGenericEvent = false,
 }) => {
+	const { t } = useTranslation("flow");
 	const sensors = useSensors(
 		useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
 	);
@@ -843,7 +841,7 @@ const PinList: React.FC<PinListProps> = ({
 			<div className="p-2 space-y-2">
 				{items.length === 0 && (
 					<div className="text-sm text-muted-foreground px-2 py-8 text-center">
-						No pins in this group.
+						{t('noPinsInThisGroup', 'No pins in this group.')}
 					</div>
 				)}
 				<DndContext
@@ -891,6 +889,7 @@ const SortablePinRow: React.FC<{
 	onRemove,
 	isGenericEvent = false,
 }) => {
+	const { t } = useTranslation("flow");
 	const {
 		attributes,
 		listeners,
@@ -935,7 +934,7 @@ const SortablePinRow: React.FC<{
 			<div className="flex items-center gap-2 px-2 py-1 border-b">
 				<button
 					type="button"
-					title="Drag to reorder"
+					title={t('dragToReorder', 'Drag to reorder')}
 					className="inline-flex h-5 w-5 items-center justify-center text-muted-foreground cursor-grab active:cursor-grabbing"
 					{...attributes}
 					{...listeners}
@@ -990,16 +989,14 @@ const SortablePinRow: React.FC<{
 							}}
 							title={
 								isGenericEvent && pin.name === "payload"
-									? "Payload pin cannot be renamed"
-									: "Click to rename"
+									? t('payloadPinCannotBeRenamed', 'Payload pin cannot be renamed')
+									: t('clickToRename', 'Click to rename')
 							}
 						>
 							{pin.friendly_name ?? pin.name ?? pin.id}
 						</button>
 					)}
-					<span className="ml-2 text-[10px] text-muted-foreground">
-						({pin.id})
-					</span>
+					<span className="ml-2 text-[10px] text-muted-foreground">{`(${pin.id})`}</span>
 				</div>{" "}
 				<PinDataTypeSelectInline
 					value={pin.data_type}
@@ -1011,7 +1008,7 @@ const SortablePinRow: React.FC<{
 					size="icon"
 					onClick={() => onMoveUp(pin.id)}
 					disabled={idx === 0}
-					title="Move up"
+					title={t('moveUp', 'Move up')}
 				>
 					<ArrowUpIcon className="h-4 w-4" />
 				</Button>
@@ -1020,7 +1017,7 @@ const SortablePinRow: React.FC<{
 					size="icon"
 					onClick={() => onMoveDown(pin.id)}
 					disabled={idx === total - 1}
-					title="Move down"
+					title={t('moveDown', 'Move down')}
 				>
 					<ArrowDownIcon className="h-4 w-4" />
 				</Button>
@@ -1031,8 +1028,8 @@ const SortablePinRow: React.FC<{
 					disabled={isGenericEvent && pin.name === "payload"}
 					title={
 						isGenericEvent && pin.name === "payload"
-							? "Payload pin cannot be removed"
-							: "Remove pin"
+							? t('payloadPinCannotBeRemoved', 'Payload pin cannot be removed')
+							: t('removePin', 'Remove pin')
 					}
 				>
 					<Trash2Icon className="h-4 w-4 text-destructive-foreground" />
@@ -1053,7 +1050,7 @@ const SortablePinRow: React.FC<{
 			{expanded && (
 				<div className="p-2 space-y-3">
 					<div className="space-y-1.5">
-						<Label className="text-xs">Description</Label>
+						<Label className="text-xs">{t('description', 'Description')}</Label>
 						<Input
 							className="h-8"
 							value={pin.description}
@@ -1062,7 +1059,7 @@ const SortablePinRow: React.FC<{
 							disabled={isGenericEvent && pin.name === "payload"}
 							title={
 								isGenericEvent && pin.name === "payload"
-									? "Payload pin description cannot be edited"
+									? t('payloadPinDescriptionCannotBeEdited', 'Payload pin description cannot be edited')
 									: undefined
 							}
 						/>
@@ -1091,6 +1088,7 @@ const PinOptionsButton: React.FC<PinOptionsButtonProps> = ({
 	onApply,
 	onSchemaChange,
 }) => {
+	const { t } = useTranslation("flow");
 	const [open, setOpen] = useState(false);
 	const [local, setLocal] = useState<IPinOptions | null>(pin.options ?? null);
 	const [localSchema, setLocalSchema] = useState<string>(pin.schema ?? "");
@@ -1110,9 +1108,9 @@ const PinOptionsButton: React.FC<PinOptionsButtonProps> = ({
 				size="sm"
 				className="h-7 px-2"
 				onClick={() => setOpen(true)}
-				title="Edit pin options"
+				title={t('editPinOptions', 'Edit pin options')}
 			>
-				Options…
+				{t('options', 'Options…')}
 			</Button>
 			<Dialog open={open} onOpenChange={setOpen}>
 				<DialogContent
@@ -1120,18 +1118,18 @@ const PinOptionsButton: React.FC<PinOptionsButtonProps> = ({
 					onDoubleClick={(e) => e.stopPropagation()}
 				>
 					<DialogHeader>
-						<DialogTitle>Pin Options — {pin.friendly_name}</DialogTitle>
-						<DialogDescription>Advanced, optional settings.</DialogDescription>
+						<DialogTitle>{t('pinOptionsFriendly_name', 'Pin Options — {{friendly_name}}', { friendly_name: pin.friendly_name })}</DialogTitle>
+						<DialogDescription>{t('advancedOptionalSettings', 'Advanced, optional settings.')}</DialogDescription>
 					</DialogHeader>
 
 					<div className="grid grid-cols-1 md:grid-cols-6 gap-3">
 						<div className="space-y-1.5 md:col-span-6">
-							<Label className="text-xs">Schema</Label>
+							<Label className="text-xs">{t('schema', 'Schema')}</Label>
 							<Input
 								className="h-8"
 								value={localSchema}
 								onChange={(e) => setLocalSchema(e.target.value)}
-								placeholder="e.g. my.schema.Identifier"
+								placeholder={t('egMyschemaidentifier', 'e.g. my.schema.Identifier')}
 							/>
 						</div>
 
@@ -1149,7 +1147,7 @@ const PinOptionsButton: React.FC<PinOptionsButtonProps> = ({
 								}
 							/>
 							<Label htmlFor={`opt-egvt-${pin.id}`} className="text-xs">
-								Enforce Generic VT
+								{t('enforceGenericVt', 'Enforce Generic VT')}
 							</Label>
 						</div>
 
@@ -1167,7 +1165,7 @@ const PinOptionsButton: React.FC<PinOptionsButtonProps> = ({
 								}
 							/>
 							<Label htmlFor={`opt-es-${pin.id}`} className="text-xs">
-								Enforce Schema
+								{t('enforceSchema', 'Enforce Schema')}
 							</Label>
 						</div>
 
@@ -1185,12 +1183,12 @@ const PinOptionsButton: React.FC<PinOptionsButtonProps> = ({
 								}
 							/>
 							<Label htmlFor={`opt-sens-${pin.id}`} className="text-xs">
-								Sensitive
+								{t('sensitive', 'Sensitive')}
 							</Label>
 						</div>
 
 						<div className="space-y-1.5 md:col-span-3">
-							<Label className="text-xs">Step</Label>
+							<Label className="text-xs">{t('step', 'Step')}</Label>
 							<Input
 								className="h-8"
 								type="number"
@@ -1205,7 +1203,7 @@ const PinOptionsButton: React.FC<PinOptionsButtonProps> = ({
 						</div>
 
 						<div className="space-y-1.5 md:col-span-3">
-							<Label className="text-xs">Range Min</Label>
+							<Label className="text-xs">{t('rangeMin', 'Range Min')}</Label>
 							<Input
 								className="h-8"
 								type="number"
@@ -1236,7 +1234,7 @@ const PinOptionsButton: React.FC<PinOptionsButtonProps> = ({
 						</div>
 
 						<div className="space-y-1.5 md:col-span-3">
-							<Label className="text-xs">Range Max</Label>
+							<Label className="text-xs">{t('rangeMax', 'Range Max')}</Label>
 							<Input
 								className="h-8"
 								type="number"
@@ -1267,7 +1265,7 @@ const PinOptionsButton: React.FC<PinOptionsButtonProps> = ({
 						</div>
 
 						<div className="space-y-1.5 md:col-span-6">
-							<Label className="text-xs">Valid Values (comma-separated)</Label>
+							<Label className="text-xs">{t('validValuesCommaseparated', 'Valid Values (comma-separated)')}</Label>
 							<Input
 								className="h-8"
 								value={toCSV(local?.valid_values ?? null)}
@@ -1286,7 +1284,7 @@ const PinOptionsButton: React.FC<PinOptionsButtonProps> = ({
 
 					<DialogFooter className="gap-2">
 						<Button variant="secondary" onClick={() => setOpen(false)}>
-							Close
+							{t('close', 'Close')}
 						</Button>
 						<Button
 							onClick={() => {
@@ -1297,7 +1295,7 @@ const PinOptionsButton: React.FC<PinOptionsButtonProps> = ({
 								setOpen(false);
 							}}
 						>
-							Save
+							{t('save', 'Save')}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

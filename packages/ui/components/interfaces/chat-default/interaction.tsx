@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	AlertCircle,
 	CheckCircle2,
@@ -83,6 +84,7 @@ function formatCountdown(seconds: number): string {
 }
 
 function StatusBadge({ status }: { status: IInteractionStatus }) {
+	const { t } = useTranslation("chat");
 	switch (status) {
 		case "pending":
 			return (
@@ -91,7 +93,7 @@ function StatusBadge({ status }: { status: IInteractionStatus }) {
 					className="gap-1 text-amber-600 border-amber-600/30"
 				>
 					<Clock className="h-3 w-3" />
-					Pending
+					{t('pending', 'Pending')}
 				</Badge>
 			);
 		case "responded":
@@ -101,7 +103,7 @@ function StatusBadge({ status }: { status: IInteractionStatus }) {
 					className="gap-1 text-emerald-600 border-emerald-600/30"
 				>
 					<CheckCircle2 className="h-3 w-3" />
-					Responded
+					{t('responded', 'Responded')}
 				</Badge>
 			);
 		case "expired":
@@ -111,7 +113,7 @@ function StatusBadge({ status }: { status: IInteractionStatus }) {
 					className="gap-1 text-red-600 border-red-600/30"
 				>
 					<XCircle className="h-3 w-3" />
-					Expired
+					{t('expired', 'Expired')}
 				</Badge>
 			);
 		case "cancelled":
@@ -121,7 +123,7 @@ function StatusBadge({ status }: { status: IInteractionStatus }) {
 					className="gap-1 text-muted-foreground border-muted-foreground/30"
 				>
 					<AlertCircle className="h-3 w-3" />
-					Cancelled
+					{t('cancelled', 'Cancelled')}
 				</Badge>
 			);
 	}
@@ -134,11 +136,12 @@ function ResponseDisplay({
 	interactionType: IInteractionType;
 	responseValue: any;
 }) {
+	const { t } = useTranslation("chat");
 	if (!responseValue) {
 		return (
 			<p className="text-sm text-muted-foreground flex items-center gap-1.5">
 				<CheckCircle2 className="h-4 w-4 text-emerald-500" />
-				Response submitted.
+				{t('responseSubmitted', 'Response submitted.')}
 			</p>
 		);
 	}
@@ -155,14 +158,12 @@ function ResponseDisplay({
 				<div className="text-sm space-y-1">
 					<p className="text-muted-foreground flex items-center gap-1.5">
 						<CheckCircle2 className="h-4 w-4 text-emerald-500" />
-						Response submitted:
+						{t('responseSubmitted2', 'Response submitted:')}
 					</p>
 					<p className="font-medium pl-5">
 						{selectedOption?.label ?? selectedId}
 						{freeformValue && (
-							<span className="font-normal text-muted-foreground">
-								: {freeformValue}
-							</span>
+							<span className="font-normal text-muted-foreground">{`: ${freeformValue}`}</span>
 						)}
 					</p>
 				</div>
@@ -180,10 +181,10 @@ function ResponseDisplay({
 				<div className="text-sm space-y-1">
 					<p className="text-muted-foreground flex items-center gap-1.5">
 						<CheckCircle2 className="h-4 w-4 text-emerald-500" />
-						Response submitted:
+						{t('responseSubmitted2', 'Response submitted:')}
 					</p>
 					<p className="font-medium pl-5">
-						{selectedLabels || "None selected"}
+						{selectedLabels || t('noneSelected', 'None selected')}
 					</p>
 				</div>
 			);
@@ -198,7 +199,7 @@ function ResponseDisplay({
 				return (
 					<p className="text-sm text-muted-foreground flex items-center gap-1.5">
 						<CheckCircle2 className="h-4 w-4 text-emerald-500" />
-						Response submitted.
+						{t('responseSubmitted', 'Response submitted.')}
 					</p>
 				);
 			}
@@ -207,7 +208,7 @@ function ResponseDisplay({
 				<div className="text-sm space-y-1">
 					<p className="text-muted-foreground flex items-center gap-1.5">
 						<CheckCircle2 className="h-4 w-4 text-emerald-500" />
-						Response submitted:
+						{t('responseSubmitted2', 'Response submitted:')}
 					</p>
 					<div className="pl-5 space-y-0.5">
 						{entries.map(([fieldId, value]) => {
@@ -221,7 +222,7 @@ function ResponseDisplay({
 									: String(value);
 							return (
 								<p key={fieldId}>
-									<span className="text-muted-foreground">{label}:</span>{" "}
+									<span className="text-muted-foreground">{`${label}:`}</span>{" "}
 									<span className="font-medium">{displayValue}</span>
 								</p>
 							);
@@ -242,6 +243,7 @@ function SingleChoiceForm({
 	onSubmit: (value: any) => void;
 	isDisabled: boolean;
 }) {
+	const { t } = useTranslation("chat");
 	const [selected, setSelected] = useState<string>("");
 	const [freeformValue, setFreeformValue] = useState("");
 
@@ -293,7 +295,7 @@ function SingleChoiceForm({
 
 			{activeFreeform && selected === activeFreeform.id && (
 				<Input
-					placeholder="Enter your answer..."
+					placeholder={t('enterYourAnswer', 'Enter your answer...')}
 					value={freeformValue}
 					onChange={(e) => setFreeformValue(e.target.value)}
 					disabled={isDisabled}
@@ -306,7 +308,7 @@ function SingleChoiceForm({
 				onClick={handleSubmit}
 				disabled={isDisabled || !selected}
 			>
-				Submit
+				{t('submit', 'Submit')}
 			</Button>
 		</div>
 	);
@@ -321,6 +323,7 @@ function MultipleChoiceForm({
 	onSubmit: (value: any) => void;
 	isDisabled: boolean;
 }) {
+	const { t } = useTranslation("chat");
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 
 	const toggle = useCallback((id: string) => {
@@ -338,10 +341,10 @@ function MultipleChoiceForm({
 	const validationError = useMemo(() => {
 		const count = selected.size;
 		if (config.min_selections && count < config.min_selections) {
-			return `Select at least ${config.min_selections}`;
+			return t('selectAtLeastMin_selections', 'Select at least {{min_selections}}', { min_selections: config.min_selections });
 		}
 		if (config.max_selections && count > config.max_selections) {
-			return `Select at most ${config.max_selections}`;
+			return t('selectAtMostMax_selections', 'Select at most {{max_selections}}', { max_selections: config.max_selections });
 		}
 		return null;
 	}, [selected, config.min_selections, config.max_selections]);
@@ -383,8 +386,8 @@ function MultipleChoiceForm({
 					{config.min_selections && config.max_selections
 						? `Select ${config.min_selections}–${config.max_selections} options`
 						: config.min_selections
-							? `Select at least ${config.min_selections}`
-							: `Select at most ${config.max_selections}`}
+							? t('selectAtLeastMin_selections', 'Select at least {{min_selections}}', { min_selections: config.min_selections })
+							: t('selectAtMostMax_selections', 'Select at most {{max_selections}}', { max_selections: config.max_selections })}
 				</p>
 			)}
 
@@ -397,7 +400,7 @@ function MultipleChoiceForm({
 				onClick={handleSubmit}
 				disabled={isDisabled || selected.size === 0 || !!validationError}
 			>
-				Submit
+				{t('submit', 'Submit')}
 			</Button>
 		</div>
 	);
@@ -414,6 +417,7 @@ function FormFieldInput({
 	onChange: (value: any) => void;
 	isDisabled: boolean;
 }) {
+	const { t } = useTranslation("chat");
 	switch (field.field_type) {
 		case "text":
 			return (
@@ -453,7 +457,7 @@ function FormFieldInput({
 					disabled={isDisabled}
 				>
 					<SelectTrigger id={`field-${field.id}`}>
-						<SelectValue placeholder="Select an option..." />
+						<SelectValue placeholder={t('selectAnOption', 'Select an option...')} />
 					</SelectTrigger>
 					<SelectContent>
 						{field.options?.map((opt) => (
@@ -614,7 +618,7 @@ function renderSchemaField({
 					disabled={isDisabled}
 				>
 					<SelectTrigger id={id}>
-						<SelectValue placeholder="Select an option..." />
+						<SelectValue placeholder={i18next.t('selectAnOption', 'Select an option...')} />
 					</SelectTrigger>
 					<SelectContent>
 						{property.enum.map((option) => {
@@ -772,12 +776,12 @@ function renderSchemaField({
 								size="sm"
 								onClick={addItem}
 							>
-								<Plus className="h-3 w-3 mr-1" /> Add
+								<Plus className="h-3 w-3 mr-1" /> {i18next.t('add', 'Add')}
 							</Button>
 						)}
 					</div>
 					{arrayValue.length === 0 && (
-						<p className="text-xs text-muted-foreground italic">No items</p>
+						<p className="text-xs text-muted-foreground italic">{i18next.t('noItems', 'No items')}</p>
 					)}
 					{arrayValue.map((item, index) => (
 						<div
@@ -786,7 +790,7 @@ function renderSchemaField({
 						>
 							<div className="flex items-center justify-between">
 								<span className="text-xs font-medium text-muted-foreground">
-									Item {index + 1}
+									{i18next.t('item', 'Item')} {index + 1}
 								</span>
 								{!isDisabled && (
 									<Button
@@ -864,12 +868,12 @@ function renderSchemaField({
 								size="sm"
 								onClick={addItem}
 							>
-								<Plus className="h-3 w-3 mr-1" /> Add
+								<Plus className="h-3 w-3 mr-1" /> {i18next.t('add', 'Add')}
 							</Button>
 						)}
 					</div>
 					{arrayValue.length === 0 && (
-						<p className="text-xs text-muted-foreground italic">No items</p>
+						<p className="text-xs text-muted-foreground italic">{i18next.t('noItems', 'No items')}</p>
 					)}
 					{arrayValue.map((item, index) => (
 						<div key={index} className="flex items-center gap-2">
@@ -947,7 +951,7 @@ function renderSchemaField({
 						}
 					}}
 					disabled={isDisabled}
-					placeholder={description ?? "Enter JSON array"}
+					placeholder={description ?? i18next.t('enterJsonArray', 'Enter JSON array')}
 					className="font-mono text-xs"
 				/>
 			</div>
@@ -1000,6 +1004,7 @@ function FormInteractionForm({
 	onSubmit: (value: any) => void;
 	isDisabled: boolean;
 }) {
+	const { t } = useTranslation("chat");
 	const schema = useMemo(() => asSchema(config), [config]);
 
 	const [values, setValues] = useState<Record<string, any>>(() => {
@@ -1064,7 +1069,7 @@ function FormInteractionForm({
 
 				{missingRequired.length > 0 && Object.keys(values).length > 0 && (
 					<p className="text-xs text-destructive">
-						Fill in required fields:{" "}
+						{t('fillInRequiredFields', 'Fill in required fields:')}{" "}
 						{missingRequired.map((f) => f.label).join(", ")}
 					</p>
 				)}
@@ -1074,7 +1079,7 @@ function FormInteractionForm({
 					onClick={handleSubmit}
 					disabled={isDisabled || missingRequired.length > 0}
 				>
-					Submit
+					{t('submit', 'Submit')}
 				</Button>
 			</div>
 		);
@@ -1108,7 +1113,7 @@ function FormInteractionForm({
 
 			{missingRequired.length > 0 && Object.keys(values).length > 0 && (
 				<p className="text-xs text-destructive">
-					Fill in required fields:{" "}
+					{t('fillInRequiredFields', 'Fill in required fields:')}{" "}
 					{missingRequired.map((f) => f.label).join(", ")}
 				</p>
 			)}
@@ -1118,7 +1123,7 @@ function FormInteractionForm({
 				onClick={handleSubmit}
 				disabled={isDisabled || missingRequired.length > 0}
 			>
-				Submit
+				{t('submit', 'Submit')}
 			</Button>
 		</div>
 	);
@@ -1183,7 +1188,7 @@ function getCompactResponseSummary(interaction: IInteractionRequest): string {
 						(id) =>
 							interaction_type.options.find((o) => o.id === id)?.label ?? id,
 					)
-					.join(", ") || "None selected"
+					.join(", ") || i18next.t('noneSelected', 'None selected')
 			);
 		}
 		case "form": {
@@ -1305,6 +1310,7 @@ export function Interaction({
 	onCollapse,
 	forceExpanded,
 }: InteractionProps & { onCollapse?: () => void; forceExpanded?: boolean }) {
+	const { t } = useTranslation("chat");
 	const remaining = useCountdown(interaction.expires_at);
 	const isPending = interaction.status === "pending" && remaining > 0;
 	const isDisabled = disabled || !isPending;
@@ -1397,12 +1403,12 @@ export function Interaction({
 				(interaction.status === "pending" && remaining <= 0) ? (
 					<p className="text-sm text-muted-foreground flex items-center gap-1.5">
 						<XCircle className="h-4 w-4 text-red-500" />
-						This interaction has expired.
+						{t('thisInteractionHasExpired', 'This interaction has expired.')}
 					</p>
 				) : interaction.status === "cancelled" ? (
 					<p className="text-sm text-muted-foreground flex items-center gap-1.5">
 						<AlertCircle className="h-4 w-4" />
-						This interaction was cancelled.
+						{t('thisInteractionWasCancelled', 'This interaction was cancelled.')}
 					</p>
 				) : interaction.status === "responded" ? (
 					<ResponseDisplay

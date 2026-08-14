@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { useDebounce } from "@uidotdev/usehooks";
 import {
@@ -103,6 +104,7 @@ function prettyCategory(category: string): string {
 }
 
 export function PackageCard({ pkg }: { pkg: PackageSummary }) {
+	const { t } = useTranslation("store");
 	const { primaryHue, isDark } = useThemeInfo();
 	const gradient = useMemo(
 		() => hashToGradient(pkg.id, primaryHue, isDark),
@@ -195,9 +197,7 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 								)}
 							</span>
 						)}
-						<span className="rounded-md border border-white/20 bg-white/12 px-2 py-0.5 font-mono text-[10px] text-white/85">
-							v{pkg.latestVersion}
-						</span>
+						<span className="rounded-md border border-white/20 bg-white/12 px-2 py-0.5 font-mono text-[10px] text-white/85">{`v${pkg.latestVersion}`}</span>
 					</div>
 				</div>
 
@@ -211,7 +211,7 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 							{formatCompact(pkg.downloadCount)}
 						</div>
 						<div className="mt-0.5 text-[9px] uppercase tracking-wider text-white/55">
-							Installs
+							{t("installs", "Installs")}
 						</div>
 					</div>
 					<div className="rounded-xl border border-white/12 bg-white/8 px-2 py-2 text-center backdrop-blur-sm">
@@ -226,7 +226,7 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 							)}
 						</div>
 						<div className="mt-0.5 text-[9px] uppercase tracking-wider text-white/55">
-							Rating
+							{t("rating", "Rating")}
 						</div>
 					</div>
 					<div className="rounded-xl border border-white/12 bg-white/8 px-2 py-2 text-center backdrop-blur-sm">
@@ -234,7 +234,7 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 							{pkg.price > 0 ? `€${(pkg.price / 100).toFixed(2)}` : "Free"}
 						</div>
 						<div className="mt-0.5 text-[9px] uppercase tracking-wider text-white/55">
-							Price
+							{t("price", "Price")}
 						</div>
 					</div>
 				</div>
@@ -274,6 +274,7 @@ export function PackageDetailWrapper({
 	auth: PackagesStoreAuth;
 	getPackageStatus?: (packageId: string) => CompileStatus | undefined;
 }) {
+	const { t } = useTranslation("store");
 	const searchParams = useSearchParams();
 	const router = useRouter();
 	const packageId = searchParams.get("id") ?? "";
@@ -283,16 +284,24 @@ export function PackageDetailWrapper({
 		if (!purchaseStatus) return;
 		if (purchaseStatus === "success") {
 			toast.success(
-				"Purchase successful! You now have access to this package.",
+				t(
+					"purchaseSuccessfulYouNowHaveAccessToThisPackage",
+					"Purchase successful! You now have access to this package.",
+				),
 				{ duration: 5000 },
 			);
 		} else if (purchaseStatus === "canceled") {
-			toast.info("Purchase was canceled. You can try again anytime.");
+			toast.info(
+				t(
+					"purchaseCanceledTryAgainAnytime",
+					"Purchase was canceled. You can try again anytime.",
+				),
+			);
 		}
 		const url = new URL(window.location.href);
 		url.searchParams.delete("purchase");
 		router.replace(url.pathname + url.search, { scroll: false });
-	}, [purchaseStatus, router]);
+	}, [purchaseStatus, router, t]);
 
 	const handleBack = useCallback(() => {
 		router.replace(getPackageOverviewHref(searchParams), {
@@ -305,15 +314,36 @@ export function PackageDetailWrapper({
 		<StorePackageDetail
 			packageId={packageId}
 			onBack={handleBack}
-			onInstallSuccess={() => toast.success("Package installed successfully")}
+			onInstallSuccess={() =>
+				toast.success(
+					t("packageInstalledSuccessfully", "Package installed successfully"),
+				)
+			}
 			onUninstallSuccess={() =>
-				toast.success("Package uninstalled successfully")
+				toast.success(
+					t(
+						"packageUninstalledSuccessfully",
+						"Package uninstalled successfully",
+					),
+				)
 			}
 			onInstallError={(error) =>
-				toast.error(`Failed to install package: ${getErrorMessage(error)}`)
+				toast.error(
+					t(
+						"failedToInstallPackageMessage",
+						"Failed to install package: {{message}}",
+						{ message: getErrorMessage(error) },
+					),
+				)
 			}
 			onUninstallError={(error) =>
-				toast.error(`Failed to uninstall package: ${getErrorMessage(error)}`)
+				toast.error(
+					t(
+						"failedToUninstallPackageMessage",
+						"Failed to uninstall package: {{message}}",
+						{ message: getErrorMessage(error) },
+					),
+				)
 			}
 			onDeleteSuccess={handleBack}
 			fetcher={fetcher}
@@ -437,6 +467,7 @@ export function PackageListContent({
 	fetcher,
 	auth,
 }: { fetcher: GenericFetcher; auth: PackagesStoreAuth }) {
+	const { t } = useTranslation("store");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
@@ -499,7 +530,7 @@ export function PackageListContent({
 				<div className="relative flex-1">
 					<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
 					<Input
-						placeholder="Search packages..."
+						placeholder={t("searchPackages", "Search packages...")}
 						value={searchQuery}
 						onChange={(e) => {
 							setSearchQuery(e.target.value);
@@ -519,14 +550,22 @@ export function PackageListContent({
 					>
 						<SelectTrigger className="w-37.5">
 							<SlidersHorizontal className="mr-2 h-4 w-4" />
-							<SelectValue placeholder="Sort by" />
+							<SelectValue placeholder={t("sortBy", "Sort by")} />
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="downloads">Most Downloads</SelectItem>
-							<SelectItem value="relevance">Relevance</SelectItem>
-							<SelectItem value="name">Name</SelectItem>
-							<SelectItem value="updated_at">Recently Updated</SelectItem>
-							<SelectItem value="created_at">Newest</SelectItem>
+							<SelectItem value="downloads">
+								{t("mostDownloads", "Most Downloads")}
+							</SelectItem>
+							<SelectItem value="relevance">
+								{t("relevance", "Relevance")}
+							</SelectItem>
+							<SelectItem value="name">{t("name", "Name")}</SelectItem>
+							<SelectItem value="updated_at">
+								{t("recentlyUpdated", "Recently Updated")}
+							</SelectItem>
+							<SelectItem value="created_at">
+								{t("newest", "Newest")}
+							</SelectItem>
 						</SelectContent>
 					</Select>
 
@@ -543,14 +582,15 @@ export function PackageListContent({
 						}`}
 					>
 						<Shield className="h-4 w-4" />
-						Verified
+						{t("verified", "Verified")}
 					</button>
 				</div>
 			</div>
 
 			{searchResults.data && (
 				<p className="text-xs text-muted-foreground/60">
-					{searchResults.data.totalCount.toLocaleString()} packages found
+					{searchResults.data.totalCount.toLocaleString()}{" "}
+					{t("packagesFound", "packages found")}
 				</p>
 			)}
 
@@ -563,9 +603,14 @@ export function PackageListContent({
 			) : searchResults.data?.packages.length === 0 ? (
 				<div className="flex flex-col items-center justify-center py-20 text-center">
 					<Package className="w-12 h-12 text-muted-foreground/30 mb-3" />
-					<h3 className="text-lg font-semibold">No packages found</h3>
+					<h3 className="text-lg font-semibold">
+						{t("noPackagesFound", "No packages found")}
+					</h3>
 					<p className="text-sm text-muted-foreground mt-1">
-						Try adjusting your search or filters
+						{t(
+							"tryAdjustingYourSearchOrFilters",
+							"Try adjusting your search or filters",
+						)}
 					</p>
 				</div>
 			) : swimlaneGroups && swimlaneGroups.size > 1 ? (
@@ -590,18 +635,16 @@ export function PackageListContent({
 						disabled={offset === 0}
 						className="rounded-full text-sm text-muted-foreground/60 border border-border/30 hover:bg-muted/30 px-5 py-2 transition-colors disabled:opacity-40"
 					>
-						Previous
+						{t("previous", "Previous")}
 					</button>
-					<span className="text-xs text-muted-foreground/60">
-						{currentPage} / {totalPages}
-					</span>
+					<span className="text-xs text-muted-foreground/60">{`${currentPage} / ${totalPages}`}</span>
 					<button
 						type="button"
 						onClick={() => setOffset(offset + limit)}
 						disabled={currentPage >= totalPages}
 						className="rounded-full text-sm text-muted-foreground/60 border border-border/30 hover:bg-muted/30 px-5 py-2 transition-colors disabled:opacity-40"
 					>
-						Next
+						{t("next", "Next")}
 					</button>
 				</div>
 			)}
@@ -614,6 +657,7 @@ function PageContent({
 	auth,
 	getPackageStatus,
 }: PackagesStorePageProps) {
+	const { t } = useTranslation("store");
 	const searchParams = useSearchParams();
 	const packageId = searchParams.get("id");
 
@@ -634,7 +678,10 @@ function PageContent({
 			<div className="mx-auto w-full max-w-7xl space-y-8">
 				<ExploreHubHeader
 					active="packages"
-					subtitle="Discover and install WASM node packages."
+					subtitle={t(
+						"discoverAndInstallWasmNodePackages",
+						"Discover and install WASM node packages.",
+					)}
 				/>
 				<PackageListContent fetcher={fetcher} auth={auth} />
 			</div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as SheetPrimitive from "@radix-ui/react-dialog";
 import { XIcon } from "lucide-react";
 import type * as React from "react";
@@ -56,14 +57,15 @@ function SheetContent({
 	/** Override the backdrop overlay (e.g. raise its z-index above a high-z host panel). */
 	overlayClassName?: string;
 }) {
+	const { t } = useTranslation("common");
 	const insetTop =
 		side === "bottom"
 			? "0px"
-			: "var(--fl-safe-top, env(safe-area-inset-top, 0px))";
+			: `var(--fl-safe-top, env(safe-area-inset-top, 0px))`;
 	const insetBottom =
 		side === "top"
 			? "0px"
-			: "var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px))";
+			: `var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px))`;
 
 	const safeAreaStyle: React.CSSProperties = {
 		paddingTop: insetTop,
@@ -104,7 +106,7 @@ function SheetContent({
 					className="ring-offset-background focus:ring-ring data-[state=open]:bg-secondary absolute right-4 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none z-20"
 				>
 					<XIcon className="size-4" />
-					<span className="sr-only">Close</span>
+					<span className="sr-only">{t('close', 'Close')}</span>
 				</SheetPrimitive.Close>
 			</SheetPrimitive.Content>
 		</SheetPortal>

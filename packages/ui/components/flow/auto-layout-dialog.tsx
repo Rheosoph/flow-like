@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { memo, useMemo } from "react";
 import type React from "react";
 import type { LayoutStyle } from "../../lib/flow-auto-layout";
@@ -42,14 +43,10 @@ const LAYOUT_OPTIONS: LayoutOption[] = [
 // ─── Animated SVG Previews ──────────────────────────────────────────────
 
 function AnimatedCompact() {
+	const { t } = useTranslation("flow");
 	return (
 		<svg viewBox="0 0 120 80" className="w-full h-full" aria-hidden>
-			<style>{`
-				@keyframes fadeSlide { 0% { opacity: 0; transform: translateX(-8px); } 100% { opacity: 1; transform: translateX(0); } }
-				.cp-node { animation: fadeSlide 0.5s ease-out both; }
-				.cp-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: cpDash 1s ease-out 0.4s forwards; }
-				@keyframes cpDash { to { stroke-dashoffset: 0; } }
-			`}</style>
+			<style>{`@keyframes fadeSlide { 0% { opacity: 0; transform: translateX(-8px); } 100% { opacity: 1; transform: translateX(0); } } .cp-node { animation: fadeSlide 0.5s ease-out both; } .cp-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: cpDash 1s ease-out 0.4s forwards; } @keyframes cpDash { to { stroke-dashoffset: 0; } }`}</style>
 			<rect
 				className="cp-node"
 				style={{ animationDelay: "0s" }}
@@ -277,14 +274,10 @@ function AnimatedCompact() {
 }
 
 function AnimatedBalanced() {
+	const { t } = useTranslation("flow");
 	return (
 		<svg viewBox="0 0 120 80" className="w-full h-full" aria-hidden>
-			<style>{`
-				@keyframes balSlide { 0% { opacity: 0; transform: translateX(-6px); } 100% { opacity: 1; transform: translateX(0); } }
-				.bal-node { animation: balSlide 0.5s ease-out both; }
-				.bal-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: balDash 1s ease-out 0.4s forwards; }
-				@keyframes balDash { to { stroke-dashoffset: 0; } }
-			`}</style>
+			<style>{`@keyframes balSlide { 0% { opacity: 0; transform: translateX(-6px); } 100% { opacity: 1; transform: translateX(0); } } .bal-node { animation: balSlide 0.5s ease-out both; } .bal-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: balDash 1s ease-out 0.4s forwards; } @keyframes balDash { to { stroke-dashoffset: 0; } }`}</style>
 			<rect
 				className="bal-node"
 				style={{ animationDelay: "0s" }}
@@ -512,14 +505,10 @@ function AnimatedBalanced() {
 }
 
 function AnimatedExpanded() {
+	const { t } = useTranslation("flow");
 	return (
 		<svg viewBox="0 0 120 80" className="w-full h-full" aria-hidden>
-			<style>{`
-				@keyframes expSlide { 0% { opacity: 0; transform: translateX(-6px); } 100% { opacity: 1; transform: translateX(0); } }
-				.exp-node { animation: expSlide 0.6s ease-out both; }
-				.exp-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: expDash 1s ease-out 0.4s forwards; }
-				@keyframes expDash { to { stroke-dashoffset: 0; } }
-			`}</style>
+			<style>{`@keyframes expSlide { 0% { opacity: 0; transform: translateX(-6px); } 100% { opacity: 1; transform: translateX(0); } } .exp-node { animation: expSlide 0.6s ease-out both; } .exp-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: expDash 1s ease-out 0.4s forwards; } @keyframes expDash { to { stroke-dashoffset: 0; } }`}</style>
 			<rect
 				className="exp-node"
 				style={{ animationDelay: "0s" }}
@@ -718,6 +707,7 @@ export const AutoLayoutDialog = memo(function AutoLayoutDialog({
 	onSelect,
 	selectionCount = 0,
 }: AutoLayoutDialogProps) {
+	const { t } = useTranslation("flow");
 	const scoped = selectionCount > 1;
 	const cards = useMemo(
 		() =>
@@ -758,19 +748,19 @@ export const AutoLayoutDialog = memo(function AutoLayoutDialog({
 				onDoubleClick={(e) => e.stopPropagation()}
 			>
 				<DialogHeader>
-					<DialogTitle>Auto Layout</DialogTitle>
+					<DialogTitle>{t('autoLayout', 'Auto Layout')}</DialogTitle>
 					<DialogDescription>
 						{scoped
-							? `Arranges the ${selectionCount} selected nodes left-to-right along their execution flow. The rest of the board stays where it is.`
-							: "Arranges every node in this layer left-to-right along its execution flow, with data nodes banded beneath the node that consumes them."}
+							? t('arrangesTheSelectioncountSelectedNodesLefttorightAlongTheirExecutionFlowTheRestOfTheBoardStaysWhereItIs', 'Arranges the {{selectionCount}} selected nodes left-to-right along their execution flow. The rest of the board stays where it is.', { selectionCount })
+							: t('arrangesEveryNodeInThisLayerLefttorightAlongItsExecutionFlowWithDataNodesBandedBeneathTheNodeThatConsumesThem', 'Arranges every node in this layer left-to-right along its execution flow, with data nodes banded beneath the node that consumes them.')}
 					</DialogDescription>
 				</DialogHeader>
 				<div className="grid grid-cols-3 gap-3 mt-1">{cards}</div>
 				<p className="text-xs text-muted-foreground">
 					{scoped
-						? "Press Escape and clear the selection to lay out the whole layer."
-						: "Select two or more nodes first to lay out only that part of the board."}{" "}
-					Undo with ⌘Z.
+						? t('pressEscapeAndClearTheSelectionToLayOutTheWholeLayer', 'Press Escape and clear the selection to lay out the whole layer.')
+						: t('selectTwoOrMoreNodesFirstToLayOutOnlyThatPartOfTheBoard', 'Select two or more nodes first to lay out only that part of the board.')}{" "}
+					{t('undoWithZ', 'Undo with ⌘Z.')}
 				</p>
 			</DialogContent>
 		</Dialog>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { SlateElementProps } from "platejs";
 
 import { SlateElement } from "platejs";
@@ -16,6 +17,7 @@ export interface TFocusNodeElement {
 export function FocusNodeElementStatic(
 	props: SlateElementProps<TFocusNodeElement>,
 ) {
+	const { t } = useTranslation("common");
 	const { nodeId, nodeName, isInvalid } = props.element;
 
 	// Invalid node - show gray muted badge
@@ -40,7 +42,7 @@ export function FocusNodeElementStatic(
 				"
 				attributes={{
 					...props.attributes,
-					title: "Node not found in current flow",
+					title: t('nodeNotFoundInCurrentFlow', 'Node not found in current flow'),
 				}}
 			>
 				<svg

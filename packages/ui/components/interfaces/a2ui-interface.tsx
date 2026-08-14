@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useRef } from "react";
 import { normalizeBoardVersion } from "../../lib/schema/flow/board-version";
 import { A2UIRenderer } from "../a2ui/A2UIRenderer";
@@ -14,6 +15,7 @@ export function A2UIInterface({
 	toolbarRef,
 	sidebarRef,
 }: IUseInterfaceProps) {
+	const { t } = useTranslation("interfaces");
 	const { surfaces, handleServerMessage, getAllSurfaces } = useSurfaceManager();
 	const streamRef = useRef<EventSource | null>(null);
 
@@ -60,7 +62,7 @@ export function A2UIInterface({
 	if (allSurfaces.length === 0) {
 		return (
 			<div className="flex items-center justify-center h-full text-muted-foreground">
-				<p>Waiting for UI...</p>
+				<p>{t('waitingForUi', 'Waiting for UI...')}</p>
 			</div>
 		);
 	}

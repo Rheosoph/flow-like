@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useDebounce } from "@uidotdev/usehooks";
 import type { Node, NodeProps } from "@xyflow/react";
 import {
@@ -36,6 +37,7 @@ export type FlowNode = Node<
 >;
 
 export function PreviewFlowNode(props: NodeProps<FlowNode>) {
+	const { t } = useTranslation("flow");
 	const { resolvedTheme } = useTheme();
 	const [executing, setExecuting] = useState(false);
 	const [isExec, setIsExec] = useState(false);

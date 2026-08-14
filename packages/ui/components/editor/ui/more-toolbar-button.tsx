@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import type { DropdownMenuProps } from "@radix-ui/react-dropdown-menu";
@@ -24,6 +25,7 @@ import {
 import { ToolbarButton } from "./toolbar";
 
 export function MoreToolbarButton(props: DropdownMenuProps) {
+	const { t } = useTranslation("common");
 	const editor = useEditorRef();
 	const [open, setOpen] = React.useState(false);
 
@@ -48,7 +50,7 @@ export function MoreToolbarButton(props: DropdownMenuProps) {
 						}}
 					>
 						<KeyboardIcon />
-						Keyboard input
+						{t('keyboardInput', 'Keyboard input')}
 					</DropdownMenuItem>
 
 					<DropdownMenuItem
@@ -60,7 +62,7 @@ export function MoreToolbarButton(props: DropdownMenuProps) {
 						}}
 					>
 						<SuperscriptIcon />
-						Superscript
+						{t('superscript', 'Superscript')}
 						{/* (⌘+,) */}
 					</DropdownMenuItem>
 					<DropdownMenuItem
@@ -72,7 +74,7 @@ export function MoreToolbarButton(props: DropdownMenuProps) {
 						}}
 					>
 						<SubscriptIcon />
-						Subscript
+						{t('subscript', 'Subscript')}
 						{/* (⌘+.) */}
 					</DropdownMenuItem>
 				</DropdownMenuGroup>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
 import { useComponentEventTrigger } from "../ActionHandler";
@@ -31,12 +32,13 @@ export function A2UIBoundingBoxOverlay({
 	style,
 	componentId,
 }: ComponentProps<BoundingBoxOverlayComponent>) {
+	const { t } = useTranslation("common");
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const imageRef = useRef<HTMLImageElement>(null);
 
 	const src = useResolved<string>(component.src);
-	const alt = useResolved<string>(component.alt) ?? "Image with bounding boxes";
+	const alt = useResolved<string>(component.alt) ?? t('imageWithBoundingBoxes', 'Image with bounding boxes');
 	const rawBoxes = useResolved<unknown>(component.boxes);
 	const showLabels = useResolved<boolean>(component.showLabels) ?? true;
 	const showConfidence = useResolved<boolean>(component.showConfidence) ?? true;
@@ -188,8 +190,8 @@ export function A2UIBoundingBoxOverlay({
 							disabled={!interactive}
 							aria-label={
 								box.label
-									? `Bounding box: ${box.label}`
-									: `Bounding box ${index + 1}`
+									? t('boundingBoxLabel', 'Bounding box: {{label}}', { label: box.label })
+									: t('boundingBoxVal', 'Bounding box {{val}}', { val: index + 1 })
 							}
 							style={{
 								left: `${left}px`,

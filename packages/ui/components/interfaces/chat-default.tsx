@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import * as Sentry from "@sentry/nextjs";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -542,6 +543,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	toolbarRef,
 	sidebarRef,
 }: Readonly<IUseInterfaceProps>) {
+	const { t } = useTranslation("interfaces");
 	const router = useRouter();
 	const backend = useBackend();
 	const executionEngine = useExecutionEngine();
@@ -849,7 +851,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 						}}
 					>
 						<HistoryIcon className="w-3 h-3" />
-						Chat History
+						{t('chatHistory', 'Chat History')}
 					</div>
 				</HoverCardContent>
 			</HoverCard>,
@@ -872,7 +874,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				>
 					<div className="flex items-center gap-2 text-sm font-medium">
 						<SquarePenIcon className="w-3 h-3" />
-						New Chat
+						{t('newChat', 'New Chat')}
 					</div>
 				</HoverCardContent>
 			</HoverCard>,
@@ -955,7 +957,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 							size="sm"
 							className="rounded-full px-4 gap-2 font-medium"
 						>
-							Navigate
+							{t('navigate', 'Navigate')}
 							<ChevronDownIcon className="h-3.5 w-3.5 opacity-60" />
 						</Button>
 					</DropdownMenuTrigger>
@@ -1731,7 +1733,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			// (errors are run logs, not exceptions), so surface it explicitly.
 			if ((result?.log_level ?? 0) >= 3) {
 				toast.error(
-					"Widget action failed — check the flow's Runs panel for the failing node.",
+					t('widgetActionFailedCheckTheFlowsRunsPanelForTheFailingNode', 'Widget action failed — check the flow\'s Runs panel for the failing node.'),
 				);
 			}
 
@@ -1775,7 +1777,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					<div className="flex h-full flex-col items-center justify-center gap-3">
 						<Loader2Icon className="h-6 w-6 animate-spin text-muted-foreground" />
 						<p className="text-sm text-muted-foreground">
-							Loading conversation...
+							{t('loadingConversation', 'Loading conversation...')}
 						</p>
 					</div>
 				) : showWelcome ? (
@@ -1814,19 +1816,18 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			>
 				<AlertDialogContent>
 					<AlertDialogHeader>
-						<AlertDialogTitle>Send prefilled message?</AlertDialogTitle>
+						<AlertDialogTitle>{t('sendPrefilledMessage', 'Send prefilled message?')}</AlertDialogTitle>
 						<AlertDialogDescription>
-							This chat was opened with a prefilled message. Please review it
-							before sending:
+							{t('thisChatWasOpenedWithAPrefilledMessagePleaseReviewItBeforeSending', "This chat was opened with a prefilled message. Please review it before sending:")}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<div className="rounded-md bg-muted p-3 text-sm max-h-48 overflow-y-auto wrap-break-word whitespace-pre-wrap">
 						{prefilledMessage}
 					</div>
 					<AlertDialogFooter>
-						<AlertDialogCancel>Cancel</AlertDialogCancel>
+						<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
 						<AlertDialogAction onClick={handlePrefilledConfirm}>
-							Send
+							{t('send', 'Send')}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>

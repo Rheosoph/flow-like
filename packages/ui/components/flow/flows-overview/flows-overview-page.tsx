@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { SearchIcon, WorkflowIcon, XIcon } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -37,8 +38,6 @@ import {
 } from "./flows-overview-model";
 import {
 	AI_ACT_MAX_POINTS,
-	BAND_DESCRIPTOR,
-	BAND_LABEL,
 	BAND_SQUARE,
 	BAND_TEXT,
 	DIMENSION_LABEL,
@@ -58,6 +57,7 @@ function DimensionControl({
 	sortDimension: IScoreCategory | null;
 	onSort: (dimension: IScoreCategory | null) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	return (
 		<div className="no-scrollbar inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-md border bg-muted/40 p-0.5">
 			<button
@@ -71,18 +71,19 @@ function DimensionControl({
 						: "text-muted-foreground hover:text-foreground",
 				)}
 			>
-				Weakest first
+				{t('weakestFirst', 'Weakest first')}
 			</button>
 			{SCORE_CATEGORIES.map((category) => {
 				const minimum = appWideMinimum(rows, category);
 				const active = sortDimension === category;
+				const categoryLabel = t(category, DIMENSION_LABEL[category]);
 				return (
 					<button
 						key={category}
 						type="button"
 						aria-pressed={active}
 						onClick={() => onSort(active ? null : category)}
-						title={`Sort every band by ${DIMENSION_LABEL[category].toLowerCase()}`}
+						title={t('sortEveryBandByVal', 'Sort every band by {{val}}', { val: categoryLabel })}
 						className={cn(
 							"inline-flex h-7 shrink-0 items-center gap-1.5 rounded px-2.5 text-xs font-medium transition-colors",
 							active
@@ -90,7 +91,7 @@ function DimensionControl({
 								: "text-muted-foreground hover:text-foreground",
 						)}
 					>
-						{DIMENSION_LABEL[category]}
+						{categoryLabel}
 						{minimum !== undefined ? (
 							<span
 								className={cn(
@@ -117,7 +118,20 @@ function BandSection({
 	rows: IFlowRow[];
 	children: React.ReactNode;
 }>) {
+	const { t } = useTranslation("flow");
 	if (rows.length === 0) return null;
+	const label = {
+		flagged: t('flagged', 'Flagged'),
+		watch: t('watch', 'Watch'),
+		good: t('good', 'Good'),
+		unscored: t('notScored', 'Not scored'),
+	}[band];
+	const description = {
+		flagged: t('weakestDimensionIsUnder4', 'Weakest dimension is under 4'),
+		watch: t('weakestDimensionIs4To6', 'Weakest dimension is 4 to 6'),
+		good: t('everyDimensionIs7OrBetter', 'Every dimension is 7 or better'),
+		unscored: t('noNodeDeclaresAScore', 'No Node declares a score'),
+	}[band];
 	return (
 		<section className="flex flex-col gap-2.5">
 			<div className="flex items-baseline gap-2">
@@ -128,13 +142,13 @@ function BandSection({
 					)}
 				/>
 				<h3 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground/80">
-					{BAND_LABEL[band]}
+					{label}
 				</h3>
 				<span className="font-mono text-[11px] tabular-nums text-muted-foreground">
 					{rows.length}
 				</span>
 				<span className="text-[11px] italic text-muted-foreground/60">
-					{BAND_DESCRIPTOR[band]}
+					{description}
 				</span>
 			</div>
 			{children}
@@ -170,6 +184,7 @@ export function FlowsOverviewPage({
 	pageHref,
 	eventsHref,
 }: Readonly<FlowsOverviewPageProps>) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const enabled = appId.length > 0;
 
@@ -280,13 +295,13 @@ export function FlowsOverviewPage({
 			<header className="flex flex-col gap-3">
 				<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 					<div className="min-w-0">
-						<h1 className="text-xl font-semibold tracking-tight">Flows</h1>
+						<h1 className="text-xl font-semibold tracking-tight">{t('flows', 'Flows')}</h1>
 						<p className="mt-0.5 text-xs text-muted-foreground">
-							Rated by the{" "}
+							{t('ratedByThe', 'Rated by the')}{" "}
 							<span className="font-medium text-foreground">
-								lowest-scoring node
+								{t('lowestscoringNode', 'lowest-scoring node')}
 							</span>{" "}
-							in each category — higher is better.
+							{t('inEachCategoryHigherIsBetter', 'in each category — higher is better.')}
 						</p>
 					</div>
 					<div className="flex items-center gap-2">
@@ -295,15 +310,15 @@ export function FlowsOverviewPage({
 							<Input
 								value={query}
 								onChange={(event) => setQuery(event.target.value)}
-								placeholder="Search flows, pages, events…"
-								aria-label="Search flows"
+								placeholder={t('searchFlowsPagesEvents', 'Search flows, pages, events…')}
+								aria-label={t('searchFlows', 'Search flows')}
 								className="h-9 border-border/60 bg-muted/40 pl-9 text-sm focus:bg-background"
 							/>
 							{query ? (
 								<button
 									type="button"
 									onClick={() => setQuery("")}
-									aria-label="Clear search"
+									aria-label={t('clearSearch', 'Clear search')}
 									className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/60 transition-colors hover:text-foreground"
 								>
 									<XIcon className="size-3.5" />
@@ -327,19 +342,17 @@ export function FlowsOverviewPage({
 						/>
 						{conformity !== undefined ? (
 							<p className="text-[11px] italic text-muted-foreground/70">
-								AI Act conformity scales on{" "}
+								{t('aiActConformityScalesOn', 'AI Act conformity scales on')}{" "}
 								<span className="font-mono not-italic">
-									min(security, governance)
+									{t('minsecurityGovernance', 'min(security, governance)')}
 								</span>{" "}
-								— weakest flow{" "}
+								{t('weakestFlow', '— weakest flow')}{" "}
 								<span
 									className={cn(
 										"font-mono not-italic",
 										BAND_TEXT[bandOf(conformity)],
 									)}
-								>
-									{conformity}/10
-								</span>{" "}
+								>{`${conformity}/10`}</span>{" "}
 								→{" "}
 								<span
 									className={cn(
@@ -381,9 +394,7 @@ export function FlowsOverviewPage({
 							setBoardCreation={setBoardCreation}
 						/>
 					) : visibleCount === 0 ? (
-						<p className="rounded-xl border border-dashed border-border/60 px-6 py-12 text-center text-sm text-muted-foreground">
-							No flow matches &ldquo;{query}&rdquo;.
-						</p>
+						<p className="rounded-xl border border-dashed border-border/60 px-6 py-12 text-center text-sm text-muted-foreground">{t('noFlowMatchesLdquoqueryrdquo', 'No flow matches &ldquo;{{query}}&rdquo;.', { query })}</p>
 					) : (
 						BAND_ORDER.map((band) => {
 							const bandRows = bands.get(band) ?? [];
@@ -442,20 +453,20 @@ function EmptyFlows({
 		React.SetStateAction<FlowLibraryBoardCreationState>
 	>;
 }>) {
+	const { t } = useTranslation("flow");
 	return (
 		<Card className="items-center justify-center gap-3 border-dashed border-border/60 bg-card/60 py-16">
 			<WorkflowIcon className="size-10 text-muted-foreground/40" />
 			<div className="text-center">
-				<p className="text-base font-semibold">No flows yet</p>
+				<p className="text-base font-semibold">{t('noFlowsYet', 'No flows yet')}</p>
 				<p className="mt-1 max-w-md text-sm text-muted-foreground">
-					A flow holds the nodes that do the work, plus any pages built on top
-					of it. Events bound on the Events page decide what starts it.
+					{t('aFlowHoldsTheNodesThatDoTheWorkPlusAnyPagesBuiltOnTopOfItEventsBoundOnTheEventsPageDecideWhatStartsIt', "A flow holds the nodes that do the work, plus any pages built on top of it. Events bound on the Events page decide what starts it.")}
 				</p>
 			</div>
 			<Button
 				onClick={() => setBoardCreation({ ...boardCreation, open: true })}
 			>
-				Create your first flow
+				{t('createYourFirstFlow', 'Create your first flow')}
 			</Button>
 		</Card>
 	);

@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown } from "lucide-react";
 import { useMemo } from "react";
@@ -40,6 +41,7 @@ export function WidgetVariable({
 	appId: string;
 	setValue: (value: unknown) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const enabled = appId !== "";
 	const { data: widgets, isLoading } = useInvoke(
@@ -143,13 +145,11 @@ export function WidgetVariable({
 					)}
 					{packageOptions.length > 0 && (
 						<SelectGroup>
-							<SelectLabel>Packages</SelectLabel>
+							<SelectLabel>{t('packages', 'Packages')}</SelectLabel>
 							{packageOptions.map((option) => (
 								<SelectItem key={option.selector} value={option.selector}>
 									{option.label}
-									<span className="text-muted-foreground">
-										· {option.packageId}
-									</span>
+									<span className="text-muted-foreground">{`· ${option.packageId}`}</span>
 								</SelectItem>
 							))}
 						</SelectGroup>

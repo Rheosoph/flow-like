@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { HeartFilledIcon } from "@radix-ui/react-icons";
 import { motion } from "framer-motion";
 import {
@@ -14,7 +15,7 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAssetImage } from "../../hooks/use-asset-image";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
-import { formatAppCategory } from "../../lib/app-category";
+import { useAppCategoryLabel } from "../../lib/app-category";
 import { categoryColor } from "../../lib/category-meta";
 import { type IApp, IAppVisibility } from "../../lib/schema/app/app";
 import type { IMetadata } from "../../lib/schema/bit/bit";
@@ -242,6 +243,7 @@ function SmallAppCard({
 		| "isOwned"
 	>
 >) {
+	const { t } = useTranslation("common");
 	const formatPrice = (price: number) => `€${(price / 100).toFixed(2)}`;
 	const thumbnail = useAssetImage(metadata?.thumbnail);
 	const handleCardKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -346,7 +348,7 @@ function SmallAppCard({
 								) : isOwned ? (
 									<div className="bg-emerald-500/20 rounded-full px-2.5 py-0.5 text-xs text-emerald-500/80 border-emerald-500/80 border font-medium flex flex-row items-center gap-1">
 										<HeartFilledIcon className="size-3" />
-										Yours
+										{t("yours", "Yours")}
 									</div>
 								) : (
 									<div className="bg-muted/20 text-muted-foreground rounded-full px-2.5 py-0.5 text-xs font-medium">
@@ -359,7 +361,8 @@ function SmallAppCard({
 
 					<div className="flex items-center justify-between">
 						<p className="text-xs text-muted-foreground truncate flex-1 mr-2">
-							{metadata?.description ?? "No description available"}
+							{metadata?.description ??
+								t("noDescriptionAvailable", "No description available")}
 						</p>
 
 						{app.rating_count > 0 && (
@@ -401,6 +404,8 @@ function ExtendedAppCard({
 		| "href"
 	>
 >) {
+	const { t } = useTranslation("common");
+	const categoryLabel = useAppCategoryLabel();
 	const formatPrice = (price: number) => `€${(price / 100).toFixed(2)}`;
 	const appName = metadata?.name ?? app.id;
 	const appIcon = metadata?.icon ?? "/app-logo.webp";
@@ -509,7 +514,11 @@ function ExtendedAppCard({
 							<MotionLink
 								href={settingsHref}
 								data-href={settingsHref}
-								aria-label={`Open settings for ${appName}`}
+								aria-label={t(
+									"openSettingsForAppname",
+									"Open settings for {{appName}}",
+									{ appName },
+								)}
 								onClick={(e) => {
 									e.stopPropagation();
 									onSettingsClick?.();
@@ -529,7 +538,11 @@ function ExtendedAppCard({
 						) : (
 							<motion.button
 								type="button"
-								aria-label={`Open settings for ${appName}`}
+								aria-label={t(
+									"openSettingsForAppname",
+									"Open settings for {{appName}}",
+									{ appName },
+								)}
 								onClick={(e) => {
 									e.preventDefault();
 									e.stopPropagation();
@@ -570,7 +583,7 @@ function ExtendedAppCard({
 								className="truncate text-[11px] font-semibold uppercase tracking-wider"
 								style={{ color: eyebrowColor }}
 							>
-								{formatAppCategory(app.primary_category)}
+								{categoryLabel(app.primary_category)}
 							</div>
 							<h3 className="truncate text-lg font-bold leading-tight text-white">
 								{appName}
@@ -580,7 +593,8 @@ function ExtendedAppCard({
 
 					{/* reserve two lines so the title + medallion sit at the same height on every card */}
 					<p className="line-clamp-2 min-h-12 text-sm leading-relaxed text-white/75">
-						{metadata?.description ?? "No description available"}
+						{metadata?.description ??
+							t("noDescriptionAvailable", "No description available")}
 					</p>
 
 					<div className="mt-1 flex items-center justify-between gap-2">
@@ -596,7 +610,9 @@ function ExtendedAppCard({
 									</span>
 								</>
 							) : (
-								<span className="text-xs text-white/50">No ratings yet</span>
+								<span className="text-xs text-white/50">
+									{t("noRatingsYet", "No ratings yet")}
+								</span>
 							)}
 						</div>
 						{app.visibility === IAppVisibility.Public &&
@@ -607,7 +623,7 @@ function ExtendedAppCard({
 							) : isOwned ? (
 								<span className="flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-300 backdrop-blur-xs">
 									<HeartFilledIcon className="size-3.5" />
-									Yours
+									{t("yours", "Yours")}
 								</span>
 							) : (
 								<span className="rounded-full border border-white/25 bg-white/15 px-3 py-1 text-xs font-semibold text-white backdrop-blur-xs">
@@ -647,6 +663,8 @@ export function SpotlightCard({
 		"app" | "metadata" | "isOwned" | "onClick" | "href" | "className"
 	>
 >) {
+	const { t } = useTranslation("common");
+	const categoryLabel = useAppCategoryLabel();
 	const appName = metadata?.name ?? app.id;
 	const appIcon = metadata?.icon ?? "/app-logo.webp";
 	const thumbnail = useAssetImage(metadata?.thumbnail);
@@ -660,7 +678,7 @@ export function SpotlightCard({
 	const cta = isOwned ? (
 		<span className="flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/15 px-3.5 py-1.5 text-xs font-semibold text-emerald-400">
 			<HeartFilledIcon className="size-3.5" />
-			Yours
+			{t("yours", "Yours")}
 		</span>
 	) : (
 		<span className="flex shrink-0 items-center gap-1.5 rounded-full bg-primary px-4 py-1.5 text-xs font-bold text-primary-foreground shadow-sm transition-transform group-hover:scale-[1.03]">
@@ -725,9 +743,11 @@ export function SpotlightCard({
 			<div className="flex min-w-0 flex-col p-5">
 				<div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider">
 					<span className="truncate text-primary">
-						{formatAppCategory(app.primary_category)}
+						{categoryLabel(app.primary_category)}
 					</span>
-					<span className="shrink-0 text-muted-foreground/50">· Featured</span>
+					<span className="shrink-0 text-muted-foreground/50">
+						{t("featured", "· Featured")}
+					</span>
 				</div>
 
 				<div className="mt-1.5 flex items-baseline gap-2">
@@ -736,7 +756,7 @@ export function SpotlightCard({
 					</h3>
 					{author && (
 						<span className="shrink-0 truncate text-xs text-muted-foreground">
-							by {author}
+							{t("byAuthor", "by {{author}}", { author })}
 						</span>
 					)}
 				</div>
@@ -771,7 +791,7 @@ export function SpotlightCard({
 						{app.download_count > 0 && (
 							<span>{formatCompact(app.download_count)} installs</span>
 						)}
-						{app.version && <span>v{app.version}</span>}
+						{app.version && <span>{`v${app.version}`}</span>}
 					</div>
 					{cta}
 				</div>
@@ -780,7 +800,10 @@ export function SpotlightCard({
 	);
 
 	const cardClass = cn(
-		"group grid h-full grid-cols-1 overflow-hidden rounded-2xl border border-border/60 bg-card/80 shadow-sm backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-xl sm:grid-cols-[200px_1fr]",
+		t(
+			"groupGridHfullGridcols1OverflowhiddenRounded2xlBorderBorderborder60Bgcard80ShadowsmBackdropblursmTransitionallDuration300Hovertranslatey1Hoverborderprimary30HovershadowxlSmgridcols200px_1fr",
+			"group grid h-full grid-cols-1 overflow-hidden rounded-2xl border border-border/60 bg-card/80 shadow-sm backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-xl sm:grid-cols-[200px_1fr]",
+		),
 		className,
 	);
 

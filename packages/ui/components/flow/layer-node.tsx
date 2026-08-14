@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import { useDebounce } from "@uidotdev/usehooks";
 import { type Node, type NodeProps, useReactFlow } from "@xyflow/react";
 import {
@@ -71,6 +72,7 @@ export type LayerNode = Node<
 >;
 
 export function LayerNode(props: NodeProps<LayerNode>) {
+	const { t } = useTranslation("flow");
 	const divRef = useRef<HTMLDivElement>(null);
 	const { getNodes } = useReactFlow();
 	const [comment, setComment] = useState<string | undefined>();
@@ -177,7 +179,7 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 
 		if (divRef.current) {
 			divRef.current.style.height = `calc(${height * 15}px + 1.25rem + 0.5rem)`;
-			divRef.current.style.minHeight = "calc(15px + 1.25rem + 0.5rem)";
+			divRef.current.style.minHeight = `calc(15px + 1.25rem + 0.5rem)`;
 		}
 	}, [props.data.hash]);
 
@@ -232,13 +234,13 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 			]);
 			toastSuccess(
 				plan.plan.renamedPins > 0
-					? `'${props.data.layer.name}' is now a function — ${plan.plan.renamedPins} duplicate pin name(s) were renamed`
-					: `'${props.data.layer.name}' is now a function`,
+					? t('nameIsNowAFunctionDuplicatePinNamesWereRenamed', { defaultValue_one: '\'{{name}}\' is now a function — {{count}} duplicate pin name was renamed', defaultValue_other: '\'{{name}}\' is now a function — {{count}} duplicate pin names were renamed', name: props.data.layer.name, count: plan.plan.renamedPins })
+					: t('nameIsNowAFunction', '\'{{name}}\' is now a function', { name: props.data.layer.name }),
 				<CheckIcon />,
 			);
 		} catch (error) {
 			console.error("Failed to convert layer to function:", error);
-			toastError("Failed to convert the layer into a function", <XIcon />);
+			toastError(t('failedToConvertTheLayerIntoAFunction', 'Failed to convert the layer into a function'), <XIcon />);
 		}
 	}, [
 		props.data.appId,

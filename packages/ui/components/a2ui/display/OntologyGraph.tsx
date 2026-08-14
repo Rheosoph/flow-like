@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Suspense, lazy, useCallback } from "react";
 import { cn } from "../../../lib/utils";
 import type {
@@ -43,6 +44,7 @@ export function A2UIOntologyGraph({
 	appId,
 	onAction,
 }: ComponentProps<OntologyGraphComponent>) {
+	const { t } = useTranslation("common");
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const { appId: contextAppId, isPreviewMode } = useActionContext();
 	const ontologyId = useResolved<string>(component.ontologyId);
@@ -86,7 +88,7 @@ export function A2UIOntologyGraph({
 				: { nodeId: null };
 			onAction?.({
 				type: "userAction",
-				name: "nodeClick",
+				name: `nodeClick`,
 				surfaceId,
 				sourceComponentId: componentId,
 				timestamp: Date.now(),
@@ -113,7 +115,7 @@ export function A2UIOntologyGraph({
 				: { edgeId: null };
 			onAction?.({
 				type: "userAction",
-				name: "edgeClick",
+				name: `edgeClick`,
 				surfaceId,
 				sourceComponentId: componentId,
 				timestamp: Date.now(),

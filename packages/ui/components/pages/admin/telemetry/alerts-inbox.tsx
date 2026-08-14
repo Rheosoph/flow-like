@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BellRing, Check, Inbox } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
@@ -63,6 +64,7 @@ function AlertEventRow({
 	readonly onAcknowledge: (id: string) => void;
 	readonly acknowledging: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	return (
 		<div className="flex flex-wrap items-start gap-3 border-b px-4 py-3 last:border-b-0">
 			<div className="min-w-0 flex-1 space-y-1">
@@ -74,7 +76,7 @@ function AlertEventRow({
 					{event.acknowledgedAt ? (
 						<Badge variant="outline" className="gap-1 text-[10px]">
 							<Check className="h-3 w-3" />
-							Acknowledged
+							{t('acknowledged', 'Acknowledged')}
 						</Badge>
 					) : null}
 				</div>
@@ -85,13 +87,13 @@ function AlertEventRow({
 					</span>
 					{event.threshold !== null && event.threshold !== undefined ? (
 						<>
-							<span>vs threshold</span>
+							<span>{t('vsThreshold', 'vs threshold')}</span>
 							<span className="font-mono tabular-nums">
 								{formatAlertValue(metric, event.threshold)}
 							</span>
 						</>
 					) : (
-						<span>no fixed threshold</span>
+						<span>{t('noFixedThreshold', 'no fixed threshold')}</span>
 					)}
 					<span>·</span>
 					<RelativeTime value={event.createdAt} />
@@ -112,7 +114,7 @@ function AlertEventRow({
 					disabled={acknowledging}
 				>
 					<Check className="mr-1 h-3.5 w-3.5" />
-					Acknowledge
+					{t('acknowledge', 'Acknowledge')}
 				</Button>
 			)}
 		</div>
@@ -128,6 +130,7 @@ export function TelemetryAlertsInbox({
 	profile,
 	metricByRuleId,
 }: Readonly<TelemetryAlertsInboxProps>) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const [status, setStatus] = useState<string>(ALL);
@@ -185,7 +188,7 @@ export function TelemetryAlertsInbox({
 				<div className="flex flex-wrap items-center justify-between gap-2">
 					<CardTitle className="flex items-center gap-2 text-base">
 						<Inbox className="h-4 w-4" />
-						Alert inbox
+						{t('alertInbox', 'Alert inbox')}
 					</CardTitle>
 					<div className="flex flex-wrap items-center gap-2">
 						<Select value={status} onValueChange={setStatus}>
@@ -193,7 +196,7 @@ export function TelemetryAlertsInbox({
 								<SelectValue placeholder="Status" />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value={ALL}>All statuses</SelectItem>
+								<SelectItem value={ALL}>{t('allStatuses', 'All statuses')}</SelectItem>
 								{ALERT_STATUS_OPTIONS.map((option) => (
 									<SelectItem key={option} value={option}>
 										{alertStatusLabel(option)}
@@ -219,13 +222,13 @@ export function TelemetryAlertsInbox({
 					</div>
 				</div>
 				<CardDescription className="flex flex-wrap items-center gap-3">
-					<span>{total.toLocaleString()} alerts in the selected window</span>
+					<span>{total.toLocaleString()} {t('alertsInTheSelectedWindow', 'alerts in the selected window')}</span>
 					<span className="inline-flex items-center gap-1">
 						<BellRing className="h-3 w-3" />
-						{openCount.toLocaleString()} unacknowledged on this page
+						{openCount.toLocaleString()} {t('unacknowledgedOnThisPage', 'unacknowledged on this page')}
 					</span>
 					{total > rows.length ? (
-						<span>showing the {rows.length.toLocaleString()} most recent</span>
+						<span>{t('showingThe', 'showing the')} {rows.length.toLocaleString()} {t('mostRecent', 'most recent')}</span>
 					) : null}
 				</CardDescription>
 			</CardHeader>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
 	ClipboardPaste,
@@ -70,6 +71,7 @@ const DropIndicator = memo(function DropIndicator({
 	orientation,
 	isActive = false,
 }: DropIndicatorProps) {
+	const { t } = useTranslation("flow");
 	const dropId = `drop-${parentId}-${index}`;
 
 	const { setNodeRef, isOver } = useDroppable({
@@ -125,6 +127,7 @@ function ContainerDropZone({
 	orientation,
 	containerRef,
 }: ContainerDropZoneProps) {
+	const { t } = useTranslation("flow");
 	const [nearestIndex, setNearestIndex] = useState<number>(0);
 	const [indicatorPosition, setIndicatorPosition] = useState<number>(0);
 	const { activeId } = useBuilderDnd();
@@ -267,6 +270,7 @@ interface EmptyDropZoneProps {
 const EmptyDropZone = memo(function EmptyDropZone({
 	parentId,
 }: EmptyDropZoneProps) {
+	const { t } = useTranslation("flow");
 	const dropId = `empty-${parentId}`;
 
 	const { setNodeRef, isOver } = useDroppable({
@@ -295,7 +299,7 @@ const EmptyDropZone = memo(function EmptyDropZone({
 					isOver ? "text-primary font-medium" : "text-muted-foreground/50",
 				)}
 			>
-				{isOver ? "Release to drop" : "Drop here"}
+				{isOver ? t('releaseToDrop', 'Release to drop') : "Drop here"}
 			</span>
 		</div>
 	);
@@ -330,6 +334,7 @@ const SelectionToolbar = memo(function SelectionToolbar({
 	dragAttributes,
 	dragListeners,
 }: SelectionToolbarProps) {
+	const { t } = useTranslation("flow");
 	return (
 		<div
 			className="absolute -top-9 left-0 z-100 flex items-center gap-1 px-1.5 py-1 bg-primary text-primary-foreground rounded-md text-xs shadow-lg pointer-events-auto border border-primary-foreground/10"
@@ -350,7 +355,7 @@ const SelectionToolbar = memo(function SelectionToolbar({
 							<GripVertical className="h-3.5 w-3.5" />
 						</button>
 					</TooltipTrigger>
-					<TooltipContent side="top">Drag to move</TooltipContent>
+					<TooltipContent side="top">{t('dragToMove', 'Drag to move')}</TooltipContent>
 				</Tooltip>
 			)}
 
@@ -372,7 +377,7 @@ const SelectionToolbar = memo(function SelectionToolbar({
 						<Copy className="h-3.5 w-3.5" />
 					</button>
 				</TooltipTrigger>
-				<TooltipContent side="top">Copy (⌘C)</TooltipContent>
+				<TooltipContent side="top">{t('copyC', 'Copy (⌘C)')}</TooltipContent>
 			</Tooltip>
 
 			{/* Cut - only for non-root */}
@@ -387,7 +392,7 @@ const SelectionToolbar = memo(function SelectionToolbar({
 							<Scissors className="h-3.5 w-3.5" />
 						</button>
 					</TooltipTrigger>
-					<TooltipContent side="top">Cut (⌘X)</TooltipContent>
+					<TooltipContent side="top">{t('cutX', 'Cut (⌘X)')}</TooltipContent>
 				</Tooltip>
 			)}
 
@@ -402,7 +407,7 @@ const SelectionToolbar = memo(function SelectionToolbar({
 						<ClipboardPaste className="h-3.5 w-3.5" />
 					</button>
 				</TooltipTrigger>
-				<TooltipContent side="top">Paste (⌘V)</TooltipContent>
+				<TooltipContent side="top">{t('pasteV', 'Paste (⌘V)')}</TooltipContent>
 			</Tooltip>
 
 			{/* Optimize with FlowPilot */}
@@ -419,7 +424,7 @@ const SelectionToolbar = memo(function SelectionToolbar({
 								<Sparkles className="h-3.5 w-3.5" />
 							</button>
 						</TooltipTrigger>
-						<TooltipContent side="top">Optimize with FlowPilot</TooltipContent>
+						<TooltipContent side="top">{t('optimizeWithFlowpilot', 'Optimize with FlowPilot')}</TooltipContent>
 					</Tooltip>
 				</>
 			)}
@@ -438,7 +443,7 @@ const SelectionToolbar = memo(function SelectionToolbar({
 								<Trash2 className="h-3.5 w-3.5" />
 							</button>
 						</TooltipTrigger>
-						<TooltipContent side="top">Delete (⌫)</TooltipContent>
+						<TooltipContent side="top">{`Delete (⌫)`}</TooltipContent>
 					</Tooltip>
 				</>
 			)}
@@ -535,6 +540,7 @@ function BuilderComponent({
 	allComponents,
 	renderChild: parentRenderChild,
 }: BuilderComponentProps) {
+	const { t } = useTranslation("flow");
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [isHovered, setIsHovered] = useState(false);
 	const { component, style } = surfaceComponent;
@@ -780,9 +786,7 @@ function BuilderComponent({
 								<EmptyDropZone parentId={componentId} />
 							</div>
 						) : (
-							<span className="text-xs text-muted-foreground/50 select-none">
-								Empty {component.type}
-							</span>
+							<span className="text-xs text-muted-foreground/50 select-none">{t('emptyType', 'Empty {{type}}', { type: component.type })}</span>
 						)}
 					</div>
 				)}
@@ -851,9 +855,7 @@ function BuilderComponent({
 							<EmptyDropZone parentId={componentId} />
 						</div>
 					) : (
-						<span className="text-xs text-muted-foreground/50 select-none">
-							Empty {component.type}
-						</span>
+						<span className="text-xs text-muted-foreground/50 select-none">{t('emptyType', 'Empty {{type}}', { type: component.type })}</span>
 					)}
 				</div>
 			)}
@@ -866,6 +868,7 @@ function BuilderComponent({
 // ============================================================================
 
 export function BuilderRenderer({ surface, className }: BuilderRendererProps) {
+	const { t } = useTranslation("flow");
 	const { actionContext, widgetRefs } = useBuilder();
 
 	// Build components map
@@ -916,7 +919,7 @@ export function BuilderRenderer({ surface, className }: BuilderRendererProps) {
 					className,
 				)}
 			>
-				No content to display
+				{t('noContentToDisplay', 'No content to display')}
 			</div>
 		);
 	}

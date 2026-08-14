@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	Activity,
@@ -466,7 +467,7 @@ function RiskBadge({
 			</TooltipTrigger>
 			<TooltipContent className="max-w-xs">
 				<p className="text-xs font-medium">
-					{meta.article !== "—" ? `${meta.article} — ` : ""}
+					{meta.article !== "—" ? `${meta.article} —` : ""}
 					{meta.label}
 				</p>
 				<p className="text-xs text-muted-foreground">{meta.description}</p>
@@ -476,15 +477,16 @@ function RiskBadge({
 }
 
 function StatusBadge({ status }: { status: string }) {
+	const { t } = useTranslation("admin");
 	const normalized = status.toUpperCase();
 	const tone =
 		normalized === "APPROVED"
-			? "bg-emerald-500/15 text-emerald-600 border-emerald-500/30"
+			? `bg-emerald-500/15 text-emerald-600 border-emerald-500/30`
 			: normalized === "SUBMITTED"
-				? "bg-blue-500/15 text-blue-600 border-blue-500/30"
+				? `bg-blue-500/15 text-blue-600 border-blue-500/30`
 				: normalized === "REJECTED" || normalized === "BLOCKED"
-					? "bg-red-500/15 text-red-600 border-red-500/30"
-					: "bg-muted text-muted-foreground border-border";
+					? `bg-red-500/15 text-red-600 border-red-500/30`
+					: `bg-muted text-muted-foreground border-border`;
 	return (
 		<Badge variant="outline" className={tone}>
 			{normalized}
@@ -582,6 +584,7 @@ export function AdminAiActInventoryPage({
 	onAppChange?: (appId: string | null) => void;
 	onRegistryModelOpen?: (provider: string, modelId: string) => void;
 }>) {
+	const { t } = useTranslation("admin");
 	const [selectedAppId, setSelectedAppId] = useState<string | null>(
 		initialAppId ?? null,
 	);
@@ -618,13 +621,10 @@ export function AdminAiActInventoryPage({
 				<div className="space-y-1">
 					<h2 className="text-xl font-semibold flex items-center gap-2">
 						<ShieldAlert className="h-5 w-5 text-primary" />
-						AI Inventory &amp; Governance
+						{t('aiInventoryAmpGovernance', "AI Inventory & Governance")}
 					</h2>
 					<p className="text-sm text-muted-foreground">
-						Single register of AI conformity and security posture under the EU
-						AI Act (Regulation (EU) 2024/1689). Track risk classification,
-						transparency obligations, security &amp; quality scores and the
-						models attached to every published application.
+						{t('singleRegisterOfAiConformityAndSecurityPostureUnderTheEuAiActRegulationEu20241689TrackRiskClassificationTransparencyObligationsSecurityAmpQualityScoresAndTheModelsAttachedToEveryPublishedApplication', "Single register of AI conformity and security posture under the EU AI Act (Regulation (EU) 2024/1689). Track risk classification, transparency obligations, security & quality scores and the models attached to every published application.")}
 					</p>
 				</div>
 
@@ -632,8 +632,8 @@ export function AdminAiActInventoryPage({
 					defaultValue={initialTab === "registry" ? "registry" : "inventory"}
 				>
 					<TabsList>
-						<TabsTrigger value="inventory">Conformity Inventory</TabsTrigger>
-						<TabsTrigger value="registry">GPAI Model Registry</TabsTrigger>
+						<TabsTrigger value="inventory">{t('conformityInventory', 'Conformity Inventory')}</TabsTrigger>
+						<TabsTrigger value="registry">{t('gpaiModelRegistry', 'GPAI Model Registry')}</TabsTrigger>
 					</TabsList>
 					<TabsContent value="inventory" className="mt-4">
 						<InventoryTab onSelectApp={selectApp} />
@@ -690,6 +690,7 @@ function StatCard({
 }
 
 function InventoryStats() {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -746,7 +747,7 @@ function InventoryStats() {
 		<div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
 			<StatCard
 				icon={FileText}
-				label="Assessed apps"
+				label={t('assessedApps', 'Assessed apps')}
 				value={summary.total}
 				loading={loading}
 			/>
@@ -762,7 +763,7 @@ function InventoryStats() {
 			/>
 			<StatCard
 				icon={ShieldAlert}
-				label="High risk"
+				label={t('highRisk', 'High risk')}
 				value={summary.byRisk.HIGH}
 				tone={summary.byRisk.HIGH > 0 ? "text-orange-600" : "text-foreground"}
 				hint="Annex III"
@@ -770,21 +771,21 @@ function InventoryStats() {
 			/>
 			<StatCard
 				icon={ShieldQuestion}
-				label="Limited risk"
+				label={t('limitedRisk', 'Limited risk')}
 				value={summary.byRisk.LIMITED}
 				hint="Art. 50"
 				loading={loading}
 			/>
 			<StatCard
 				icon={Activity}
-				label="Awaiting review"
+				label={t('awaitingReview', 'Awaiting review')}
 				value={summary.needsReview}
 				tone={summary.needsReview > 0 ? "text-blue-600" : "text-foreground"}
 				loading={loading}
 			/>
 			<StatCard
 				icon={Gauge}
-				label="Avg. conformity"
+				label={t('avgConformity', 'Avg. conformity')}
 				value={summary.avgScore === null ? "—" : `${summary.avgScore}`}
 				tone={
 					summary.avgScore === null
@@ -813,6 +814,7 @@ function InventoryTab({
 }: {
 	onSelectApp: (appId: string) => void;
 }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -867,8 +869,8 @@ function InventoryTab({
 				return;
 			}
 			const headers = [
-				"appId",
-				"appName",
+				`appId`,
+				`appName`,
 				"riskCategory",
 				"status",
 				"conformityScore",
@@ -920,7 +922,7 @@ function InventoryTab({
 							setSearch(e.target.value);
 							resetPage();
 						}}
-						placeholder="Search by app name or id..."
+						placeholder={t('searchByAppNameOrId', 'Search by app name or id...')}
 						className="pl-8"
 					/>
 				</div>
@@ -976,7 +978,7 @@ function InventoryTab({
 					onClick={() => exportInventory.mutate("json")}
 				>
 					<Download className="mr-2 h-4 w-4" />
-					JSON
+					{`JSON`}
 				</Button>
 			</div>
 
@@ -985,42 +987,42 @@ function InventoryTab({
 					<Table>
 						<TableHeader>
 							<TableRow>
-								<TableHead>Application</TableHead>
-								<TableHead>Risk class</TableHead>
-								<TableHead>Status</TableHead>
-								<TableHead>Conformity</TableHead>
+								<TableHead>{t('application', 'Application')}</TableHead>
+								<TableHead>{t('riskClass', 'Risk class')}</TableHead>
+								<TableHead>{t('status', 'Status')}</TableHead>
+								<TableHead>{t('conformity', 'Conformity')}</TableHead>
 								<TableHead className="text-center">
 									<Tooltip>
 										<TooltipTrigger asChild>
-											<span className="cursor-default">Sec</span>
+											<span className="cursor-default">{t('sec', 'Sec')}</span>
 										</TooltipTrigger>
 										<TooltipContent>
-											Security score (worst board)
+											{t('securityScoreWorstBoard', 'Security score (worst board)')}
 										</TooltipContent>
 									</Tooltip>
 								</TableHead>
 								<TableHead className="text-center">
 									<Tooltip>
 										<TooltipTrigger asChild>
-											<span className="cursor-default">Priv</span>
+											<span className="cursor-default">{t('priv', 'Priv')}</span>
 										</TooltipTrigger>
-										<TooltipContent>Privacy score (worst board)</TooltipContent>
+										<TooltipContent>{t('privacyScoreWorstBoard', 'Privacy score (worst board)')}</TooltipContent>
 									</Tooltip>
 								</TableHead>
 								<TableHead className="text-center">
 									<Tooltip>
 										<TooltipTrigger asChild>
-											<span className="cursor-default">Worst</span>
+											<span className="cursor-default">{t('worst', 'Worst')}</span>
 										</TooltipTrigger>
 										<TooltipContent>
-											Lowest quality score across all categories
+											{t('lowestQualityScoreAcrossAllCategories', 'Lowest quality score across all categories')}
 										</TooltipContent>
 									</Tooltip>
 								</TableHead>
-								<TableHead className="text-center">Models</TableHead>
-								<TableHead className="text-center">Unvetted</TableHead>
-								<TableHead className="text-center">Drift</TableHead>
-								<TableHead>Updated</TableHead>
+								<TableHead className="text-center">{t('models', 'Models')}</TableHead>
+								<TableHead className="text-center">{t('unvetted', 'Unvetted')}</TableHead>
+								<TableHead className="text-center">{t('drift', 'Drift')}</TableHead>
+								<TableHead>{t('updated2', 'Updated')}</TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
@@ -1039,13 +1041,13 @@ function InventoryTab({
 											<ShieldQuestion className="h-6 w-6 text-muted-foreground" />
 											<p className="text-sm font-medium">
 												{hasFilters
-													? "No applications match your filters."
-													: "No inventory apps yet."}
+													? t('noApplicationsMatchYourFilters', 'No applications match your filters.')
+													: t('noInventoryAppsYet', 'No inventory apps yet.')}
 											</p>
 											<p className="text-xs text-muted-foreground">
 												{hasFilters
-													? "Try clearing the search or risk/status filters."
-													: "Apps appear here after they have governance scores, model observations, or EU AI Act assessments."}
+													? t('tryClearingTheSearchOrRiskstatusFilters', 'Try clearing the search or risk/status filters.')
+													: t('appsAppearHereAfterTheyHaveGovernanceScoresModelObservationsOrEuAiActAssessments', 'Apps appear here after they have governance scores, model observations, or EU AI Act assessments.')}
 											</p>
 										</div>
 									</TableCell>
@@ -1141,9 +1143,7 @@ function InventoryTab({
 
 			<div className="flex items-center justify-between">
 				<p className="text-sm text-muted-foreground">
-					{inventory.data?.total ?? 0} app
-					{(inventory.data?.total ?? 0) === 1 ? "" : "s"}
-				</p>
+					{inventory.data?.total ?? 0}{" "}{t('appS', { defaultValue_one: 'app', defaultValue_other: "apps", count: (inventory.data?.total ?? 0) })}</p>
 				<div className="flex items-center gap-2">
 					<Button
 						variant="outline"
@@ -1153,9 +1153,7 @@ function InventoryTab({
 					>
 						<ChevronLeft className="h-4 w-4" />
 					</Button>
-					<span className="text-sm">
-						{page} / {totalPages}
-					</span>
+					<span className="text-sm">{`${page} / ${totalPages}`}</span>
 					<Button
 						variant="outline"
 						size="sm"
@@ -1183,6 +1181,7 @@ function InventoryDetail({
 	onBack: () => void;
 	onRegistryModelOpen?: (provider: string, modelId: string) => void;
 }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const profile = useInvoke(
@@ -1251,8 +1250,8 @@ function InventoryDetail({
 		onSuccess: (res) => {
 			toast.success(
 				res.suggestion?.purpose
-					? `Governance agent: ${res.suggestion.purpose}`
-					: "Governance agent completed.",
+					? t('governanceAgentPurpose', 'Governance agent: {{purpose}}', { purpose: res.suggestion.purpose })
+					: t('governanceAgentCompleted', 'Governance agent completed.'),
 			);
 		},
 		onError: (err: Error) => toast.error(err.message ?? "Assist failed"),
@@ -1267,14 +1266,14 @@ function InventoryDetail({
 				<div className="flex items-center gap-2">
 					<Button variant="ghost" size="sm" onClick={onBack}>
 						<ArrowLeft className="h-4 w-4 mr-1" />
-						Back
+						{t('back', 'Back')}
 					</Button>
 					<div>
 						<h2 className="text-lg font-semibold leading-tight">
 							{data?.appName ?? appId}
 						</h2>
 						<p className="text-xs text-muted-foreground">
-							EU AI Act conformity record
+							{t('euAiActConformityRecord', 'EU AI Act conformity record')}
 						</p>
 					</div>
 				</div>
@@ -1286,7 +1285,7 @@ function InventoryDetail({
 						onClick={() => setEditOpen(true)}
 					>
 						<Pencil className="mr-2 h-4 w-4" />
-						Edit assessment
+						{t('editAssessment', 'Edit assessment')}
 					</Button>
 					<Button
 						variant="outline"
@@ -1297,7 +1296,7 @@ function InventoryDetail({
 						<Sparkles
 							className={`mr-2 h-4 w-4 ${assist.isPending ? "animate-pulse" : ""}`}
 						/>
-						Run governance agent
+						{t('runGovernanceAgent', 'Run governance agent')}
 					</Button>
 					<Button
 						variant="outline"
@@ -1308,7 +1307,7 @@ function InventoryDetail({
 						<RefreshCw
 							className={`mr-2 h-4 w-4 ${reconcile.isPending ? "animate-spin" : ""}`}
 						/>
-						Reconcile models
+						{t('reconcileModels', 'Reconcile models')}
 					</Button>
 				</div>
 			</div>
@@ -1369,6 +1368,7 @@ function EditAssessmentDialog({
 	appId: string;
 	data: InventoryDetailResponse;
 }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const profile = useInvoke(
@@ -1440,11 +1440,9 @@ function EditAssessmentDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="max-w-3xl">
 				<DialogHeader>
-					<DialogTitle>Edit conformity assessment</DialogTitle>
+					<DialogTitle>{t('editConformityAssessment', 'Edit conformity assessment')}</DialogTitle>
 					<DialogDescription>
-						Update the questionnaire and review decision. The responsible person
-						is hard-linked to the app owner, and the risk category and
-						conformity score are always recomputed on save.
+						{t('updateTheQuestionnaireAndReviewDecisionTheResponsiblePersonIsHardlinkedToTheAppOwnerAndTheRiskCategoryAndConformityScoreAreAlwaysRecomputedOnSave', "Update the questionnaire and review decision. The responsible person is hard-linked to the app owner, and the risk category and conformity score are always recomputed on save.")}
 					</DialogDescription>
 				</DialogHeader>
 
@@ -1476,11 +1474,10 @@ function EditAssessmentDialog({
 						<div className="flex items-center justify-between gap-3 rounded-lg border p-3">
 							<div className="min-w-0">
 								<Label className="text-sm">
-									Transparency obligations implemented
+									{t('transparencyObligationsImplemented', 'Transparency obligations implemented')}
 								</Label>
 								<p className="text-xs text-muted-foreground">
-									Confirm the triggered Art. 50 duties are in place (raises the
-									transparency score).
+									{t('confirmTheTriggeredArt50DutiesAreInPlaceRaisesTheTransparencyScore', "Confirm the triggered Art. 50 duties are in place (raises the transparency score).")}
 								</p>
 							</div>
 							<Switch
@@ -1495,20 +1492,20 @@ function EditAssessmentDialog({
 					<Separator />
 
 					<div className="space-y-2">
-						<h4 className="text-sm font-semibold">Responsible person</h4>
+						<h4 className="text-sm font-semibold">{t('responsiblePerson', 'Responsible person')}</h4>
 						<div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-3">
 							<UserCheck className="h-4 w-4 shrink-0 text-muted-foreground" />
 							<div className="min-w-0">
 								<p className="text-sm font-medium">
 									{data.assessment?.responsibleName ??
 										data.assessment?.responsibleEmail ??
-										"App owner"}
+										t('appOwner', 'App owner')}
 								</p>
 								<p className="text-xs text-muted-foreground">
 									{data.assessment?.responsibleEmail
-										? `${data.assessment.responsibleEmail} · `
+										? `${data.assessment.responsibleEmail} ·`
 										: ""}
-									Hard-linked to the app owner (Art. 26) — cannot be reassigned.
+									{t('hardlinkedToTheAppOwnerArt26CannotBeReassigned', 'Hard-linked to the app owner (Art. 26) — cannot be reassigned.')}
 								</p>
 							</div>
 						</div>
@@ -1517,10 +1514,10 @@ function EditAssessmentDialog({
 					<Separator />
 
 					<div className="space-y-3">
-						<h4 className="text-sm font-semibold">Review decision</h4>
+						<h4 className="text-sm font-semibold">{t('reviewDecision2', 'Review decision')}</h4>
 						<div className="grid gap-3 sm:grid-cols-2">
 							<div className="space-y-1.5">
-								<Label className="text-xs">Status</Label>
+								<Label className="text-xs">{t('status', 'Status')}</Label>
 								<Select value={reviewStatus} onValueChange={setReviewStatus}>
 									<SelectTrigger>
 										<SelectValue />
@@ -1537,24 +1534,22 @@ function EditAssessmentDialog({
 						</div>
 						<div className="space-y-1.5">
 							<Label htmlFor="review-note" className="text-xs">
-								Review note
+								{t('reviewNote', 'Review note')}
 							</Label>
 							<Textarea
 								id="review-note"
 								value={reviewNote}
 								onChange={(e) => setReviewNote(e.target.value)}
-								placeholder="Optional rationale recorded with the review decision."
+								placeholder={t('optionalRationaleRecordedWithTheReviewDecision', 'Optional rationale recorded with the review decision.')}
 								rows={3}
 							/>
 						</div>
 						{data.classification.blocked && (
 							<Alert variant="destructive">
 								<Ban className="h-4 w-4" />
-								<AlertTitle>Prohibited practice declared</AlertTitle>
+								<AlertTitle>{t('prohibitedPracticeDeclared', 'Prohibited practice declared')}</AlertTitle>
 								<AlertDescription>
-									While an Art. 5 prohibited practice is selected, the
-									assessment is forced to BLOCKED regardless of the chosen
-									status.
+									{t('whileAnArt5ProhibitedPracticeIsSelectedTheAssessmentIsForcedToBlockedRegardlessOfTheChosenStatus', "While an Art. 5 prohibited practice is selected, the assessment is forced to BLOCKED regardless of the chosen status.")}
 								</AlertDescription>
 							</Alert>
 						)}
@@ -1567,13 +1562,13 @@ function EditAssessmentDialog({
 						onClick={() => onOpenChange(false)}
 						disabled={save.isPending}
 					>
-						Cancel
+						{t('cancel', 'Cancel')}
 					</Button>
 					<Button
 						onClick={() => save.mutate()}
 						disabled={save.isPending || !profile.data}
 					>
-						{save.isPending ? "Saving…" : "Save & recompute"}
+						{save.isPending ? "Saving…" : t('saveRecompute', 'Save & recompute')}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
@@ -1692,6 +1687,7 @@ function QuestionField({
 }
 
 function SecurityScores({ appId }: { appId: string }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -1718,19 +1714,17 @@ function SecurityScores({ appId }: { appId: string }) {
 			<CardHeader>
 				<CardTitle className="text-sm flex items-center gap-2">
 					<ShieldCheck className="h-4 w-4" />
-					Security &amp; Quality Scores
+					{t('securityAmpQualityScores', "Security & Quality Scores")}
 				</CardTitle>
 				<CardDescription>
-					Per-board governance scores (0–10, worst-first) and flagged low-score
-					nodes from the latest static analysis.
+					{`Per-board governance scores (0–10, worst-first) and flagged low-score nodes from the latest static analysis.`}
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-3">
 				{detail.isLoading && <Skeleton className="h-24 w-full" />}
 				{!detail.isLoading && boards.length === 0 && (
 					<p className="text-sm text-muted-foreground">
-						No board scores recorded yet. Scores are computed when the app's
-						boards are analysed.
+						{t('noBoardScoresRecordedYetScoresAreComputedWhenTheAppsBoardsAreAnalysed', "No board scores recorded yet. Scores are computed when the app's boards are analysed.")}
 					</p>
 				)}
 				{boards.map((board) => (
@@ -1740,9 +1734,7 @@ function SecurityScores({ appId }: { appId: string }) {
 								<p className="truncate font-mono text-xs text-muted-foreground">
 									{board.boardId}
 								</p>
-								<p className="text-xs text-muted-foreground">
-									{board.scoredNodeCount}/{board.nodeCount} nodes scored ·
-									updated{" "}
+								<p className="text-xs text-muted-foreground">{`${board.scoredNodeCount}/${board.nodeCount} nodes scored · updated`}{" "}
 									<RelativeTime
 										value={board.updatedAt}
 										fallback={board.updatedAt}
@@ -1773,9 +1765,7 @@ function SecurityScores({ appId }: { appId: string }) {
 						{board.flaggedPatterns.length > 0 && (
 							<div className="space-y-1.5 border-t pt-3">
 								<p className="flex items-center gap-1.5 text-xs font-medium">
-									<ShieldAlert className="h-3.5 w-3.5 text-red-500" />
-									Flagged nodes ({board.flaggedPatterns.length})
-								</p>
+									<ShieldAlert className="h-3.5 w-3.5 text-red-500" />{t('flaggedNodesLength', 'Flagged nodes ({{length}})', { length: board.flaggedPatterns.length })}</p>
 								<div className="flex flex-wrap gap-1.5">
 									{board.flaggedPatterns.map((pattern, index) => (
 										<Badge
@@ -1791,9 +1781,7 @@ function SecurityScores({ appId }: { appId: string }) {
 												{pattern.score}
 											</span>
 											{(pattern.count ?? 1) > 1 && (
-												<span className="ml-1 text-muted-foreground">
-													×{pattern.count}
-												</span>
+												<span className="ml-1 text-muted-foreground">{`×${pattern.count}`}</span>
 											)}
 										</Badge>
 									))}
@@ -1808,6 +1796,7 @@ function SecurityScores({ appId }: { appId: string }) {
 }
 
 function ConformityOverview({ data }: { data: InventoryDetailResponse }) {
+	const { t } = useTranslation("admin");
 	const { classification, assessment, hasAssessment } = data;
 	const meta = riskMeta(classification.riskCategory);
 	const Icon = meta.icon;
@@ -1815,18 +1804,18 @@ function ConformityOverview({ data }: { data: InventoryDetailResponse }) {
 	const band = classification.conformityBand;
 	const statusLabel = hasAssessment
 		? (assessment?.status ?? "DRAFT")
-		: "NOT SUBMITTED";
+		: t('notSubmitted', 'NOT SUBMITTED');
 
 	return (
 		<Card>
 			<CardHeader>
 				<div className="flex flex-wrap items-start justify-between gap-3">
 					<div className="space-y-1">
-						<CardTitle className="text-base">Conformity Assessment</CardTitle>
+						<CardTitle className="text-base">{t('conformityAssessment', 'Conformity Assessment')}</CardTitle>
 						<CardDescription>
 							{hasAssessment
-								? "The owner's submitted assessment alongside the live, recomputed classification."
-								: "No assessment submitted yet. Classification below is auto-derived from board signals."}
+								? t('theOwnersSubmittedAssessmentAlongsideTheLiveRecomputedClassification', 'The owner\'s submitted assessment alongside the live, recomputed classification.')
+								: `No assessment submitted yet. Classification below is auto-derived from board signals.`}
 						</CardDescription>
 					</div>
 					<StatusBadge status={statusLabel} />
@@ -1836,10 +1825,9 @@ function ConformityOverview({ data }: { data: InventoryDetailResponse }) {
 				{classification.blocked && (
 					<Alert variant="destructive">
 						<Ban className="h-4 w-4" />
-						<AlertTitle>Publication blocked — prohibited practice</AlertTitle>
+						<AlertTitle>{t('publicationBlockedProhibitedPractice', 'Publication blocked — prohibited practice')}</AlertTitle>
 						<AlertDescription>
-							An Art. 5 prohibited practice was detected. This system may not be
-							placed on the EU market.
+							{t('anArt5ProhibitedPracticeWasDetectedThisSystemMayNotBePlacedOnTheEuMarket', "An Art. 5 prohibited practice was detected. This system may not be placed on the EU market.")}
 						</AlertDescription>
 					</Alert>
 				)}
@@ -1856,8 +1844,8 @@ function ConformityOverview({ data }: { data: InventoryDetailResponse }) {
 								<p className="text-sm font-semibold">{meta.label}</p>
 								<p className="text-xs text-muted-foreground">
 									{meta.article !== "—"
-										? `${meta.article} • EU AI Act`
-										: "EU AI Act"}
+										? t('articleEuAiAct', '{{article}} • EU AI Act', { article: meta.article })
+										: t('euAiAct', 'EU AI Act')}
 								</p>
 							</div>
 						</div>
@@ -1866,7 +1854,7 @@ function ConformityOverview({ data }: { data: InventoryDetailResponse }) {
 
 					<div className="rounded-lg border p-4 space-y-3">
 						<div className="flex items-center justify-between">
-							<span className="text-sm font-medium">Conformity score</span>
+							<span className="text-sm font-medium">{t('conformityScore', 'Conformity score')}</span>
 							{band && (
 								<span className={`text-xs font-medium ${BAND_META[band].text}`}>
 									{BAND_META[band].label}
@@ -1885,7 +1873,7 @@ function ConformityOverview({ data }: { data: InventoryDetailResponse }) {
 							</>
 						) : (
 							<p className="text-sm text-muted-foreground">
-								Not scored — classification is{" "}
+								{t('notScoredClassificationIs', 'Not scored — classification is')}{" "}
 								{classification.riskCategory === "PROHIBITED"
 									? "blocked"
 									: "undetermined"}
@@ -1909,7 +1897,7 @@ function ConformityOverview({ data }: { data: InventoryDetailResponse }) {
 							/>
 							<DetailField
 								icon={FileText}
-								label="Submitted"
+								label={t('submitted2', 'Submitted')}
 								value={
 									assessment?.submittedAt ? (
 										<RelativeTime value={assessment.submittedAt} />
@@ -1926,14 +1914,12 @@ function ConformityOverview({ data }: { data: InventoryDetailResponse }) {
 										<span className="inline-flex flex-col">
 											<RelativeTime value={assessment.reviewedAt} />
 											{assessment?.reviewedByName && (
-												<span className="text-xs text-muted-foreground">
-													by {assessment.reviewedByName}
-												</span>
+												<span className="text-xs text-muted-foreground">{t('byReviewedbyname', 'by {{reviewedByName}}', { reviewedByName: assessment.reviewedByName })}</span>
 											)}
 										</span>
 									) : assessment?.status === "SUBMITTED" ? (
 										<span className="text-amber-600 dark:text-amber-500">
-											Pending review
+											{t('pendingReview', 'Pending review')}
 										</span>
 									) : (
 										"—"
@@ -1942,14 +1928,14 @@ function ConformityOverview({ data }: { data: InventoryDetailResponse }) {
 							/>
 							<DetailField
 								icon={ScrollText}
-								label="Schema version"
+								label={t('schemaVersion', 'Schema version')}
 								value={`v${data.schema.version}`}
 							/>
 						</div>
 						{assessment?.reviewNote && (
 							<p className="rounded-md bg-muted/40 p-3 text-sm text-muted-foreground">
 								<span className="font-medium text-foreground">
-									Review note:{" "}
+									{t('reviewNote2', 'Review note:')}{" "}
 								</span>
 								{assessment.reviewNote}
 							</p>
@@ -2000,6 +1986,7 @@ function ResponsiblePersonField({
 	fallbackName?: string | null;
 	fallbackEmail?: string | null;
 }) {
+	const { t } = useTranslation("admin");
 	const [open, setOpen] = useState(false);
 	const name = person?.name ?? fallbackName ?? null;
 	const email = person?.email ?? fallbackEmail ?? null;
@@ -2012,7 +1999,7 @@ function ResponsiblePersonField({
 
 	if (!hasContact) {
 		return (
-			<DetailField icon={UserCheck} label="Responsible person" value="—" />
+			<DetailField icon={UserCheck} label={t('responsiblePerson', 'Responsible person')} value="—" />
 		);
 	}
 
@@ -2021,7 +2008,7 @@ function ResponsiblePersonField({
 			<div className="space-y-0.5">
 				<span className="flex items-center gap-1.5 text-xs text-muted-foreground">
 					<UserCheck className="h-3.5 w-3.5" />
-					Responsible person
+					{t('responsiblePerson', 'Responsible person')}
 				</span>
 				<button
 					type="button"
@@ -2041,10 +2028,9 @@ function ResponsiblePersonField({
 			<Sheet open={open} onOpenChange={setOpen}>
 				<SheetContent className="sm:max-w-md">
 					<SheetHeader>
-						<SheetTitle>Responsible person</SheetTitle>
+						<SheetTitle>{t('responsiblePerson', 'Responsible person')}</SheetTitle>
 						<SheetDescription>
-							Accountable owner for this AI system (Art. 26). Reach out to
-							coordinate conformity actions.
+							{t('accountableOwnerForThisAiSystemArt26ReachOutToCoordinateConformityActions', "Accountable owner for this AI system (Art. 26). Reach out to coordinate conformity actions.")}
 						</SheetDescription>
 					</SheetHeader>
 
@@ -2061,9 +2047,7 @@ function ResponsiblePersonField({
 									{name ?? username ?? email ?? "Unknown"}
 								</p>
 								{username && (
-									<p className="truncate text-sm text-muted-foreground">
-										@{username}
-									</p>
+									<p className="truncate text-sm text-muted-foreground">{`@${username}`}</p>
 								)}
 							</div>
 						</div>
@@ -2079,7 +2063,7 @@ function ResponsiblePersonField({
 								<div className="space-y-1">
 									<span className="flex items-center gap-1.5 text-xs text-muted-foreground">
 										<Mail className="h-3.5 w-3.5" />
-										Email
+										{t('email', 'Email')}
 									</span>
 									<div className="flex flex-wrap items-center gap-2">
 										<a
@@ -2095,7 +2079,7 @@ function ResponsiblePersonField({
 												void navigator.clipboard?.writeText(email);
 											}}
 										>
-											Copy
+											{t('copy', 'Copy')}
 										</Button>
 									</div>
 								</div>
@@ -2103,7 +2087,7 @@ function ResponsiblePersonField({
 
 							{person?.userId && (
 								<div className="space-y-1">
-									<span className="text-xs text-muted-foreground">User ID</span>
+									<span className="text-xs text-muted-foreground">{t('userId', 'User ID')}</span>
 									<p className="break-all font-mono text-xs text-muted-foreground">
 										{person.userId}
 									</p>
@@ -2115,7 +2099,7 @@ function ResponsiblePersonField({
 							<Button asChild className="w-full">
 								<a href={`mailto:${email}`}>
 									<Mail className="mr-2 h-4 w-4" />
-									Contact responsible person
+									{t('contactResponsiblePerson', 'Contact responsible person')}
 								</a>
 							</Button>
 						)}
@@ -2131,21 +2115,21 @@ function TransparencyObligations({
 }: {
 	classification: Classification;
 }) {
+	const { t } = useTranslation("admin");
 	const obligations = classification.transparencyObligations ?? [];
 
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-sm">Transparency Obligations</CardTitle>
+				<CardTitle className="text-sm">{t('transparencyObligations', 'Transparency Obligations')}</CardTitle>
 				<CardDescription>
-					Disclosure and oversight duties triggered for this system (Art. 50,
-					14, 11–12).
+					{t('disclosureAndOversightDutiesTriggeredForThisSystemArt50141112', "Disclosure and oversight duties triggered for this system (Art. 50, 14, 11–12).")}
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
 				{obligations.length === 0 ? (
 					<p className="text-sm text-muted-foreground">
-						No transparency obligations are triggered for this risk class.
+						{t('noTransparencyObligationsAreTriggeredForThisRiskClass', 'No transparency obligations are triggered for this risk class.')}
 					</p>
 				) : (
 					<div className="grid gap-3 sm:grid-cols-2">
@@ -2180,16 +2164,17 @@ function TransparencyObligations({
 }
 
 function ClassificationRationale({ rationale }: { rationale: string[] }) {
+	const { t } = useTranslation("admin");
 	if (!rationale || rationale.length === 0) return null;
 	return (
 		<Card>
 			<CardHeader>
 				<CardTitle className="text-sm flex items-center gap-2">
 					<ScrollText className="h-4 w-4" />
-					Why this classification
+					{t('whyThisClassification', 'Why this classification')}
 				</CardTitle>
 				<CardDescription>
-					Audit trail of the dominant factors behind the determination.
+					{t('auditTrailOfTheDominantFactorsBehindTheDetermination', 'Audit trail of the dominant factors behind the determination.')}
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
@@ -2207,6 +2192,7 @@ function ClassificationRationale({ rationale }: { rationale: string[] }) {
 }
 
 function QuestionnaireSummary({ data }: { data: InventoryDetailResponse }) {
+	const { t } = useTranslation("admin");
 	const { schema, answers, classification, hasAssessment } = data;
 	const screens = schema.screens.filter(
 		(screen) =>
@@ -2218,11 +2204,11 @@ function QuestionnaireSummary({ data }: { data: InventoryDetailResponse }) {
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-sm">Conformity Questionnaire</CardTitle>
+				<CardTitle className="text-sm">{t('conformityQuestionnaire', 'Conformity Questionnaire')}</CardTitle>
 				<CardDescription>
 					{hasAssessment
-						? "Answers submitted by the application owner."
-						: "Auto-derived answers from board signals (no owner submission yet)."}
+						? t('answersSubmittedByTheApplicationOwner', 'Answers submitted by the application owner.')
+						: `Auto-derived answers from board signals (no owner submission yet).`}
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
@@ -2273,6 +2259,7 @@ function AttachedModels({
 	onRegistryModelOpen?: (provider: string, modelId: string) => void;
 	acknowledging: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	const unvetted = models.filter((m) => !m.vetted).length;
 	const drift = models.filter((m) => m.driftFlagged).length;
 
@@ -2282,19 +2269,15 @@ function AttachedModels({
 				<div className="flex flex-wrap items-center justify-between gap-2">
 					<CardTitle className="text-sm flex items-center gap-2">
 						<Boxes className="h-4 w-4" />
-						Attached Models
+						{t('attachedModels', 'Attached Models')}
 					</CardTitle>
 					<div className="flex items-center gap-2 text-xs text-muted-foreground">
-						<span>{models.length} total</span>
+						<span>{t('lengthTotal', '{{length}} total', { length: models.length })}</span>
 						{unvetted > 0 && (
-							<Badge variant="outline" className="text-amber-600">
-								{unvetted} unvetted
-							</Badge>
+							<Badge variant="outline" className="text-amber-600">{t('unvettedUnvetted', '{{unvetted}} unvetted', { unvetted })}</Badge>
 						)}
 						{drift > 0 && (
-							<Badge variant="outline" className="text-red-600">
-								{drift} drift
-							</Badge>
+							<Badge variant="outline" className="text-red-600">{t('driftDrift', '{{drift}} drift', { drift })}</Badge>
 						)}
 					</div>
 				</div>
@@ -2303,13 +2286,13 @@ function AttachedModels({
 				<Table>
 					<TableHeader>
 						<TableRow>
-							<TableHead>Model</TableHead>
-							<TableHead>Provider</TableHead>
-							<TableHead>Source</TableHead>
-							<TableHead>GPAI posture</TableHead>
-							<TableHead className="text-center">Vetted</TableHead>
-							<TableHead className="text-center">Flags</TableHead>
-							<TableHead className="text-right">Action</TableHead>
+							<TableHead>{t('model', 'Model')}</TableHead>
+							<TableHead>{t('provider2', 'Provider')}</TableHead>
+							<TableHead>{t('source', 'Source')}</TableHead>
+							<TableHead>{t('gpaiPosture', 'GPAI posture')}</TableHead>
+							<TableHead className="text-center">{t('vetted', 'Vetted')}</TableHead>
+							<TableHead className="text-center">{t('flags', 'Flags')}</TableHead>
+							<TableHead className="text-right">{t('action', 'Action')}</TableHead>
 						</TableRow>
 					</TableHeader>
 					<TableBody>
@@ -2319,7 +2302,7 @@ function AttachedModels({
 									colSpan={7}
 									className="py-8 text-center text-sm text-muted-foreground"
 								>
-									No models observed. Run reconcile to scan the app's boards.
+									{t('noModelsObservedRunReconcileToScanTheAppsBoards', 'No models observed. Run reconcile to scan the app\'s boards.')}
 								</TableCell>
 							</TableRow>
 						)}
@@ -2337,21 +2320,21 @@ function AttachedModels({
 								</TableCell>
 								<TableCell className="text-center">
 									{m.vetted ? (
-										<span className="text-emerald-600">Yes</span>
+										<span className="text-emerald-600">{t('yes', 'Yes')}</span>
 									) : (
-										<span className="text-amber-600">No</span>
+										<span className="text-amber-600">{t('no', 'No')}</span>
 									)}
 								</TableCell>
 								<TableCell className="text-center">
 									<div className="flex flex-wrap justify-center gap-1">
 										{m.systemicRisk && (
-											<Badge className="bg-red-600 text-white">Systemic</Badge>
+											<Badge className="bg-red-600 text-white">{t('systemic', 'Systemic')}</Badge>
 										)}
 										{m.dynamicSelector && (
-											<Badge variant="outline">Dynamic</Badge>
+											<Badge variant="outline">{t('dynamic', 'Dynamic')}</Badge>
 										)}
 										{m.driftFlagged && (
-											<Badge className="bg-amber-500 text-black">Drift</Badge>
+											<Badge className="bg-amber-500 text-black">{t('drift', 'Drift')}</Badge>
 										)}
 										{!m.systemicRisk &&
 											!m.dynamicSelector &&
@@ -2384,7 +2367,7 @@ function AttachedModels({
 												disabled={acknowledging}
 												onClick={() => onAcknowledge(m.id)}
 											>
-												Acknowledge
+												{t('acknowledge', 'Acknowledge')}
 											</Button>
 										)}
 									</div>
@@ -2440,6 +2423,7 @@ function RegistryTab({
 	initialProvider?: string | null;
 	initialModelId?: string | null;
 }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const profile = useInvoke(
@@ -2453,7 +2437,7 @@ function RegistryTab({
 	const userEditedInitialFormRef = useRef(false);
 	const initialSelectionKey =
 		initialProvider && initialModelId
-			? `${initialProvider}\u0000${initialModelId}`
+			? `${initialProvider} ${initialModelId}`
 			: "";
 
 	useEffect(() => {
@@ -2512,15 +2496,15 @@ function RegistryTab({
 	);
 
 	const formTitle = selectedModel?.registered
-		? "Update model"
+		? t('updateModel', 'Update model')
 		: selectedModel?.observed
-			? "Rate observed model"
-			: "Add model";
+			? t('rateObservedModel', 'Rate observed model')
+			: t('addModel', 'Add model');
 	const submitLabel = selectedModel?.registered
-		? "Save changes"
+		? t('saveChanges', 'Save changes')
 		: selectedModel?.observed
-			? "Save rating"
-			: "Add model";
+			? t('saveRating', 'Save rating')
+			: t('addModel', 'Add model');
 
 	const upsert = useMutation({
 		mutationFn: async () => {
@@ -2549,11 +2533,9 @@ function RegistryTab({
 		<div className="space-y-4">
 			<Alert>
 				<FileText className="h-4 w-4" />
-				<AlertTitle>General-purpose AI model register</AlertTitle>
+				<AlertTitle>{t('generalpurposeAiModelRegister', 'General-purpose AI model register')}</AlertTitle>
 				<AlertDescription>
-					Record the GPAI posture of every model used across the platform so
-					attached-model governance and drift detection can classify them
-					correctly.
+					{t('recordTheGpaiPostureOfEveryModelUsedAcrossThePlatformSoAttachedmodelGovernanceAndDriftDetectionCanClassifyThemCorrectly', "Record the GPAI posture of every model used across the platform so attached-model governance and drift detection can classify them correctly.")}
 				</AlertDescription>
 			</Alert>
 
@@ -2567,7 +2549,7 @@ function RegistryTab({
 				<CardContent className="space-y-4">
 					<div className="grid gap-3 sm:grid-cols-2">
 						<div className="space-y-1">
-							<Label className="text-xs">Provider</Label>
+							<Label className="text-xs">{t('provider2', 'Provider')}</Label>
 							<Input
 								value={form.provider}
 								onChange={(e) =>
@@ -2577,7 +2559,7 @@ function RegistryTab({
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">Model ID</Label>
+							<Label className="text-xs">{t('modelId', 'Model ID')}</Label>
 							<Input
 								value={form.modelId}
 								onChange={(e) =>
@@ -2589,7 +2571,7 @@ function RegistryTab({
 					</div>
 					<div className="grid gap-3 sm:grid-cols-2">
 						<div className="space-y-1">
-							<Label className="text-xs">GPAI posture</Label>
+							<Label className="text-xs">{t('gpaiPosture', 'GPAI posture')}</Label>
 							<Select
 								value={form.posture}
 								onValueChange={(posture) => updateRegistryForm({ posture })}
@@ -2598,16 +2580,16 @@ function RegistryTab({
 									<SelectValue />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="UNKNOWN">Unknown</SelectItem>
-									<SelectItem value="HOSTED">Hosted</SelectItem>
-									<SelectItem value="OPEN_LICENCE">Open licence</SelectItem>
-									<SelectItem value="CLOSED">Closed</SelectItem>
-									<SelectItem value="SYSTEMIC">Systemic risk</SelectItem>
+									<SelectItem value="UNKNOWN">{t('unknown', 'Unknown')}</SelectItem>
+									<SelectItem value="HOSTED">{t('hosted', 'Hosted')}</SelectItem>
+									<SelectItem value="OPEN_LICENCE">{t('openLicence', 'Open licence')}</SelectItem>
+									<SelectItem value="CLOSED">{t('closed', 'Closed')}</SelectItem>
+									<SelectItem value="SYSTEMIC">{t('systemicRisk', 'Systemic risk')}</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">Note</Label>
+							<Label className="text-xs">{t('note', 'Note')}</Label>
 							<Input
 								value={form.note}
 								onChange={(e) => updateRegistryForm({ note: e.target.value })}
@@ -2643,7 +2625,7 @@ function RegistryTab({
 								setForm({ ...EMPTY_REGISTRY_FORM });
 							}}
 						>
-							Clear
+							{t('clear', 'Clear')}
 						</Button>
 						<Button
 							size="sm"
@@ -2665,12 +2647,12 @@ function RegistryTab({
 					<Table>
 						<TableHeader>
 							<TableRow>
-								<TableHead>Provider</TableHead>
-								<TableHead>Model</TableHead>
-								<TableHead>Posture</TableHead>
-								<TableHead className="text-center">Vetted</TableHead>
-								<TableHead>Note</TableHead>
-								<TableHead className="text-right">Action</TableHead>
+								<TableHead>{t('provider2', 'Provider')}</TableHead>
+								<TableHead>{t('model', 'Model')}</TableHead>
+								<TableHead>{t('posture', 'Posture')}</TableHead>
+								<TableHead className="text-center">{t('vetted', 'Vetted')}</TableHead>
+								<TableHead>{t('note', 'Note')}</TableHead>
+								<TableHead className="text-right">{t('action', 'Action')}</TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
@@ -2688,8 +2670,7 @@ function RegistryTab({
 										colSpan={6}
 										className="py-8 text-center text-sm text-muted-foreground"
 									>
-										No registered or observed models yet. Run reconcile from an
-										app inventory detail to scan its boards.
+										{`No registered or observed models yet. Run reconcile from an app inventory detail to scan its boards.`}
 									</TableCell>
 								</TableRow>
 							)}
@@ -2702,18 +2683,18 @@ function RegistryTab({
 											<div className="flex flex-wrap gap-1">
 												{item.needsRating && (
 													<Badge variant="outline" className="text-amber-600">
-														Needs rating
+														{t('needsRating', 'Needs rating')}
 													</Badge>
 												)}
 												{item.observed && (
 													<Badge variant="outline">
 														{item.observedCount > 1
-															? `${item.observedCount} observations`
+															? t('observedcountObservations', '{{observedCount}} observations', { observedCount: item.observedCount })
 															: "Observed"}
 													</Badge>
 												)}
 												{!item.registered && (
-													<Badge variant="secondary">Unregistered</Badge>
+													<Badge variant="secondary">{t('unregistered', 'Unregistered')}</Badge>
 												)}
 											</div>
 										</div>
@@ -2725,9 +2706,9 @@ function RegistryTab({
 									</TableCell>
 									<TableCell className="text-center">
 										{item.vetted ? (
-											<span className="text-emerald-600">Yes</span>
+											<span className="text-emerald-600">{t('yes', 'Yes')}</span>
 										) : (
-											<span className="text-amber-600">No</span>
+											<span className="text-amber-600">{t('no', 'No')}</span>
 										)}
 									</TableCell>
 									<TableCell className="text-sm text-muted-foreground">

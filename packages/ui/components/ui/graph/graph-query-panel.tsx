@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Network, Play, Table2 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Button } from "../button";
@@ -19,6 +20,7 @@ export function GraphQueryPanel({
 	loading,
 	error,
 }: GraphQueryPanelProps) {
+	const { t } = useTranslation("common");
 	const [query, setQuery] = useState("");
 	const [activeTab, setActiveTab] = useState("table");
 
@@ -43,7 +45,7 @@ export function GraphQueryPanel({
 			<div className="p-3 border-b space-y-2">
 				<div className="flex items-center justify-between">
 					<p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-						Cypher Query
+						{t('cypherQuery', 'Cypher Query')}
 					</p>
 					<Button
 						size="sm"
@@ -58,7 +60,7 @@ export function GraphQueryPanel({
 					value={query}
 					onChange={(e) => setQuery(e.target.value)}
 					onKeyDown={handleKeyDown}
-					placeholder="MATCH (n:Person)-[r]->(m) RETURN n, r, m LIMIT 100"
+					placeholder={t('matchNpersonrmReturnNRMLimit100', 'MATCH (n:Person)-[r]->(m) RETURN n, r, m LIMIT 100')}
 					className="w-full min-h-[80px] max-h-[200px] rounded-md border bg-muted/50 px-3 py-2 text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-ring"
 					spellCheck={false}
 				/>
@@ -78,11 +80,11 @@ export function GraphQueryPanel({
 						<TabsList className="mx-3 mt-2 w-fit">
 							<TabsTrigger value="table" className="text-xs gap-1">
 								<Table2 className="h-3.5 w-3.5" />
-								Table
+								{t('table', 'Table')}
 							</TabsTrigger>
 							<TabsTrigger value="json" className="text-xs gap-1">
 								<Network className="h-3.5 w-3.5" />
-								JSON
+								{`JSON`}
 							</TabsTrigger>
 						</TabsList>
 						<TabsContent value="table" className="flex-1 m-0 p-3 min-h-0">
@@ -104,7 +106,7 @@ export function GraphQueryPanel({
 													))
 												) : (
 													<th className="px-3 py-2 text-left font-medium text-muted-foreground">
-														Value
+														{t('value2', 'Value')}
 													</th>
 												)}
 											</tr>
@@ -145,7 +147,7 @@ export function GraphQueryPanel({
 			)}
 			{results && results.length === 0 && (
 				<div className="p-4 text-center text-sm text-muted-foreground">
-					Query returned no results
+					{t('queryReturnedNoResults', 'Query returned no results')}
 				</div>
 			)}
 		</div>

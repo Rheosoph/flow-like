@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Settings } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -158,6 +159,7 @@ function PageInterfaceInner({
 	route,
 	page: providedPage,
 }: PageInterfaceProps) {
+	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
 	const router = useRouter();
@@ -721,13 +723,13 @@ function PageInterfaceInner({
 	if (!routeMapping && !providedPage) {
 		return (
 			<div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
-				<p>No route configured for this path</p>
+				<p>{t('noRouteConfiguredForThisPath', 'No route configured for this path')}</p>
 				<Link
 					href={`/library/config/pages?appId=${appId}`}
 					className="flex items-center gap-2 text-sm hover:text-foreground transition-colors"
 				>
 					<Settings className="h-4 w-4" />
-					Configure routes
+					{t('configureRoutes', 'Configure routes')}
 				</Link>
 			</div>
 		);
@@ -736,7 +738,7 @@ function PageInterfaceInner({
 	if (routeEvent && !routeEvent.default_page_id) {
 		return (
 			<div className="flex items-center justify-center h-full text-muted-foreground">
-				<p>Event does not have a page target</p>
+				<p>{t('eventDoesNotHaveAPageTarget', 'Event does not have a page target')}</p>
 			</div>
 		);
 	}
@@ -744,7 +746,7 @@ function PageInterfaceInner({
 	if (!activeSurface) {
 		return (
 			<div className="flex items-center justify-center h-full text-muted-foreground">
-				<p>No content to display</p>
+				<p>{t('noContentToDisplay', 'No content to display')}</p>
 			</div>
 		);
 	}

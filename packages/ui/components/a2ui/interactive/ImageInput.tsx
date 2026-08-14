@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { ImagePlus, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
@@ -75,8 +76,8 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 
 function formatFileSize(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	if (bytes < 1024 * 1024) return i18next.t('valKb', '{{val}} KB', { val: (bytes / 1024).toFixed(1) });
+	return i18next.t('valMb', '{{val}} MB', { val: (bytes / (1024 * 1024)).toFixed(1) });
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -94,6 +95,7 @@ export function A2UIImageInput({
 	componentId,
 	surfaceId,
 }: ComponentProps<ImageInputComponent>) {
+	const { t } = useTranslation("common");
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const isTriggering = useIsComponentTriggering(componentId);
@@ -157,12 +159,12 @@ export function A2UIImageInput({
 			}
 		};
 		window.addEventListener(
-			"a2ui:clearFileInput",
+			t('a2uiclearfileinput', 'a2ui:clearFileInput'),
 			handleClear as EventListener,
 		);
 		return () => {
 			window.removeEventListener(
-				"a2ui:clearFileInput",
+				t('a2uiclearfileinput', 'a2ui:clearFileInput'),
 				handleClear as EventListener,
 			);
 		};
@@ -264,7 +266,7 @@ export function A2UIImageInput({
 						type: file.type,
 						dataUrl: image.dataUrl,
 						uploading: false,
-						uploadError: err instanceof Error ? err.message : "Upload failed",
+						uploadError: err instanceof Error ? err.message : t('uploadFailed', 'Upload failed'),
 					};
 				}
 			},
@@ -372,7 +374,7 @@ export function A2UIImageInput({
 					className="absolute inset-0 h-full w-full appearance-none bg-transparent text-left"
 					onClick={() => inputRef.current?.click()}
 					disabled={disabled || isBusy}
-					aria-label={image ? "Replace image" : "Upload image"}
+					aria-label={image ? "Replace image" : t('uploadImage', 'Upload image')}
 				>
 					{image && showPreview ? (
 						<>
@@ -386,7 +388,7 @@ export function A2UIImageInput({
 									<div className="flex flex-col items-center gap-2 text-white">
 										<Loader2 className="h-8 w-8 animate-spin" />
 										{isTriggering && (
-											<span className="text-sm">Running action...</span>
+											<span className="text-sm">{t('runningAction', 'Running action...')}</span>
 										)}
 									</div>
 								</div>
@@ -398,13 +400,13 @@ export function A2UIImageInput({
 								<>
 									<Loader2 className="h-8 w-8 animate-spin" />
 									<span className="text-sm">
-										{isUploading ? "Uploading..." : "Running action..."}
+										{isUploading ? "Uploading..." : t('runningAction', 'Running action...')}
 									</span>
 								</>
 							) : (
 								<>
 									<ImagePlus className="h-8 w-8" />
-									<span className="text-sm">Click to upload image</span>
+									<span className="text-sm">{t('clickToUploadImage', 'Click to upload image')}</span>
 								</>
 							)}
 						</div>
@@ -430,7 +432,7 @@ export function A2UIImageInput({
 							onClick={() => handleRemove(0)}
 							disabled={disabled || isBusy}
 						>
-							<X className="h-4 w-4 mr-1" /> Remove
+							<X className="h-4 w-4 mr-1" /> {t('remove', 'Remove')}
 						</Button>
 					</div>
 				) : null}
@@ -520,12 +522,12 @@ export function A2UIImageInput({
 						{isBusy ? (
 							<div className="flex flex-col items-center gap-1 text-muted-foreground">
 								<Loader2 className="h-6 w-6 animate-spin" />
-								{isTriggering && <span className="text-xs">Running</span>}
+								{isTriggering && <span className="text-xs">{t('running', 'Running')}</span>}
 							</div>
 						) : (
 							<>
 								<ImagePlus className="h-6 w-6 text-muted-foreground" />
-								<span className="text-xs text-muted-foreground">Add</span>
+								<span className="text-xs text-muted-foreground">{t('add', 'Add')}</span>
 							</>
 						)}
 					</button>
@@ -533,8 +535,7 @@ export function A2UIImageInput({
 			</div>
 
 			{!showPreview && displayImages.length > 0 && (
-				<div className="text-sm text-muted-foreground">
-					{displayImages.length} image{displayImages.length !== 1 ? "s" : ""}{" "}
+				<div className="text-sm text-muted-foreground">{t('lengthImage', '{{length}} image', { length: displayImages.length })}{displayImages.length !== 1 ? "s" : ""}{" "}
 					selected
 					{displayImages.some((img) => img.uploading) && " (uploading...)"}
 				</div>

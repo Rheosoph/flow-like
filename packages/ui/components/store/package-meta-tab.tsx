@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	BookOpen,
@@ -50,6 +51,7 @@ export function PackageMetaTab({
 	fetcher,
 	auth,
 }: PackageMetaTabProps) {
+	const { t } = useTranslation("store");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
@@ -174,13 +176,14 @@ export function PackageMetaTab({
 			);
 		},
 		onSuccess: () => {
-			toast.success("Metadata saved");
+			toast.success(t("metadataSaved", "Metadata saved"));
 			queryClient.invalidateQueries({ queryKey });
 			queryClient.invalidateQueries({
 				queryKey: ["registry-package", packageId],
 			});
 		},
-		onError: () => toast.error("Failed to save metadata"),
+		onError: () =>
+			toast.error(t("failedToSaveMetadata", "Failed to save metadata")),
 	});
 
 	const invalidateMeta = useCallback(() => {
@@ -212,14 +215,17 @@ export function PackageMetaTab({
 
 	const iconUpload = useMutation({
 		mutationFn: (file: File) => uploadMedia("icon", file),
-		onSuccess: () => toast.success("Icon uploaded"),
-		onError: () => toast.error("Failed to upload icon"),
+		onSuccess: () => toast.success(t("iconUploaded", "Icon uploaded")),
+		onError: () =>
+			toast.error(t("failedToUploadIcon", "Failed to upload icon")),
 	});
 
 	const thumbnailUpload = useMutation({
 		mutationFn: (file: File) => uploadMedia("thumbnail", file),
-		onSuccess: () => toast.success("Thumbnail uploaded"),
-		onError: () => toast.error("Failed to upload thumbnail"),
+		onSuccess: () =>
+			toast.success(t("thumbnailUploaded", "Thumbnail uploaded")),
+		onError: () =>
+			toast.error(t("failedToUploadThumbnail", "Failed to upload thumbnail")),
 	});
 
 	const handleFileSelect = useCallback(
@@ -229,7 +235,11 @@ export function PackageMetaTab({
 			const maxSize = item === "icon" ? MAX_ICON_SIZE : MAX_THUMBNAIL_SIZE;
 			if (file.size > maxSize) {
 				toast.error(
-					`File too large. Maximum size is ${Math.round(maxSize / 1024 / 1024)}MB`,
+					t(
+						"fileTooLargeMaximumSizeIsValmb",
+						"File too large. Maximum size is {{val}}MB",
+						{ val: Math.round(maxSize / 1024 / 1024) },
+					),
 				);
 				return;
 			}
@@ -237,7 +247,7 @@ export function PackageMetaTab({
 			else thumbnailUpload.mutate(file);
 			e.target.value = "";
 		},
-		[iconUpload, thumbnailUpload],
+		[iconUpload, t, thumbnailUpload],
 	);
 
 	const isUploading = iconUpload.isPending || thumbnailUpload.isPending;
@@ -256,9 +266,14 @@ export function PackageMetaTab({
 		<div className="space-y-4">
 			<div className="flex items-center justify-between">
 				<div>
-					<h3 className="text-lg font-semibold">Package Metadata</h3>
+					<h3 className="text-lg font-semibold">
+						{t("packageMetadata", "Package Metadata")}
+					</h3>
 					<p className="text-sm text-muted-foreground">
-						Customize how your package appears in the store
+						{t(
+							"customizeHowYourPackageAppearsInTheStore",
+							"Customize how your package appears in the store",
+						)}
 					</p>
 				</div>
 				<Button
@@ -271,36 +286,47 @@ export function PackageMetaTab({
 					) : (
 						<Save className="h-4 w-4" />
 					)}
-					Save Changes
+					{t("saveChanges", "Save Changes")}
 				</Button>
 			</div>
 
 			{/* Basic Info */}
 			<Card>
 				<CardHeader>
-					<CardTitle className="text-base">Basic Information</CardTitle>
+					<CardTitle className="text-base">
+						{t("basicInformation", "Basic Information")}
+					</CardTitle>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="space-y-2">
-						<Label htmlFor="meta-name">Display Name</Label>
+						<Label htmlFor="meta-name">
+							{t("displayName", "Display Name")}
+						</Label>
 						<Input
 							id="meta-name"
 							value={form.name}
 							onChange={(e) => update({ name: e.target.value })}
-							placeholder="Package display name"
+							placeholder={t("packageDisplayName", "Package display name")}
 						/>
 					</div>
 					<div className="space-y-2">
-						<Label htmlFor="meta-description">Short Description</Label>
+						<Label htmlFor="meta-description">
+							{t("shortDescription", "Short Description")}
+						</Label>
 						<Input
 							id="meta-description"
 							value={form.description ?? ""}
 							onChange={(e) => update({ description: e.target.value })}
-							placeholder="Brief description of your package"
+							placeholder={t(
+								"briefDescriptionOfYourPackage",
+								"Brief description of your package",
+							)}
 						/>
 					</div>
 					<div className="space-y-2">
-						<Label>Long Description (Markdown)</Label>
+						<Label>
+							{t("longDescriptionMarkdown", "Long Description (Markdown)")}
+						</Label>
 						<div className="rounded-md border min-h-50">
 							<TextEditor
 								initialContent={meta?.longDescription || ""}
@@ -314,12 +340,15 @@ export function PackageMetaTab({
 						</div>
 					</div>
 					<div className="space-y-2">
-						<Label htmlFor="meta-use-case">Use Case</Label>
+						<Label htmlFor="meta-use-case">{t("useCase", "Use Case")}</Label>
 						<Input
 							id="meta-use-case"
 							value={form.useCase ?? ""}
 							onChange={(e) => update({ useCase: e.target.value })}
-							placeholder="What problem does this package solve?"
+							placeholder={t(
+								"whatProblemDoesThisPackageSolve",
+								"What problem does this package solve?",
+							)}
 						/>
 					</div>
 				</CardContent>
@@ -330,7 +359,7 @@ export function PackageMetaTab({
 				<CardHeader>
 					<CardTitle className="text-base flex items-center gap-2">
 						<Tag className="h-4 w-4" />
-						Tags
+						{t("tags", "Tags")}
 					</CardTitle>
 				</CardHeader>
 				<CardContent className="space-y-3">
@@ -338,7 +367,10 @@ export function PackageMetaTab({
 						value={newTag}
 						onChange={(e) => setNewTag(e.target.value)}
 						onKeyDown={handleTagKeyDown}
-						placeholder="Type a tag and press Enter..."
+						placeholder={t(
+							"typeATagAndPressEnter",
+							"Type a tag and press Enter...",
+						)}
 					/>
 					{(form.tags?.length ?? 0) > 0 && (
 						<div className="flex flex-wrap gap-1.5">
@@ -364,7 +396,7 @@ export function PackageMetaTab({
 				<CardHeader>
 					<CardTitle className="text-base flex items-center gap-2">
 						<ImageIcon className="h-4 w-4" />
-						Branding
+						{t("branding", "Branding")}
 					</CardTitle>
 				</CardHeader>
 				<CardContent className="space-y-4">
@@ -384,12 +416,12 @@ export function PackageMetaTab({
 					/>
 					<div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 						<div className="space-y-3">
-							<Label>Icon</Label>
+							<Label>{t("icon", "Icon")}</Label>
 							<div className="flex items-center gap-4">
 								{meta?.icon ? (
 									<img
 										src={meta.icon}
-										alt="Icon"
+										alt={t("icon", "Icon")}
 										className="h-16 w-16 rounded-lg object-cover border"
 									/>
 								) : (
@@ -409,20 +441,23 @@ export function PackageMetaTab({
 									) : (
 										<Upload className="h-4 w-4" />
 									)}
-									Upload Icon
+									{t("uploadIcon", "Upload Icon")}
 								</Button>
 							</div>
 							<p className="text-xs text-muted-foreground">
-								Square image, max 20 MB. PNG, JPEG, or WebP.
+								{t(
+									"squareImageMax20MbPngJpegOrWebp",
+									"Square image, max 20 MB. PNG, JPEG, or WebP.",
+								)}
 							</p>
 						</div>
 						<div className="space-y-3">
-							<Label>Thumbnail</Label>
+							<Label>{t("thumbnail", "Thumbnail")}</Label>
 							<div className="flex items-center gap-4">
 								{meta?.thumbnail ? (
 									<img
 										src={meta.thumbnail}
-										alt="Thumbnail"
+										alt={t("thumbnail", "Thumbnail")}
 										className="h-16 w-28 rounded-lg object-cover border"
 									/>
 								) : (
@@ -442,11 +477,14 @@ export function PackageMetaTab({
 									) : (
 										<Upload className="h-4 w-4" />
 									)}
-									Upload Thumbnail
+									{t("uploadThumbnail", "Upload Thumbnail")}
 								</Button>
 							</div>
 							<p className="text-xs text-muted-foreground">
-								16:9 or similar, max 30 MB. PNG, JPEG, or WebP.
+								{t(
+									"169OrSimilarMax30MbPngJpegOrWebp",
+									"16:9 or similar, max 30 MB. PNG, JPEG, or WebP.",
+								)}
 							</p>
 						</div>
 					</div>
@@ -458,14 +496,14 @@ export function PackageMetaTab({
 				<CardHeader>
 					<CardTitle className="text-base flex items-center gap-2">
 						<Globe className="h-4 w-4" />
-						Links
+						{t("links", "Links")}
 					</CardTitle>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="space-y-2">
 						<Label htmlFor="meta-website" className="flex items-center gap-1.5">
 							<ExternalLink className="h-3.5 w-3.5" />
-							Website
+							{t("website", "Website")}
 						</Label>
 						<Input
 							id="meta-website"
@@ -478,7 +516,7 @@ export function PackageMetaTab({
 					<div className="space-y-2">
 						<Label htmlFor="meta-docs" className="flex items-center gap-1.5">
 							<BookOpen className="h-3.5 w-3.5" />
-							Documentation
+							{t("documentation", "Documentation")}
 						</Label>
 						<Input
 							id="meta-docs"
@@ -491,7 +529,7 @@ export function PackageMetaTab({
 					<div className="space-y-2">
 						<Label htmlFor="meta-support" className="flex items-center gap-1.5">
 							<HelpCircle className="h-3.5 w-3.5" />
-							Support
+							{t("support", "Support")}
 						</Label>
 						<Input
 							id="meta-support"
@@ -507,7 +545,9 @@ export function PackageMetaTab({
 			{/* Release Notes */}
 			<Card>
 				<CardHeader>
-					<CardTitle className="text-base">Release Notes (Markdown)</CardTitle>
+					<CardTitle className="text-base">
+						{t("releaseNotesMarkdown", "Release Notes (Markdown)")}
+					</CardTitle>
 				</CardHeader>
 				<CardContent>
 					<div className="rounded-md border min-h-30">

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowDownAZ,
@@ -19,7 +20,7 @@ import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useIsMobile } from "../../hooks/use-mobile";
 import { useSearch } from "../../hooks/use-search-index";
-import { formatAppCategory } from "../../lib/app-category";
+import { useAppCategoryLabel } from "../../lib/app-category";
 import { IBitTypes } from "../../lib/schema/hub/bit-search-query";
 import type { IProfileApp } from "../../lib/schema/profile/profile";
 import { nowSystemTime } from "../../lib/time/now";
@@ -65,6 +66,8 @@ export function LibraryPage({
 	isAuthenticated = true,
 	renderExtras,
 }: LibraryPageProps) {
+	const { t } = useTranslation("common");
+	const categoryLabel = useAppCategoryLabel();
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const currentProfile = useInvoke(
@@ -270,7 +273,7 @@ export function LibraryPage({
 	const categorizedItems = useMemo(() => {
 		const groups = new Map<string, LibraryItem[]>();
 		for (const item of ungroupedItems) {
-			const label = formatAppCategory(item.app.primary_category);
+			const label = categoryLabel(item.app.primary_category);
 			const existing = groups.get(label) ?? [];
 			existing.push(item);
 			groups.set(label, existing);
@@ -281,7 +284,7 @@ export function LibraryPage({
 				items: sortItems(sectionItems, sortMode),
 			}))
 			.sort((a, b) => a.label.localeCompare(b.label));
-	}, [ungroupedItems, sortMode]);
+	}, [ungroupedItems, sortMode, categoryLabel]);
 
 	const searchResults = useSearch(itemsForDisplay, searchQuery, {
 		fields: [
@@ -303,7 +306,7 @@ export function LibraryPage({
 
 	useMobileHeader({
 		right: menuActions,
-		title: "My Apps",
+		title: t("myApps", "My Apps"),
 	});
 
 	const isLoading = apps.isLoading || currentProfile.isLoading;
@@ -330,7 +333,11 @@ export function LibraryPage({
 
 			const meta = {
 				name: projectName,
-				description: `Coding project: ${projectName}`,
+				description: t(
+					"codingProjectProjectname",
+					"Coding project: {{projectName}}",
+					{ projectName },
+				),
 				tags: ["coding", "development"],
 				use_case: "Development",
 				created_at: nowSystemTime(),
@@ -407,10 +414,13 @@ export function LibraryPage({
 				<div className="w-full max-w-md space-y-10">
 					<div className="text-center space-y-3">
 						<h1 className="text-2xl font-semibold tracking-tight">
-							Your Library
+							{t("yourLibrary", "Your Library")}
 						</h1>
 						<p className="text-sm text-muted-foreground/70">
-							Apps you create or join will appear here
+							{t(
+								"appsYouCreateOrJoinWillAppearHere",
+								"Apps you create or join will appear here",
+							)}
 						</p>
 					</div>
 
@@ -423,8 +433,11 @@ export function LibraryPage({
 						]}
 						icons={[Sparkles, LayoutGridIcon, FilesIcon]}
 						className="w-full border border-dashed border-border/30 rounded-2xl bg-muted/5"
-						title="No apps yet"
-						description="Create your first app or join one with an invite link."
+						title={t("noAppsYet", "No apps yet")}
+						description={t(
+							"createYourFirstAppOrJoinOneWithAnInviteLink",
+							"Create your first app or join one with an invite link.",
+						)}
 					/>
 
 					<div className="relative">
@@ -433,7 +446,7 @@ export function LibraryPage({
 						</div>
 						<div className="relative flex justify-center text-xs">
 							<span className="bg-background px-3 text-muted-foreground/50">
-								or join a project
+								{t("orJoinAProject", "or join a project")}
 							</span>
 						</div>
 					</div>
@@ -460,7 +473,7 @@ export function LibraryPage({
 					<div className="relative w-full sm:flex-1 sm:max-w-lg">
 						<Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40 pointer-events-none" />
 						<Input
-							placeholder="Search…"
+							placeholder={t("search", "Search…")}
 							value={searchQuery}
 							onChange={(e) => setSearchQuery(e.target.value)}
 							className="pl-11 h-11 sm:h-10 rounded-full bg-muted/30 border-transparent focus:border-border/40 focus:bg-muted/50 transition-all text-sm"
@@ -498,8 +511,11 @@ export function LibraryPage({
 							</TooltipTrigger>
 							<TooltipContent>
 								{sortMode === "alpha"
-									? "Sorted A\u2013Z \u00B7 click for recent"
-									: "Sorted by recent \u00B7 click for A\u2013Z"}
+									? t("sortedAzClickForRecent", "Sorted A–Z · click for recent")
+									: t(
+											"sortedByRecentClickForAz",
+											"Sorted by recent · click for A–Z",
+										)}
 							</TooltipContent>
 						</Tooltip>
 
@@ -521,7 +537,7 @@ export function LibraryPage({
 									<Plus className="h-4 w-4" />
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent>Create Flow</TooltipContent>
+							<TooltipContent>{t("createFlow", "Create Flow")}</TooltipContent>
 						</Tooltip>
 
 						<Tooltip>
@@ -544,7 +560,9 @@ export function LibraryPage({
 								</Button>
 							</TooltipTrigger>
 							<TooltipContent>
-								{visibilityMode ? "Exit visibility mode" : "Show / hide apps"}
+								{visibilityMode
+									? t("exitVisibilityMode", "Exit visibility mode")
+									: t("showHideApps", "Show / hide apps")}
 							</TooltipContent>
 						</Tooltip>
 					</div>
@@ -552,7 +570,10 @@ export function LibraryPage({
 
 				{visibilityMode && (
 					<p className="text-xs text-muted-foreground/40">
-						Click any app to toggle it in your library. Faded apps are hidden.
+						{t(
+							"clickAnyAppToToggleItInYourLibraryFadedAppsAreHidden",
+							"Click any app to toggle it in your library. Faded apps are hidden.",
+						)}
 					</p>
 				)}
 			</div>
@@ -602,7 +623,7 @@ export function LibraryPage({
 
 						{recentItems.length > 0 && (
 							<Section
-								title="Recently updated"
+								title={t("recentlyUpdated", "Recently updated")}
 								icon={
 									isMobile ? undefined : (
 										<Clock className="h-3.5 w-3.5 text-muted-foreground/50" />

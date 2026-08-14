@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { SlateElementProps, TEquationElement } from "platejs";
 
 import { getEquationHtml } from "@platejs/math";
@@ -81,6 +82,7 @@ function sanitizeKatexHtml(html: string): string {
 export function EquationElementStatic(
 	props: SlateElementProps<TEquationElement>,
 ) {
+	const { t } = useTranslation("common");
 	const { element } = props;
 
 	const html = getEquationHtml({
@@ -103,9 +105,7 @@ export function EquationElementStatic(
 			<div
 				className={cn(
 					"group flex items-center justify-center rounded-sm select-none hover:bg-primary/10 data-[selected=true]:bg-primary/10",
-					element.texExpression.length === 0
-						? "bg-muted p-3 pr-9"
-						: "px-2 py-1",
+					t('px2Py1', { defaultValue_zero: 'bg-muted p-3 pr-9', defaultValue_other: 'px-2 py-1', count: element.texExpression.length }),
 				)}
 			>
 				{element.texExpression.length > 0 ? (
@@ -117,7 +117,7 @@ export function EquationElementStatic(
 				) : (
 					<div className="flex h-7 w-full items-center gap-2 text-sm whitespace-nowrap text-muted-foreground">
 						<RadicalIcon className="size-6 text-muted-foreground/80" />
-						<div>Add a Tex equation</div>
+						<div>{t('addATexEquation', 'Add a Tex equation')}</div>
 					</div>
 				)}
 			</div>

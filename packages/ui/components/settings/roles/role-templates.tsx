@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
 import {
@@ -17,6 +18,7 @@ export function TemplatePicker({
 	onPick: (template: RoleTemplate) => void;
 	onCancel: () => void;
 }>) {
+	const { t } = useTranslation("settings");
 	return (
 		<section
 			id="role-templates"
@@ -25,14 +27,14 @@ export function TemplatePicker({
 			<div className="flex items-start justify-between gap-3">
 				<div>
 					<h2 className="text-sm font-semibold">
-						Start from a shape that already works
+						{`Start from a shape that already works`}
 					</h2>
 					<p className="text-xs text-muted-foreground">
-						Pick the closest fit, then adjust. Nothing is locked in.
+						{t('pickTheClosestFitThenAdjustNothingIsLockedIn', 'Pick the closest fit, then adjust. Nothing is locked in.')}
 					</p>
 				</div>
 				<Button variant="ghost" size="sm" onClick={onCancel}>
-					Cancel
+					{t('cancel', 'Cancel')}
 				</Button>
 			</div>
 			<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">

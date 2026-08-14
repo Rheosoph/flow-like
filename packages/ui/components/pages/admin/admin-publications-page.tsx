@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowRight,
@@ -354,6 +355,7 @@ function PaginationControls({
 	totalPages: number;
 	onPageChange: (page: number) => void;
 }) {
+	const { t } = useTranslation("admin");
 	if (totalPages <= 1) return null;
 	return (
 		<div className="flex items-center justify-end gap-2 pt-4">
@@ -365,9 +367,7 @@ function PaginationControls({
 			>
 				<ChevronLeft className="h-4 w-4" />
 			</Button>
-			<span className="text-sm text-muted-foreground">
-				Page {page} of {totalPages}
-			</span>
+			<span className="text-sm text-muted-foreground">{t('pagePageOfTotalpages', 'Page {{page}} of {{totalPages}}', { page, totalPages })}</span>
 			<Button
 				variant="outline"
 				size="sm"
@@ -387,6 +387,7 @@ function AppRequestsTab({
 	statusFilter: AppStatusFilter;
 	onSelectRequest?: (requestId: string) => void;
 }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -432,12 +433,12 @@ function AppRequestsTab({
 					<Table>
 						<TableHeader>
 							<TableRow>
-								<TableHead>App</TableHead>
-								<TableHead>Visibility</TableHead>
-								<TableHead>Status</TableHead>
-								<TableHead>Stats</TableHead>
-								<TableHead>Submitted</TableHead>
-								<TableHead className="text-right">Actions</TableHead>
+								<TableHead>{t('app', 'App')}</TableHead>
+								<TableHead>{t('visibility', 'Visibility')}</TableHead>
+								<TableHead>{t('status', 'Status')}</TableHead>
+								<TableHead>{t('stats', 'Stats')}</TableHead>
+								<TableHead>{t('submitted2', 'Submitted')}</TableHead>
+								<TableHead className="text-right">{t('actions', 'Actions')}</TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
@@ -449,7 +450,7 @@ function AppRequestsTab({
 											colSpan={6}
 											className="text-center text-muted-foreground py-8"
 										>
-											No publication requests found.
+											{t('noPublicationRequestsFound', 'No publication requests found.')}
 										</TableCell>
 									</TableRow>
 								) : (
@@ -534,7 +535,7 @@ function AppRequestsTab({
 													onClick={() => onSelectRequest?.(req.id)}
 												>
 													<Eye className="h-3 w-3 mr-1" />
-													Review
+													{t('review', 'Review')}
 												</Button>
 											</TableCell>
 										</TableRow>
@@ -560,6 +561,7 @@ function PackageRequestsTab({
 	statusFilter: PackageStatusFilter;
 	onNavigateToPackage?: (packageId: string) => void;
 }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -611,10 +613,10 @@ function PackageRequestsTab({
 						<TableHeader>
 							<TableRow>
 								<TableHead>Name</TableHead>
-								<TableHead>Version</TableHead>
-								<TableHead>Status</TableHead>
-								<TableHead>Downloads</TableHead>
-								<TableHead className="text-right">Actions</TableHead>
+								<TableHead>{t('version', 'Version')}</TableHead>
+								<TableHead>{t('status', 'Status')}</TableHead>
+								<TableHead>{t('downloads', 'Downloads')}</TableHead>
+								<TableHead className="text-right">{t('actions', 'Actions')}</TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
@@ -626,7 +628,7 @@ function PackageRequestsTab({
 											colSpan={5}
 											className="text-center text-muted-foreground py-8"
 										>
-											No packages pending review.
+											{t('noPackagesPendingReview', 'No packages pending review.')}
 										</TableCell>
 									</TableRow>
 								) : (
@@ -659,7 +661,7 @@ function PackageRequestsTab({
 													onClick={() => onNavigateToPackage?.(pkg.id)}
 												>
 													<Eye className="h-3 w-3 mr-1" />
-													View
+													{t('view', 'View')}
 												</Button>
 											</TableCell>
 										</TableRow>
@@ -683,6 +685,7 @@ export function AdminPublicationsPage({
 	onSelectRequest,
 	onNavigateToSuites,
 }: AdminPublicationsPageProps) {
+	const { t } = useTranslation("admin");
 	const [activeTab, setActiveTab] = useState<"apps" | "packages">("apps");
 	const [appStatusFilter, setAppStatusFilter] =
 		useState<AppStatusFilter>("all");
@@ -704,11 +707,9 @@ export function AdminPublicationsPage({
 			<Card className="border-border/60 shadow-sm">
 				<CardHeader className="gap-4 sm:flex-row sm:items-end sm:justify-between">
 					<div className="space-y-2">
-						<CardTitle className="text-3xl">Publication Requests</CardTitle>
+						<CardTitle className="text-3xl">{t('publicationRequests', 'Publication Requests')}</CardTitle>
 						<CardDescription className="max-w-3xl text-sm leading-6">
-							Review app publication requests and package submissions from one
-							place. Package requests use the package review queue and app
-							requests use the publication request workflow.
+							{`Review app publication requests and package submissions from one place. Package requests use the package review queue and app requests use the publication request workflow.`}
 						</CardDescription>
 					</div>
 					<div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -720,14 +721,14 @@ export function AdminPublicationsPage({
 								}
 							>
 								<SelectTrigger className="w-full sm:w-40">
-									<SelectValue placeholder="App status" />
+									<SelectValue placeholder={t('appStatus', 'App status')} />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="all">All app statuses</SelectItem>
-									<SelectItem value="pending">Pending</SelectItem>
-									<SelectItem value="on_hold">On hold</SelectItem>
-									<SelectItem value="accepted">Accepted</SelectItem>
-									<SelectItem value="rejected">Rejected</SelectItem>
+									<SelectItem value="all">{t('allAppStatuses', 'All app statuses')}</SelectItem>
+									<SelectItem value="pending">{t('pending', 'Pending')}</SelectItem>
+									<SelectItem value="on_hold">{t('onHold', 'On hold')}</SelectItem>
+									<SelectItem value="accepted">{t('accepted', 'Accepted')}</SelectItem>
+									<SelectItem value="rejected">{t('rejected', 'Rejected')}</SelectItem>
 								</SelectContent>
 							</Select>
 						) : (
@@ -738,27 +739,27 @@ export function AdminPublicationsPage({
 								}
 							>
 								<SelectTrigger className="w-full sm:w-48">
-									<SelectValue placeholder="Package status" />
+									<SelectValue placeholder={t('packageStatus', 'Package status')} />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="all">Pending review</SelectItem>
-									<SelectItem value="pending_review">Pending review</SelectItem>
-									<SelectItem value="active">Approved</SelectItem>
-									<SelectItem value="rejected">Rejected</SelectItem>
-									<SelectItem value="deprecated">Deprecated</SelectItem>
-									<SelectItem value="disabled">Disabled</SelectItem>
+									<SelectItem value="all">{t('pendingReview', 'Pending review')}</SelectItem>
+									<SelectItem value="pending_review">{t('pendingReview', 'Pending review')}</SelectItem>
+									<SelectItem value="active">{t('approved', 'Approved')}</SelectItem>
+									<SelectItem value="rejected">{t('rejected', 'Rejected')}</SelectItem>
+									<SelectItem value="deprecated">{t('deprecated', 'Deprecated')}</SelectItem>
+									<SelectItem value="disabled">{t('disabled', 'Disabled')}</SelectItem>
 								</SelectContent>
 							</Select>
 						)}
 						{onNavigateToSuites && (
 							<Button variant="outline" size="sm" onClick={onNavigateToSuites}>
 								<Layers className="mr-2 h-4 w-4" />
-								Suite Requests
+								{t('suiteRequests', 'Suite Requests')}
 							</Button>
 						)}
 						<Button variant="outline" size="sm" onClick={handleRefresh}>
 							<RefreshCw className="mr-2 h-4 w-4" />
-							Refresh
+							{t('refresh', 'Refresh')}
 						</Button>
 					</div>
 				</CardHeader>
@@ -769,8 +770,8 @@ export function AdminPublicationsPage({
 				onValueChange={(value) => setActiveTab(value as "apps" | "packages")}
 			>
 				<TabsList className="w-full justify-start gap-2 rounded-xl border border-border/60 bg-background p-1">
-					<TabsTrigger value="apps">App Requests</TabsTrigger>
-					<TabsTrigger value="packages">Package Requests</TabsTrigger>
+					<TabsTrigger value="apps">{t('appRequests', 'App Requests')}</TabsTrigger>
+					<TabsTrigger value="packages">{t('packageRequests', 'Package Requests')}</TabsTrigger>
 				</TabsList>
 
 				<TabsContent value="apps" className="mt-4">

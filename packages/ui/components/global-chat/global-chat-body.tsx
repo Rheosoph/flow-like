@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	BotIcon,
 	BrainIcon,
@@ -150,20 +151,35 @@ const PROVIDERS: Array<{
 	{ id: "claude-code", label: "Claude Code", icon: BotIcon },
 ];
 
-// Quick-start prompts on the empty chat; the `prompt` is what actually gets sent.
-const EMPTY_SUGGESTIONS: readonly IEmptyStateSuggestion[] = [
-	{ label: "Create an app", icon: PlusIcon, prompt: "Create a new app" },
-	{
-		label: "Browse the store",
-		icon: PackageIcon,
-		prompt: "Show me the package store",
-	},
-	{
-		label: "What can I build?",
-		icon: SparklesIcon,
-		prompt: "What can I build with Flow-Like?",
-	},
-];
+// Quick-start prompts on the empty chat; the `prompt` is what actually gets
+// sent, so it is localized too — FlowPilot answers in the language it was asked
+// in.
+function useEmptySuggestions(): readonly IEmptyStateSuggestion[] {
+	const { t } = useTranslation("chat");
+	return useMemo(
+		() => [
+			{
+				label: t("createAnApp", "Create an app"),
+				icon: PlusIcon,
+				prompt: t("createANewApp", "Create a new app"),
+			},
+			{
+				label: t("browseTheStore", "Browse the store"),
+				icon: PackageIcon,
+				prompt: t("showMeThePackageStore", "Show me the package store"),
+			},
+			{
+				label: t("whatCanIBuild", "What can I build?"),
+				icon: SparklesIcon,
+				prompt: t(
+					"whatCanIBuildWithFlowlike",
+					"What can I build with Flow-Like?",
+				),
+			},
+		],
+		[t],
+	);
+}
 
 // Radix Select disallows an empty value, so "memory off" uses a sentinel mapped back to "".
 const MEMORY_OFF = "__off__";
@@ -194,6 +210,8 @@ interface GlobalChatBodyProps {
  * bubbles use the local <Chat> ref, and committed messages are pushed to the store + persisted.
  */
 export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
+	const { t } = useTranslation("chat");
+	const emptySuggestions = useEmptySuggestions();
 	const chatRef = useRef<IChatRef>(null);
 	// One channel per surface: an app chat can be open beside this one, and typing in it must not
 	// stir this mark. Never state — it changes per keystroke and only the film's loop reads it.
@@ -533,7 +551,11 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					attachments = await fileToAttachment(allFiles, backend, true);
 				} catch (error) {
 					toast.error(
-						`Failed to prepare attachments: ${error instanceof Error ? error.message : String(error)}`,
+						t(
+							"failedToPrepareAttachmentsVal",
+							"Failed to prepare attachments: {{val}}",
+							{ val: error instanceof Error ? error.message : String(error) },
+						),
 					);
 				}
 			}
@@ -659,8 +681,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					}
 				: undefined;
 
-			// Forward the open Data Studio page (if any) so the assistant defaults data questions to
-			// its app/overlay via data_studio_agent without asking which project.
+			// Forward the open Data Studio page (if any) so the assistant resolves "this data" to the
+			// right app/overlay without overriding Event-first routing.
 			const dataStudio = useAssistantSurface.getState().dataStudioSurface;
 			const dataStudioContext = dataStudio
 				? {
@@ -776,7 +798,9 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				setInteractionResponded(interactionId, value);
 			} catch (error) {
 				toast.error(
-					`Failed to submit response: ${error instanceof Error ? error.message : String(error)}`,
+					t("failedToSubmitResponseVal", "Failed to submit response: {{val}}", {
+						val: error instanceof Error ? error.message : String(error),
+					}),
 				);
 			}
 		},
@@ -827,7 +851,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			const delivered = await steerGlobalChatRun(target.runId, content);
 			if (!delivered) {
 				toast.error(
-					"FlowPilot could not take that mid-run. It was not sent — try again or wait for the turn to finish.",
+					t(
+						"flowpilotCouldNotTakeThatMidrunItWasNotSentTryAgainOrWaitForTheTurnToFinish",
+						"FlowPilot could not take that mid-run. It was not sent — try again or wait for the turn to finish.",
+					),
 				);
 			}
 			return delivered;
@@ -1025,14 +1052,17 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				>
 					<SelectTrigger
 						className="h-9 md:h-7 data-[size=default]:h-9 md:data-[size=default]:h-7 min-w-0 max-w-36 shrink-0 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs shadow-none outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-						title="Profile memory embedding model"
+						title={t(
+							"profileMemoryEmbeddingModel",
+							"Profile memory embedding model",
+						)}
 					>
 						<BrainIcon className="size-3.5 mr-1 text-muted-foreground shrink-0" />
-						<SelectValue placeholder="Memory: off" />
+						<SelectValue placeholder={t("memoryOff", "Memory: off")} />
 					</SelectTrigger>
 					<SelectContent className="z-10000">
 						<SelectItem value={MEMORY_OFF} className="text-xs">
-							Memory: off
+							{t("memoryOff", "Memory: off")}
 						</SelectItem>
 						{memoryModels.map((bit) => (
 							<SelectItem key={bit.id} value={bit.id} className="text-xs">
@@ -1048,8 +1078,12 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		(option) => option.id === selectedAgentModel?.defaultReasoningEffort,
 	)?.name;
 	const autoReasoningEffortName = defaultReasoningEffortName
-		? `Auto (${defaultReasoningEffortName} default)`
-		: "Auto (provider default)";
+		? t(
+				"autoDefaultreasoningeffortnameDefault",
+				"Auto ({{defaultReasoningEffortName}} default)",
+				{ defaultReasoningEffortName },
+			)
+		: t("autoProviderDefault", "Auto (provider default)");
 	const currentReasoningEffortName = reasoningEffort
 		? (reasoningEffortOptions.find((option) => option.id === reasoningEffort)
 				?.name ?? reasoningEffort)
@@ -1134,7 +1168,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			</PopoverTrigger>
 			<PopoverContent align="start" className="z-10000 w-72 p-2">
 				<p className="px-1 pb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-					Provider
+					{t("provider", "Provider")}
 				</p>
 				<div className="flex gap-0.5 rounded-lg border border-border/40 bg-muted/30 p-0.5">
 					{availableProviders.map(({ id, label, icon: Icon }) => {
@@ -1153,12 +1187,14 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					})}
 				</div>
 				<p className="px-1 pb-1.5 pt-2.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-					Model
+					{t("model", "Model")}
 				</p>
 				<div className="max-h-48 space-y-0.5 overflow-y-auto">
 					{modelOptions.length === 0 ? (
 						<p className="px-2 py-4 text-center text-xs text-muted-foreground">
-							{isAgent ? "Starting backend…" : "No models available"}
+							{isAgent
+								? t("startingBackend", "Starting backend…")
+								: t("noModelsAvailable", "No models available")}
 						</p>
 					) : (
 						modelOptions.map((option) => {
@@ -1198,7 +1234,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				{reasoningEffortOptions.length > 0 && (
 					<>
 						<p className="px-1 pb-1.5 pt-2.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-							Reasoning
+							{t("reasoning", "Reasoning")}
 						</p>
 						<div className="grid grid-cols-2 gap-1">
 							<button
@@ -1261,7 +1297,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							variant="ghost"
 							size="icon"
 							onClick={() => setMemoryManagerOpen(true)}
-							title="Review & manage saved memories"
+							title={t(
+								"reviewManageSavedMemories",
+								"Review & manage saved memories",
+							)}
 							className="size-9 md:size-7 shrink-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 						>
 							<SettingsIcon className="size-3.5 shrink-0 text-muted-foreground" />
@@ -1275,8 +1314,14 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						onClick={() => setAutoMode(!autoMode)}
 						title={
 							autoMode
-								? "Auto mode on — tools run and changes apply without asking, including deletions and full-board replacements."
-								: "Auto mode off — the assistant asks before acting"
+								? t(
+										"autoModeOnToolsRunAndChangesApplyWithoutAskingIncludingDeletionsAndFullboardReplacements",
+										"Auto mode on — tools run and changes apply without asking, including deletions and full-board replacements.",
+									)
+								: t(
+										"autoModeOffTheAssistantAsksBeforeActing",
+										"Auto mode off — the assistant asks before acting",
+									)
 						}
 						className={cn(
 							"h-9 md:h-7 shrink-0 gap-1.5 rounded-lg px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0",
@@ -1284,12 +1329,15 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						)}
 					>
 						<ZapIcon className="size-3.5 shrink-0" />
-						Auto
+						{t("auto", "Auto")}
 					</Button>
 					{boardSurface && (
 						<div
 							className="flex h-9 md:h-7 shrink-0 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-2.5 text-xs text-foreground/80"
-							title="The assistant can see and edit this board"
+							title={t(
+								"theAssistantCanSeeAndEditThisBoard",
+								"The assistant can see and edit this board",
+							)}
 						>
 							<WorkflowIcon className="size-3.5 shrink-0 text-primary" />
 							<span className="truncate max-w-32">
@@ -1297,7 +1345,9 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							</span>
 							{boardSurface.selectedNodeIds.length > 0 && (
 								<span className="shrink-0 text-muted-foreground">
-									· {boardSurface.selectedNodeIds.length} selected
+									{t("lengthSelected", "· {{length}} selected", {
+										length: boardSurface.selectedNodeIds.length,
+									})}
 								</span>
 							)}
 						</div>
@@ -1311,13 +1361,19 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							onClick={() => setFlowscriptHidden((hidden) => !hidden)}
 							title={
 								showWorkspace
-									? "Hide the FlowScript workspace"
-									: "Show the FlowScript workspace"
+									? t(
+											"hideTheFlowscriptWorkspace",
+											"Hide the FlowScript workspace",
+										)
+									: t(
+											"showTheFlowscriptWorkspace",
+											"Show the FlowScript workspace",
+										)
 							}
 							className="h-9 md:h-7 shrink-0 gap-1.5 px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 						>
 							<FileCode2Icon className="size-3.5 shrink-0" />
-							FlowScript
+							{t("flowscript", "FlowScript")}
 							{flowscriptWorkspace.status === "validation_errors" && (
 								<span
 									className="size-1.5 shrink-0 rounded-full bg-red-500"
@@ -1403,7 +1459,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								{/* The dock is too narrow for the orb to frame the composer rather than
 								    crowd it, so there it is the suggestions alone. */}
 								<FlowPilotEmptyState
-									suggestions={EMPTY_SUGGESTIONS}
+									suggestions={emptySuggestions}
 									onSelect={(prompt) => void handleSendMessage(prompt)}
 									suggestionsOnly={compact}
 									exiting={emptyStateExiting}
@@ -1474,18 +1530,33 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			>
 				<AlertDialogContent>
 					<AlertDialogHeader>
-						<AlertDialogTitle>Change memory embedding model?</AlertDialogTitle>
+						<AlertDialogTitle>
+							{t(
+								"changeMemoryEmbeddingModel",
+								"Change memory embedding model?",
+							)}
+						</AlertDialogTitle>
 						<AlertDialogDescription>
-							This profile has {pendingEmbedding?.count ?? 0} saved{" "}
-							{pendingEmbedding?.count === 1 ? "memory" : "memories"} embedded
-							with a different model. They can&apos;t be read by the new model,
-							so switching will permanently delete them. Continue?
+							{t("thisProfileHas", "This profile has")}{" "}
+							{pendingEmbedding?.count ?? 0} saved{" "}
+							{t(
+								"memoriesEmbeddedWithADifferentModelTheyCanapostBeReadByTheNewModelSoSwitchingWillPermanentlyDeleteThemContinue",
+								{
+									defaultValue_one:
+										"memory embedded with a different model. They can't be read by the new model, so switching will permanently delete them. Continue?",
+									defaultValue_other:
+										"memories embedded with a different model. They can't be read by the new model, so switching will permanently delete them. Continue?",
+									count: pendingEmbedding?.count,
+								},
+							)}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
-						<AlertDialogCancel>Keep current model</AlertDialogCancel>
+						<AlertDialogCancel>
+							{t("keepCurrentModel", "Keep current model")}
+						</AlertDialogCancel>
 						<AlertDialogAction onClick={confirmEmbeddingChange}>
-							Delete &amp; switch
+							{t("deleteAmpSwitch", "Delete & switch")}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>
@@ -1500,11 +1571,12 @@ function formatMemoryAge(timestamp: number): string {
 	const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
 	if (seconds < 60) return "just now";
 	const minutes = Math.floor(seconds / 60);
-	if (minutes < 60) return `${minutes}m ago`;
+	if (minutes < 60)
+		return i18next.t("minutesmAgo", "{{minutes}}m ago", { minutes });
 	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return `${hours}h ago`;
+	if (hours < 24) return i18next.t("hourshAgo", "{{hours}}h ago", { hours });
 	const days = Math.floor(hours / 24);
-	if (days < 30) return `${days}d ago`;
+	if (days < 30) return i18next.t("daysdAgo", "{{days}}d ago", { days });
 	return new Date(timestamp).toLocaleDateString();
 }
 
@@ -1524,6 +1596,7 @@ function MemoryManagerDialog({
 	profileId: string;
 	active: boolean;
 }) {
+	const { t } = useTranslation("chat");
 	const [entries, setEntries] = useState<MemoryEntry[] | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [busyId, setBusyId] = useState<string | null>(null);
@@ -1587,19 +1660,19 @@ function MemoryManagerDialog({
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
 						<BrainIcon className="size-4 text-primary" />
-						Saved memories
+						{t("savedMemories", "Saved memories")}
 					</DialogTitle>
 					<DialogDescription>
-						Facts, preferences, and decisions the assistant remembered for this
-						profile. Delete anything it should forget.
+						{t(
+							"factsPreferencesAndDecisionsTheAssistantRememberedForThisProfileDeleteAnythingItShouldForget",
+							"Facts, preferences, and decisions the assistant remembered for this profile. Delete anything it should forget.",
+						)}
 					</DialogDescription>
 				</DialogHeader>
 
 				{!active && (
 					<p className="rounded-md border border-border/50 bg-muted/40 px-2.5 py-2 text-xs text-muted-foreground">
-						Memory is off — pick an embedding model in the header to let the
-						assistant recall and save memories. You can still review and delete
-						saved memories here.
+						{`Memory is off — pick an embedding model in the header to let the assistant recall and save memories. You can still review and delete saved memories here.`}
 					</p>
 				)}
 
@@ -1607,14 +1680,17 @@ function MemoryManagerDialog({
 					{loading ? (
 						<div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
 							<Loader2Icon className="size-4 animate-spin" />
-							Loading…
+							{t("loading", "Loading…")}
 						</div>
 					) : !hasEntries ? (
 						<div className="flex flex-col items-center gap-1 py-10 text-center text-sm text-muted-foreground">
 							<BrainIcon className="size-6 opacity-40" />
-							<p>No memories saved yet.</p>
+							<p>{t("noMemoriesSavedYet", "No memories saved yet.")}</p>
 							<p className="text-xs">
-								The assistant stores salient facts as you chat.
+								{t(
+									"theAssistantStoresSalientFactsAsYouChat",
+									"The assistant stores salient facts as you chat.",
+								)}
 							</p>
 						</div>
 					) : (
@@ -1648,7 +1724,7 @@ function MemoryManagerDialog({
 										size="icon"
 										disabled={busyId === entry.id}
 										onClick={() => handleDelete(entry.id)}
-										title="Forget this memory"
+										title={t("forgetThisMemory", "Forget this memory")}
 										className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
 									>
 										{busyId === entry.id ? (
@@ -1681,7 +1757,7 @@ function MemoryManagerDialog({
 							) : (
 								<Trash2Icon className="size-3.5" />
 							)}
-							Clear all
+							{t("clearAll", "Clear all")}
 						</Button>
 					</DialogFooter>
 				)}

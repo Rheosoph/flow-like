@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { FileIcon, KeyIcon, PlusCircleIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { IVariable } from "../../../lib/schema/flow/variable";
@@ -85,6 +86,7 @@ function PathValueInput({
 	onChange: (value: unknown, valid: boolean) => void;
 	disabled?: boolean;
 }>) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const path = typeof value === "string" ? value : "";
 
@@ -111,7 +113,7 @@ function PathValueInput({
 		>
 			<FileIcon className="mr-2 h-4 w-4 shrink-0" />
 			<span className="truncate">
-				{path ? (path.split("/").pop() ?? path) : "Choose file..."}
+				{path ? (path.split("/").pop() ?? path) : t('chooseFile', 'Choose file...')}
 			</span>
 		</Button>
 	);
@@ -192,6 +194,7 @@ function MapValueInput({
 	disabled?: boolean;
 	secret?: boolean;
 }>) {
+	const { t } = useTranslation("flow");
 	switch (dataType) {
 		case IVariableType.Boolean:
 			return (
@@ -233,7 +236,7 @@ function MapValueInput({
 					step={1}
 					min={0}
 					max={255}
-					placeholder="0-255..."
+					placeholder={`0-255...`}
 					className="flex-1 min-w-0"
 					value={
 						value === "" || value === undefined || value === null
@@ -294,7 +297,7 @@ function MapValueInput({
 					onChange={onChange}
 					disabled={disabled}
 					requireObject
-					placeholder='{"key": "value"}'
+					placeholder={`{"key": "value"}`}
 				/>
 			);
 		case IVariableType.Generic:
@@ -303,7 +306,7 @@ function MapValueInput({
 					value={value}
 					onChange={onChange}
 					disabled={disabled}
-					placeholder="JSON value..."
+					placeholder={t('jsonValue', 'JSON value...')}
 				/>
 			);
 		default:
@@ -329,6 +332,7 @@ export function MapVariable({
 	variable: IVariable;
 	onChange: (variable: IVariable) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const dataType = variable.data_type;
 
 	const entries = useMemo<MapEntries>(() => {
@@ -424,7 +428,11 @@ export function MapVariable({
 				</div>
 				{keyExists && (
 					<p className="text-xs text-muted-foreground">
-						Key "{newKey.trim()}" already exists — adding will overwrite it.
+						{t(
+							"keyAlreadyExistsAddingWillOverwriteIt",
+							'Key "{{key}}" already exists — adding will overwrite it.',
+							{ key: newKey.trim() },
+						)}
 					</p>
 				)}
 			</div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	EyeIcon,
 	GlobeIcon,
@@ -114,6 +115,7 @@ export function Sparkline({
 	className,
 	tone = "ok",
 }: Readonly<{ values: number[]; className?: string; tone?: "ok" | "warn" }>) {
+	const { t } = useTranslation("settings");
 	if (values.length < 2) return null;
 	const max = Math.max(...values, 1);
 	const step = 100 / (values.length - 1);
@@ -124,7 +126,7 @@ export function Sparkline({
 	});
 	const line = `M${points.join(" L")}`;
 	const area = `${line} L100 26 L0 26 Z`;
-	const stroke = tone === "warn" ? "var(--chart-4)" : "oklch(0.72 0.16 150)";
+	const stroke = tone === "warn" ? "var(--chart-4)" : t('oklch072016150', 'oklch(0.72 0.16 150)');
 
 	return (
 		<svg
@@ -133,7 +135,7 @@ export function Sparkline({
 			preserveAspectRatio="none"
 			aria-hidden
 		>
-			<title>Run volume, last 24 hours</title>
+			<title>{t('runVolumeLast24Hours', 'Run volume, last 24 hours')}</title>
 			<path d={area} fill={stroke} fillOpacity={0.14} />
 			<path
 				d={line}

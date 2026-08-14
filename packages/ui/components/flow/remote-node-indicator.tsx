@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Cloud, Download } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
@@ -16,13 +17,18 @@ export function RemoteNodeIndicator({
 	packageName,
 	className,
 }: RemoteNodeIndicatorProps) {
+	const { t } = useTranslation("flow");
 	if (mode === "local") return null;
 
 	const isRemote = mode === "remote";
 	const Icon = isRemote ? Cloud : Download;
 	const label = isRemote
-		? `Runs on server${packageName ? ` — no local access to ${packageName}` : ""}`
-		: `Install available${packageName ? ` for ${packageName}` : ""}`;
+		? packageName
+			? t('runsOnServerNoLocalAccessToPackageName', 'Runs on server — no local access to {{packageName}}', { packageName })
+			: t('runsOnServer', 'Runs on server')
+		: packageName
+			? t('installAvailableForPackageName', 'Install available for {{packageName}}', { packageName })
+			: t('installAvailable', 'Install available');
 
 	return (
 		<Tooltip>

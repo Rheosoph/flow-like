@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import {
 	type ReactNode,
@@ -15,6 +16,7 @@ export function ScrollRail({
 	children,
 	className,
 }: Readonly<{ children: ReactNode; className?: string }>) {
+	const { t } = useTranslation("common");
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const [canScrollLeft, setCanScrollLeft] = useState(false);
 	const [canScrollRight, setCanScrollRight] = useState(false);
@@ -65,7 +67,7 @@ export function ScrollRail({
 					<div className="pointer-events-none absolute inset-y-0 left-0 w-12 bg-linear-to-r from-background/90 to-transparent" />
 					<button
 						type="button"
-						aria-label="Scroll left"
+						aria-label={t('scrollLeft', 'Scroll left')}
 						onClick={() => scrollBy("left")}
 						className="absolute left-1 top-1/2 z-10 -translate-y-1/2 rounded-full border border-border/50 bg-background/90 p-2 shadow-md backdrop-blur-sm opacity-100 transition-opacity md:opacity-0 md:group-hover/rail:opacity-100 focus-visible:opacity-100 hover:bg-background"
 					>
@@ -78,7 +80,7 @@ export function ScrollRail({
 					<div className="pointer-events-none absolute inset-y-0 right-0 w-12 bg-linear-to-l from-background/90 to-transparent" />
 					<button
 						type="button"
-						aria-label="Scroll right"
+						aria-label={t('scrollRight', 'Scroll right')}
 						onClick={() => scrollBy("right")}
 						className="absolute right-1 top-1/2 z-10 -translate-y-1/2 rounded-full border border-border/50 bg-background/90 p-2 shadow-md backdrop-blur-sm opacity-100 transition-opacity md:opacity-0 md:group-hover/rail:opacity-100 focus-visible:opacity-100 hover:bg-background"
 					>

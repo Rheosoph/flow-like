@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { BellRing, ExternalLink, Inbox, Siren } from "lucide-react";
 import Link from "next/link";
@@ -38,6 +39,7 @@ interface DashboardTelemetryAlertsWidgetProps {
 export function DashboardTelemetryAlertsWidget({
 	profile,
 }: Readonly<DashboardTelemetryAlertsWidgetProps>) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 
 	const events = useQuery<ITelemetryAlertEventsResponse>({
@@ -86,18 +88,18 @@ export function DashboardTelemetryAlertsWidget({
 				<div className="space-y-1">
 					<CardTitle className="flex items-center gap-2 text-base">
 						<BellRing className="h-4 w-4 text-primary" />
-						Alerts
+						{t('alerts', 'Alerts')}
 						<Badge variant="outline" className="text-[10px]">
 							7d
 						</Badge>
 					</CardTitle>
 					<CardDescription>
-						Threshold and anomaly rules over anonymous telemetry
+						{t('thresholdAndAnomalyRulesOverAnonymousTelemetry', 'Threshold and anomaly rules over anonymous telemetry')}
 					</CardDescription>
 				</div>
 				<Button asChild size="sm" variant="outline">
 					<Link href="/admin/telemetry/alerts">
-						Open Alerts
+						{t('openAlerts', 'Open Alerts')}
 						<ExternalLink className="ml-1 h-3 w-3" />
 					</Link>
 				</Button>
@@ -105,7 +107,7 @@ export function DashboardTelemetryAlertsWidget({
 			<CardContent className="space-y-4">
 				<div className="grid gap-2 sm:grid-cols-3">
 					<StatTile
-						label="Open alerts"
+						label={t('openAlerts2', 'Open alerts')}
 						value={events.isLoading ? "…" : unacknowledged.toLocaleString()}
 						icon={<Siren className="h-4 w-4" />}
 						hint="Triggered and unacknowledged"
@@ -121,10 +123,10 @@ export function DashboardTelemetryAlertsWidget({
 						hint="In the last 7 days"
 					/>
 					<StatTile
-						label="Active rules"
+						label={t('activeRules', 'Active rules')}
 						value={rules.isLoading ? "…" : enabledRules.toLocaleString()}
 						icon={<BellRing className="h-4 w-4" />}
-						hint={`${(rules.data?.rules.length ?? 0).toLocaleString()} configured`}
+						hint={t('valConfigured', '{{val}} configured', { val: (rules.data?.rules.length ?? 0).toLocaleString() })}
 					/>
 				</div>
 

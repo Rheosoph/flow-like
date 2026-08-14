@@ -13,6 +13,7 @@ import {
 	verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import type Dexie from "dexie";
 import type { EntityTable } from "dexie";
@@ -137,6 +138,7 @@ export function Shortcuts<TBackend, TAppMetadata>({
 	onShortcutsChanged,
 	bits,
 }: ShortcutsProps<TBackend, TAppMetadata>) {
+	const { t } = useTranslation("common");
 	const { state: sidebarState } = useSidebar();
 	const [startCodingOpen, setStartCodingOpen] = useState(false);
 
@@ -281,7 +283,7 @@ export function Shortcuts<TBackend, TAppMetadata>({
 		? [
 				{
 					id: "start-coding",
-					label: "Create Flow",
+					label: t("createFlow", "Create Flow"),
 					icon: AnimatedNewProjectIcon,
 					action: () => {
 						setStartCodingOpen(true);
@@ -349,7 +351,7 @@ export function Shortcuts<TBackend, TAppMetadata>({
 	return (
 		<>
 			<SidebarGroup>
-				<SidebarGroupLabel>Shortcuts</SidebarGroupLabel>
+				<SidebarGroupLabel>{t("shortcuts", "Shortcuts")}</SidebarGroupLabel>
 				<SidebarMenu>
 					{predefinedShortcuts.map((shortcut) => (
 						<SidebarMenuItem key={shortcut.id}>
@@ -395,14 +397,14 @@ export function Shortcuts<TBackend, TAppMetadata>({
 					<SidebarMenuItem>
 						<MotionSidebarMenuButton
 							onClick={handleAddCurrentLocation}
-							tooltip="Add Current Location"
+							tooltip={t("addCurrentLocation", "Add Current Location")}
 							initial="initial"
 							whileHover="hover"
 						>
 							<motion.div variants={iconVariants}>
 								<AnimatedPinIcon className="size-4" />
 							</motion.div>
-							<span>Add Current Location</span>
+							<span>{t("addCurrentLocation", "Add Current Location")}</span>
 						</MotionSidebarMenuButton>
 					</SidebarMenuItem>
 				</SidebarMenu>

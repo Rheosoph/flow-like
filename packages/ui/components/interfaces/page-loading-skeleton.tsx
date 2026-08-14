@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "../../lib";
 
@@ -143,7 +144,7 @@ function resolveCanvasColor(value: string): RGB | null {
 	context.fillStyle = value;
 	if (
 		context.fillStyle === "#010203" &&
-		!["#010203", "rgb(1, 2, 3)", "rgba(1, 2, 3, 1)"].includes(value)
+		!["#010203", `rgb(1, 2, 3)`, `rgba(1, 2, 3, 1)`].includes(value)
 	) {
 		return null;
 	}
@@ -443,7 +444,7 @@ function createShaderProgram(gl: WebGLRenderingContext): WebGLProgram | null {
 	const fragmentShader = compileShader(
 		gl,
 		gl.FRAGMENT_SHADER,
-		`${GLSL_PRELUDE}\n${FLUX_LATTICE_FRAGMENT}`,
+		`${GLSL_PRELUDE} ${FLUX_LATTICE_FRAGMENT}`,
 	);
 	if (!vertexShader || !fragmentShader) {
 		if (vertexShader) gl.deleteShader(vertexShader);
@@ -646,6 +647,7 @@ const PHASE_MS = 2200;
  * set large. The run title drops to a tracked eyebrow carrying four ticks.
  */
 function PhaseReadout({ title }: Readonly<{ title: string }>) {
+	const { t } = useTranslation("interfaces");
 	const [index, setIndex] = useState(0);
 	const [outgoing, setOutgoing] = useState<number | null>(null);
 	const indexRef = useRef(0);
@@ -682,7 +684,7 @@ function PhaseReadout({ title }: Readonly<{ title: string }>) {
 				<span
 					className="fxl-ticks"
 					role="img"
-					aria-label={`Step ${index + 1} of ${PHASES.length}`}
+					aria-label={t('stepValOfLength', 'Step {{val}} of {{length}}', { val: index + 1, length: PHASES.length })}
 				>
 					{PHASES.map((phase, position) => (
 						<i
@@ -722,6 +724,7 @@ export function PageLoadingSkeleton({
 	className,
 	title = "Running workflow",
 }: Readonly<{ className?: string; title?: string }>) {
+	const { t } = useTranslation("interfaces");
 	return (
 		<div
 			className={cn(
@@ -732,231 +735,7 @@ export function PageLoadingSkeleton({
 			<LatticeCanvas />
 			<PhaseReadout title={title} />
 
-			<style>{`
-				.fxl-root {
-					container-type: inline-size;
-					container-name: loading;
-					padding: 1.5rem;
-				}
-
-				/* Two bands, nothing else: a quiet tracked eyebrow carrying the run
-				   title and its four progress ticks, and the live phase set at display
-				   scale beneath it. */
-				.fxl-root .fxl-readout {
-					position: relative;
-					z-index: 10;
-					max-width: 100%;
-					display: flex;
-					flex-direction: column;
-					align-items: center;
-					gap: clamp(0.5rem, 1.1cqi, 0.95rem);
-					text-align: center;
-					animation: fxl-rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
-
-					/* Knockout halo painted in the page's own ground colour. It follows
-					   the glyph outlines exactly, so an ignited filament crossing behind
-					   the type is pushed off the letterforms without a card or a pane. */
-					--fxl-halo:
-						0 0 0.09em color-mix(in oklab, var(--background) 96%, transparent),
-						0 0 0.2em color-mix(in oklab, var(--background) 92%, transparent),
-						0 0 0.42em color-mix(in oklab, var(--background) 82%, transparent),
-						0 0 0.85em color-mix(in oklab, var(--background) 64%, transparent),
-						0 0 1.7em color-mix(in oklab, var(--background) 42%, transparent);
-				}
-
-				/* Broad feathered wash that deepens the shader's own centre calm rather
-				   than covering it — it never reaches an edge, so it reads as sky. */
-				.fxl-root .fxl-readout::before {
-					content: "";
-					position: absolute;
-					left: 50%;
-					top: 50%;
-					width: calc(100% + clamp(4rem, 14cqi, 15rem));
-					height: calc(100% + clamp(3rem, 9cqi, 9rem));
-					transform: translate(-50%, -50%);
-					background: radial-gradient(
-						52% 56% at 50% 50%,
-						color-mix(in oklab, var(--background) 80%, transparent) 0%,
-						color-mix(in oklab, var(--background) 60%, transparent) 44%,
-						color-mix(in oklab, var(--background) 24%, transparent) 70%,
-						transparent 89%
-					);
-					pointer-events: none;
-				}
-
-				.fxl-root .fxl-eyebrow {
-					position: relative;
-					z-index: 1;
-					display: flex;
-					align-items: center;
-					gap: clamp(0.65rem, 1.5cqi, 1.1rem);
-				}
-
-				.fxl-root .fxl-kicker {
-					margin-right: -0.34em;
-					font-size: clamp(0.5625rem, 0.82cqi, 0.75rem);
-					font-weight: 500;
-					line-height: 1;
-					letter-spacing: 0.34em;
-					text-transform: uppercase;
-					white-space: nowrap;
-					color: color-mix(in oklab, var(--foreground) 58%, var(--muted-foreground));
-					text-shadow:
-						0 0 0.45em color-mix(in oklab, var(--background) 97%, transparent),
-						0 0 0.9em color-mix(in oklab, var(--background) 90%, transparent),
-						0 0 2em color-mix(in oklab, var(--background) 66%, transparent);
-				}
-
-				/* Four ticks, not four junctions: a flat measure that cannot be mistaken
-				   for the lattice behind it. The live one charges across its own dwell. */
-				.fxl-root .fxl-ticks {
-					display: flex;
-					align-items: center;
-					gap: clamp(4px, 0.55cqi, 7px);
-				}
-
-				.fxl-root .fxl-tick {
-					position: relative;
-					flex: 0 0 auto;
-					width: clamp(13px, 1.5cqi, 20px);
-					height: 3px;
-					border-radius: 999px;
-					overflow: hidden;
-					background: color-mix(in oklab, var(--foreground) 24%, transparent);
-					box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--background) 74%, transparent);
-					transition: background 320ms ease;
-				}
-
-				.fxl-root .fxl-tick.is-done {
-					background: color-mix(in oklab, var(--foreground) 46%, transparent);
-				}
-
-				/* Tinted before it charges, so the live tick is never mistaken for a
-				   pending one in the first moments after an advance. */
-				.fxl-root .fxl-tick.is-cur {
-					background: color-mix(in oklab, var(--primary) 30%, transparent);
-					box-shadow:
-						0 0 0 1.5px color-mix(in oklab, var(--background) 74%, transparent),
-						0 0 9px color-mix(in oklab, var(--primary) 45%, transparent);
-				}
-
-				.fxl-root .fxl-tick-fill {
-					position: absolute;
-					inset: 0;
-					transform: scaleX(0);
-					transform-origin: left center;
-					background: var(--primary);
-				}
-
-				.fxl-root .fxl-tick.is-cur .fxl-tick-fill {
-					animation: fxl-charge 2.2s linear both;
-				}
-
-				/* One cell, two layers: the outgoing phase and the incoming one overlap
-				   here so the change is a dissolve in place rather than a reflow. */
-				.fxl-root .fxl-stack {
-					position: relative;
-					z-index: 1;
-					display: grid;
-					max-width: 100%;
-					font-size: clamp(1.5rem, 5.5cqi, 3.75rem);
-				}
-
-				.fxl-root .fxl-stack::before {
-					content: "";
-					position: absolute;
-					inset: -0.46em -1.7em;
-					background: radial-gradient(
-						50% 50% at 50% 50%,
-						color-mix(in oklab, var(--background) 76%, transparent) 0%,
-						color-mix(in oklab, var(--background) 54%, transparent) 50%,
-						transparent 100%
-					);
-					pointer-events: none;
-				}
-
-				.fxl-root .fxl-phase {
-					grid-area: 1 / 1;
-					position: relative;
-					z-index: 1;
-					justify-self: center;
-					margin: 0 -0.06em 0 0;
-					font-size: 1em;
-					font-weight: 300;
-					line-height: 1.12;
-					letter-spacing: 0.06em;
-					white-space: nowrap;
-					color: var(--foreground);
-					text-shadow: var(--fxl-halo);
-				}
-
-				/* Staggered so the two phrases never share the line at full strength:
-				   the old one is gone by the time the new one comes into focus. */
-				.fxl-root .fxl-phase.is-in {
-					animation: fxl-phase-in 0.72s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both;
-				}
-
-				.fxl-root .fxl-phase.is-out {
-					animation: fxl-phase-out 0.34s cubic-bezier(0.4, 0, 0.25, 1) both;
-				}
-
-				/* Above the fold the pair can breathe and the eyebrow opens up; below it
-				   the two bands close ranks so the phase keeps the space. */
-				@container loading (min-width: 30rem) {
-					.fxl-root .fxl-readout {
-						gap: clamp(0.85rem, 1.5cqi, 1.4rem);
-					}
-
-					.fxl-root .fxl-eyebrow {
-						gap: clamp(0.85rem, 1.6cqi, 1.25rem);
-					}
-
-					.fxl-root .fxl-kicker {
-						margin-right: -0.38em;
-						letter-spacing: 0.38em;
-					}
-				}
-
-				@keyframes fxl-rise {
-					from { opacity: 0; transform: translateY(12px) scale(0.985); }
-					to   { opacity: 1; transform: none; }
-				}
-
-				@keyframes fxl-charge {
-					from { transform: scaleX(0); }
-					to   { transform: scaleX(1); }
-				}
-
-				/* Tracking-in: the phrase resolves out of the field instead of appearing. */
-				@keyframes fxl-phase-in {
-					from { opacity: 0; transform: translateY(0.22em); filter: blur(10px); letter-spacing: 0.2em; }
-					55%  { opacity: 1; }
-					to   { opacity: 1; transform: none; filter: blur(0); letter-spacing: 0.06em; }
-				}
-
-				@keyframes fxl-phase-out {
-					from { opacity: 1; transform: none; filter: blur(0); letter-spacing: 0.06em; }
-					to   { opacity: 0; transform: translateY(-0.16em); filter: blur(8px); letter-spacing: 0.11em; }
-				}
-
-				@media (prefers-reduced-motion: reduce) {
-					.fxl-root .fxl-readout { animation: none; }
-
-					.fxl-root .fxl-phase.is-in,
-					.fxl-root .fxl-phase.is-out {
-						animation: none;
-					}
-
-					.fxl-root .fxl-tick {
-						transition: none;
-					}
-
-					.fxl-root .fxl-tick.is-cur .fxl-tick-fill {
-						animation: none;
-						transform: none;
-					}
-				}
-			`}</style>
+			<style>{`.fxl-root { container-type: inline-size; container-name: loading; padding: 1.5rem; } /* Two bands, nothing else: a quiet tracked eyebrow carrying the run title and its four progress ticks, and the live phase set at display scale beneath it. */ .fxl-root .fxl-readout { position: relative; z-index: 10; max-width: 100%; display: flex; flex-direction: column; align-items: center; gap: clamp(0.5rem, 1.1cqi, 0.95rem); text-align: center; animation: fxl-rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) both; /* Knockout halo painted in the page's own ground colour. It follows the glyph outlines exactly, so an ignited filament crossing behind the type is pushed off the letterforms without a card or a pane. */ --fxl-halo: 0 0 0.09em color-mix(in oklab, var(--background) 96%, transparent), 0 0 0.2em color-mix(in oklab, var(--background) 92%, transparent), 0 0 0.42em color-mix(in oklab, var(--background) 82%, transparent), 0 0 0.85em color-mix(in oklab, var(--background) 64%, transparent), 0 0 1.7em color-mix(in oklab, var(--background) 42%, transparent); } /* Broad feathered wash that deepens the shader's own centre calm rather than covering it — it never reaches an edge, so it reads as sky. */ .fxl-root .fxl-readout::before { content: ""; position: absolute; left: 50%; top: 50%; width: calc(100% + clamp(4rem, 14cqi, 15rem)); height: calc(100% + clamp(3rem, 9cqi, 9rem)); transform: translate(-50%, -50%); background: radial-gradient( 52% 56% at 50% 50%, color-mix(in oklab, var(--background) 80%, transparent) 0%, color-mix(in oklab, var(--background) 60%, transparent) 44%, color-mix(in oklab, var(--background) 24%, transparent) 70%, transparent 89% ); pointer-events: none; } .fxl-root .fxl-eyebrow { position: relative; z-index: 1; display: flex; align-items: center; gap: clamp(0.65rem, 1.5cqi, 1.1rem); } .fxl-root .fxl-kicker { margin-right: -0.34em; font-size: clamp(0.5625rem, 0.82cqi, 0.75rem); font-weight: 500; line-height: 1; letter-spacing: 0.34em; text-transform: uppercase; white-space: nowrap; color: color-mix(in oklab, var(--foreground) 58%, var(--muted-foreground)); text-shadow: 0 0 0.45em color-mix(in oklab, var(--background) 97%, transparent), 0 0 0.9em color-mix(in oklab, var(--background) 90%, transparent), 0 0 2em color-mix(in oklab, var(--background) 66%, transparent); } /* Four ticks, not four junctions: a flat measure that cannot be mistaken for the lattice behind it. The live one charges across its own dwell. */ .fxl-root .fxl-ticks { display: flex; align-items: center; gap: clamp(4px, 0.55cqi, 7px); } .fxl-root .fxl-tick { position: relative; flex: 0 0 auto; width: clamp(13px, 1.5cqi, 20px); height: 3px; border-radius: 999px; overflow: hidden; background: color-mix(in oklab, var(--foreground) 24%, transparent); box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--background) 74%, transparent); transition: background 320ms ease; } .fxl-root .fxl-tick.is-done { background: color-mix(in oklab, var(--foreground) 46%, transparent); } /* Tinted before it charges, so the live tick is never mistaken for a pending one in the first moments after an advance. */ .fxl-root .fxl-tick.is-cur { background: color-mix(in oklab, var(--primary) 30%, transparent); box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--background) 74%, transparent), 0 0 9px color-mix(in oklab, var(--primary) 45%, transparent); } .fxl-root .fxl-tick-fill { position: absolute; inset: 0; transform: scaleX(0); transform-origin: left center; background: var(--primary); } .fxl-root .fxl-tick.is-cur .fxl-tick-fill { animation: fxl-charge 2.2s linear both; } /* One cell, two layers: the outgoing phase and the incoming one overlap here so the change is a dissolve in place rather than a reflow. */ .fxl-root .fxl-stack { position: relative; z-index: 1; display: grid; max-width: 100%; font-size: clamp(1.5rem, 5.5cqi, 3.75rem); } .fxl-root .fxl-stack::before { content: ""; position: absolute; inset: -0.46em -1.7em; background: radial-gradient( 50% 50% at 50% 50%, color-mix(in oklab, var(--background) 76%, transparent) 0%, color-mix(in oklab, var(--background) 54%, transparent) 50%, transparent 100% ); pointer-events: none; } .fxl-root .fxl-phase { grid-area: 1 / 1; position: relative; z-index: 1; justify-self: center; margin: 0 -0.06em 0 0; font-size: 1em; font-weight: 300; line-height: 1.12; letter-spacing: 0.06em; white-space: nowrap; color: var(--foreground); text-shadow: var(--fxl-halo); } /* Staggered so the two phrases never share the line at full strength: the old one is gone by the time the new one comes into focus. */ .fxl-root .fxl-phase.is-in { animation: fxl-phase-in 0.72s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both; } .fxl-root .fxl-phase.is-out { animation: fxl-phase-out 0.34s cubic-bezier(0.4, 0, 0.25, 1) both; } /* Above the fold the pair can breathe and the eyebrow opens up; below it the two bands close ranks so the phase keeps the space. */ @container loading (min-width: 30rem) { .fxl-root .fxl-readout { gap: clamp(0.85rem, 1.5cqi, 1.4rem); } .fxl-root .fxl-eyebrow { gap: clamp(0.85rem, 1.6cqi, 1.25rem); } .fxl-root .fxl-kicker { margin-right: -0.38em; letter-spacing: 0.38em; } } @keyframes fxl-rise { from { opacity: 0; transform: translateY(12px) scale(0.985); } to { opacity: 1; transform: none; } } @keyframes fxl-charge { from { transform: scaleX(0); } to { transform: scaleX(1); } } /* Tracking-in: the phrase resolves out of the field instead of appearing. */ @keyframes fxl-phase-in { from { opacity: 0; transform: translateY(0.22em); filter: blur(10px); letter-spacing: 0.2em; } 55% { opacity: 1; } to { opacity: 1; transform: none; filter: blur(0); letter-spacing: 0.06em; } } @keyframes fxl-phase-out { from { opacity: 1; transform: none; filter: blur(0); letter-spacing: 0.06em; } to { opacity: 0; transform: translateY(-0.16em); filter: blur(8px); letter-spacing: 0.11em; } } @media (prefers-reduced-motion: reduce) { .fxl-root .fxl-readout { animation: none; } .fxl-root .fxl-phase.is-in, .fxl-root .fxl-phase.is-out { animation: none; } .fxl-root .fxl-tick { transition: none; } .fxl-root .fxl-tick.is-cur .fxl-tick-fill { animation: none; transform: none; } }`}</style>
 		</div>
 	);
 }

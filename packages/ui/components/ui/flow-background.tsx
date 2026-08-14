@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../lib";
 
@@ -46,6 +47,7 @@ function FlowCanvas({
 	intensity,
 	interactive,
 }: { intensity: "subtle" | "medium" | "full"; interactive: boolean }) {
+	const { t } = useTranslation("common");
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const animationRef = useRef<number>(0);

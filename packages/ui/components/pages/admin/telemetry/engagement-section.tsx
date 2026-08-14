@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import {
 	CalendarRange,
@@ -139,6 +140,7 @@ function RetentionGrid({
 }: {
 	cohorts: ITelemetryRetentionCohort[];
 }) {
+	const { t } = useTranslation("admin");
 	if (cohorts.length === 0) {
 		return (
 			<EmptyState message="Not enough history for retention cohorts yet." />
@@ -150,18 +152,16 @@ function RetentionGrid({
 				<thead>
 					<tr>
 						<th className="px-2 py-1 text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-							Cohort
+							{t('cohort', 'Cohort')}
 						</th>
 						<th className="px-2 py-1 text-right text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-							Size
+							{t('size', 'Size')}
 						</th>
 						{WEEK_OFFSETS.map((w) => (
 							<th
 								key={w}
 								className="px-1 py-1 text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
-							>
-								W{w}
-							</th>
+							>{`W${w}`}</th>
 						))}
 					</tr>
 				</thead>
@@ -213,6 +213,7 @@ export function EngagementSection({
 	days,
 	onDaysChange,
 }: Readonly<EngagementSectionProps>) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 
 	const engagement = useQuery<ITelemetryEngagementResponse>({
@@ -235,7 +236,7 @@ export function EngagementSection({
 			<div className="flex flex-wrap items-center justify-between gap-2">
 				<h2 className="flex items-center gap-2 text-xl font-semibold">
 					<Users className="h-5 w-5 text-primary" />
-					Engagement
+					{t('engagement', 'Engagement')}
 					<TelemetryGranularityNotice response={data} />
 				</h2>
 				<Select
@@ -267,16 +268,16 @@ export function EngagementSection({
 						label="WAU"
 						value={(data?.wau ?? 0).toLocaleString()}
 						icon={<Users className="h-4 w-4" />}
-						hint={`prev ${(data?.previousWau ?? 0).toLocaleString()}`}
+						hint={t('prevVal', 'prev {{val}}', { val: (data?.previousWau ?? 0).toLocaleString() })}
 					/>
 					<StatTile
 						label="MAU"
 						value={(data?.mau ?? 0).toLocaleString()}
 						icon={<CalendarRange className="h-4 w-4" />}
-						hint={`prev ${(data?.previousMau ?? 0).toLocaleString()}`}
+						hint={t('prevVal', 'prev {{val}}', { val: (data?.previousMau ?? 0).toLocaleString() })}
 					/>
 					<StatTile
-						label="New installs"
+						label={t('newInstalls', 'New installs')}
 						value={(data?.newInstalls ?? 0).toLocaleString()}
 						icon={<UserPlus className="h-4 w-4" />}
 						hint="First seen in window"
@@ -294,7 +295,7 @@ export function EngagementSection({
 						extra={
 							churnRate != null && churnRate > 0 ? (
 								<span className="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-destructive">
-									{(churnRate * 100).toFixed(0)}% churn
+									{(churnRate * 100).toFixed(0)}{t('churn', '% churn')}
 								</span>
 							) : undefined
 						}
@@ -305,9 +306,9 @@ export function EngagementSection({
 
 			<Card>
 				<CardHeader className="pb-3">
-					<CardTitle className="text-base">Daily active installs</CardTitle>
+					<CardTitle className="text-base">{t('dailyActiveInstalls', 'Daily active installs')}</CardTitle>
 					<CardDescription>
-						Distinct installs per UTC day over the selected window.
+						{t('distinctInstallsPerUtcDayOverTheSelectedWindow', 'Distinct installs per UTC day over the selected window.')}
 					</CardDescription>
 				</CardHeader>
 				<CardContent>
@@ -322,9 +323,9 @@ export function EngagementSection({
 			<div className="grid gap-4 lg:grid-cols-3">
 				<Card className="lg:col-span-2">
 					<CardHeader className="pb-3">
-						<CardTitle className="text-base">Weekly retention</CardTitle>
+						<CardTitle className="text-base">{t('weeklyRetention', 'Weekly retention')}</CardTitle>
 						<CardDescription>
-							Share of each first-seen cohort still active N weeks later.
+							{t('shareOfEachFirstseenCohortStillActiveNWeeksLater', 'Share of each first-seen cohort still active N weeks later.')}
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
@@ -342,10 +343,10 @@ export function EngagementSection({
 				<Card>
 					<CardHeader className="pb-3">
 						<CardTitle className="text-base">
-							Last screen before drop-off
+							{t('lastScreenBeforeDropoff', 'Last screen before drop-off')}
 						</CardTitle>
 						<CardDescription>
-							Final page seen by installs that stopped coming back.
+							{t('finalPageSeenByInstallsThatStoppedComingBack', 'Final page seen by installs that stopped coming back.')}
 						</CardDescription>
 					</CardHeader>
 					<CardContent>

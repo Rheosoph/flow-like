@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
 	CreateOverlayPayload,
@@ -48,6 +49,7 @@ export function OverlayWizard({
 	onValidate,
 	submitting,
 }: OverlayWizardProps) {
+	const { t } = useTranslation("common");
 	const [step, setStep] = useState<number>(0);
 	const [name, setName] = useState("");
 	const [description, setDescription] = useState("");
@@ -142,10 +144,9 @@ export function OverlayWizard({
 		<Dialog open={open} onOpenChange={(v) => !v && onClose()}>
 			<DialogContent className="max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
 				<DialogHeader>
-					<DialogTitle>Create Graph Overlay</DialogTitle>
+					<DialogTitle>{t('createGraphOverlay', 'Create Graph Overlay')}</DialogTitle>
 					<DialogDescription>
-						Step {step + 1} of {STEPS.length}: {currentStep}
-					</DialogDescription>
+						{t('step', 'Step')} {step + 1}{t('ofLengthCurrentstep', 'of {{length}}: {{currentStep}}', { length: STEPS.length, currentStep })}</DialogDescription>
 				</DialogHeader>
 
 				{/* Step indicator */}
@@ -166,10 +167,9 @@ export function OverlayWizard({
 						<div className="space-y-6">
 							<div className="space-y-4">
 								<div>
-									<h3 className="text-sm font-medium mb-1">Overlay Details</h3>
+									<h3 className="text-sm font-medium mb-1">{t('overlayDetails', 'Overlay Details')}</h3>
 									<p className="text-xs text-muted-foreground">
-										Name the overlay, set its default query limit, and pick the
-										tables you want to map.
+										{t('nameTheOverlaySetItsDefaultQueryLimitAndPickTheTablesYouWantToMap', "Name the overlay, set its default query limit, and pick the tables you want to map.")}
 									</p>
 								</div>
 								<div className="space-y-1.5">
@@ -177,20 +177,20 @@ export function OverlayWizard({
 									<Input
 										value={name}
 										onChange={(e) => setName(e.target.value)}
-										placeholder="My Graph Overlay"
+										placeholder={t('myGraphOverlay', 'My Graph Overlay')}
 										autoFocus
 									/>
 								</div>
 								<div className="space-y-1.5">
-									<Label className="text-sm">Description</Label>
+									<Label className="text-sm">{t('description', 'Description')}</Label>
 									<Input
 										value={description}
 										onChange={(e) => setDescription(e.target.value)}
-										placeholder="Optional description..."
+										placeholder={t('optionalDescription', 'Optional description...')}
 									/>
 								</div>
 								<div className="space-y-1.5">
-									<Label className="text-sm">Default Query Limit</Label>
+									<Label className="text-sm">{t('defaultQueryLimit', 'Default Query Limit')}</Label>
 									<Input
 										type="number"
 										value={defaultLimit}
@@ -241,21 +241,21 @@ export function OverlayWizard({
 					<div>
 						{step > 0 && (
 							<Button variant="outline" onClick={() => setStep(step - 1)}>
-								Back
+								{t('back', 'Back')}
 							</Button>
 						)}
 					</div>
 					<div className="flex gap-2">
 						<Button variant="ghost" onClick={onClose}>
-							Cancel
+							{t('cancel', 'Cancel')}
 						</Button>
 						{step < STEPS.length - 1 ? (
 							<Button onClick={() => setStep(step + 1)} disabled={!canNext}>
-								Next
+								{t('next', 'Next')}
 							</Button>
 						) : (
 							<Button onClick={handleSubmit} disabled={submitting}>
-								{submitting ? "Creating..." : "Create Overlay"}
+								{submitting ? "Creating..." : t('createOverlay', 'Create Overlay')}
 							</Button>
 						)}
 					</div>

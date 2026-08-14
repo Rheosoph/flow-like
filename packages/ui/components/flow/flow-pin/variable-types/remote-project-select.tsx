@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { useReactFlow } from "@xyflow/react";
 import { ChevronDown } from "lucide-react";
 import {
@@ -55,6 +56,7 @@ export function RemoteProjectSelect({
 	setValue: (value: number[] | undefined) => void;
 	onPreviewValue?: (value: number[] | undefined) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const { getNode } = useReactFlow();
@@ -208,11 +210,11 @@ export function RemoteProjectSelect({
 					<SelectGroup>
 						<SelectLabel>{pin.friendly_name}</SelectLabel>
 						{loading && apps.length === 0 && (
-							<SelectLabel>Loading projects...</SelectLabel>
+							<SelectLabel>{t('loadingProjects', 'Loading projects...')}</SelectLabel>
 						)}
-						{error && <SelectLabel>Could not load accessible apps</SelectLabel>}
+						{error && <SelectLabel>{t('couldNotLoadAccessibleApps', 'Could not load accessible apps')}</SelectLabel>}
 						{!loading && !error && apps.length === 0 && (
-							<SelectLabel>No accessible apps found</SelectLabel>
+							<SelectLabel>{t('noAccessibleAppsFound', 'No accessible apps found')}</SelectLabel>
 						)}
 						{apps.map((app) => (
 							<SelectItem key={app.app_id} value={app.app_id}>

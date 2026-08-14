@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	AlertTriangleIcon,
 	ArrowRightIcon,
@@ -67,6 +68,7 @@ export function EntityVisibilitySwitcher({
 	availableTransitions,
 	docsUrl = "https://docs.flow-like.com/guides/Apps/visibility/",
 }: Readonly<EntityVisibilitySwitcherProps>) {
+	const { t } = useTranslation("settings");
 	const currentConfig = VISIBILITY_META[visibility];
 	const transitions =
 		availableTransitions ?? getVisibilityTransitions(visibility);
@@ -78,19 +80,19 @@ export function EntityVisibilitySwitcher({
 			try {
 				const outcome = await onVisibilityChange(entityId, newVisibility);
 				if (outcome?.reviewRequested) {
-					toast.success("Submitted for review", {
-						description: `Your ${entityNoun} stays ${VISIBILITY_META[visibility].title} until the review is complete.`,
+					toast.success(t('submittedForReview', 'Submitted for review'), {
+						description: t('yourEntitynounStaysTitleUntilTheReviewIsComplete', 'Your {{entityNoun}} stays {{title}} until the review is complete.', { entityNoun, title: VISIBILITY_META[visibility].title }),
 					});
 					return;
 				}
-				toast.success(`Visibility changed to ${config.title}`, {
+				toast.success(t('visibilityChangedToTitle', 'Visibility changed to {{title}}', { title: config.title }), {
 					icon: <config.Icon className="w-4 h-4" />,
 				});
 			} catch (error) {
 				toast.error(
 					error instanceof Error
 						? error.message
-						: "Could not change the visibility",
+						: t('couldNotChangeTheVisibility', 'Could not change the visibility'),
 				);
 			}
 		},
@@ -106,16 +108,15 @@ export function EntityVisibilitySwitcher({
 			<CardHeader>
 				<CardTitle className="flex items-center gap-2">
 					<EyeIcon className="w-5 h-5" />
-					Visibility Status
+					{t('visibilityStatus', 'Visibility Status')}
 				</CardTitle>
-				<CardDescription>
-					Control who can access your {entityNoun} and how it&apos;s shared.{" "}
+				<CardDescription>{t('controlWhoCanAccessYourEntitynounAndHowItapossShared', "Control who can access your {{entityNoun}} and how it's shared.", { entityNoun })}{" "}
 					<a href={docsUrl} target="_blank" rel="noreferrer">
 						<Button
 							variant="link"
 							className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
 						>
-							Learn more about visibility statuses
+							{t('learnMoreAboutVisibilityStatuses', 'Learn more about visibility statuses')}
 							<ExternalLinkIcon className="w-3 h-3 ml-1" />
 						</Button>
 					</a>
@@ -126,7 +127,7 @@ export function EntityVisibilitySwitcher({
 				<div className="flex items-center gap-3 p-4 bg-muted rounded-lg border">
 					<div className={`w-3 h-3 rounded-full ${currentConfig.color}`} />
 					<div>
-						<div className="font-medium">Current: {currentConfig.title}</div>
+						<div className="font-medium">{t('currentTitle', 'Current: {{title}}', { title: currentConfig.title })}</div>
 						<div className="text-sm text-muted-foreground">
 							{currentConfig.description}
 						</div>
@@ -137,7 +138,7 @@ export function EntityVisibilitySwitcher({
 				{transitions.length > 0 ? (
 					<div className="space-y-3">
 						<div className="text-sm font-medium text-muted-foreground">
-							Available transitions:
+							{t('availableTransitions', 'Available transitions:')}
 						</div>
 						<div className="grid gap-2">
 							{transitions.map((target) => {
@@ -202,8 +203,8 @@ export function EntityVisibilitySwitcher({
 							<InfoIcon className="w-4 h-4" />
 							<span className="text-sm">
 								{visibility === IAppVisibility.Offline
-									? "No transitions available from Offline status"
-									: "No transitions available from current status"}
+									? `No transitions available from Offline status`
+									: `No transitions available from current status`}
 							</span>
 						</div>
 					</div>
@@ -214,12 +215,12 @@ export function EntityVisibilitySwitcher({
 					{entityNoun === "app" && (
 						<div className="flex items-center gap-1">
 							<ShieldIcon className="w-3 h-3" />
-							<span>Offline apps cannot change visibility status</span>
+							<span>{t('offlineAppsCannotChangeVisibilityStatus', 'Offline apps cannot change visibility status')}</span>
 						</div>
 					)}
 					<div className="flex items-center gap-1">
 						<UsersIcon className="w-3 h-3" />
-						<span>Public transitions require central review (1-3 days)</span>
+						<span>{t('publicTransitionsRequireCentralReview13Days', 'Public transitions require central review (1-3 days)')}</span>
 					</div>
 				</div>
 			</CardContent>

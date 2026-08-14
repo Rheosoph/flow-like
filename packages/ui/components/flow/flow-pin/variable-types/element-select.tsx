@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { CheckIcon, ChevronDown, Layers } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -39,6 +40,7 @@ export function ElementSelect({
 	setValue,
 	selectorDataRef,
 }: ElementSelectProps) {
+	const { t } = useTranslation("flow");
 	const [open, setOpen] = useState(false);
 	const [, refreshSnapshot] = useState(0);
 
@@ -87,9 +89,9 @@ export function ElementSelect({
 				</PopoverTrigger>
 				<PopoverContent className="w-60 p-0" align="start">
 					<Command>
-						<CommandInput placeholder="Search elements..." />
+						<CommandInput placeholder={t('searchElements', 'Search elements...')} />
 						<CommandList>
-							<CommandEmpty>No elements found.</CommandEmpty>
+							<CommandEmpty>{t('noElementsFound', 'No elements found.')}</CommandEmpty>
 							<CommandGroup heading={pin.friendly_name}>
 								{elements.map((element) => (
 									<CommandItem

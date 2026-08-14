@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
 	ChevronDown,
@@ -54,6 +55,7 @@ export function HierarchyTree({
 	className,
 	rootComponents = [],
 }: HierarchyTreeProps) {
+	const { t } = useTranslation("flow");
 	const [searchQuery, setSearchQuery] = useState("");
 	const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 	const [lockedNodes, setLockedNodes] = useState<Set<string>>(new Set());
@@ -420,7 +422,7 @@ export function HierarchyTree({
 				<div className="relative">
 					<Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
 					<Input
-						placeholder="Search tree..."
+						placeholder={t('searchTree', 'Search tree...')}
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						className="pl-8 h-8"
@@ -432,7 +434,7 @@ export function HierarchyTree({
 				<div className="p-2">
 					{filteredTree.length === 0 ? (
 						<div className="text-sm text-muted-foreground text-center py-4">
-							No components
+							{t('noComponents', 'No components')}
 						</div>
 					) : (
 						filteredTree.map((node) => (
@@ -512,6 +514,7 @@ function TreeNode({
 	onAddComponent,
 	findParentId,
 }: TreeNodeProps) {
+	const { t } = useTranslation("flow");
 	const { components, getWidgetRef } = useBuilder();
 	const [dropPosition, setDropPosition] = useState<DropPosition>(null);
 	const hasChildren = node.children.length > 0;
@@ -656,7 +659,7 @@ function TreeNode({
 
 					{/* Container indicator */}
 					{isContainer && (
-						<span className="text-xs text-muted-foreground">[container]</span>
+						<span className="text-xs text-muted-foreground">{`[container]`}</span>
 					)}
 
 					{/* Visibility toggle button */}
@@ -687,27 +690,27 @@ function TreeNode({
 			<ContextMenuContent>
 				<ContextMenuItem onClick={onCopy}>
 					<Copy className="h-4 w-4 mr-2" />
-					Copy
+					{t('copy', 'Copy')}
 				</ContextMenuItem>
 				<ContextMenuItem onClick={onCut}>
 					<Scissors className="h-4 w-4 mr-2" />
-					Cut
+					{t('cut', 'Cut')}
 				</ContextMenuItem>
 				<ContextMenuItem onClick={() => onPaste(node.id)}>
 					<FolderPlus className="h-4 w-4 mr-2" />
-					Paste into
+					{t('pasteInto', 'Paste into')}
 				</ContextMenuItem>
 				<ContextMenuSeparator />
 				<ContextMenuItem onClick={() => onToggleLock(node.id)}>
 					{node.locked ? (
 						<>
 							<Unlock className="h-4 w-4 mr-2" />
-							Unlock
+							{t('unlock', 'Unlock')}
 						</>
 					) : (
 						<>
 							<Lock className="h-4 w-4 mr-2" />
-							Lock
+							{t('lock', 'Lock')}
 						</>
 					)}
 				</ContextMenuItem>
@@ -715,12 +718,12 @@ function TreeNode({
 					{node.hidden ? (
 						<>
 							<Eye className="h-4 w-4 mr-2" />
-							Show
+							{t('show', 'Show')}
 						</>
 					) : (
 						<>
 							<EyeOff className="h-4 w-4 mr-2" />
-							Hide
+							{t('hide', 'Hide')}
 						</>
 					)}
 				</ContextMenuItem>
@@ -730,7 +733,7 @@ function TreeNode({
 					className="text-destructive focus:text-destructive"
 				>
 					<Trash className="h-4 w-4 mr-2" />
-					Delete
+					{t('delete', 'Delete')}
 				</ContextMenuItem>
 			</ContextMenuContent>
 

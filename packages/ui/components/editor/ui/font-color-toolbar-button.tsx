@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import React from "react";
 
 import type {
@@ -146,9 +147,10 @@ function PureColorPicker({
 	updateCustomColor: (color: string) => void;
 	color?: string;
 }) {
+	const { t } = useTranslation("common");
 	return (
 		<div className={cn("flex flex-col", className)} {...props}>
-			<ToolbarMenuGroup label="Custom Colors">
+			<ToolbarMenuGroup label={t('customColors', 'Custom Colors')}>
 				<ColorCustom
 					color={color}
 					className="px-2"
@@ -158,7 +160,7 @@ function PureColorPicker({
 					updateCustomColor={updateCustomColor}
 				/>
 			</ToolbarMenuGroup>
-			<ToolbarMenuGroup label="Default Colors">
+			<ToolbarMenuGroup label={t('defaultColors', 'Default Colors')}>
 				<ColorDropdownMenuItems
 					color={color}
 					className="px-2"
@@ -170,7 +172,7 @@ function PureColorPicker({
 				<ToolbarMenuGroup>
 					<DropdownMenuItem className="p-2" onClick={clearColor}>
 						<EraserIcon />
-						<span>Clear</span>
+						<span>{t('clear', 'Clear')}</span>
 					</DropdownMenuItem>
 				</ToolbarMenuGroup>
 			)}
@@ -201,6 +203,7 @@ function ColorCustom({
 	updateCustomColor: (color: string) => void;
 	color?: string;
 } & React.ComponentPropsWithoutRef<"div">) {
+	const { t } = useTranslation("common");
 	const [customColor, setCustomColor] = React.useState<string>();
 	const [value, setValue] = React.useState<string>(color || "#000000");
 
@@ -263,7 +266,7 @@ function ColorCustom({
 							e.preventDefault();
 						}}
 					>
-						<span className="sr-only">Custom</span>
+						<span className="sr-only">{t('custom', 'Custom')}</span>
 						<PlusIcon />
 					</DropdownMenuItem>
 				</ColorInput>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowLeft,
@@ -148,6 +149,7 @@ function VersionRow({
 	isInstalling?: boolean;
 	onInstall?: (version: string) => void;
 }) {
+	const { t } = useTranslation("store");
 	const isInstalled = installedVersion === version.version;
 	const isPending = version.status === PackageStatus.PendingReview;
 	const isRejected = version.status === PackageStatus.Rejected;
@@ -158,11 +160,21 @@ function VersionRow({
 		<div className="flex items-center justify-between gap-3 py-2 border-b last:border-0">
 			<div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
 				<code className="text-sm font-mono">{version.version}</code>
-				{isLatest && <Badge variant="secondary">Latest</Badge>}
-				{isPending && <Badge variant="outline">Pending Review</Badge>}
-				{isRejected && <Badge variant="destructive">Rejected</Badge>}
-				{isDisabled && <Badge variant="secondary">Disabled</Badge>}
-				{version.yanked && <Badge variant="destructive">Yanked</Badge>}
+				{isLatest && <Badge variant="secondary">{t("latest", "Latest")}</Badge>}
+				{isPending && (
+					<Badge variant="outline">
+						{t("pendingReview", "Pending Review")}
+					</Badge>
+				)}
+				{isRejected && (
+					<Badge variant="destructive">{t("rejected", "Rejected")}</Badge>
+				)}
+				{isDisabled && (
+					<Badge variant="secondary">{t("disabled", "Disabled")}</Badge>
+				)}
+				{version.yanked && (
+					<Badge variant="destructive">{t("yanked", "Yanked")}</Badge>
+				)}
 			</div>
 			<div className="flex shrink-0 items-center gap-3">
 				<RelativeTime
@@ -182,10 +194,10 @@ function VersionRow({
 							<Download className="mr-2 h-3.5 w-3.5" />
 						)}
 						{isInstalled
-							? "Installed"
+							? t("installed", "Installed")
 							: isPending
-								? "Install for testing"
-								: "Install"}
+								? t("installForTesting", "Install for testing")
+								: t("install", "Install")}
 					</Button>
 				)}
 			</div>
@@ -212,6 +224,7 @@ function PublicationReviewCard({
 	fetcher: GenericFetcher;
 	auth?: unknown;
 }) {
+	const { t } = useTranslation("store");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
@@ -237,21 +250,24 @@ function PublicationReviewCard({
 	const reviews = reviewQuery.data ?? [];
 	const statusLabel =
 		status === PackageStatus.PendingReview
-			? "Pending review"
+			? t("pendingReview", "Pending Review")
 			: status === PackageStatus.Disabled
-				? "Review outcome available"
-				: "Review history";
+				? t("reviewOutcomeAvailable", "Review outcome available")
+				: t("reviewHistory", "Review history");
 
 	return (
 		<Card className="border-amber-500/30 bg-amber-500/5">
 			<CardHeader>
 				<CardTitle className="text-base flex items-center gap-2">
 					<RefreshCw className="h-4 w-4" />
-					Publication Review
+					{t("publicationReview", "Publication Review")}
 				</CardTitle>
 				<CardDescription>
-					Current status: {statusLabel}. Submission events and auditor comments
-					appear here for package maintainers.
+					{t(
+						"currentStatusStatuslabelSubmissionEventsAndAuditorCommentsAppearHereForPackageMaintainers",
+						"Current status: {{statusLabel}}. Submission events and auditor comments appear here for package maintainers.",
+						{ statusLabel },
+					)}
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-4">
@@ -259,11 +275,15 @@ function PublicationReviewCard({
 					<Skeleton className="h-24 w-full" />
 				) : reviewQuery.isError ? (
 					<p className="text-sm text-destructive">
-						{reviewQuery.error?.message ?? "Failed to load review history"}
+						{reviewQuery.error?.message ??
+							t("failedToLoadReviewHistory", "Failed to load review history")}
 					</p>
 				) : reviews.length === 0 ? (
 					<p className="text-sm text-muted-foreground">
-						No publication review events recorded yet.
+						{t(
+							"noPublicationReviewEventsRecordedYet",
+							"No publication review events recorded yet.",
+						)}
 					</p>
 				) : (
 					<div className="space-y-3">
@@ -291,7 +311,9 @@ function PublicationReviewCard({
 													{formatReviewAction(review.action)}
 												</span>
 												<span className="text-sm text-muted-foreground">
-													by {reviewerLabel}
+													{t("byReviewerlabel", "by {{reviewerLabel}}", {
+														reviewerLabel,
+													})}
 												</span>
 												<span className="text-sm text-muted-foreground">
 													<RelativeTime value={review.createdAt} />
@@ -323,6 +345,7 @@ function PublicationRequestCard({
 	fetcher: GenericFetcher;
 	auth?: unknown;
 }) {
+	const { t } = useTranslation("store");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const profile = useInvoke(
@@ -359,19 +382,23 @@ function PublicationRequestCard({
 			<CardHeader>
 				<CardTitle className="text-base flex items-center gap-2">
 					<Send className="h-4 w-4" />
-					Request Publication
+					{t("requestPublication", "Request Publication")}
 				</CardTitle>
 				<CardDescription>
-					This package is currently private. Submit it for review to make it
-					publicly available on the registry.
+					{t(
+						"thisPackageIsCurrentlyPrivateSubmitItForReviewToMakeItPubliclyAvailableOnTheRegistry",
+						"This package is currently private. Submit it for review to make it publicly available on the registry.",
+					)}
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
 				{requestMutation.isSuccess ? (
 					<div className="flex items-center gap-2 text-sm text-green-600">
 						<Check className="h-4 w-4" />
-						Publication review requested. We will review your package and notify
-						you once a decision has been made.
+						{t(
+							"publicationReviewRequestedWeWillReviewYourPackageAndNotifyYouOnceADecisionHasBeenMade",
+							"Publication review requested. We will review your package and notify you once a decision has been made.",
+						)}
 					</div>
 				) : (
 					<div className="flex items-center gap-3">
@@ -384,12 +411,15 @@ function PublicationRequestCard({
 							) : (
 								<Send className="mr-2 h-4 w-4" />
 							)}
-							Request Publication Review
+							{t("requestPublicationReview", "Request Publication Review")}
 						</Button>
 						{requestMutation.isError && (
 							<p className="text-sm text-destructive">
 								{requestMutation.error?.message ??
-									"Failed to request publication"}
+									t(
+										"failedToRequestPublication",
+										"Failed to request publication",
+									)}
 							</p>
 						)}
 					</div>
@@ -426,6 +456,7 @@ export interface PackageDetailViewProps {
 }
 
 export function PackageDetailView(props: PackageDetailViewProps) {
+	const { t } = useTranslation("store");
 	const {
 		pkg,
 		isLoading,
@@ -478,7 +509,15 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 			onDeleteSuccess?.();
 		},
 		onError: (err: Error) =>
-			toast.error(`Failed to delete package: ${err.message}`),
+			toast.error(
+				t(
+					"failedToDeletePackageMessage",
+					"Failed to delete package: {{message}}",
+					{
+						message: err.message,
+					},
+				),
+			),
 	});
 
 	const restoreMutation = useMutation({
@@ -500,7 +539,15 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 			onDeleteSuccess?.();
 		},
 		onError: (err: Error) =>
-			toast.error(`Failed to restore package: ${err.message}`),
+			toast.error(
+				t(
+					"failedToRestorePackageMessage",
+					"Failed to restore package: {{message}}",
+					{
+						message: err.message,
+					},
+				),
+			),
 	});
 
 	const { data: meta } = useQuery<PackageMeta | null>({
@@ -537,27 +584,37 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 
 	if (!pkg) {
 		const actions: { label: string; onClick: () => void }[] = [
-			{ label: "Back to packages", onClick: onBack },
+			{ label: t("backToPackages", "Back to packages"), onClick: onBack },
 		];
-		if (onRetry) actions.unshift({ label: "Try again", onClick: onRetry });
+		if (onRetry)
+			actions.unshift({ label: t("tryAgain", "Try again"), onClick: onRetry });
 
 		return (
 			<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
 				<div className="mx-auto w-full max-w-5xl space-y-6">
 					<Button variant="ghost" size="sm" onClick={onBack} className="gap-2">
 						<ArrowLeft className="h-4 w-4" />
-						Back
+						{t("back", "Back")}
 					</Button>
 					<div className="flex justify-center">
 						<EmptyState
 							icons={[Package]}
 							title={
-								loadError ? "Couldn't load this package" : "Package not found"
+								loadError
+									? t("couldntLoadThisPackage", "Couldn't load this package")
+									: t("packageNotFound", "Package not found")
 							}
 							description={
 								loadError
-									? `${getErrorMessage(loadError)} — check your connection, or sign in if the package is private.`
-									: "This package doesn't exist, is no longer published, or you don't have access to it."
+									? t(
+											"valCheckYourConnectionOrSignInIfThePackageIsPrivate",
+											"{{val}} — check your connection, or sign in if the package is private.",
+											{ val: getErrorMessage(loadError) },
+										)
+									: t(
+											"thisPackageDoesntExistIsNoLongerPublishedOrYouDontHaveAccessToIt",
+											"This package doesn't exist, is no longer published, or you don't have access to it.",
+										)
 							}
 							action={actions}
 						/>
@@ -603,15 +660,31 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 		installedVersion !== latestVersion;
 	const unavailableActionLabel =
 		pkg.status === PackageStatus.PendingReview
-			? "Pending review"
+			? t("pendingReview", "Pending Review")
 			: pkg.status === PackageStatus.Disabled
-				? "Disabled"
+				? t("disabled", "Disabled")
 				: pkg.status === PackageStatus.Rejected
-					? "Rejected"
-					: "Unavailable";
+					? t("rejected", "Rejected")
+					: t("unavailable", "Unavailable");
+	const unavailableActionState =
+		pkg.status === PackageStatus.PendingReview
+			? t("awaitingReview", "awaiting review")
+			: pkg.status === PackageStatus.Disabled
+				? t("disabledState", "disabled")
+				: pkg.status === PackageStatus.Rejected
+					? t("rejectedState", "rejected")
+					: t("unavailableState", "unavailable");
 	const unavailableActionMessage = isInstalled
-		? `Updates are unavailable while this package is ${unavailableActionLabel.toLowerCase()}.`
-		: `Install is unavailable while this package is ${unavailableActionLabel.toLowerCase()}.`;
+		? t(
+				"updatesAreUnavailableWhileThisPackageIsVal",
+				"Updates are unavailable while this package is {{val}}.",
+				{ val: unavailableActionState },
+			)
+		: t(
+				"installIsUnavailableWhileThisPackageIsVal",
+				"Install is unavailable while this package is {{val}}.",
+				{ val: unavailableActionState },
+			);
 	const showPublicationAudit =
 		canManagePublication &&
 		(pkg.status !== PackageStatus.Active || hasPendingVersion);
@@ -628,7 +701,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 				{/* Back Button */}
 				<Button variant="ghost" onClick={onBack} className="gap-2">
 					<ArrowLeft className="h-4 w-4" />
-					Back
+					{t("back", "Back")}
 				</Button>
 
 				{/* Header Card */}
@@ -665,23 +738,23 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										</CardTitle>
 										{pkg.status === PackageStatus.Disabled && (
 											<Badge variant="destructive" className="gap-1">
-												Disabled
+												{t("disabled", "Disabled")}
 											</Badge>
 										)}
 										{pkg.status === PackageStatus.PendingReview && (
 											<Badge variant="secondary" className="gap-1">
-												Pending Review
+												{t("pendingReview", "Pending Review")}
 											</Badge>
 										)}
 										{pkg.status === PackageStatus.Rejected && (
 											<Badge variant="destructive" className="gap-1">
-												Rejected
+												{t("rejected", "Rejected")}
 											</Badge>
 										)}
 										{pkg.verified && (
 											<Badge variant="secondary" className="gap-1">
 												<Shield className="h-3 w-3" />
-												Verified
+												{t("verified", "Verified")}
 											</Badge>
 										)}
 									</div>
@@ -690,7 +763,8 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 									</CardDescription>
 									<div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-sm text-muted-foreground">
 										<span className="flex items-center gap-1">
-											<Tag className="h-4 w-4" />v{latestVersion}
+											<Tag className="h-4 w-4" />
+											{`v${latestVersion}`}
 										</span>
 										<span className="flex items-center gap-1">
 											<Download className="h-4 w-4" />
@@ -700,7 +774,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											<span className="flex items-center gap-1">
 												<Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />
 												{(pkg.avgRating ?? 0).toFixed(1)}
-												<span className="text-xs">({pkg.ratingCount})</span>
+												<span className="text-xs">{`(${pkg.ratingCount})`}</span>
 											</span>
 										)}
 										{price != null && price > 0 ? (
@@ -709,7 +783,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											</span>
 										) : priceLabel ? (
 											<span className="flex items-center gap-1 font-medium">
-												Free
+												{t("free", "Free")}
 											</span>
 										) : null}
 										{compileStatus && compileStatus !== "idle" && (
@@ -724,7 +798,11 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 									<>
 										<div className="flex items-center gap-2 text-sm text-muted-foreground">
 											<Check className="h-4 w-4 text-green-500" />
-											Installed v{installedVersion}
+											{t(
+												"installedVinstalledversion",
+												"Installed v{{installedVersion}}",
+												{ installedVersion },
+											)}
 										</div>
 										{hasUpdate && (
 											<Button
@@ -736,7 +814,11 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 												) : (
 													<RefreshCw className="mr-2 h-4 w-4" />
 												)}
-												Update to v{latestVersion}
+												{t(
+													"updateToVlatestversion",
+													"Update to v{{latestVersion}}",
+													{ latestVersion },
+												)}
 											</Button>
 										)}
 										{!hasUpdate &&
@@ -751,13 +833,13 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											onClick={onUninstall}
 											disabled={isUninstalling}
 										>
-											Uninstall
+											{t("uninstall", "Uninstall")}
 										</Button>
 									</>
 								) : hasAccess === false && price != null && price > 0 ? (
 									<Button onClick={onBuy} disabled={isPurchasing}>
 										{isPurchasing ? (
-											"Processing..."
+											t("processing", "Processing...")
 										) : (
 											<>
 												<ShoppingCart className="mr-2 h-4 w-4" />
@@ -769,22 +851,22 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 									visibility === "public_request_access" ? (
 									<Button onClick={onGetOrBuy} disabled={isRequesting}>
 										{isRequesting ? (
-											"Requesting..."
+											t("requesting", "Requesting...")
 										) : (
 											<>
 												<KeyRound className="mr-2 h-4 w-4" />
-												Request access
+												{t("requestAccess", "Request access")}
 											</>
 										)}
 									</Button>
 								) : hasAccess === false ? (
 									<Button onClick={onGetOrBuy} disabled={isRequesting}>
 										{isRequesting ? (
-											"Processing..."
+											t("processing", "Processing...")
 										) : (
 											<>
 												<Download className="mr-2 h-4 w-4" />
-												Get
+												{t("get", "Get")}
 											</>
 										)}
 									</Button>
@@ -805,7 +887,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										) : (
 											<Download className="mr-2 h-4 w-4" />
 										)}
-										{canInstallForReview ? "Install for testing" : "Install"}
+										{canInstallForReview
+											? t("installForTesting", "Install for testing")
+											: t("install", "Install")}
 									</Button>
 								)}
 							</div>
@@ -816,29 +900,41 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 				{/* Main Content */}
 				<Tabs defaultValue="overview" className="w-full">
 					<TabsList className="h-auto flex-wrap justify-start">
-						<TabsTrigger value="overview">Overview</TabsTrigger>
+						<TabsTrigger value="overview">
+							{t("overview", "Overview")}
+						</TabsTrigger>
 						<TabsTrigger value="nodes">
-							Nodes ({pkg.nodes?.length ?? 0})
+							{t("nodesLength", "Nodes ({{length}})", {
+								length: pkg.nodes?.length ?? 0,
+							})}
 						</TabsTrigger>
 						{widgets.length > 0 && (
 							<TabsTrigger value="widgets">
-								Widgets ({widgets.length})
+								{t("widgetsLength", "Widgets ({{length}})", {
+									length: widgets.length,
+								})}
 							</TabsTrigger>
 						)}
-						<TabsTrigger value="permissions">Permissions</TabsTrigger>
-						<TabsTrigger value="versions">
-							Versions ({pkg.versions.length})
+						<TabsTrigger value="permissions">
+							{t("permissions", "Permissions")}
 						</TabsTrigger>
-						<TabsTrigger value="reviews">Reviews</TabsTrigger>
+						<TabsTrigger value="versions">
+							{t("versionsLength", "Versions ({{length}})", {
+								length: pkg.versions.length,
+							})}
+						</TabsTrigger>
+						<TabsTrigger value="reviews">{t("reviews", "Reviews")}</TabsTrigger>
 						{currentUserPermission != null &&
 							isMaintainer(currentUserPermission) &&
 							fetcher && (
 								<>
-									<TabsTrigger value="access">Access Requests</TabsTrigger>
-									<TabsTrigger value="users">Users</TabsTrigger>
+									<TabsTrigger value="access">
+										{t("accessRequests", "Access Requests")}
+									</TabsTrigger>
+									<TabsTrigger value="users">{t("users", "Users")}</TabsTrigger>
 									<TabsTrigger value="metadata" className="gap-1">
 										<Settings className="h-3.5 w-3.5" />
-										Metadata
+										{t("metadata", "Metadata")}
 									</TabsTrigger>
 								</>
 							)}
@@ -849,7 +945,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 						{meta?.longDescription && (
 							<Card className="gap-3">
 								<CardHeader>
-									<CardTitle className="text-base">About</CardTitle>
+									<CardTitle className="text-base">
+										{t("about", "About")}
+									</CardTitle>
 								</CardHeader>
 								<CardContent>
 									<PackageMarkdown content={meta.longDescription} />
@@ -866,9 +964,14 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											<Target className="h-4 w-4" />
 										</div>
 										<div className="min-w-0">
-											<CardTitle className="text-base">Use Case</CardTitle>
+											<CardTitle className="text-base">
+												{t("useCase", "Use Case")}
+											</CardTitle>
 											<CardDescription>
-												Where this package fits best
+												{t(
+													"whereThisPackageFitsBest",
+													"Where this package fits best",
+												)}
 											</CardDescription>
 										</div>
 									</div>
@@ -886,7 +989,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 							<Card className="md:col-span-2">
 								<CardHeader>
 									<CardTitle className="text-base">
-										Package Information
+										{t("packageInformation", "Package Information")}
 									</CardTitle>
 								</CardHeader>
 								<CardContent className="space-y-4">
@@ -897,7 +1000,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										if (!tags.length) return null;
 										return (
 											<div>
-												<h4 className="text-sm font-medium mb-2">Tags</h4>
+												<h4 className="text-sm font-medium mb-2">
+													{t("tags", "Tags")}
+												</h4>
 												<div className="flex flex-wrap gap-1">
 													{tags.map((t) => (
 														<Badge key={t} variant="outline">
@@ -911,7 +1016,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 
 									{(manifest.authors?.length ?? 0) > 0 && (
 										<div>
-											<h4 className="text-sm font-medium mb-2">Authors</h4>
+											<h4 className="text-sm font-medium mb-2">
+												{t("authors", "Authors")}
+											</h4>
 											<div className="flex flex-wrap gap-2">
 												{manifest.authors?.map((author) => (
 													<div
@@ -939,7 +1046,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 
 									{manifest.license && (
 										<div>
-											<h4 className="text-sm font-medium mb-2">License</h4>
+											<h4 className="text-sm font-medium mb-2">
+												{t("license", "License")}
+											</h4>
 											<Badge variant="outline">{manifest.license}</Badge>
 										</div>
 									)}
@@ -949,7 +1058,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 							{/* Links Card */}
 							<Card>
 								<CardHeader>
-									<CardTitle className="text-base">Links</CardTitle>
+									<CardTitle className="text-base">
+										{t("links", "Links")}
+									</CardTitle>
 								</CardHeader>
 								<CardContent className="space-y-3">
 									{manifest.repository && (
@@ -960,7 +1071,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											className="flex items-center gap-2 text-sm hover:underline"
 										>
 											<Github className="h-4 w-4" />
-											Repository
+											{t("repository", "Repository")}
 											<ExternalLink className="h-3 w-3" />
 										</a>
 									)}
@@ -972,7 +1083,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											className="flex items-center gap-2 text-sm hover:underline"
 										>
 											<Globe className="h-4 w-4" />
-											Website
+											{t("website", "Website")}
 											<ExternalLink className="h-3 w-3" />
 										</a>
 									)}
@@ -984,7 +1095,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											className="flex items-center gap-2 text-sm hover:underline"
 										>
 											<BookOpen className="h-4 w-4" />
-											Documentation
+											{t("documentation", "Documentation")}
 											<ExternalLink className="h-3 w-3" />
 										</a>
 									)}
@@ -996,7 +1107,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											className="flex items-center gap-2 text-sm hover:underline"
 										>
 											<HelpCircle className="h-4 w-4" />
-											Support
+											{t("support", "Support")}
 											<ExternalLink className="h-3 w-3" />
 										</a>
 									)}
@@ -1006,7 +1117,10 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										!meta?.docsUrl &&
 										!meta?.supportUrl && (
 											<p className="text-sm text-muted-foreground">
-												No external links provided
+												{t(
+													"noExternalLinksProvided",
+													"No external links provided",
+												)}
 											</p>
 										)}
 								</CardContent>
@@ -1016,7 +1130,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 						{/* Stats Card */}
 						<Card>
 							<CardHeader>
-								<CardTitle className="text-base">Statistics</CardTitle>
+								<CardTitle className="text-base">
+									{t("statistics", "Statistics")}
+								</CardTitle>
 							</CardHeader>
 							<CardContent>
 								<div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -1025,18 +1141,22 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											{(pkg.downloadCount ?? 0).toLocaleString()}
 										</p>
 										<p className="text-sm text-muted-foreground">
-											Total Downloads
+											{t("totalDownloads", "Total Downloads")}
 										</p>
 									</div>
 									<div>
 										<p className="text-2xl font-bold">{pkg.versions.length}</p>
-										<p className="text-sm text-muted-foreground">Versions</p>
+										<p className="text-sm text-muted-foreground">
+											{t("versions", "Versions")}
+										</p>
 									</div>
 									<div>
 										<p className="text-2xl font-bold">
 											{pkg.nodes?.length ?? 0}
 										</p>
-										<p className="text-sm text-muted-foreground">Nodes</p>
+										<p className="text-sm text-muted-foreground">
+											{t("nodes2", "Nodes")}
+										</p>
 									</div>
 									<div>
 										<p className="text-2xl font-bold">
@@ -1045,8 +1165,8 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 												: "N/A"}
 										</p>
 										<p className="text-sm text-muted-foreground">
-											Avg Rating
-											{(pkg.ratingCount ?? 0) > 0 && ` (${pkg.ratingCount})`}
+											{t("avgRating", "Avg Rating")}
+											{(pkg.ratingCount ?? 0) > 0 && `(${pkg.ratingCount})`}
 										</p>
 									</div>
 								</div>
@@ -1081,17 +1201,19 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 									<CardHeader>
 										<CardTitle className="text-base flex items-center gap-2">
 											<RotateCcw className="h-4 w-4" />
-											Package Disabled
+											{t("packageDisabled", "Package Disabled")}
 										</CardTitle>
 									</CardHeader>
 									<CardContent className="flex items-center justify-between">
 										<div>
 											<p className="text-sm font-medium">
-												Restore this package
+												{t("restoreThisPackage", "Restore this package")}
 											</p>
 											<p className="text-sm text-muted-foreground">
-												This package is currently disabled and hidden from
-												search. Restore it to make it active again.
+												{t(
+													"disabledPackageRestoreDescription",
+													"This package is currently disabled and hidden from search. Restore it to make it active again.",
+												)}
 											</p>
 										</div>
 										<Button
@@ -1105,7 +1227,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											) : (
 												<RotateCcw className="h-4 w-4" />
 											)}
-											Restore
+											{t("restore", "Restore")}
 										</Button>
 									</CardContent>
 								</Card>
@@ -1119,15 +1241,19 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 								<Card className="border-destructive/30">
 									<CardHeader>
 										<CardTitle className="text-base text-destructive">
-											Danger Zone
+											{t("dangerZone", "Danger Zone")}
 										</CardTitle>
 									</CardHeader>
 									<CardContent className="flex items-center justify-between">
 										<div>
-											<p className="text-sm font-medium">Delete this package</p>
+											<p className="text-sm font-medium">
+												{t("deleteThisPackage", "Delete this package")}
+											</p>
 											<p className="text-sm text-muted-foreground">
-												The package will be disabled and hidden from search.
-												Existing installs will keep working.
+												{t(
+													"deletePackageDescription",
+													"The package will be disabled and hidden from search. Existing installs will keep working.",
+												)}
 											</p>
 										</div>
 										<AlertDialog
@@ -1141,21 +1267,26 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 													className="gap-1.5 shrink-0 ml-4"
 												>
 													<Trash2 className="h-4 w-4" />
-													Delete
+													{t("delete", "Delete")}
 												</Button>
 											</AlertDialogTrigger>
 											<AlertDialogContent>
 												<AlertDialogHeader>
-													<AlertDialogTitle>Delete package?</AlertDialogTitle>
+													<AlertDialogTitle>
+														{t("deletePackage", "Delete package?")}
+													</AlertDialogTitle>
 													<AlertDialogDescription>
-														This will disable{" "}
-														<strong>{meta?.name || manifest.name}</strong> and
-														remove it from search results. Existing installs and
-														offline projects will continue to work.
+														{t(
+															"disablePackageWarning",
+															"This will disable {{name}} and remove it from search results. Existing installs and offline projects will continue to work.",
+															{ name: meta?.name || manifest.name },
+														)}
 													</AlertDialogDescription>
 												</AlertDialogHeader>
 												<AlertDialogFooter>
-													<AlertDialogCancel>Cancel</AlertDialogCancel>
+													<AlertDialogCancel>
+														{t("cancel", "Cancel")}
+													</AlertDialogCancel>
 													<AlertDialogAction
 														className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 														onClick={() => deleteMutation.mutate()}
@@ -1166,7 +1297,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 														) : (
 															<Trash2 className="mr-2 h-4 w-4" />
 														)}
-														Delete Package
+														{t("deletePackage2", "Delete Package")}
 													</AlertDialogAction>
 												</AlertDialogFooter>
 											</AlertDialogContent>
@@ -1180,9 +1311,14 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 						{!pkg.nodes?.length ? (
 							<Card className="p-8 text-center">
 								<FileCode className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
-								<h3 className="font-semibold">No nodes declared</h3>
+								<h3 className="font-semibold">
+									{t("noNodesDeclared", "No nodes declared")}
+								</h3>
 								<p className="text-muted-foreground text-sm">
-									This package doesn&apos;t have any extracted nodes yet
+									{t(
+										"thisPackageDoesnapostHaveAnyExtractedNodesYet",
+										"This package doesn't have any extracted nodes yet",
+									)}
 								</p>
 							</Card>
 						) : (
@@ -1208,18 +1344,24 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 					<TabsContent value="permissions" className="space-y-4">
 						<Card>
 							<CardHeader>
-								<CardTitle className="text-base">Resource Limits</CardTitle>
+								<CardTitle className="text-base">
+									{t("resourceLimits", "Resource Limits")}
+								</CardTitle>
 							</CardHeader>
 							<CardContent className="space-y-4">
 								<div className="grid grid-cols-2 gap-4">
 									<div>
-										<p className="text-sm font-medium">Memory</p>
+										<p className="text-sm font-medium">
+											{t("memory", "Memory")}
+										</p>
 										<Badge variant="outline" className="mt-1">
 											{manifest.permissions?.memory}
 										</Badge>
 									</div>
 									<div>
-										<p className="text-sm font-medium">Timeout</p>
+										<p className="text-sm font-medium">
+											{t("timeout", "Timeout")}
+										</p>
 										<Badge variant="outline" className="mt-1">
 											{manifest.permissions?.timeout}
 										</Badge>
@@ -1230,36 +1372,38 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 
 						<Card>
 							<CardHeader>
-								<CardTitle className="text-base">Capabilities</CardTitle>
+								<CardTitle className="text-base">
+									{t("capabilities", "Capabilities")}
+								</CardTitle>
 							</CardHeader>
 							<CardContent>
 								<div className="flex flex-wrap gap-2">
 									<PermissionBadge
-										label="HTTP Requests"
+										label={t("httpRequests", "HTTP Requests")}
 										enabled={manifest.permissions?.network?.httpEnabled}
 									/>
 									<PermissionBadge
-										label="WebSocket"
+										label={t("websocket", "WebSocket")}
 										enabled={manifest.permissions?.network?.websocketEnabled}
 									/>
 									<PermissionBadge
-										label="Node Storage"
+										label={t("nodeStorage", "Node Storage")}
 										enabled={manifest.permissions?.filesystem?.nodeStorage}
 									/>
 									<PermissionBadge
-										label="User Storage"
+										label={t("userStorage", "User Storage")}
 										enabled={manifest.permissions?.filesystem?.userStorage}
 									/>
 									<PermissionBadge
-										label="Variables"
+										label={t("variables", "Variables")}
 										enabled={manifest.permissions?.variables}
 									/>
 									<PermissionBadge
-										label="Cache"
+										label={t("cache", "Cache")}
 										enabled={manifest.permissions?.cache}
 									/>
 									<PermissionBadge
-										label="Streaming"
+										label={t("streaming", "Streaming")}
 										enabled={manifest.permissions?.streaming}
 									/>
 									<PermissionBadge
@@ -1267,7 +1411,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										enabled={manifest.permissions?.a2ui}
 									/>
 									<PermissionBadge
-										label="Models/LLM"
+										label={t("modelsLlm", "Models/LLM")}
 										enabled={manifest.permissions?.models}
 									/>
 								</div>
@@ -1276,7 +1420,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 									(manifest.permissions?.network?.allowedHosts?.length ?? 0) >
 										0 && (
 										<div className="mt-4">
-											<p className="text-sm font-medium mb-2">Allowed Hosts</p>
+											<p className="text-sm font-medium mb-2">
+												{t("allowedHosts", "Allowed Hosts")}
+											</p>
 											<div className="flex flex-wrap gap-1">
 												{manifest.permissions?.network?.allowedHosts?.map(
 													(host) => (
@@ -1295,7 +1441,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 
 								{(manifest.permissions?.oauthScopes?.length ?? 0) > 0 && (
 									<div className="mt-4">
-										<p className="text-sm font-medium mb-2">OAuth Scopes</p>
+										<p className="text-sm font-medium mb-2">
+											{t("oauthScopes", "OAuth Scopes")}
+										</p>
 										{manifest.permissions?.oauthScopes?.map((oauth) => (
 											<div
 												key={`${oauth.provider}:${oauth.scopes.join(",")}:${oauth.reason}`}
@@ -1304,7 +1452,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 												<div className="flex items-center gap-2">
 													<Badge>{oauth.provider}</Badge>
 													{oauth.required && (
-														<Badge variant="destructive">Required</Badge>
+														<Badge variant="destructive">
+															{t("required", "Required")}
+														</Badge>
 													)}
 												</div>
 												<p className="text-sm mt-1">{oauth.reason}</p>
@@ -1330,12 +1480,14 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 					<TabsContent value="versions" className="space-y-4">
 						<Card>
 							<CardHeader>
-								<CardTitle className="text-base">Version History</CardTitle>
+								<CardTitle className="text-base">
+									{t("versionHistory", "Version History")}
+								</CardTitle>
 							</CardHeader>
 							<CardContent>
 								{pkg.versions.length === 0 ? (
 									<p className="text-sm text-muted-foreground">
-										No versions available
+										{t("noVersionsAvailable", "No versions available")}
 									</p>
 								) : (
 									<div className="divide-y">

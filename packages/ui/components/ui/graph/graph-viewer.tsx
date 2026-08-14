@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { AlertTriangle, Route, Search, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -28,9 +29,9 @@ const GRAPH_VIEW_LIMIT_OPTIONS = [
 ] as const;
 
 function formatGraphLimitOption(limit: number): string {
-	if (limit >= 1000000) return `${limit / 1000000}m nodes`;
-	if (limit >= 1000) return `${limit / 1000}k nodes`;
-	return `${limit} nodes`;
+	if (limit >= 1000000) return i18next.t('valmNodes', '{{val}}m nodes', { val: limit / 1000000 });
+	if (limit >= 1000) return i18next.t('valkNodes', '{{val}}k nodes', { val: limit / 1000 });
+	return i18next.t('limitNodes', '{{limit}} nodes', { limit });
 }
 
 function getEffectiveNodeIdColumn(
@@ -165,6 +166,7 @@ export function GraphViewer({
 	analytics,
 	enableClusterLayout = false,
 }: GraphViewerProps) {
+	const { t } = useTranslation("common");
 	const [selectedNode, setSelectedNode] = useState<SubgraphNode | null>(null);
 	const [selectedEdge, setSelectedEdge] = useState<SubgraphEdge | null>(null);
 	const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null);
@@ -286,10 +288,10 @@ export function GraphViewer({
 			.sort((a, b) => b[1] - a[1])
 			.map(
 				([label, total]) =>
-					`${(loadedByLabel.get(label) ?? 0).toLocaleString()} of ${total.toLocaleString()} ${label}`,
+					t('valOfVal2Label', '{{val}} of {{val2}} {{label}}', { val: (loadedByLabel.get(label) ?? 0).toLocaleString(), val2: total.toLocaleString(), label }),
 			);
 
-		return parts.length > 0 ? `Showing ${parts.join(" · ")}` : null;
+		return parts.length > 0 ? t('showingVal', 'Showing {{val}}', { val: parts.join(" · ") }) : null;
 	}, [populationByLabel, data]);
 
 	const nodeMap = useMemo(() => {
@@ -693,7 +695,7 @@ export function GraphViewer({
 										type="text"
 										value={searchQuery}
 										onChange={(e) => handleSearch(e.target.value)}
-										placeholder="Search loaded nodes, then fallback to full graph..."
+										placeholder={t('searchLoadedNodesThenFallbackToFullGraph', 'Search loaded nodes, then fallback to full graph...')}
 										className="w-full h-9 pl-8 pr-8 text-sm rounded-md border bg-transparent focus:outline-none focus:ring-1 focus:ring-ring"
 									/>
 									{searchQuery && (
@@ -709,7 +711,7 @@ export function GraphViewer({
 										<div className="absolute left-0 right-0 top-full z-20 mt-1 rounded-md border bg-popover shadow-lg overflow-hidden">
 											{remoteSearchLoading ? (
 												<div className="px-3 py-2 text-xs text-muted-foreground">
-													Searching full graph...
+													{t('searchingFullGraph', 'Searching full graph...')}
 												</div>
 											) : remoteSearchError ? (
 												<div className="px-3 py-2 text-xs text-destructive">
@@ -729,15 +731,13 @@ export function GraphViewer({
 															<span className="text-sm font-medium truncate max-w-full">
 																{node.caption ?? node.id}
 															</span>
-															<span className="text-[11px] text-muted-foreground truncate max-w-full">
-																{node.label} · {node.id}
-															</span>
+															<span className="text-[11px] text-muted-foreground truncate max-w-full">{`${node.label} · ${node.id}`}</span>
 														</button>
 													))}
 												</div>
 											) : searchHighlight.size === 0 ? (
 												<div className="px-3 py-2 text-xs text-muted-foreground">
-													No nodes found in the full graph.
+													{t('noNodesFoundInTheFullGraph', 'No nodes found in the full graph.')}
 												</div>
 											) : null}
 										</div>
@@ -745,21 +745,17 @@ export function GraphViewer({
 								</div>
 
 								{searchHighlight.size > 0 && (
-									<span className="text-xs text-muted-foreground whitespace-nowrap">
-										{searchHighlight.size} loaded match
-										{searchHighlight.size !== 1 ? "es" : ""}
+									<span className="text-xs text-muted-foreground whitespace-nowrap">{t('sizeLoadedMatch', '{{size}} loaded match', { size: searchHighlight.size })}{searchHighlight.size !== 1 ? "es" : ""}
 									</span>
 								)}
 
 								{unloadedRemoteSearchMatches.length > 0 && (
-									<span className="text-xs text-muted-foreground whitespace-nowrap">
-										{unloadedRemoteSearchMatches.length} more in graph
-									</span>
+									<span className="text-xs text-muted-foreground whitespace-nowrap">{t('lengthMoreInGraph', '{{length}} more in graph', { length: unloadedRemoteSearchMatches.length })}</span>
 								)}
 
 								{hasRemoteSearchQuery && remoteSearchLoading && (
 									<span className="text-xs text-muted-foreground whitespace-nowrap">
-										Searching full graph...
+										{t('searchingFullGraph', 'Searching full graph...')}
 									</span>
 								)}
 
@@ -769,7 +765,7 @@ export function GraphViewer({
 
 						{/* Node / edge count */}
 						<span className="text-xs text-muted-foreground whitespace-nowrap">
-							{nodeCount.toLocaleString()} nodes · {edgeCount.toLocaleString()}{" "}
+							{nodeCount.toLocaleString()} {t('nodes', 'nodes ·')} {edgeCount.toLocaleString()}{" "}
 							edges
 						</span>
 
@@ -811,21 +807,19 @@ export function GraphViewer({
 											type="button"
 											className="flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-600 dark:text-amber-400 whitespace-nowrap hover:bg-amber-500/20 transition-colors"
 										>
-											<AlertTriangle className="h-3.5 w-3.5" />
-											{warnings.length} data warning
-											{warnings.length !== 1 ? "s" : ""}
+											<AlertTriangle className="h-3.5 w-3.5" />{t('lengthDataWarning', '{{length}} data warning', { length: warnings.length })}{warnings.length !== 1 ? "s" : ""}
 										</button>
 									</PopoverTrigger>
 									<PopoverContent align="end" className="w-80 p-0">
 										<div className="flex items-center justify-between border-b px-3 py-2">
 											<span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
-												Data warnings
+												{t('dataWarnings', 'Data warnings')}
 											</span>
 											<button
 												type="button"
 												className="text-muted-foreground hover:text-foreground"
 												onClick={() => setDismissedWarningsKey(warningsKey)}
-												title="Dismiss warnings"
+												title={t('dismissWarnings', 'Dismiss warnings')}
 											>
 												<X className="h-3.5 w-3.5" />
 											</button>
@@ -856,7 +850,7 @@ export function GraphViewer({
 							    complete description of a view that is nothing of the kind. */}
 							{truncated && (
 								<span className="text-xs text-amber-500 whitespace-nowrap">
-									Result truncated
+									{t('resultTruncated', 'Result truncated')}
 								</span>
 							)}
 							{loading && (
@@ -910,17 +904,17 @@ export function GraphViewer({
 								<div className="flex items-center gap-2 rounded-full border bg-background/90 px-3 py-1.5 text-xs shadow-sm backdrop-blur-sm">
 									<Route className="h-3.5 w-3.5 text-primary" />
 									<span className="whitespace-nowrap">
-										Finding path from{" "}
+										{t('findingPathFrom', 'Finding path from')}{" "}
 										<span className="font-medium">
 											{pathSource.caption ?? pathSource.id}
 										</span>{" "}
-										— select a target node
+										{t('selectATargetNode', '— select a target node')}
 									</span>
 									<button
 										type="button"
 										className="text-muted-foreground hover:text-foreground"
 										onClick={exitPathMode}
-										title="Cancel path finding"
+										title={t('cancelPathFinding', 'Cancel path finding')}
 									>
 										<X className="h-3.5 w-3.5" />
 									</button>
@@ -928,7 +922,7 @@ export function GraphViewer({
 							) : pathFinding ? (
 								<div className="flex items-center gap-2 rounded-full border bg-background/90 px-3 py-1.5 text-xs shadow-sm backdrop-blur-sm">
 									<Route className="h-3.5 w-3.5 animate-pulse text-primary" />
-									<span className="whitespace-nowrap">Finding path…</span>
+									<span className="whitespace-nowrap">{t('findingPath', 'Finding path…')}</span>
 								</div>
 							) : pathOutcome ? (
 								<div
@@ -945,22 +939,18 @@ export function GraphViewer({
 										{pathOutcome.error
 											? pathOutcome.error
 											: pathOutcome.found
-												? `Connected — ${pathOutcome.hops} hop${
-														pathOutcome.hops !== 1 ? "s" : ""
-													}${
-														pathOutcome.alternatives > 0
+												? t('connectedHopsHopvalval2', 'Connected — {{hops}} hop{{val}}{{val2}}', { hops: pathOutcome.hops, val: pathOutcome.hops !== 1 ? "s" : "", val2: pathOutcome.alternatives > 0
 															? ` (${pathOutcome.alternatives} alternative route${
 																	pathOutcome.alternatives !== 1 ? "s" : ""
 																})`
-															: ""
-													}`
-												: "No connection within 4 hops"}
+															: "" })
+												: t('noConnectionWithin4Hops', 'No connection within 4 hops')}
 									</span>
 									<button
 										type="button"
 										className="hover:opacity-70"
 										onClick={exitPathMode}
-										title="Clear path"
+										title={t('clearPath', 'Clear path')}
 									>
 										<X className="h-3.5 w-3.5" />
 									</button>

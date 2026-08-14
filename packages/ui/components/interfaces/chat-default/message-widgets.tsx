@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Maximize2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "../../../lib";
@@ -51,6 +52,7 @@ function MessageWidget({
 	boardId,
 	eventId,
 }: MessageWidgetProps) {
+	const { t } = useTranslation("chat");
 	// Content keys: Dexie liveQuery re-materializes message objects on every
 	// table write, so object identity is NOT stable across renders of unchanged
 	// widgets — string equality is. Reseeding only on real content change keeps
@@ -120,7 +122,7 @@ function MessageWidget({
 
 			<Dialog open={maximized} onOpenChange={setMaximized}>
 				<DialogContent className="w-screen h-screen max-w-none! max-h-none! p-0 rounded-none top-[50%]! left-[50%]! translate-x-[-50%]! translate-y-[-50%]! flex flex-col">
-					<DialogTitle className="sr-only">Widget</DialogTitle>
+					<DialogTitle className="sr-only">{t('widget', 'Widget')}</DialogTitle>
 					<div className="flex-1 overflow-auto p-4">{renderer}</div>
 				</DialogContent>
 			</Dialog>

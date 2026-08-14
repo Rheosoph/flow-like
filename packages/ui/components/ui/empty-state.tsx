@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import type { LucideIcon } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../components/ui/button";
@@ -27,6 +28,7 @@ export function EmptyState({
 	action,
 	className,
 }: Readonly<EmptyStateProps>) {
+	const { t } = useTranslation("common");
 	return (
 		<div
 			className={cn(
@@ -50,17 +52,17 @@ export function EmptyState({
 					<>
 						<div className="bg-background/80 backdrop-blur-sm size-12 grid place-items-center rounded-xl relative left-2.5 top-1.5 -rotate-6 shadow-lg ring-1 ring-border/50 group-hover:ring-primary/20 group-hover:-translate-x-5 group-hover:-rotate-12 group-hover:-translate-y-0.5 transition-all duration-500 group-hover:duration-200">
 							{React.createElement(icons[0], {
-								className: "w-6 h-6 text-muted-foreground",
+								className: `w-6 h-6 text-muted-foreground`,
 							})}
 						</div>
 						<div className="bg-background/80 backdrop-blur-sm size-12 grid place-items-center rounded-xl relative z-10 shadow-lg ring-1 ring-border/50 group-hover:ring-primary/20 group-hover:-translate-y-0.5 transition-all duration-500 group-hover:duration-200">
 							{React.createElement(icons[1], {
-								className: "w-6 h-6 text-muted-foreground",
+								className: `w-6 h-6 text-muted-foreground`,
 							})}
 						</div>
 						<div className="bg-background/80 backdrop-blur-sm size-12 grid place-items-center rounded-xl relative right-2.5 top-1.5 rotate-6 shadow-lg ring-1 ring-border/50 group-hover:ring-primary/20 group-hover:translate-x-5 group-hover:rotate-12 group-hover:-translate-y-0.5 transition-all duration-500 group-hover:duration-200">
 							{React.createElement(icons[2], {
-								className: "w-6 h-6 text-muted-foreground",
+								className: `w-6 h-6 text-muted-foreground`,
 							})}
 						</div>
 					</>
@@ -68,7 +70,7 @@ export function EmptyState({
 					<div className="bg-background/80 backdrop-blur-sm size-12 grid place-items-center rounded-xl shadow-lg ring-1 ring-border/50 group-hover:ring-primary/20 group-hover:-translate-y-0.5 transition-all duration-500 group-hover:duration-200">
 						{icons[0] &&
 							React.createElement(icons[0], {
-								className: "w-6 h-6 text-muted-foreground",
+								className: `w-6 h-6 text-muted-foreground`,
 							})}
 					</div>
 				)}

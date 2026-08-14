@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { ChevronRight, Flame, List } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../../../ui";
@@ -155,6 +156,7 @@ function SpanTooltip({
 	readonly x: number;
 	readonly y: number;
 }) {
+	const { t } = useTranslation("admin");
 	const attributes = attributeEntries(node.span.attributes);
 	return (
 		<div
@@ -180,7 +182,7 @@ function SpanTooltip({
 					{node.span.status}
 				</span>
 				<span className="tabular-nums">
-					+{formatDurationMs(node.start)} in trace
+					+{formatDurationMs(node.start)} {t('inTrace', 'in trace')}
 				</span>
 			</div>
 			{attributes.length > 0 ? (
@@ -208,6 +210,7 @@ function FlameRuler({
 	readonly viewStart: number;
 	readonly viewSpan: number;
 }) {
+	const { t } = useTranslation("admin");
 	const ticks = [0, 0.25, 0.5, 0.75, 1];
 	return (
 		<div className="relative mb-1 h-4 border-b border-dashed">
@@ -218,11 +221,7 @@ function FlameRuler({
 					style={{
 						left: `${tick * 100}%`,
 						transform:
-							tick === 0
-								? "none"
-								: tick === 1
-									? "translateX(-100%)"
-									: "translateX(-50%)",
+							t('translatex50', { defaultValue_zero: 'none', defaultValue_one: 'translateX(-100%)', defaultValue_other: 'translateX(-50%)', count: tick }),
 					}}
 				>
 					{formatDurationMs(viewStart + viewSpan * tick)}
@@ -241,6 +240,7 @@ export function TraceFlamegraph({
 	spans,
 	className,
 }: Readonly<TraceFlamegraphProps>) {
+	const { t } = useTranslation("admin");
 	const tree = useMemo(() => buildFlameTree(spans), [spans]);
 	const [focusKey, setFocusKey] = useState<string | null>(null);
 	const [view, setView] = useState<"flame" | "list">("flame");
@@ -327,7 +327,7 @@ export function TraceFlamegraph({
 		<div ref={rootRef} className={`relative ${className ?? ""}`}>
 			<div className="mb-2 flex flex-wrap items-center justify-between gap-2">
 				<nav
-					aria-label="Flamegraph zoom path"
+					aria-label={t('flamegraphZoomPath', 'Flamegraph zoom path')}
 					className="flex min-w-0 flex-wrap items-center gap-1 text-xs"
 				>
 					<Button
@@ -336,7 +336,7 @@ export function TraceFlamegraph({
 						className="h-6 px-2 text-xs"
 						onClick={() => setFocusKey(null)}
 					>
-						Full trace
+						{t('fullTrace', 'Full trace')}
 					</Button>
 					{breadcrumb.map((node, index) => (
 						<span key={node.key} className="flex min-w-0 items-center gap-1">
@@ -362,7 +362,7 @@ export function TraceFlamegraph({
 						onClick={() => setView("flame")}
 					>
 						<Flame className="mr-1 h-3 w-3" />
-						Flame
+						{t('flame', 'Flame')}
 					</Button>
 					<Button
 						variant={view === "list" ? "secondary" : "ghost"}
@@ -371,7 +371,7 @@ export function TraceFlamegraph({
 						onClick={() => setView("list")}
 					>
 						<List className="mr-1 h-3 w-3" />
-						List
+						{t('list', 'List')}
 					</Button>
 				</div>
 			</div>
@@ -478,8 +478,7 @@ export function TraceFlamegraph({
 			)}
 
 			<p className="mt-2 text-[11px] text-muted-foreground">
-				Bar width is the span duration, colour intensity its share of the
-				slowest span in view. Select a span to zoom into its subtree.
+				{t('barWidthIsTheSpanDurationColourIntensityItsShareOfTheSlowestSpanInViewSelectASpanToZoomIntoItsSubtree', "Bar width is the span duration, colour intensity its share of the slowest span in view. Select a span to zoom into its subtree.")}
 			</p>
 
 			{hovered ? (

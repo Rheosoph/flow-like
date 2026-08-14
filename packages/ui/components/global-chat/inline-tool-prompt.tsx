@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { motion } from "framer-motion";
 import {
 	ChevronDownIcon,
@@ -79,6 +80,7 @@ function ApprovalAppIdentity({
 
 /** Keep verbose delegated prompts out of the way until the user explicitly asks to inspect them. */
 function ApprovalDetails({ description }: { description: string }) {
+	const { t } = useTranslation("chat");
 	const [open, setOpen] = useState(false);
 
 	return (
@@ -88,7 +90,7 @@ function ApprovalDetails({ description }: { description: string }) {
 					type="button"
 					className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 				>
-					<span>Review request details</span>
+					<span>{t('reviewRequestDetails', 'Review request details')}</span>
 					<ChevronDownIcon
 						className={cn(
 							"ml-auto size-3.5 shrink-0 transition-transform",
@@ -125,6 +127,7 @@ function initialSelected(ask: GlobalToolAsk | undefined): Set<number> {
  * freeform text, single choice, and multiple choice, mirroring the `ask_user` tool's modes.
  */
 export function InlineToolPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
+	const { t } = useTranslation("chat");
 	const [remember, setRemember] = useState(false);
 	const [answer, setAnswer] = useState(() =>
 		typeof prompt.ask?.defaultValue === "string" ? prompt.ask.defaultValue : "",
@@ -194,7 +197,7 @@ export function InlineToolPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 						{prompt.title}
 					</p>
 					<p className="mt-0.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/70">
-						{isApproval ? "Needs your approval" : "Needs an answer"}
+						{isApproval ? t('needsYourApproval', 'Needs your approval') : t('needsAnAnswer', 'Needs an answer')}
 					</p>
 				</div>
 			</div>
@@ -256,7 +259,7 @@ export function InlineToolPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 							autoFocus
 							value={answer}
 							onChange={(e) => setAnswer(e.target.value)}
-							placeholder={prompt.ask?.placeholder ?? "Your answer…"}
+							placeholder={prompt.ask?.placeholder ?? t('yourAnswer', 'Your answer…')}
 							className="min-h-20 resize-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 							onKeyDown={(e) => {
 								if (e.key === "Enter" && !e.shiftKey && answer.trim()) {
@@ -281,7 +284,7 @@ export function InlineToolPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 							checked={remember}
 							onCheckedChange={(checked) => setRemember(checked === true)}
 						/>
-						Don&apos;t ask again this session
+						{t('donapostAskAgainThisSession', "Don't ask again this session")}
 					</label>
 				) : (
 					<span />

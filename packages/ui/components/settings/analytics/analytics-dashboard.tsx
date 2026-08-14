@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { ResponsiveBar } from "@nivo/bar";
 import type { BarDatum, BarTooltipProps } from "@nivo/bar";
 import { ResponsiveLine } from "@nivo/line";
@@ -397,11 +398,12 @@ function MetricCard({
 	icon: ComponentType<{ className?: string }>;
 	tone?: "neutral" | "success" | "warning" | "danger";
 }) {
+	const { t } = useTranslation("settings");
 	const toneClassName = {
 		neutral:
 			"bg-[color-mix(in_oklch,var(--primary)_12%,transparent)] text-primary",
-		success: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-		warning: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+		success: `bg-emerald-500/10 text-emerald-600 dark:text-emerald-400`,
+		warning: `bg-amber-500/10 text-amber-600 dark:text-amber-400`,
 		danger: "bg-destructive/10 text-destructive",
 	}[tone];
 
@@ -426,6 +428,7 @@ function MetricCard({
 }
 
 function ActivityTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
+	const { t } = useTranslation("settings");
 	const labels = useMemo(
 		() => data.map((d) => formatChartDate(d.date)),
 		[data],
@@ -452,7 +455,7 @@ function ActivityTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
 	);
 
 	if (data.length === 0 || !hasActivity) {
-		return <EmptyChart label="No executions in this date range" />;
+		return <EmptyChart label={t('noExecutionsInThisDateRange', 'No executions in this date range')} />;
 	}
 
 	return (
@@ -498,6 +501,7 @@ function ActivityTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
 }
 
 function ReliabilityChart({ data }: { data: IDailyAnalyticsStat[] }) {
+	const { t } = useTranslation("settings");
 	const chartData = useMemo(
 		() =>
 			data.map((d) => ({
@@ -510,7 +514,7 @@ function ReliabilityChart({ data }: { data: IDailyAnalyticsStat[] }) {
 	const hasExecutions = data.some((d) => d.executions > 0);
 
 	if (data.length === 0 || !hasExecutions) {
-		return <EmptyChart label="No reliability data in this date range" />;
+		return <EmptyChart label={t('noReliabilityDataInThisDateRange', 'No reliability data in this date range')} />;
 	}
 
 	return (
@@ -552,6 +556,7 @@ function ReliabilityChart({ data }: { data: IDailyAnalyticsStat[] }) {
 }
 
 function LatencyChart({ data }: { data: IDailyAnalyticsStat[] }) {
+	const { t } = useTranslation("settings");
 	const chartData = useMemo(
 		() =>
 			[
@@ -578,7 +583,7 @@ function LatencyChart({ data }: { data: IDailyAnalyticsStat[] }) {
 	);
 
 	if (chartData.length === 0) {
-		return <EmptyChart label="No latency samples in this date range" />;
+		return <EmptyChart label={t('noLatencySamplesInThisDateRange', 'No latency samples in this date range')} />;
 	}
 
 	return (
@@ -623,6 +628,7 @@ function LatencyChart({ data }: { data: IDailyAnalyticsStat[] }) {
 }
 
 function CostTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
+	const { t } = useTranslation("settings");
 	const chartData = useMemo(
 		() =>
 			data.map((d) => ({
@@ -635,7 +641,7 @@ function CostTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
 	const hasCost = chartData.some((d) => d.llm > 0 || d.embeddings > 0);
 
 	if (data.length === 0 || !hasCost) {
-		return <EmptyChart label="No AI cost in this date range" />;
+		return <EmptyChart label={t('noAiCostInThisDateRange', 'No AI cost in this date range')} />;
 	}
 
 	return (
@@ -677,6 +683,7 @@ function CostTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
 }
 
 function FeedbackTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
+	const { t } = useTranslation("settings");
 	const chartData = useMemo(
 		() =>
 			data.map((d) => ({
@@ -691,7 +698,7 @@ function FeedbackTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
 	);
 
 	if (data.length === 0 || !hasFeedback) {
-		return <EmptyChart label="No feedback signal in this date range" />;
+		return <EmptyChart label={t('noFeedbackSignalInThisDateRange', 'No feedback signal in this date range')} />;
 	}
 
 	return (
@@ -733,11 +740,12 @@ function FeedbackTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
 }
 
 function FeedbackBadge({ rating }: { rating: number }) {
+	const { t } = useTranslation("settings");
 	if (rating > 0) {
 		return (
 			<Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
 				<ThumbsUpIcon className="mr-1 h-3 w-3" />
-				Positive
+				{t('positive', 'Positive')}
 			</Badge>
 		);
 	}
@@ -746,15 +754,16 @@ function FeedbackBadge({ rating }: { rating: number }) {
 		return (
 			<Badge className="bg-destructive/10 text-destructive">
 				<ThumbsDownIcon className="mr-1 h-3 w-3" />
-				Negative
+				{t('negative', 'Negative')}
 			</Badge>
 		);
 	}
 
-	return <Badge variant="secondary">Neutral</Badge>;
+	return <Badge variant="secondary">{t('neutral', 'Neutral')}</Badge>;
 }
 
 export function AnalyticsDashboard() {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const analyticsState = backend.analyticsState;
 	const eventState = backend.eventState;
@@ -825,8 +834,8 @@ export function AnalyticsDashboard() {
 		} catch (error) {
 			toast.error(
 				error instanceof Error
-					? `Failed to load analytics: ${error.message}`
-					: "Failed to load analytics data",
+					? t('failedToLoadAnalyticsMessage', 'Failed to load analytics: {{message}}', { message: error.message })
+					: t('failedToLoadAnalyticsData', 'Failed to load analytics data'),
 			);
 		} finally {
 			setLoading(false);
@@ -873,14 +882,14 @@ export function AnalyticsDashboard() {
 	const feedbackTotalPages = Math.ceil(feedbackTotal / FEEDBACK_LIMIT);
 	const dateRangeLabel =
 		dateRange === "7d"
-			? "Last 7 days"
+			? t('last7Days', 'Last 7 days')
 			: dateRange === "30d"
-				? "Last 30 days"
-				: "Last 90 days";
+				? t('last30Days', 'Last 30 days')
+				: t('last90Days', 'Last 90 days');
 	const analyticsScopeCopy =
 		selectedEventId === "all"
-			? "Usage, reliability, cost, and feedback"
-			: "Usage, reliability, and feedback";
+			? t('usageReliabilityCostAndFeedback', 'Usage, reliability, cost, and feedback')
+			: t('usageReliabilityAndFeedback', 'Usage, reliability, and feedback');
 	const eventOptions = useMemo(
 		() =>
 			[...events]
@@ -896,7 +905,7 @@ export function AnalyticsDashboard() {
 		selectedEventId === "all" ? undefined : eventLookup.get(selectedEventId);
 	const selectedEventLabel =
 		selectedEventId === "all"
-			? "all events"
+			? t('allEvents', 'all events')
 			: selectedEvent?.name ||
 				compactIdentifier(selectedEventId) ||
 				"selected event";
@@ -935,7 +944,7 @@ export function AnalyticsDashboard() {
 	if (!analyticsState) {
 		return (
 			<div className="flex h-full items-center justify-center">
-				<p className="text-muted-foreground">Analytics is not available</p>
+				<p className="text-muted-foreground">{t('analyticsIsNotAvailable', 'Analytics is not available')}</p>
 			</div>
 		);
 	}
@@ -943,7 +952,7 @@ export function AnalyticsDashboard() {
 	if (!appId) {
 		return (
 			<div className="flex h-full items-center justify-center">
-				<p className="text-muted-foreground">No app selected</p>
+				<p className="text-muted-foreground">{t('noAppSelected2', 'No app selected')}</p>
 			</div>
 		);
 	}
@@ -972,9 +981,8 @@ export function AnalyticsDashboard() {
 		<div className="space-y-5 text-foreground">
 			<div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
 				<div className="space-y-1">
-					<h1 className="text-2xl font-semibold">Analytics</h1>
-					<p className="text-sm text-muted-foreground">
-						{analyticsScopeCopy} for {dateRangeLabel.toLowerCase()} across{" "}
+					<h1 className="text-2xl font-semibold">{t('analytics', 'Analytics')}</h1>
+					<p className="text-sm text-muted-foreground">{t('analyticsscopecopyFor', '{{analyticsScopeCopy}} for', { analyticsScopeCopy })}{dateRangeLabel.toLowerCase()} across{" "}
 						{selectedEventLabel}
 					</p>
 				</div>
@@ -987,18 +995,18 @@ export function AnalyticsDashboard() {
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="7d">Last 7 days</SelectItem>
-							<SelectItem value="30d">Last 30 days</SelectItem>
-							<SelectItem value="90d">Last 90 days</SelectItem>
+							<SelectItem value="7d">{t('last7Days', 'Last 7 days')}</SelectItem>
+							<SelectItem value="30d">{t('last30Days', 'Last 30 days')}</SelectItem>
+							<SelectItem value="90d">{t('last90Days', 'Last 90 days')}</SelectItem>
 						</SelectContent>
 					</Select>
 					<Select value={selectedEventId} onValueChange={updateEventFilter}>
 						<SelectTrigger className="w-full bg-background/70 sm:w-60 dark:bg-background/30">
 							<FilterIcon className="mr-2 h-4 w-4 text-muted-foreground" />
-							<SelectValue placeholder="All events" />
+							<SelectValue placeholder={t('allEvents2', 'All events')} />
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="all">All events</SelectItem>
+							<SelectItem value="all">{t('allEvents2', 'All events')}</SelectItem>
 							{selectedEventIsMissing && (
 								<SelectItem value={selectedEventId}>
 									{compactIdentifier(selectedEventId) || "Selected event"}
@@ -1021,7 +1029,7 @@ export function AnalyticsDashboard() {
 							onClick={() => updateEventFilter("all")}
 						>
 							<XIcon className="mr-1 h-3.5 w-3.5" />
-							Clear
+							{t('clear', 'Clear')}
 						</Button>
 					)}
 				</div>
@@ -1031,14 +1039,14 @@ export function AnalyticsDashboard() {
 				<MetricCard
 					title="Executions"
 					value={formatNumber(totalExecutions)}
-					detail={`${formatNumber(successfulExecutions)} successful, ${formatNumber(failedExecutions)} failed`}
+					detail={t('valSuccessfulVal2Failed', '{{val}} successful, {{val2}} failed', { val: formatNumber(successfulExecutions), val2: formatNumber(failedExecutions) })}
 					icon={ActivityIcon}
 					tone={failedExecutions > 0 ? "warning" : "neutral"}
 				/>
 				<MetricCard
 					title="Users"
 					value={formatNumber(uniqueUsers)}
-					detail={`${runsPerUser} executions per user`}
+					detail={t('runsperuserExecutionsPerUser', '{{runsPerUser}} executions per user', { runsPerUser })}
 					icon={UsersIcon}
 				/>
 				<MetricCard
@@ -1046,8 +1054,8 @@ export function AnalyticsDashboard() {
 					value={successRate === null ? "N/A" : formatPercent(successRate)}
 					detail={
 						failedExecutions > 0
-							? `${formatNumber(failedExecutions)} failed executions`
-							: "No failed executions"
+							? t('valFailedExecutions', '{{val}} failed executions', { val: formatNumber(failedExecutions) })
+							: t('noFailedExecutions', 'No failed executions')
 					}
 					icon={
 						successRate === null || failedExecutions > 0
@@ -1061,18 +1069,18 @@ export function AnalyticsDashboard() {
 					value={formatLatency(overview?.avgLatencyMs)}
 					detail={
 						peakP95Latency === null
-							? "No p95 samples"
-							: `Peak daily p95 ${formatLatency(peakP95Latency)}`
+							? t('noP95Samples', 'No p95 samples')
+							: t('peakDailyP95Val', 'Peak daily p95 {{val}}', { val: formatLatency(peakP95Latency) })
 					}
 					icon={ClockIcon}
 				/>
 				<MetricCard
-					title="AI Spend"
+					title={t('aiSpend', 'AI Spend')}
 					value={selectedEventId === "all" ? formatCost(totalCost) : "N/A"}
 					detail={
 						selectedEventId === "all"
-							? `${formatCost(costPerExecution)} per execution`
-							: "Event-level cost is not tracked yet"
+							? t('valPerExecution', '{{val}} per execution', { val: formatCost(costPerExecution) })
+							: t('eventlevelCostIsNotTrackedYet', 'Event-level cost is not tracked yet')
 					}
 					icon={BrainIcon}
 				/>
@@ -1083,9 +1091,9 @@ export function AnalyticsDashboard() {
 					<CardHeader className="pb-3">
 						<div className="flex items-start justify-between gap-3">
 							<div>
-								<CardTitle>Runs and Users</CardTitle>
+								<CardTitle>{t('runsAndUsers', 'Runs and Users')}</CardTitle>
 								<CardDescription>
-									Daily execution volume and active users
+									{t('dailyExecutionVolumeAndActiveUsers', 'Daily execution volume and active users')}
 								</CardDescription>
 							</div>
 							<Badge variant="outline">
@@ -1101,8 +1109,8 @@ export function AnalyticsDashboard() {
 
 				<Card className={analyticsCardClassName}>
 					<CardHeader className="pb-3">
-						<CardTitle>Reliability</CardTitle>
-						<CardDescription>Successful and failed executions</CardDescription>
+						<CardTitle>{t('reliability', 'Reliability')}</CardTitle>
+						<CardDescription>{t('successfulAndFailedExecutions', 'Successful and failed executions')}</CardDescription>
 					</CardHeader>
 					<CardContent className="pt-0">
 						<ReliabilityChart data={dailyStats} />
@@ -1113,9 +1121,9 @@ export function AnalyticsDashboard() {
 			<div className="grid gap-4 xl:grid-cols-2">
 				<Card className={analyticsCardClassName}>
 					<CardHeader className="pb-3">
-						<CardTitle>Response Time</CardTitle>
+						<CardTitle>{t('responseTime', 'Response Time')}</CardTitle>
 						<CardDescription>
-							Average and daily p95 execution latency
+							{t('averageAndDailyP95ExecutionLatency', 'Average and daily p95 execution latency')}
 						</CardDescription>
 					</CardHeader>
 					<CardContent className="pt-0">
@@ -1127,17 +1135,17 @@ export function AnalyticsDashboard() {
 					<CardHeader className="pb-3">
 						<div className="flex items-start justify-between gap-3">
 							<div>
-								<CardTitle>AI Cost</CardTitle>
+								<CardTitle>{t('aiCost', 'AI Cost')}</CardTitle>
 								<CardDescription>
 									{selectedEventId === "all"
-										? "Daily LLM and embedding spend"
-										: "Event-level AI spend is not tracked yet"}
+										? t('dailyLlmAndEmbeddingSpend', 'Daily LLM and embedding spend')
+										: t('eventlevelAiSpendIsNotTrackedYet', 'Event-level AI spend is not tracked yet')}
 								</CardDescription>
 							</div>
 							<div className="text-right text-xs text-muted-foreground">
 								<div>LLM {formatCost(overview?.totalLlmCost ?? 0)}</div>
 								<div>
-									Embeddings {formatCost(overview?.totalEmbeddingCost ?? 0)}
+									{t('embeddings', 'Embeddings')} {formatCost(overview?.totalEmbeddingCost ?? 0)}
 								</div>
 							</div>
 						</div>
@@ -1146,7 +1154,7 @@ export function AnalyticsDashboard() {
 						{selectedEventId === "all" ? (
 							<CostTrendChart data={dailyStats} />
 						) : (
-							<EmptyChart label="Event-level AI spend is not tracked yet" />
+							<EmptyChart label={t('eventlevelAiSpendIsNotTrackedYet', 'Event-level AI spend is not tracked yet')} />
 						)}
 					</CardContent>
 				</Card>
@@ -1157,10 +1165,8 @@ export function AnalyticsDashboard() {
 					<CardHeader className="pb-3">
 						<div className="flex items-start justify-between gap-3">
 							<div>
-								<CardTitle>Feedback Signal</CardTitle>
-								<CardDescription>
-									Positive and negative responses for {selectedEventLabel}
-								</CardDescription>
+								<CardTitle>{t('feedbackSignal', 'Feedback Signal')}</CardTitle>
+								<CardDescription>{t('positiveAndNegativeResponsesForSelectedeventlabel', 'Positive and negative responses for {{selectedEventLabel}}', { selectedEventLabel })}</CardDescription>
 							</div>
 							<Badge
 								variant={positiveRate === null ? "secondary" : "outline"}
@@ -1175,8 +1181,8 @@ export function AnalyticsDashboard() {
 							>
 								<MessageSquareIcon className="mr-1 h-3 w-3" />
 								{positiveRate === null
-									? "No signal"
-									: `${formatPercent(positiveRate)} positive`}
+									? t('noSignal', 'No signal')
+									: t('valPositive', '{{val}} positive', { val: formatPercent(positiveRate) })}
 							</Badge>
 						</div>
 					</CardHeader>
@@ -1189,10 +1195,9 @@ export function AnalyticsDashboard() {
 					<CardHeader className="pb-3">
 						<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
 							<div>
-								<CardTitle>Recent Feedback</CardTitle>
+								<CardTitle>{t('recentFeedback', 'Recent Feedback')}</CardTitle>
 								<CardDescription>
-									{formatNumber(feedbackTotal)} entries for {selectedEventLabel}
-								</CardDescription>
+									{formatNumber(feedbackTotal)}{t('entriesForSelectedeventlabel', 'entries for {{selectedEventLabel}}', { selectedEventLabel })}</CardDescription>
 							</div>
 							<Select
 								value={feedbackFilter}
@@ -1205,9 +1210,9 @@ export function AnalyticsDashboard() {
 									<SelectValue />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="all">All</SelectItem>
-									<SelectItem value="positive">Positive</SelectItem>
-									<SelectItem value="negative">Negative</SelectItem>
+									<SelectItem value="all">{t('all', 'All')}</SelectItem>
+									<SelectItem value="positive">{t('positive', 'Positive')}</SelectItem>
+									<SelectItem value="negative">{t('negative', 'Negative')}</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>
@@ -1216,7 +1221,7 @@ export function AnalyticsDashboard() {
 						{feedbackItems.length === 0 ? (
 							<div className="flex min-h-[220px] flex-col items-center justify-center rounded-lg border border-dashed border-border/70 bg-muted/20 px-4 text-center text-sm text-muted-foreground">
 								<MessageSquareIcon className="mb-3 h-8 w-8" />
-								No feedback yet
+								{t('noFeedbackYet', 'No feedback yet')}
 							</div>
 						) : (
 							<div className="space-y-3">
@@ -1224,10 +1229,10 @@ export function AnalyticsDashboard() {
 									<Table>
 										<TableHeader>
 											<TableRow>
-												<TableHead>Signal</TableHead>
-												<TableHead className="w-80">Source</TableHead>
-												<TableHead>Comment</TableHead>
-												<TableHead className="w-32">Date</TableHead>
+												<TableHead>{t('signal', 'Signal')}</TableHead>
+												<TableHead className="w-80">{t('source3', 'Source')}</TableHead>
+												<TableHead>{t('comment', 'Comment')}</TableHead>
+												<TableHead className="w-32">{t('date', 'Date')}</TableHead>
 											</TableRow>
 										</TableHeader>
 										<TableBody>
@@ -1281,7 +1286,7 @@ export function AnalyticsDashboard() {
 																		</span>
 																	) : (
 																		<span className="text-muted-foreground italic">
-																			Unknown event
+																			{t('unknownEvent', 'Unknown event')}
 																		</span>
 																	)}
 																</div>
@@ -1294,7 +1299,7 @@ export function AnalyticsDashboard() {
 																	</p>
 																) : (
 																	<p className="text-xs text-muted-foreground italic">
-																		No page context
+																		{t('noPageContext', 'No page context')}
 																	</p>
 																)}
 															</div>
@@ -1303,7 +1308,7 @@ export function AnalyticsDashboard() {
 															<p className="truncate">
 																{item.comment || (
 																	<span className="text-muted-foreground italic">
-																		No comment
+																		{t('noComment', 'No comment')}
 																	</span>
 																)}
 															</p>
@@ -1326,18 +1331,17 @@ export function AnalyticsDashboard() {
 											disabled={feedbackPage === 0}
 											onClick={() => setFeedbackPage((page) => page - 1)}
 										>
-											Previous
+											{t('previous', 'Previous')}
 										</Button>
 										<span className="text-sm text-muted-foreground">
-											Page {feedbackPage + 1} of {feedbackTotalPages}
-										</span>
+											{t('page', 'Page')} {feedbackPage + 1}{t('ofFeedbacktotalpages', 'of {{feedbackTotalPages}}', { feedbackTotalPages })}</span>
 										<Button
 											variant="outline"
 											size="sm"
 											disabled={feedbackPage >= feedbackTotalPages - 1}
 											onClick={() => setFeedbackPage((page) => page + 1)}
 										>
-											Next
+											{t('next', 'Next')}
 										</Button>
 									</div>
 								)}

@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import { Check, Copy, ExternalLink, Play } from "lucide-react";
 import { useState } from "react";
 import {
@@ -35,6 +36,7 @@ export function ApiConfig({
 	node,
 	onConfigUpdate,
 }: IConfigInterfaceProps) {
+	const { t } = useTranslation("interfaces");
 	const [copiedCode, setCopiedCode] = useState<string | null>(null);
 	const [testPayload, setTestPayload] = useState("{}");
 	const [isTesting, setIsTesting] = useState(false);
@@ -134,7 +136,7 @@ export function ApiConfig({
 			const text = await response.text();
 
 			setTestResult(
-				`Status: ${response.status}\n\n${text || "No response body"}`,
+				`Status: ${response.status}\n\n${text || t('noResponseBody', 'No response body')}`,
 			);
 		} catch (error) {
 			setTestResult(
@@ -154,7 +156,7 @@ export function ApiConfig({
 		switch (lang) {
 			case "curl":
 				return `\`\`\`bash
-curl -X ${method} "${endpoint}"${authHeader ? ` \\\n  -H "${authHeader}"` : ""}${method !== "GET" ? ' \\\n  -H "Content-Type: application/json" \\\n  -d \'{"key": "value"}\'' : ""}
+curl -X ${method} "${endpoint}"${authHeader ? ` \\\n+  -H "${authHeader}"` : ""}${method !== "GET" ? ' \\\n+  -H "Content-Type: application/json" \\\n+  -d \'{"key": "value"}\'' : ""}
 \`\`\``;
 
 			case "python":
@@ -167,15 +169,13 @@ ${
     "Authorization": "${authToken}",
     "Content-Type": "application/json"
 }
+
 `
-		: ""
-}${
-	method !== "GET"
+		: ""}${method !== "GET"
 		? `payload = {"key": "value"}
+
 `
-		: ""
-}
-response = requests.${method.toLowerCase()}(
+		: ""}response = requests.${method.toLowerCase()}(
     "${endpoint}"${authHeader ? ",\n    headers=headers" : ""}${method !== "GET" ? ",\n    json=payload" : ""}
 )
 print(response.status_code, response.json())
@@ -213,7 +213,7 @@ println!("Body: {}", body);
 	return (
 		<div className="w-full space-y-6">
 			<div className="space-y-3">
-				<Label htmlFor="path">Path</Label>
+				<Label htmlFor="path">{t('path', 'Path')}</Label>
 				{isEditing ? (
 					<input
 						type="text"
@@ -229,26 +229,26 @@ println!("Body: {}", body);
 					</div>
 				)}
 				<p className="text-sm text-muted-foreground">
-					API endpoint path (must start with /)
+					{t('apiEndpointPathMustStartWith', 'API endpoint path (must start with /)')}
 				</p>
 			</div>
 
 			<div className="space-y-3">
-				<Label htmlFor="method">HTTP Method</Label>
+				<Label htmlFor="method">{t('httpMethod', 'HTTP Method')}</Label>
 				{isEditing ? (
 					<Select
 						value={method}
 						onValueChange={(value) => setValue("method", value)}
 					>
 						<SelectTrigger id="method">
-							<SelectValue placeholder="Select method" />
+							<SelectValue placeholder={t('selectMethod', 'Select method')} />
 						</SelectTrigger>
 						<SelectContent>
 							<SelectItem value="GET">GET</SelectItem>
-							<SelectItem value="POST">POST</SelectItem>
+							<SelectItem value="POST">{`POST`}</SelectItem>
 							<SelectItem value="PUT">PUT</SelectItem>
-							<SelectItem value="PATCH">PATCH</SelectItem>
-							<SelectItem value="DELETE">DELETE</SelectItem>
+							<SelectItem value="PATCH">{`PATCH`}</SelectItem>
+							<SelectItem value="DELETE">{`DELETE`}</SelectItem>
 						</SelectContent>
 					</Select>
 				) : (
@@ -257,7 +257,7 @@ println!("Body: {}", body);
 					</div>
 				)}
 				<p className="text-sm text-muted-foreground">
-					HTTP method for the API endpoint
+					{t('httpMethodForTheApiEndpoint', 'HTTP method for the API endpoint')}
 				</p>
 			</div>
 
@@ -278,7 +278,7 @@ println!("Body: {}", body);
 							<div className="h-4 w-4 rounded-full bg-white" />
 						</div>
 					)}
-					<Label htmlFor="public_endpoint">Public Endpoint</Label>
+					<Label htmlFor="public_endpoint">{t('publicEndpoint', 'Public Endpoint')}</Label>
 					{!isEditing && (
 						<span className="text-sm text-muted-foreground">
 							{publicEndpoint ? "Enabled" : "Disabled"}
@@ -286,36 +286,36 @@ println!("Body: {}", body);
 					)}
 				</div>
 				<p className="text-sm text-muted-foreground">
-					Allow access without authentication (use with caution)
+					{t('allowAccessWithoutAuthenticationUseWithCaution', 'Allow access without authentication (use with caution)')}
 				</p>
 			</div>
 
 			{!publicEndpoint && (
 				<div className="space-y-3">
-					<Label htmlFor="auth_token">Authentication Token</Label>
+					<Label htmlFor="auth_token">{t('authenticationToken', 'Authentication Token')}</Label>
 					{isEditing ? (
 						<input
 							type="password"
 							value={authToken}
 							onChange={(e) => setValue("auth_token", e.target.value)}
 							id="auth_token"
-							placeholder="Bearer token for authentication"
+							placeholder={`Bearer token for authentication`}
 							className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
 						/>
 					) : (
 						<div className="flex h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm">
-							{authToken ? "••••••••••••" : "No token set"}
+							{authToken ? "••••••••••••" : t('noTokenSet', 'No token set')}
 						</div>
 					)}
 					<p className="text-sm text-muted-foreground">
-						Required Bearer token for API requests
+						{t('requiredBearerTokenForApiRequests', 'Required Bearer token for API requests')}
 					</p>
 				</div>
 			)}
 
 			<div className="space-y-4 pt-4 border-t">
 				<div className="flex items-center justify-between">
-					<Label>API Endpoint</Label>
+					<Label>{t('apiEndpoint', 'API Endpoint')}</Label>
 					<Button
 						variant="outline"
 						size="sm"
@@ -332,61 +332,47 @@ println!("Body: {}", body);
 					{endpoint}
 				</div>
 				<div className="rounded-lg border border-border bg-card p-4">
-					<p className="text-sm text-muted-foreground">
-						<strong className="text-foreground">Local Only:</strong> This
+					<p className="text-sm text-muted-foreground"><Trans i18nKey="strongClassnametextforegroundlocalOnlystrongThisEndpointIsOnlyAccessibleOnYourMachineUseOneOfTheTunnelingSolutionsBelowToExposeItSecurelyOverHttps"><strong className="text-foreground">Local Only:</strong> This
 						endpoint is only accessible on your machine. Use one of the
-						tunneling solutions below to expose it securely over HTTPS.
-					</p>
+						tunneling solutions below to expose it securely over HTTPS.</Trans></p>
 				</div>
 
 				<div className="space-y-3">
-					<Label className="text-base">Expose Your API Securely</Label>
+					<Label className="text-base">{t('exposeYourApiSecurely', 'Expose Your API Securely')}</Label>
 					<Tabs defaultValue="cloudflare" className="w-full">
 						<TabsList className="grid w-full grid-cols-2">
-							<TabsTrigger value="cloudflare" className="gap-2">
-								Cloudflare Tunnel
+							<TabsTrigger value="cloudflare" className="gap-2"><Trans i18nKey="cloudflareTunnelSpanClassnameroundedfullBgprimaryPx2Py05TextxsFontmediumTextprimaryforegroundRecommendedSpan">Cloudflare Tunnel
 								<span className="rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground">
 									Recommended
-								</span>
-							</TabsTrigger>
+								</span></Trans></TabsTrigger>
 							<TabsTrigger value="ngrok">ngrok</TabsTrigger>
 						</TabsList>
 
 						<TabsContent value="cloudflare" className="space-y-4 mt-4">
 							<div className="rounded-lg border border-green-200 dark:border-green-900 bg-green-50 dark:bg-green-950/30 p-4">
 								<h4 className="font-semibold text-sm text-green-900 dark:text-green-100 mb-2">
-									Why Cloudflare Tunnel?
+									{t('whyCloudflareTunnel', 'Why Cloudflare Tunnel?')}
 								</h4>
 								<ul className="text-sm text-green-800 dark:text-green-200 space-y-1 list-disc list-inside">
-									<li>
-										<strong>100% Free</strong> - No credit card, no paid plans
-										required
-									</li>
-									<li>
-										<strong>No firewall changes</strong> - Uses outbound
-										connections only
-									</li>
-									<li>
-										<strong>Automatic HTTPS</strong> - TLS certificates managed
-										for you
-									</li>
-									<li>
-										<strong>Fast & reliable</strong> - Cloudflare's global
-										network
-									</li>
+									<li><Trans i18nKey="strong100FreestrongNoCreditCardNoPaidPlansRequired"><strong>100% Free</strong> - No credit card, no paid plans
+										required</Trans></li>
+									<li><Trans i18nKey="strongnoFirewallChangesstrongUsesOutboundConnectionsOnly"><strong>No firewall changes</strong> - Uses outbound
+										connections only</Trans></li>
+									<li><Trans i18nKey="strongautomaticHttpsstrongTlsCertificatesManagedForYou"><strong>Automatic HTTPS</strong> - TLS certificates managed
+										for you</Trans></li>
+									<li><Trans i18nKey="strongfastReliablestrongCloudflaresGlobalNetwork"><strong>Fast & reliable</strong> - Cloudflare's global
+										network</Trans></li>
 								</ul>
 							</div>
 
 							<div className="space-y-4">
 								<div className="space-y-2">
-									<h4 className="font-semibold text-sm flex items-center gap-2">
-										<span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
+									<h4 className="font-semibold text-sm flex items-center gap-2"><Trans i18nKey="spanClassnameflexH6W6ItemscenterJustifycenterRoundedfullBgprimaryTextxsFontboldTextprimaryforeground1SpanInstallCloudflared"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
 											1
 										</span>
-										Install cloudflared
-									</h4>
+										Install cloudflared</Trans></h4>
 									<p className="text-sm text-muted-foreground pl-8">
-										Download and install the Cloudflare Tunnel client for{" "}
+										{t('downloadAndInstallTheCloudflareTunnelClientFor', 'Download and install the Cloudflare Tunnel client for')}{" "}
 										<strong>{getPlatformLabel()}</strong>:
 									</p>
 									<div className="pl-8">
@@ -399,42 +385,38 @@ println!("Body: {}", body);
 											rel="noopener noreferrer"
 											className="text-xs text-primary hover:underline inline-flex items-center gap-1 mt-2"
 										>
-											Other platforms or installation methods
+											{t('otherPlatformsOrInstallationMethods', 'Other platforms or installation methods')}
 											<ExternalLink className="h-3 w-3" />
 										</a>
 									</div>
 								</div>
 
 								<div className="space-y-2">
-									<h4 className="font-semibold text-sm flex items-center gap-2">
-										<span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
+									<h4 className="font-semibold text-sm flex items-center gap-2"><Trans i18nKey="spanClassnameflexH6W6ItemscenterJustifycenterRoundedfullBgprimaryTextxsFontboldTextprimaryforeground2SpanStartTheTunnel"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
 											2
 										</span>
-										Start the tunnel
-									</h4>
+										Start the tunnel</Trans></h4>
 									<p className="text-sm text-muted-foreground pl-8">
-										Run this command to create a free Quick Tunnel:
+										{t('runThisCommandToCreateAFreeQuickTunnel', 'Run this command to create a free Quick Tunnel:')}
 									</p>
 									<div className="pl-8 space-y-2">
 										<pre className="p-3 bg-muted rounded-md font-mono text-xs overflow-x-auto">
-											cloudflared tunnel --url http://localhost:9657
+											{t('cloudflaredTunnelUrlHttplocalhost9657', 'cloudflared tunnel --url http://localhost:9657')}
 										</pre>
 										<p className="text-xs text-muted-foreground">
-											This generates a random{" "}
+											{t('thisGeneratesARandom', 'This generates a random')}{" "}
 											<code>https://*****.trycloudflare.com</code> URL
 										</p>
 									</div>
 								</div>
 
 								<div className="space-y-2">
-									<h4 className="font-semibold text-sm flex items-center gap-2">
-										<span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
+									<h4 className="font-semibold text-sm flex items-center gap-2"><Trans i18nKey="spanClassnameflexH6W6ItemscenterJustifycenterRoundedfullBgprimaryTextxsFontboldTextprimaryforeground3SpanUseYourEndpoint"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
 											3
 										</span>
-										Use your endpoint
-									</h4>
+										Use your endpoint</Trans></h4>
 									<p className="text-sm text-muted-foreground pl-8">
-										Copy the generated URL and append your path:{" "}
+										{t('copyTheGeneratedUrlAndAppendYourPath', 'Copy the generated URL and append your path:')}{" "}
 										<code className="text-foreground">{path}</code>
 									</p>
 									<div className="pl-8">
@@ -446,27 +428,26 @@ println!("Body: {}", body);
 
 								<div className="rounded-lg border border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/30 p-4">
 									<h4 className="font-semibold text-sm text-blue-900 dark:text-blue-100 mb-2">
-										💡 Pro Tips
+										{t('proTips', '💡 Pro Tips')}
 									</h4>
 									<ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1.5">
 										<li>
-											• Quick Tunnels generate a new random URL each time you
-											restart
+											{`• Quick Tunnels generate a new random URL each time you restart`}
 										</li>
 										<li>
-											• For a permanent URL, create a{" "}
+											{t('forAPermanentUrlCreateA', '• For a permanent URL, create a')}{" "}
 											<a
 												href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/create-remote-tunnel/"
 												target="_blank"
 												rel="noopener noreferrer"
 												className="underline hover:no-underline"
 											>
-												named tunnel
+												{t('namedTunnel', 'named tunnel')}
 											</a>{" "}
-											(free, requires Cloudflare account)
+											{t('freeRequiresCloudflareAccount', '(free, requires Cloudflare account)')}
 										</li>
 										<li>
-											• The tunnel stays active as long as the command runs
+											{t('theTunnelStaysActiveAsLongAsTheCommandRuns', '• The tunnel stays active as long as the command runs')}
 										</li>
 									</ul>
 								</div>
@@ -476,28 +457,24 @@ println!("Body: {}", body);
 						<TabsContent value="ngrok" className="space-y-4 mt-4">
 							<div className="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-4">
 								<h4 className="font-semibold text-sm text-amber-900 dark:text-amber-100 mb-2">
-									⚠️ Note About ngrok
+									{t('noteAboutNgrok', '⚠️ Note About ngrok')}
 								</h4>
 								<ul className="text-sm text-amber-800 dark:text-amber-200 space-y-1">
-									<li>
-										• <strong>Free tier requires account</strong> - Sign up at
-										ngrok.com
-									</li>
-									<li>• URL changes on every restart (unless you upgrade)</li>
-									<li>• Good for quick testing and demos</li>
+									<li><Trans i18nKey="strongfreeTierRequiresAccountstrongSignUpAtNgrokcom">• <strong>Free tier requires account</strong> - Sign up at
+										ngrok.com</Trans></li>
+									<li>{t('urlChangesOnEveryRestartUnlessYouUpgrade', '• URL changes on every restart (unless you upgrade)')}</li>
+									<li>{t('goodForQuickTestingAndDemos', '• Good for quick testing and demos')}</li>
 								</ul>
 							</div>
 
 							<div className="space-y-4">
 								<div className="space-y-2">
-									<h4 className="font-semibold text-sm flex items-center gap-2">
-										<span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
+									<h4 className="font-semibold text-sm flex items-center gap-2"><Trans i18nKey="spanClassnameflexH6W6ItemscenterJustifycenterRoundedfullBgprimaryTextxsFontboldTextprimaryforeground1SpanInstallNgrok"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
 											1
 										</span>
-										Install ngrok
-									</h4>
+										Install ngrok</Trans></h4>
 									<p className="text-sm text-muted-foreground pl-8">
-										Install ngrok for <strong>{getPlatformLabel()}</strong>:
+										{t('installNgrokFor', 'Install ngrok for')} <strong>{getPlatformLabel()}</strong>:
 									</p>
 									<div className="pl-8 space-y-2">
 										<pre className="p-3 bg-muted rounded-md font-mono text-xs overflow-x-auto whitespace-pre-wrap">
@@ -509,51 +486,47 @@ println!("Body: {}", body);
 											rel="noopener noreferrer"
 											className="text-xs text-primary hover:underline inline-flex items-center gap-1"
 										>
-											Other installation methods
+											{t('otherInstallationMethods', 'Other installation methods')}
 											<ExternalLink className="h-3 w-3" />
 										</a>
 									</div>
 								</div>
 
 								<div className="space-y-2">
-									<h4 className="font-semibold text-sm flex items-center gap-2">
-										<span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
+									<h4 className="font-semibold text-sm flex items-center gap-2"><Trans i18nKey="spanClassnameflexH6W6ItemscenterJustifycenterRoundedfullBgprimaryTextxsFontboldTextprimaryforeground2SpanAuthenticateWithYourToken"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
 											2
 										</span>
-										Authenticate with your token
-									</h4>
+										Authenticate with your token</Trans></h4>
 									<p className="text-sm text-muted-foreground pl-8">
-										Get your auth token from{" "}
+										{t('getYourAuthTokenFrom', 'Get your auth token from')}{" "}
 										<a
 											href="https://dashboard.ngrok.com/get-started/your-authtoken"
 											target="_blank"
 											rel="noopener noreferrer"
 											className="text-primary hover:underline"
 										>
-											ngrok dashboard
+											{t('ngrokDashboard', 'ngrok dashboard')}
 										</a>{" "}
-										and run:
+										{t('andRun', 'and run:')}
 									</p>
 									<div className="pl-8">
 										<pre className="p-3 bg-muted rounded-md font-mono text-xs overflow-x-auto">
-											ngrok config add-authtoken YOUR_TOKEN_HERE
+											{t('ngrokConfigAddauthtokenYour_token_here', 'ngrok config add-authtoken YOUR_TOKEN_HERE')}
 										</pre>
 									</div>
 								</div>
 
 								<div className="space-y-2">
-									<h4 className="font-semibold text-sm flex items-center gap-2">
-										<span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
+									<h4 className="font-semibold text-sm flex items-center gap-2"><Trans i18nKey="spanClassnameflexH6W6ItemscenterJustifycenterRoundedfullBgprimaryTextxsFontboldTextprimaryforeground3SpanStartTheTunnel"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
 											3
 										</span>
-										Start the tunnel
-									</h4>
+										Start the tunnel</Trans></h4>
 									<div className="pl-8 space-y-2">
 										<pre className="p-3 bg-muted rounded-md font-mono text-xs overflow-x-auto">
-											ngrok http 9657
+											{t('ngrokHttp9657', 'ngrok http 9657')}
 										</pre>
 										<p className="text-xs text-muted-foreground">
-											Copy the forwarding URL and append your path:{" "}
+											{t('copyTheForwardingUrlAndAppendYourPath', 'Copy the forwarding URL and append your path:')}{" "}
 											<code className="text-foreground">{path}</code>
 										</p>
 									</div>
@@ -565,13 +538,13 @@ println!("Body: {}", body);
 			</div>
 
 			<div className="space-y-3">
-				<Label>Code Examples</Label>
+				<Label>{t('codeExamples', 'Code Examples')}</Label>
 				<Tabs defaultValue="curl" className="w-full">
 					<TabsList className="grid w-full grid-cols-4">
-						<TabsTrigger value="curl">cURL</TabsTrigger>
-						<TabsTrigger value="python">Python</TabsTrigger>
-						<TabsTrigger value="typescript">TypeScript</TabsTrigger>
-						<TabsTrigger value="rust">Rust</TabsTrigger>
+						<TabsTrigger value="curl">{`cURL`}</TabsTrigger>
+						<TabsTrigger value="python">{t('python', 'Python')}</TabsTrigger>
+						<TabsTrigger value="typescript">{t('typescript', 'TypeScript')}</TabsTrigger>
+						<TabsTrigger value="rust">{t('rust', 'Rust')}</TabsTrigger>
 					</TabsList>
 					{["curl", "python", "typescript", "rust"].map((lang) => (
 						<TabsContent key={lang} value={lang} className="space-y-2">
@@ -589,29 +562,27 @@ println!("Body: {}", body);
 			</div>
 
 			<div className="space-y-3 pt-4 border-t">
-				<Label>Test Endpoint</Label>
+				<Label>{t('testEndpoint', 'Test Endpoint')}</Label>
 				<Dialog>
 					<DialogTrigger asChild>
 						<Button variant="outline" className="w-full">
 							<Play className="h-4 w-4 mr-2" />
-							Test API Request
+							{t('testApiRequest', 'Test API Request')}
 						</Button>
 					</DialogTrigger>
 					<DialogContent className="max-w-2xl">
 						<DialogHeader>
-							<DialogTitle>Test API Request</DialogTitle>
-							<DialogDescription>
-								Send a test request to {endpoint}
-							</DialogDescription>
+							<DialogTitle>{t('testApiRequest', 'Test API Request')}</DialogTitle>
+							<DialogDescription>{t('sendATestRequestToEndpoint', 'Send a test request to {{endpoint}}', { endpoint })}</DialogDescription>
 						</DialogHeader>
 						<div className="space-y-4">
 							{method !== "GET" && (
 								<div className="space-y-2">
-									<Label>Request Body (JSON)</Label>
+									<Label>{t('requestBodyJson', 'Request Body (JSON)')}</Label>
 									<Textarea
 										value={testPayload}
 										onChange={(e) => setTestPayload(e.target.value)}
-										placeholder='{"key": "value"}'
+										placeholder={`{"key": "value"}`}
 										className="font-mono text-sm"
 										rows={6}
 									/>
@@ -622,11 +593,11 @@ println!("Body: {}", body);
 								disabled={isTesting}
 								className="w-full"
 							>
-								{isTesting ? "Sending..." : "Send Request"}
+								{isTesting ? "Sending..." : t('sendRequest', 'Send Request')}
 							</Button>
 							{testResult && (
 								<div className="space-y-2">
-									<Label>Response</Label>
+									<Label>{t('response', 'Response')}</Label>
 									<pre className="p-4 bg-muted rounded-md text-sm overflow-x-auto whitespace-pre-wrap">
 										{testResult}
 									</pre>

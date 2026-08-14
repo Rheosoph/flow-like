@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import {
 	Building,
 	Calendar,
@@ -95,6 +96,7 @@ const TagsInput = ({
 	tags,
 	onChange,
 }: { tags: string[]; onChange: (tags: string[]) => void }) => {
+	const { t } = useTranslation("settings");
 	const [inputValue, setInputValue] = useState("");
 
 	const handleKeyDown = useCallback(
@@ -139,7 +141,7 @@ const TagsInput = ({
 				value={inputValue}
 				onChange={(e) => setInputValue(e.target.value)}
 				onKeyDown={handleKeyDown}
-				placeholder="Type tag and press Enter..."
+				placeholder={t('typeTagAndPressEnter', 'Type tag and press Enter...')}
 				className="w-full"
 			/>
 		</div>
@@ -211,6 +213,7 @@ export function TemplatePreview({
 	templateId,
 	canEdit,
 }: Readonly<{ appId: string; templateId: string; canEdit: boolean }>) {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const [isEditing, setIsEditing] = useState(false);
 	const [editState, setEditState] = useState<EditState | null>(null);
@@ -364,7 +367,7 @@ export function TemplatePreview({
 													setQueryParams("templateId", undefined);
 												}}
 											>
-												Templates
+												{t('templates', 'Templates')}
 											</button>
 										</BreadcrumbLink>
 									</BreadcrumbItem>
@@ -398,9 +401,7 @@ export function TemplatePreview({
 										<Badge variant="outline">{template.data.stage}</Badge>
 										{currentData.age_rating && (
 											<Badge variant="outline" className="gap-1">
-												<Star className="h-3 w-3" />
-												Age {currentData.age_rating}+
-											</Badge>
+												<Star className="h-3 w-3" />{t('ageAge_rating', 'Age {{age_rating}}+', { age_rating: currentData.age_rating })}</Badge>
 										)}
 										{isEditing && (
 											<Input
@@ -413,7 +414,7 @@ export function TemplatePreview({
 															: undefined,
 													})
 												}
-												placeholder="Age rating"
+												placeholder={t('ageRating', 'Age rating')}
 												className="w-40"
 												min="0"
 												max="100"
@@ -441,7 +442,7 @@ export function TemplatePreview({
 											setEditState(null);
 										}}
 									>
-										Cancel
+										{t('cancel', 'Cancel')}
 									</Button>
 								)}
 							</div>
@@ -452,7 +453,7 @@ export function TemplatePreview({
 						<Textarea
 							value={currentData.description}
 							onChange={(e) => updateEditState({ description: e.target.value })}
-							placeholder="Template description..."
+							placeholder={t('templateDescription', 'Template description...')}
 							className="resize-none w-full"
 							rows={2}
 						/>
@@ -464,7 +465,7 @@ export function TemplatePreview({
 
 					{(currentData.tags.length > 0 || isEditing) && (
 						<div className="space-y-2">
-							{isEditing && <Label className="font-medium">Tags</Label>}
+							{isEditing && <Label className="font-medium">{t('tags', 'Tags')}</Label>}
 							{isEditing ? (
 								<TagsInput
 									tags={currentData.tags}
@@ -485,14 +486,14 @@ export function TemplatePreview({
 					{isEditing && (
 						<Card>
 							<CardHeader>
-								<CardTitle>Update Template Source</CardTitle>
+								<CardTitle>{t('updateTemplateSource', 'Update Template Source')}</CardTitle>
 								<CardDescription>
-									Import a new workflow version into this template
+									{`Import a new workflow version into this template`}
 								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-4">
 								<div className="space-y-2">
-									<Label>Source Workflow</Label>
+									<Label>{t('sourceWorkflow', 'Source Workflow')}</Label>
 									<Select
 										value={editState?.selectedWorkflow || ""}
 										onValueChange={(value) =>
@@ -503,7 +504,7 @@ export function TemplatePreview({
 										}
 									>
 										<SelectTrigger>
-											<SelectValue placeholder="Select a workflow" />
+											<SelectValue placeholder={t('selectAWorkflow', 'Select a workflow')} />
 										</SelectTrigger>
 										<SelectContent>
 											{boards.data?.map((workflow) => (
@@ -517,7 +518,7 @@ export function TemplatePreview({
 
 								{editState?.selectedWorkflow && (
 									<div className="space-y-2">
-										<Label>Workflow Version</Label>
+										<Label>{t('workflowVersion', 'Workflow Version')}</Label>
 										<Select
 											value={editState?.selectedVersion?.join(".") || ""}
 											onValueChange={(value) =>
@@ -534,7 +535,7 @@ export function TemplatePreview({
 												<SelectValue
 													placeholder={
 														versions.isFetching
-															? "Loading versions..."
+															? t('loadingVersions', 'Loading versions...')
 															: "Latest"
 													}
 												/>
@@ -544,13 +545,13 @@ export function TemplatePreview({
 													<div className="flex items-center justify-center py-4">
 														<div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
 														<span className="ml-2 text-sm text-muted-foreground">
-															Loading versions...
+															{t('loadingVersions', 'Loading versions...')}
 														</span>
 													</div>
 												) : (
 													<>
 														<SelectItem key={""} value={"none"}>
-															Latest
+															{t('latest', 'Latest')}
 														</SelectItem>
 														{versions.data?.map((version) => (
 															<SelectItem
@@ -575,10 +576,10 @@ export function TemplatePreview({
 							<CardHeader>
 								<CardTitle className="flex items-center gap-2">
 									<Shield className="h-5 w-5" />
-									Quality Metrics
+									{t('qualityMetrics', 'Quality Metrics')}
 								</CardTitle>
 								<CardDescription>
-									Average scores across all nodes
+									{t('averageScoresAcrossAllNodes', 'Average scores across all nodes')}
 								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-3">
@@ -616,21 +617,21 @@ export function TemplatePreview({
 							isMarkdown={true}
 							initialContent={
 								metadata.data.long_description ||
-								"*No detailed description available.*"
+								t('noDetailedDescriptionAvailable', '*No detailed description available.*')
 							}
 						/>
 					</div>
 
 					<Card>
 						<CardHeader>
-							<CardTitle>Template Information</CardTitle>
+							<CardTitle>{t('templateInformation', 'Template Information')}</CardTitle>
 						</CardHeader>
 						<CardContent className="space-y-6">
 							<div className="grid grid-cols-2 gap-6">
 								<div className="space-y-1">
 									<div className="flex items-center gap-2 text-sm text-muted-foreground">
 										<Calendar className="h-4 w-4" />
-										Created
+										{t('created', 'Created')}
 									</div>
 									<div className="font-medium">
 										{formatRelativeTime(metadata.data.created_at)}
@@ -639,7 +640,7 @@ export function TemplatePreview({
 								<div className="space-y-1">
 									<div className="flex items-center gap-2 text-sm text-muted-foreground">
 										<Calendar className="h-4 w-4" />
-										Updated
+										{t('updated', 'Updated')}
 									</div>
 									<div className="font-medium">
 										{formatRelativeTime(metadata.data.updated_at)}
@@ -648,10 +649,10 @@ export function TemplatePreview({
 							</div>
 
 							<MetadataField
-								label="Use Case"
+								label={t('useCase', 'Use Case')}
 								value={currentData.use_case}
 								isEditing={isEditing}
-								placeholder="Describe the primary use case for this template..."
+								placeholder={t('describeThePrimaryUseCaseForThisTemplate', 'Describe the primary use case for this template...')}
 								onChange={(value) => updateEditState({ use_case: value })}
 							/>
 
@@ -662,12 +663,12 @@ export function TemplatePreview({
 								<>
 									<Separator />
 									<div className="space-y-3">
-										<Label className="font-medium">Links</Label>
+										<Label className="font-medium">{t('links', 'Links')}</Label>
 										{isEditing ? (
 											<div className="space-y-3">
 												<div className="space-y-1">
 													<Label className="text-sm text-muted-foreground">
-														Website
+														{t('website', 'Website')}
 													</Label>
 													<Input
 														value={currentData.website}
@@ -679,7 +680,7 @@ export function TemplatePreview({
 												</div>
 												<div className="space-y-1">
 													<Label className="text-sm text-muted-foreground">
-														Documentation
+														{t('documentation', 'Documentation')}
 													</Label>
 													<Input
 														value={currentData.docs_url}
@@ -691,7 +692,7 @@ export function TemplatePreview({
 												</div>
 												<div className="space-y-1">
 													<Label className="text-sm text-muted-foreground">
-														Support
+														{t('support', 'Support')}
 													</Label>
 													<Input
 														value={currentData.support_url}
@@ -712,7 +713,7 @@ export function TemplatePreview({
 														className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800"
 													>
 														<Globe className="h-4 w-4" />
-														Website
+														{t('website', 'Website')}
 														<ExternalLink className="h-3 w-3" />
 													</a>
 												)}
@@ -724,7 +725,7 @@ export function TemplatePreview({
 														className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800"
 													>
 														<FileText className="h-4 w-4" />
-														Documentation
+														{t('documentation', 'Documentation')}
 														<ExternalLink className="h-3 w-3" />
 													</a>
 												)}
@@ -736,7 +737,7 @@ export function TemplatePreview({
 														className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800"
 													>
 														<Shield className="h-4 w-4" />
-														Support
+														{t('support', 'Support')}
 														<ExternalLink className="h-3 w-3" />
 													</a>
 												)}
@@ -747,10 +748,10 @@ export function TemplatePreview({
 							)}
 
 							<MetadataField
-								label="Release Notes"
+								label={t('releaseNotes', 'Release Notes')}
 								value={currentData.release_notes}
 								isEditing={isEditing}
-								placeholder="What's new in this version..."
+								placeholder={`What's new in this version...`}
 								onChange={(value) => updateEditState({ release_notes: value })}
 							/>
 						</CardContent>

@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next } from "@flow-like/locales";
 import { useTheme } from "next-themes";
 import {
 	forwardRef,
@@ -597,7 +598,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										}}
 									>
 										<span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
-											Asked
+											{i18next.t('asked', 'Asked')}
 										</span>
 										<p className="line-clamp-6 whitespace-pre-wrap text-sm leading-relaxed">
 											{sendingContent}
@@ -707,9 +708,9 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								sendDisabled={concurrency ? false : isSending || isStreamActive}
 								sendHint={
 									concurrency?.atCapacity
-										? "Queue this message"
+										? i18next.t('queueThisMessage', 'Queue this message')
 										: concurrency && concurrency.runs.length > 0
-											? "Start another response"
+											? i18next.t('startAnotherResponse', 'Start another response')
 											: undefined
 								}
 								onSteer={

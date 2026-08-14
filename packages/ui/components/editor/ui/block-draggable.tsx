@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import { DndPlugin, useDraggable, useDropLine } from "@platejs/dnd";
@@ -217,6 +218,7 @@ const DragHandle = React.memo(function DragHandle({
 	resetPreview: () => void;
 	setPreviewTop: (top: number) => void;
 }) {
+	const { t } = useTranslation("common");
 	const editor = useEditorRef();
 	const element = useElement();
 
@@ -279,7 +281,7 @@ const DragHandle = React.memo(function DragHandle({
 					<GripVertical className="text-muted-foreground" />
 				</div>
 			</TooltipTrigger>
-			<TooltipContent>Drag to move</TooltipContent>
+			<TooltipContent>{t('dragToMove', 'Drag to move')}</TooltipContent>
 		</Tooltip>
 	);
 });

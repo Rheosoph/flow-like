@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Monitor, RotateCcw, Smartphone, Tablet } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -90,6 +91,7 @@ interface PreviewFrameProps {
  * against the simulated device width instead of the host window.
  */
 function PreviewFrame({ width, height, scale, children }: PreviewFrameProps) {
+	const { t } = useTranslation("flow");
 	const iframeRef = useRef<HTMLIFrameElement>(null);
 	const [mountNode, setMountNode] = useState<HTMLElement | null>(null);
 
@@ -149,7 +151,7 @@ function PreviewFrame({ width, height, scale, children }: PreviewFrameProps) {
 		<>
 			<iframe
 				ref={iframeRef}
-				title="Responsive preview"
+				title={t('responsivePreview', 'Responsive preview')}
 				className="bg-background"
 				style={{
 					width,
@@ -174,6 +176,7 @@ export function ResponsivePreview({
 	className,
 	children,
 }: ResponsivePreviewProps) {
+	const { t } = useTranslation("flow");
 	const [selectedDevice, setSelectedDevice] = useState(DEVICE_PRESETS[0]);
 	const [orientation, setOrientation] = useState<"portrait" | "landscape">(
 		"landscape",
@@ -260,7 +263,7 @@ export function ResponsivePreview({
 						variant="ghost"
 						size="sm"
 						onClick={toggleOrientation}
-						title="Toggle orientation"
+						title={t('toggleOrientation', 'Toggle orientation')}
 					>
 						<RotateCcw className="h-4 w-4" />
 					</Button>
@@ -268,9 +271,7 @@ export function ResponsivePreview({
 
 				{/* Size display */}
 				<div className="flex items-center gap-2 text-sm text-muted-foreground whitespace-nowrap min-w-0">
-					<span>
-						{displayWidth} × {displayHeight}
-					</span>
+					<span>{`${displayWidth} × ${displayHeight}`}</span>
 					{scale !== null && scale < 1 && (
 						<span className="text-xs">{Math.round(scale * 100)}%</span>
 					)}
@@ -336,9 +337,7 @@ export function ResponsivePreview({
 									? "bg-primary/10 text-primary font-medium"
 									: "text-muted-foreground",
 							)}
-						>
-							{name} ({width}px)
-						</div>
+						>{t('nameWidthpx', '{{name}} ({{width}}px)', { name, width })}</div>
 					))}
 				</div>
 			</div>
@@ -374,9 +373,7 @@ export function SideBySidePreview({
 						<div className="flex items-center gap-2 text-sm text-muted-foreground">
 							<Icon className="h-4 w-4" />
 							<span>{device.name}</span>
-							<span className="text-xs">
-								({device.width}×{device.height})
-							</span>
+							<span className="text-xs">{`(${device.width}×${device.height})`}</span>
 						</div>
 						<div
 							className="bg-background shadow-lg rounded-lg overflow-hidden shrink-0"

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type CSSProperties,
 	type ReactNode,
@@ -34,6 +35,7 @@ export function ChatAppearance({
 	config = {},
 	children,
 }: Readonly<ChatAppearanceProps>) {
+	const { t } = useTranslation("chat");
 	const backend = useBackend();
 	const instanceId = useId();
 	const scopeKey = `${eventId || "default"}-${instanceId}`;

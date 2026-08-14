@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	Boxes,
 	Cloud,
@@ -141,6 +142,7 @@ export function QueryWorkbench({
 	userScoped: boolean;
 	onScopeChange: (userScoped: boolean) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const savedQueriesQuery = useInvoke(
 		backend.queryState.listSavedQueries,
@@ -352,7 +354,7 @@ export function QueryWorkbench({
 			setLiveMessage(`${value.row_count} rows returned`);
 		} catch (error) {
 			setRunError(
-				error instanceof Error ? error.message : "The query could not run.",
+				error instanceof Error ? error.message : t('theQueryCouldNotRun', 'The query could not run.'),
 			);
 			setResult(null);
 			setLastRun({
@@ -509,7 +511,7 @@ export function QueryWorkbench({
 				await savedQueriesQuery.refetch();
 			} catch (error) {
 				setSaveError(
-					error instanceof Error ? error.message : "Could not save the query.",
+					error instanceof Error ? error.message : t('couldNotSaveTheQuery', 'Could not save the query.'),
 				);
 			} finally {
 				setSaveBusy(false);
@@ -534,13 +536,13 @@ export function QueryWorkbench({
 	const disabledReason = running
 		? "Running…"
 		: !sql.trim()
-			? "Write a query first"
+			? t('writeAQueryFirst', 'Write a query first')
 			: surface === "overlay" && !overlayId
-				? "Select an ontology"
+				? t('selectAnOntology', 'Select an ontology')
 				: surface === "remote" && !remoteImportId
-					? "Select a remote ontology"
+					? t('selectARemoteOntology', 'Select a remote ontology')
 					: paramNames.length > 0 && !paramsValid
-						? "Fix parameter values"
+						? t('fixParameterValues', 'Fix parameter values')
 						: null;
 	const runDisabled = disabledReason !== null;
 
@@ -559,7 +561,7 @@ export function QueryWorkbench({
 
 	const focusParamForm = useCallback(() => {
 		const el = paramFormRef.current?.querySelector<HTMLElement>(
-			"input, select, textarea, button",
+			t('inputSelectTextareaButton', 'input, select, textarea, button'),
 		);
 		el?.focus();
 		el?.scrollIntoView({ block: "nearest" });
@@ -618,7 +620,7 @@ export function QueryWorkbench({
 								await backend.queryState.createSavedQuery(
 									appId,
 									{
-										name: `${query.name} copy`,
+										name: t('nameCopy2', '{{name}} copy', { name: query.name }),
 										description: query.description,
 										kind: query.kind,
 										surface: query.surface,
@@ -636,7 +638,7 @@ export function QueryWorkbench({
 					)}
 				</Panel>
 
-				<ResizableHandle withHandle aria-label="Resize saved-queries sidebar" />
+				<ResizableHandle withHandle aria-label={t('resizeSavedqueriesSidebar', 'Resize saved-queries sidebar')} />
 
 				<Panel id="qw-main" order={2} minSize={40} className="min-w-0">
 					<section className="flex h-full min-h-0 min-w-0 flex-col">
@@ -649,7 +651,7 @@ export function QueryWorkbench({
 								aria-expanded={!sidebarCollapsed}
 								aria-controls="qw-sidebar"
 								aria-label={
-									sidebarCollapsed ? "Show saved queries" : "Hide saved queries"
+									sidebarCollapsed ? t('showSavedQueries', 'Show saved queries') : t('hideSavedQueries', 'Hide saved queries')
 								}
 							>
 								{sidebarCollapsed ? (
@@ -663,7 +665,7 @@ export function QueryWorkbench({
 								<button
 									type="button"
 									aria-pressed={surface === "native"}
-									aria-label="Query native tables"
+									aria-label={t('queryNativeTables', 'Query native tables')}
 									onClick={() => setSurface("native")}
 									className={cn(
 										"flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -672,12 +674,12 @@ export function QueryWorkbench({
 											: "text-muted-foreground hover:text-foreground",
 									)}
 								>
-									<Database className="h-3.5 w-3.5" /> Native
+									<Database className="h-3.5 w-3.5" /> {t('native', 'Native')}
 								</button>
 								<button
 									type="button"
 									aria-pressed={surface === "overlay"}
-									aria-label="Query ontology"
+									aria-label={t('queryOntology', 'Query ontology')}
 									disabled={ontologies.length === 0}
 									onClick={() => {
 										setSurface("overlay");
@@ -690,12 +692,12 @@ export function QueryWorkbench({
 											: "text-muted-foreground hover:text-foreground",
 									)}
 								>
-									<Boxes className="h-3.5 w-3.5" /> Ontology
+									<Boxes className="h-3.5 w-3.5" /> {t('ontology', 'Ontology')}
 								</button>
 								<button
 									type="button"
 									aria-pressed={surface === "remote"}
-									aria-label="Query remote ontology"
+									aria-label={t('queryRemoteOntology', 'Query remote ontology')}
 									disabled={remoteImports.length === 0}
 									onClick={() => {
 										setSurface("remote");
@@ -709,7 +711,7 @@ export function QueryWorkbench({
 											: "text-muted-foreground hover:text-foreground",
 									)}
 								>
-									<Cloud className="h-3.5 w-3.5" /> Remote
+									<Cloud className="h-3.5 w-3.5" /> {t('remote', 'Remote')}
 								</button>
 							</div>
 
@@ -720,13 +722,13 @@ export function QueryWorkbench({
 								>
 									<SelectTrigger
 										className="h-8 w-32"
-										aria-label="Database scope"
+										aria-label={t('databaseScope', 'Database scope')}
 									>
 										<SelectValue />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value="project">Project</SelectItem>
-										<SelectItem value="user">Personal</SelectItem>
+										<SelectItem value="project">{t('project', 'Project')}</SelectItem>
+										<SelectItem value="user">{t('personal', 'Personal')}</SelectItem>
 									</SelectContent>
 								</Select>
 							)}
@@ -734,7 +736,7 @@ export function QueryWorkbench({
 							{surface === "overlay" && (
 								<Select value={overlayId} onValueChange={setOverlayId}>
 									<SelectTrigger className="h-8 w-44" aria-label="Ontology">
-										<SelectValue placeholder="Select ontology" />
+										<SelectValue placeholder={t('selectOntology', 'Select ontology')} />
 									</SelectTrigger>
 									<SelectContent>
 										{ontologies.map((overlay) => (
@@ -754,15 +756,15 @@ export function QueryWorkbench({
 									>
 										<SelectTrigger
 											className="h-8 w-52"
-											aria-label="Remote ontology"
+											aria-label={t('remoteOntology', 'Remote ontology')}
 										>
-											<SelectValue placeholder="Select remote ontology" />
+											<SelectValue placeholder={t('selectRemoteOntology', 'Select remote ontology')} />
 										</SelectTrigger>
 										<SelectContent>
 											{remoteImports.map((imported) => (
 												<SelectItem key={imported.id} value={imported.id}>
 													{imported.contract.name}
-													{" · "}
+													{` · `}
 													{resolveSourceName?.(imported.target_app_id) ??
 														imported.target_app_id}
 												</SelectItem>
@@ -770,7 +772,7 @@ export function QueryWorkbench({
 										</SelectContent>
 									</Select>
 									<Badge variant="outline" className="hidden gap-1 sm:flex">
-										<Cloud className="h-3 w-3" /> Read-only
+										<Cloud className="h-3 w-3" /> {t('readonly', 'Read-only')}
 									</Badge>
 								</>
 							)}
@@ -789,12 +791,12 @@ export function QueryWorkbench({
 									disabled={!sql.trim() || surface === "remote"}
 									title={
 										surface === "remote"
-											? "Remote queries are read-only previews and cannot be saved"
+											? t('remoteQueriesAreReadonlyPreviewsAndCannotBeSaved', 'Remote queries are read-only previews and cannot be saved')
 											: undefined
 									}
 									onClick={openSave}
 								>
-									<Save className="h-4 w-4" /> Save
+									<Save className="h-4 w-4" /> {t('save', 'Save')}
 								</Button>
 								<Tooltip>
 									<TooltipTrigger asChild>
@@ -809,12 +811,10 @@ export function QueryWorkbench({
 													<Loader2 className="h-4 w-4 animate-spin" />
 												) : (
 													<Play className="h-4 w-4" />
-												)}
-												Run
+												)}<Trans i18nKey="runKbdClassnameml05HiddenRoundedBorderBorderprimaryforeground30Bgprimaryforeground10Px1Text10pxFontmediumSminlineKbd">Run
 												<kbd className="ml-0.5 hidden rounded border border-primary-foreground/30 bg-primary-foreground/10 px-1 text-[10px] font-medium sm:inline">
 													⌘↵
-												</kbd>
-											</Button>
+												</kbd></Trans></Button>
 										</span>
 									</TooltipTrigger>
 									<TooltipContent>
@@ -879,7 +879,7 @@ export function QueryWorkbench({
 
 							<ResizableHandle
 								withHandle
-								aria-label="Resize editor and results"
+								aria-label={t('resizeEditorAndResults', 'Resize editor and results')}
 							/>
 
 							<Panel id="qw-results" order={2} minSize={20}>

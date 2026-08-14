@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	ArrowLeft,
 	CheckCircle,
@@ -65,6 +66,15 @@ function formatDownloadCount(count: number | null | undefined) {
 }
 
 function ReviewItem({ review }: { review: PackageReview }) {
+	const { t } = useTranslation("store");
+	const actionLabel = {
+		submitted: t("submitted", "Submitted"),
+		approve: t("approve", "Approve"),
+		reject: t("reject", "Reject"),
+		request_changes: t("requestChanges", "Request Changes"),
+		comment: t("comment", "Comment"),
+		flag: t("flagForReview", "Flag for Review"),
+	}[review.action];
 	const actionIcon = {
 		submitted: <Package className="h-4 w-4" />,
 		approve: <CheckCircle className="h-4 w-4 text-green-500" />,
@@ -98,11 +108,9 @@ function ReviewItem({ review }: { review: PackageReview }) {
 			</div>
 			<div className="flex-1">
 				<div className="flex items-center gap-2">
-					<span className="font-medium capitalize">
-						{review.action.replace("_", " ")}
-					</span>
+					<span className="font-medium">{actionLabel}</span>
 					<span className="text-sm text-muted-foreground">
-						by {reviewerLabel}
+						{t("byReviewerlabel", "by {{reviewerLabel}}", { reviewerLabel })}
 					</span>
 					<span className="text-sm text-muted-foreground">
 						<RelativeTime value={review.createdAt} />
@@ -117,24 +125,26 @@ function ReviewItem({ review }: { review: PackageReview }) {
 					<div className="flex gap-4 mt-2">
 						{review.securityScore && (
 							<div className="text-sm">
-								<span className="text-muted-foreground">Security:</span>{" "}
-								<span className="font-medium">{review.securityScore}/10</span>
+								<span className="text-muted-foreground">
+									{t("security", "Security:")}
+								</span>{" "}
+								<span className="font-medium">{`${review.securityScore}/10`}</span>
 							</div>
 						)}
 						{review.codeQualityScore && (
 							<div className="text-sm">
-								<span className="text-muted-foreground">Code Quality:</span>{" "}
-								<span className="font-medium">
-									{review.codeQualityScore}/10
-								</span>
+								<span className="text-muted-foreground">
+									{t("codeQuality", "Code Quality:")}
+								</span>{" "}
+								<span className="font-medium">{`${review.codeQualityScore}/10`}</span>
 							</div>
 						)}
 						{review.documentationScore && (
 							<div className="text-sm">
-								<span className="text-muted-foreground">Documentation:</span>{" "}
-								<span className="font-medium">
-									{review.documentationScore}/10
-								</span>
+								<span className="text-muted-foreground">
+									{t("documentation2", "Documentation:")}
+								</span>{" "}
+								<span className="font-medium">{`${review.documentationScore}/10`}</span>
 							</div>
 						)}
 					</div>
@@ -163,12 +173,20 @@ export function AdminPackageDetailView({
 	isSubmittingReview,
 	isUpdatingPackage,
 }: AdminPackageDetailViewProps) {
+	const { t } = useTranslation("store");
 	const [reviewAction, setReviewAction] =
 		useState<ReviewRequest["action"]>("comment");
 	const [reviewComment, setReviewComment] = useState("");
 	const [securityScore, setSecurityScore] = useState<number[]>([5]);
 	const [codeQualityScore, setCodeQualityScore] = useState<number[]>([5]);
 	const [documentationScore, setDocumentationScore] = useState<number[]>([5]);
+	const packageStatusLabel: Record<PackageAdminStatus, string> = {
+		pending_review: t("pendingReview", "Pending Review"),
+		active: t("active", "Active"),
+		rejected: t("rejected", "Rejected"),
+		deprecated: t("deprecated", "Deprecated"),
+		disabled: t("disabled", "Disabled"),
+	};
 
 	const handleSubmitReview = useCallback(() => {
 		const review: ReviewRequest = {
@@ -206,7 +224,7 @@ export function AdminPackageDetailView({
 	if (!pkg) {
 		return (
 			<div className="container mx-auto py-6">
-				<p>Package not found</p>
+				<p>{t("packageNotFound", "Package not found")}</p>
 			</div>
 		);
 	}
@@ -216,7 +234,7 @@ export function AdminPackageDetailView({
 			<div className="flex items-center gap-4">
 				<Button variant="ghost" size="sm" onClick={onBack}>
 					<ArrowLeft className="h-4 w-4 mr-2" />
-					Back
+					{t("back", "Back")}
 				</Button>
 			</div>
 
@@ -229,14 +247,15 @@ export function AdminPackageDetailView({
 					<p className="text-muted-foreground mt-1">{pkg.description}</p>
 					<div className="flex items-center gap-4 mt-2">
 						<Badge variant={statusBadgeVariant[pkg.status]}>
-							{pkg.status.replace("_", " ")}
+							{packageStatusLabel[pkg.status]}
 						</Badge>
-						<span className="text-sm text-muted-foreground">
-							v{pkg.version}
-						</span>
+						<span className="text-sm text-muted-foreground">{`v${pkg.version}`}</span>
 						<span className="text-sm text-muted-foreground flex items-center gap-1">
 							<Download className="h-3 w-3" />
-							{formatDownloadCount(pkg.downloadCount)} downloads
+							{t("downloadCount", "{{formattedCount}} downloads", {
+								count: pkg.downloadCount,
+								formattedCount: formatDownloadCount(pkg.downloadCount),
+							})}
 						</span>
 					</div>
 				</div>
@@ -249,7 +268,7 @@ export function AdminPackageDetailView({
 								rel="noopener noreferrer"
 							>
 								<ExternalLink className="h-4 w-4 mr-2" />
-								Repository
+								{t("repository", "Repository")}
 							</a>
 						</Button>
 					)}
@@ -260,20 +279,30 @@ export function AdminPackageDetailView({
 				<div className="md:col-span-2 space-y-6">
 					<Tabs defaultValue="details">
 						<TabsList>
-							<TabsTrigger value="details">Details</TabsTrigger>
-							<TabsTrigger value="permissions">Permissions</TabsTrigger>
+							<TabsTrigger value="details">
+								{t("details", "Details")}
+							</TabsTrigger>
+							<TabsTrigger value="permissions">
+								{t("permissions", "Permissions")}
+							</TabsTrigger>
 							<TabsTrigger value="nodes">
-								Nodes ({(pkg.nodes as unknown[]).length})
+								{t("nodesLength", "Nodes ({{length}})", {
+									length: (pkg.nodes as unknown[]).length,
+								})}
 							</TabsTrigger>
 							<TabsTrigger value="reviews">
-								Reviews ({reviews.length})
+								{t("reviewsLength", "Reviews ({{length}})", {
+									length: reviews.length,
+								})}
 							</TabsTrigger>
 						</TabsList>
 
 						<TabsContent value="details" className="space-y-4 mt-4">
 							<Card>
 								<CardHeader>
-									<CardTitle>Package Information</CardTitle>
+									<CardTitle>
+										{t("packageInformation", "Package Information")}
+									</CardTitle>
 								</CardHeader>
 								<CardContent className="space-y-4">
 									<div className="grid grid-cols-2 gap-4">
@@ -282,44 +311,65 @@ export function AdminPackageDetailView({
 											<p className="font-mono text-sm">{pkg.id}</p>
 										</div>
 										<div>
-											<Label className="text-muted-foreground">Version</Label>
+											<Label className="text-muted-foreground">
+												{t("version", "Version")}
+											</Label>
 											<p>{pkg.version}</p>
 										</div>
 										<div>
-											<Label className="text-muted-foreground">Authors</Label>
-											<p>{pkg.authors.join(", ") || "Unknown"}</p>
+											<Label className="text-muted-foreground">
+												{t("authors", "Authors")}
+											</Label>
+											<p>{pkg.authors.join(", ") || t("unknown", "Unknown")}</p>
 										</div>
 										<div>
-											<Label className="text-muted-foreground">License</Label>
-											<p>{pkg.license || "Not specified"}</p>
+											<Label className="text-muted-foreground">
+												{t("license", "License")}
+											</Label>
+											<p>{pkg.license || t("notSpecified", "Not specified")}</p>
 										</div>
 										<div>
-											<Label className="text-muted-foreground">WASM Size</Label>
+											<Label className="text-muted-foreground">
+												{t("wasmSize", "WASM Size")}
+											</Label>
 											<p>{(pkg.wasmSize / 1024).toFixed(2)} KB</p>
 										</div>
 										<div>
-											<Label className="text-muted-foreground">Submitter</Label>
-											<p>{pkg.submitterId || "Unknown"}</p>
+											<Label className="text-muted-foreground">
+												{t("submitter", "Submitter")}
+											</Label>
+											<p>{pkg.submitterId || t("unknown", "Unknown")}</p>
 										</div>
 										<div>
-											<Label className="text-muted-foreground">Created</Label>
-											<p>{formatAbsoluteDateValue(pkg.createdAt, "Unknown")}</p>
+											<Label className="text-muted-foreground">
+												{t("created", "Created")}
+											</Label>
+											<p>
+												{formatAbsoluteDateValue(
+													pkg.createdAt,
+													t("unknown", "Unknown"),
+												)}
+											</p>
 										</div>
 										<div>
-											<Label className="text-muted-foreground">Published</Label>
+											<Label className="text-muted-foreground">
+												{t("published", "Published")}
+											</Label>
 											<p>
 												{pkg.publishedAt
 													? formatAbsoluteDateValue(
 															pkg.publishedAt,
-															"Not published",
+															t("notPublished", "Not published"),
 														)
-													: "Not published"}
+													: t("notPublished", "Not published")}
 											</p>
 										</div>
 									</div>
 									{pkg.keywords.length > 0 && (
 										<div>
-											<Label className="text-muted-foreground">Keywords</Label>
+											<Label className="text-muted-foreground">
+												{t("keywords", "Keywords")}
+											</Label>
 											<div className="flex flex-wrap gap-1 mt-1">
 												{pkg.keywords.map((kw) => (
 													<Badge key={kw} variant="secondary">
@@ -336,9 +386,14 @@ export function AdminPackageDetailView({
 						<TabsContent value="permissions" className="mt-4">
 							<Card>
 								<CardHeader>
-									<CardTitle>Requested Permissions</CardTitle>
+									<CardTitle>
+										{t("requestedPermissions", "Requested Permissions")}
+									</CardTitle>
 									<CardDescription>
-										Review the permissions this package requests
+										{t(
+											"reviewThePermissionsThisPackageRequests",
+											"Review the permissions this package requests",
+										)}
 									</CardDescription>
 								</CardHeader>
 								<CardContent>
@@ -352,9 +407,12 @@ export function AdminPackageDetailView({
 						<TabsContent value="nodes" className="mt-4">
 							<Card>
 								<CardHeader>
-									<CardTitle>Exported Nodes</CardTitle>
+									<CardTitle>{t("exportedNodes", "Exported Nodes")}</CardTitle>
 									<CardDescription>
-										Custom nodes provided by this package
+										{t(
+											"customNodesProvidedByThisPackage",
+											"Custom nodes provided by this package",
+										)}
 									</CardDescription>
 								</CardHeader>
 								<CardContent>
@@ -367,7 +425,9 @@ export function AdminPackageDetailView({
 
 						<TabsContent value="reviews" className="mt-4 space-y-4">
 							{reviews.length === 0 ? (
-								<p className="text-muted-foreground">No reviews yet</p>
+								<p className="text-muted-foreground">
+									{t("noReviewsYet", "No reviews yet")}
+								</p>
 							) : (
 								reviews.map((review) => (
 									<ReviewItem key={review.id} review={review} />
@@ -380,11 +440,11 @@ export function AdminPackageDetailView({
 				<div className="space-y-6">
 					<Card>
 						<CardHeader>
-							<CardTitle>Actions</CardTitle>
+							<CardTitle>{t("actions", "Actions")}</CardTitle>
 						</CardHeader>
 						<CardContent className="space-y-4">
 							<div className="space-y-2">
-								<Label>Quick Actions</Label>
+								<Label>{t("quickActions", "Quick Actions")}</Label>
 								<div className="flex flex-col gap-2">
 									<Button
 										variant="default"
@@ -393,7 +453,7 @@ export function AdminPackageDetailView({
 										onClick={() => onSubmitReview({ action: "approve" })}
 									>
 										<CheckCircle className="h-4 w-4 mr-2" />
-										Approve
+										{t("approve", "Approve")}
 									</Button>
 									<Button
 										variant="destructive"
@@ -402,7 +462,7 @@ export function AdminPackageDetailView({
 										onClick={() => onSubmitReview({ action: "reject" })}
 									>
 										<XCircle className="h-4 w-4 mr-2" />
-										Reject
+										{t("reject", "Reject")}
 									</Button>
 								</div>
 							</div>
@@ -410,7 +470,7 @@ export function AdminPackageDetailView({
 							<Separator />
 
 							<div className="space-y-2">
-								<Label>Verified Status</Label>
+								<Label>{t("verifiedStatus", "Verified Status")}</Label>
 								<Button
 									variant="outline"
 									className="w-full"
@@ -418,7 +478,9 @@ export function AdminPackageDetailView({
 									onClick={() => onUpdatePackage({ verified: !pkg.verified })}
 								>
 									<Shield className="h-4 w-4 mr-2" />
-									{pkg.verified ? "Remove Verified" : "Mark as Verified"}
+									{pkg.verified
+										? t("removeVerified", "Remove Verified")
+										: t("markAsVerified", "Mark as Verified")}
 								</Button>
 							</div>
 						</CardContent>
@@ -426,11 +488,11 @@ export function AdminPackageDetailView({
 
 					<Card>
 						<CardHeader>
-							<CardTitle>Submit Review</CardTitle>
+							<CardTitle>{t("submitReview", "Submit Review")}</CardTitle>
 						</CardHeader>
 						<CardContent className="space-y-4">
 							<div className="space-y-2">
-								<Label>Action</Label>
+								<Label>{t("action", "Action")}</Label>
 								<Select
 									value={reviewAction}
 									onValueChange={(v) =>
@@ -441,23 +503,34 @@ export function AdminPackageDetailView({
 										<SelectValue />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value="approve">Approve</SelectItem>
-										<SelectItem value="reject">Reject</SelectItem>
-										<SelectItem value="request_changes">
-											Request Changes
+										<SelectItem value="approve">
+											{t("approve", "Approve")}
 										</SelectItem>
-										<SelectItem value="comment">Comment</SelectItem>
-										<SelectItem value="flag">Flag for Review</SelectItem>
+										<SelectItem value="reject">
+											{t("reject", "Reject")}
+										</SelectItem>
+										<SelectItem value="request_changes">
+											{t("requestChanges", "Request Changes")}
+										</SelectItem>
+										<SelectItem value="comment">
+											{t("comment", "Comment")}
+										</SelectItem>
+										<SelectItem value="flag">
+											{t("flagForReview", "Flag for Review")}
+										</SelectItem>
 									</SelectContent>
 								</Select>
 							</div>
 
 							<div className="space-y-2">
-								<Label>Comment</Label>
+								<Label>{t("comment", "Comment")}</Label>
 								<Textarea
 									value={reviewComment}
 									onChange={(e) => setReviewComment(e.target.value)}
-									placeholder="Add your review comments..."
+									placeholder={t(
+										"addYourReviewComments",
+										"Add your review comments...",
+									)}
 									rows={4}
 								/>
 							</div>
@@ -465,7 +538,10 @@ export function AdminPackageDetailView({
 							{reviewAction === "approve" && (
 								<>
 									<div className="space-y-2">
-										<Label>Security Score: {securityScore[0]}/10</Label>
+										<Label>
+											{t("securityScore", "Security Score:")} {securityScore[0]}
+											/10
+										</Label>
 										<Slider
 											value={securityScore}
 											onValueChange={setSecurityScore}
@@ -475,7 +551,10 @@ export function AdminPackageDetailView({
 										/>
 									</div>
 									<div className="space-y-2">
-										<Label>Code Quality Score: {codeQualityScore[0]}/10</Label>
+										<Label>
+											{t("codeQualityScore", "Code Quality Score:")}{" "}
+											{codeQualityScore[0]}/10
+										</Label>
 										<Slider
 											value={codeQualityScore}
 											onValueChange={setCodeQualityScore}
@@ -486,7 +565,8 @@ export function AdminPackageDetailView({
 									</div>
 									<div className="space-y-2">
 										<Label>
-											Documentation Score: {documentationScore[0]}/10
+											{t("documentationScore", "Documentation Score:")}{" "}
+											{documentationScore[0]}/10
 										</Label>
 										<Slider
 											value={documentationScore}
@@ -504,7 +584,7 @@ export function AdminPackageDetailView({
 								onClick={handleSubmitReview}
 								disabled={isSubmittingReview}
 							>
-								Submit Review
+								{t("submitReview", "Submit Review")}
 							</Button>
 						</CardContent>
 					</Card>

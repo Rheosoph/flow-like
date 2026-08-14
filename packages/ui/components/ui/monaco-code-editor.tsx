@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import Editor, { type Monaco, type OnMount } from "@monaco-editor/react";
 import { Maximize2, Minimize2 } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -16,30 +17,7 @@ function injectMonacoCodeStyles() {
 
 	const style = document.createElement("style");
 	style.id = styleId;
-	style.textContent = `
-		.monaco-code-editor-wrapper .monaco-editor .line-numbers {
-			font-size: 0.75rem;
-		}
-
-		.monaco-code-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider {
-			background: hsl(var(--muted-foreground) / 0.3) !important;
-			border-radius: 4px;
-		}
-
-		.monaco-code-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider:hover {
-			background: hsl(var(--muted-foreground) / 0.5) !important;
-		}
-
-		/* Fullscreen mode */
-		.monaco-code-editor-fullscreen {
-			position: fixed !important;
-			inset: 0 !important;
-			z-index: 50 !important;
-			height: 100vh !important;
-			width: 100vw !important;
-			border-radius: 0 !important;
-		}
-	`;
+	style.textContent = `.monaco-code-editor-wrapper .monaco-editor .line-numbers { font-size: 0.75rem; } .monaco-code-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider { background: hsl(var(--muted-foreground) / 0.3) !important; border-radius: 4px; } .monaco-code-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider:hover { background: hsl(var(--muted-foreground) / 0.5) !important; } /* Fullscreen mode */ .monaco-code-editor-fullscreen { position: fixed !important; inset: 0 !important; z-index: 50 !important; height: 100vh !important; width: 100vw !important; border-radius: 0 !important; }`;
 	document.head.appendChild(style);
 }
 
@@ -76,6 +54,7 @@ export function MonacoCodeEditor({
 	allowFullscreen = false,
 	autoFocus = true,
 }: Readonly<MonacoCodeEditorProps>) {
+	const { t } = useTranslation("common");
 	const [isFullscreen, setIsFullscreen] = useState(false);
 	const { resolvedTheme } = useTheme();
 	const monacoRef = useRef<Monaco | null>(null);
@@ -156,7 +135,7 @@ export function MonacoCodeEditor({
 					minimap: { enabled: showMinimap || isFullscreen },
 					fontSize: isFullscreen ? 14 : 12,
 					fontFamily:
-						"'SF Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+						t('sfMonoUimonospaceSfmonoregularMenloMonacoConsolasLiberationMonoCourierNewMonospace', '\'SF Mono\', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \'Liberation Mono\', \'Courier New\', monospace'),
 					fontLigatures: true,
 					lineNumbers: showLineNumbers ? "on" : "off",
 					scrollBeyondLastLine: false,

@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import {
 	DndContext,
 	PointerSensor,
@@ -48,6 +49,7 @@ export function FlowWrapper({
 	/** True when the host app provides the assistant (global chat) — see FlowBoard.externalAssistant. */
 	externalAssistant?: boolean;
 }>) {
+	const { t } = useTranslation("flow");
 	const pointerSensor = useSensor(PointerSensor, {
 		activationConstraint: {
 			distance: 10,
@@ -157,7 +159,7 @@ export function FlowWrapper({
 			>
 				<DialogContent>
 					<DialogHeader>
-						<DialogTitle>Reference: {detail?.variable.name}</DialogTitle>
+						<DialogTitle>{t('reference', 'Reference:')} {detail?.variable.name}</DialogTitle>
 					</DialogHeader>
 					<div className="w-full flex items-center justify-start gap-2 max-w-full">
 						<Button
@@ -165,14 +167,14 @@ export function FlowWrapper({
 							variant={"outline"}
 							onClick={() => placeNode("get")}
 						>
-							Get
+							{t('get', 'Get')}
 						</Button>
 						<Button
 							className="flex-grow"
 							variant={"outline"}
 							onClick={() => placeNode("set")}
 						>
-							Set
+							{t('set', 'Set')}
 						</Button>
 					</div>
 				</DialogContent>

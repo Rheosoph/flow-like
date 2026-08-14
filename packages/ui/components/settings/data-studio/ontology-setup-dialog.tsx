@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import {
 	ArrowRight,
@@ -198,6 +199,7 @@ export function OntologySetupDialog({
 	appId,
 	userScoped,
 }: Readonly<OntologySetupDialogProps>) {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const graphState = backend.graphState;
 	const projectTables = useMemo(
@@ -307,7 +309,7 @@ export function OntologySetupDialog({
 			if (!name.trim()) {
 				setName(
 					inferred.length === 1
-						? `${inferred[0]?.label ?? "Data"} Ontology`
+						? t('valOntology', '{{val}} Ontology', { val: inferred[0]?.label ?? "Data" })
 						: "Operations Ontology",
 				);
 			}
@@ -316,7 +318,7 @@ export function OntologySetupDialog({
 			setError(
 				schemaError instanceof Error
 					? schemaError.message
-					: "Could not inspect the selected tables.",
+					: t('couldNotInspectTheSelectedTables', 'Could not inspect the selected tables.'),
 			);
 		} finally {
 			setLoadingSchemas(false);
@@ -456,7 +458,7 @@ export function OntologySetupDialog({
 					}
 				} catch {
 					setValidationWarning(
-						"Could not validate the ontology before creating. Proceeding without validation.",
+						t('couldNotValidateTheOntologyBeforeCreatingProceedingWithoutValidation', 'Could not validate the ontology before creating. Proceeding without validation.'),
 					);
 				}
 			}
@@ -477,7 +479,7 @@ export function OntologySetupDialog({
 			setError(
 				createError instanceof Error
 					? createError.message
-					: "Could not create the ontology.",
+					: t('couldNotCreateTheOntology', 'Could not create the ontology.'),
 			);
 		} finally {
 			setSubmitting(false);
@@ -508,9 +510,9 @@ export function OntologySetupDialog({
 							<Sparkles className="h-4 w-4" />
 						</div>
 						<div>
-							<DialogTitle>Set up an ontology</DialogTitle>
+							<DialogTitle>{t('setUpAnOntology', 'Set up an ontology')}</DialogTitle>
 							<DialogDescription>
-								Turn existing project tables into objects and relationships.
+								{t('turnExistingProjectTablesIntoObjectsAndRelationships', 'Turn existing project tables into objects and relationships.')}
 							</DialogDescription>
 						</div>
 					</div>
@@ -545,24 +547,22 @@ export function OntologySetupDialog({
 					{step === "sources" && (
 						<div className="flex h-full min-h-80 flex-col gap-4">
 							<div className="space-y-1.5">
-								<Label htmlFor="ontology-name">Ontology name</Label>
+								<Label htmlFor="ontology-name">{t('ontologyName', 'Ontology name')}</Label>
 								<Input
 									id="ontology-name"
 									value={name}
 									onChange={(event) => setName(event.target.value)}
-									placeholder="Logistics operations"
+									placeholder={t('logisticsOperations', 'Logistics operations')}
 								/>
 							</div>
 							<div className="flex items-center justify-between">
 								<div>
-									<p className="text-sm font-medium">Choose source tables</p>
+									<p className="text-sm font-medium">{t('chooseSourceTables', 'Choose source tables')}</p>
 									<p className="text-xs text-muted-foreground">
-										Schemas load only after you continue.
+										{t('schemasLoadOnlyAfterYouContinue', 'Schemas load only after you continue.')}
 									</p>
 								</div>
-								<Badge variant="secondary">
-									{selectedTables.size} selected
-								</Badge>
+								<Badge variant="secondary">{t('sizeSelected', '{{size}} selected', { size: selectedTables.size })}</Badge>
 							</div>
 							<ScrollArea className="min-h-0 flex-1 rounded-lg border">
 								<div className="grid gap-2 p-3 sm:grid-cols-2">
@@ -587,7 +587,7 @@ export function OntologySetupDialog({
 									))}
 									{projectTables.length === 0 && (
 										<p className="col-span-full py-10 text-center text-sm text-muted-foreground">
-											Create a project table before setting up an ontology.
+											{t('createAProjectTableBeforeSettingUpAnOntology', 'Create a project table before setting up an ontology.')}
 										</p>
 									)}
 								</div>
@@ -599,10 +599,9 @@ export function OntologySetupDialog({
 						<ScrollArea className="h-full min-h-80 pr-3">
 							<div className="space-y-3">
 								<div>
-									<p className="text-sm font-medium">Review inferred objects</p>
+									<p className="text-sm font-medium">{t('reviewInferredObjects', 'Review inferred objects')}</p>
 									<p className="text-xs text-muted-foreground">
-										IDs and display fields are suggested from each selected
-										schema.
+										{`IDs and display fields are suggested from each selected schema.`}
 									</p>
 								</div>
 								{objects.map((object, index) => {
@@ -622,14 +621,12 @@ export function OntologySetupDialog({
 													<p className="truncate text-sm font-medium">
 														{object.table}
 													</p>
-													<p className="text-xs text-muted-foreground">
-														{object.columns.length} properties
-													</p>
+													<p className="text-xs text-muted-foreground">{t('lengthProperties', '{{length}} properties', { length: object.columns.length })}</p>
 												</div>
 											</div>
 											<div className="grid gap-3 sm:grid-cols-2">
 												<div className="space-y-1.5">
-													<Label>Object name</Label>
+													<Label>{t('objectName', 'Object name')}</Label>
 													<Input
 														value={object.label}
 														onChange={(event) => {
@@ -648,12 +645,12 @@ export function OntologySetupDialog({
 													/>
 													{dupLabel && (
 														<p className="text-xs text-destructive">
-															Another object already uses this name.
+															{t('anotherObjectAlreadyUsesThisName', 'Another object already uses this name.')}
 														</p>
 													)}
 												</div>
 												<div className="space-y-1.5">
-													<Label>API name</Label>
+													<Label>{t('apiName', 'API name')}</Label>
 													<Input
 														value={object.api_name ?? ""}
 														onChange={(event) =>
@@ -674,12 +671,12 @@ export function OntologySetupDialog({
 													/>
 													{dupApiName && (
 														<p className="text-xs text-destructive">
-															Another object already uses this API name.
+															{t('anotherObjectAlreadyUsesThisApiName', 'Another object already uses this API name.')}
 														</p>
 													)}
 												</div>
 												<div className="space-y-1.5">
-													<Label>Unique ID</Label>
+													<Label>{t('uniqueId', 'Unique ID')}</Label>
 													<Select
 														value={object.id_column}
 														onValueChange={(value) =>
@@ -702,7 +699,7 @@ export function OntologySetupDialog({
 													</Select>
 												</div>
 												<div className="space-y-1.5">
-													<Label>Display property</Label>
+													<Label>{t('displayProperty', 'Display property')}</Label>
 													<Select
 														value={object.display_column ?? "__none"}
 														onValueChange={(value) =>
@@ -717,7 +714,7 @@ export function OntologySetupDialog({
 														</SelectTrigger>
 														<SelectContent>
 															<SelectItem value="__none">
-																Use unique ID
+																{t('useUniqueId', 'Use unique ID')}
 															</SelectItem>
 															{object.columns.map((column) => (
 																<SelectItem
@@ -742,21 +739,18 @@ export function OntologySetupDialog({
 						<ScrollArea className="h-full min-h-80 pr-3">
 							<div className="space-y-3">
 								<div>
-									<p className="text-sm font-medium">Review relationships</p>
+									<p className="text-sm font-medium">{t('reviewRelationships', 'Review relationships')}</p>
 									<p className="text-xs text-muted-foreground">
-										Inferred from foreign-key style columns. Edit labels or
-										remove any that do not belong.
+										{`Inferred from foreign-key style columns. Edit labels or remove any that do not belong.`}
 									</p>
 								</div>
 								{edges.length === 0 ? (
 									<div className="rounded-xl border border-dashed p-8 text-center">
 										<p className="text-sm font-medium">
-											No relationships inferred
+											{t('noRelationshipsInferred', 'No relationships inferred')}
 										</p>
 										<p className="mt-1 text-xs text-muted-foreground">
-											We could not find foreign-key columns linking your
-											objects. You can add relationships later from the ontology
-											editor.
+											{`We could not find foreign-key columns linking your objects. You can add relationships later from the ontology editor.`}
 										</p>
 									</div>
 								) : (
@@ -776,25 +770,23 @@ export function OntologySetupDialog({
 					{step === "publish" && (
 						<div className="space-y-5 py-2">
 							<div className="space-y-1.5">
-								<Label htmlFor="ontology-description">Description</Label>
+								<Label htmlFor="ontology-description">{t('description', 'Description')}</Label>
 								<Input
 									id="ontology-description"
 									value={description}
 									onChange={(event) => setDescription(event.target.value)}
-									placeholder="What this model represents and who should use it"
+									placeholder={t('whatThisModelRepresentsAndWhoShouldUseIt', 'What this model represents and who should use it')}
 								/>
 							</div>
 							<div className="rounded-xl border bg-muted/30 p-4">
 								<div className="flex items-center justify-between">
 									<div>
 										<p className="font-medium">{name}</p>
-										<p className="text-sm text-muted-foreground">
-											{objects.length} objects · {edges.length} relationships
-										</p>
+										<p className="text-sm text-muted-foreground">{t('lengthObjectsLength2Relationships', '{{length}} objects · {{length2}} relationships', { length: objects.length, length2: edges.length })}</p>
 									</div>
 									<Badge className="gap-1">
 										<Sparkles className="h-3 w-3" />
-										Bindings on
+										{t('bindingsOn', 'Bindings on')}
 									</Badge>
 								</div>
 								<div className="mt-4 flex flex-wrap gap-2">
@@ -808,7 +800,7 @@ export function OntologySetupDialog({
 							{validation && !validation.ok && (
 								<div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
 									<p className="font-medium">
-										Fix these issues before creating
+										{t('fixTheseIssuesBeforeCreating', 'Fix these issues before creating')}
 									</p>
 									{validation.issues.length > 0 && (
 										<ul className="list-disc space-y-1 pl-4 text-xs">
@@ -841,9 +833,7 @@ export function OntologySetupDialog({
 								</div>
 							)}
 							<p className="text-xs text-muted-foreground">
-								The ontology stays private until you expose it from Sharing.
-								Standard object views and board bindings are generated
-								automatically.
+								{`The ontology stays private until you expose it from Sharing. Standard object views and board bindings are generated automatically.`}
 							</p>
 						</div>
 					)}
@@ -863,7 +853,7 @@ export function OntologySetupDialog({
 							) : (
 								<Sparkles className="h-4 w-4" />
 							)}
-							Infer objects
+							{t('inferObjects', 'Infer objects')}
 						</Button>
 					)}
 					{step === "objects" && (
@@ -871,12 +861,12 @@ export function OntologySetupDialog({
 							onClick={() => setStep("relationships")}
 							disabled={!validObjects}
 						>
-							Review <ArrowRight className="h-4 w-4" />
+							{t('review', 'Review')} <ArrowRight className="h-4 w-4" />
 						</Button>
 					)}
 					{step === "relationships" && (
 						<Button onClick={() => setStep("publish")}>
-							Continue <ArrowRight className="h-4 w-4" />
+							{t('continue', 'Continue')} <ArrowRight className="h-4 w-4" />
 						</Button>
 					)}
 					{step === "publish" && (
@@ -889,7 +879,7 @@ export function OntologySetupDialog({
 							) : (
 								<Check className="h-4 w-4" />
 							)}
-							Create ontology
+							{t('createOntology', 'Create ontology')}
 						</Button>
 					)}
 				</DialogFooter>
@@ -912,6 +902,7 @@ function EdgeReviewCard({
 	onEdgeChange,
 	onRemove,
 }: Readonly<EdgeReviewCardProps>) {
+	const { t } = useTranslation("settings");
 	const containmentId = `edge-containment-${edge.id ?? edgeKey(edge)}`;
 	return (
 		<div className="space-y-3 rounded-xl border p-4">
@@ -925,14 +916,14 @@ function EdgeReviewCard({
 					variant="ghost"
 					size="icon"
 					onClick={() => onRemove(edge)}
-					title="Remove relationship"
+					title={t('removeRelationship', 'Remove relationship')}
 				>
 					<Trash2 className="h-4 w-4" />
 				</Button>
 			</div>
 			<div className="grid gap-3 sm:grid-cols-2">
 				<div className="space-y-1.5">
-					<Label>Relationship label</Label>
+					<Label>{t('relationshipLabel', 'Relationship label')}</Label>
 					<Input
 						value={edge.label}
 						onChange={(event) =>
@@ -942,10 +933,8 @@ function EdgeReviewCard({
 					/>
 				</div>
 				<div className="space-y-1.5">
-					<Label>Join</Label>
-					<p className="rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">
-						{edge.src_column} → {edge.dst_column}
-					</p>
+					<Label>{t('join', 'Join')}</Label>
+					<p className="rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">{`${edge.src_column} → ${edge.dst_column}`}</p>
 				</div>
 			</div>
 			<div className="flex items-center gap-2">
@@ -957,7 +946,7 @@ function EdgeReviewCard({
 					}
 				/>
 				<Label htmlFor={containmentId} className="text-xs font-medium">
-					Hierarchy (parent → child)
+					{t('hierarchyParentChild', 'Hierarchy (parent → child)')}
 				</Label>
 			</div>
 		</div>

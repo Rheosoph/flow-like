@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import type { TComboboxInputElement, TMentionElement } from "platejs";
@@ -81,6 +82,7 @@ const onSelectItem = getMentionOnSelectItem();
 export function MentionInputElement(
 	props: PlateElementProps<TComboboxInputElement>,
 ) {
+	const { t } = useTranslation("common");
 	const { editor, element } = props;
 	const [search, setSearch] = React.useState("");
 	const items = useMentionItems();
@@ -99,7 +101,7 @@ export function MentionInputElement(
 				</span>
 
 				<InlineComboboxContent className="my-1.5">
-					<InlineComboboxEmpty>No results</InlineComboboxEmpty>
+					<InlineComboboxEmpty>{t('noResults2', 'No results')}</InlineComboboxEmpty>
 
 					<InlineComboboxGroup>
 						{items.map((item) => (

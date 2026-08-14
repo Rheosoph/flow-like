@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Loader2, Send, Wand2, X } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useA2UIGeneration } from "../../lib/flowpilot/use-a2ui-generation";
@@ -23,6 +24,7 @@ export function FlowPilotAction({
 	onGenerate,
 	className,
 }: FlowPilotActionProps) {
+	const { t } = useTranslation("flow");
 	const [isOpen, setIsOpen] = useState(false);
 	const [prompt, setPrompt] = useState("");
 	const { selection, components, updateComponent, addComponent, getComponent } =
@@ -112,11 +114,11 @@ export function FlowPilotAction({
 		if (!prompt.trim()) return;
 
 		const context = hasSelection
-			? `Modify the following selected component(s):\n${JSON.stringify(selectedComponents, null, 2)}\n\nUser request: ${prompt}`
+			? t('modifyTheFollowingSelectedComponentsValUserRequestPrompt', "Modify the following selected component(s): {{val}} User request: {{prompt}}", { val: JSON.stringify(selectedComponents, null, 2), prompt })
 			: prompt;
 
 		await generate(context);
-	}, [prompt, hasSelection, selectedComponents, generate]);
+	}, [prompt, hasSelection, selectedComponents, generate, t]);
 
 	const handleKeyDown = useCallback(
 		(e: React.KeyboardEvent) => {
@@ -139,13 +141,13 @@ export function FlowPilotAction({
 							className={cn("h-7 px-2 gap-1.5", className)}
 						>
 							<Wand2 className="h-4 w-4" />
-							<span className="text-xs">FlowPilot</span>
+							<span className="text-xs">{t('flowpilot', 'FlowPilot')}</span>
 						</Button>
 					</PopoverTrigger>
 				</TooltipTrigger>
 				<TooltipContent side="bottom">
-					<p className="font-medium">Edit with FlowPilot</p>
-					<p className="text-xs text-muted-foreground">⌘⇧F</p>
+					<p className="font-medium">{t('editWithFlowpilot', 'Edit with FlowPilot')}</p>
+					<p className="text-xs text-muted-foreground">{`⌘⇧F`}</p>
 				</TooltipContent>
 			</Tooltip>
 			<PopoverContent className="w-80 p-3" align="end">
@@ -153,12 +155,10 @@ export function FlowPilotAction({
 					<div className="space-y-1.5">
 						<Label className="text-xs font-medium flex items-center gap-1.5">
 							<Wand2 className="h-3.5 w-3.5" />
-							{hasSelection ? "Edit Selection" : "Generate UI"}
+							{hasSelection ? t('editSelection', 'Edit Selection') : "Generate UI"}
 						</Label>
 						{hasSelection && (
-							<p className="text-xs text-muted-foreground">
-								{selection.componentIds.length} component
-								{selection.componentIds.length !== 1 ? "s" : ""} selected
+							<p className="text-xs text-muted-foreground">{t('countComponentsSelected', { defaultValue_one: '{{count}} component selected', defaultValue_other: '{{count}} components selected', count: selection.componentIds.length })}
 							</p>
 						)}
 					</div>
@@ -167,8 +167,8 @@ export function FlowPilotAction({
 						<Input
 							placeholder={
 								hasSelection
-									? "e.g., Make this button larger and blue..."
-									: "e.g., Create a login form with email and password..."
+									? t('egMakeThisButtonLargerAndBlue', 'e.g., Make this button larger and blue...')
+									: t('egCreateALoginFormWithEmailAndPassword', 'e.g., Create a login form with email and password...')
 							}
 							value={prompt}
 							onChange={(e) => setPrompt(e.target.value)}
@@ -208,7 +208,7 @@ export function FlowPilotAction({
 						<div className="space-y-1.5">
 							<div className="flex items-center justify-between text-xs">
 								<span className="text-muted-foreground">Generating...</span>
-								<span className="text-muted-foreground">{progress}%</span>
+								<span className="text-muted-foreground">{`${progress}%`}</span>
 							</div>
 							<div className="h-1.5 bg-muted rounded-full overflow-hidden">
 								<div
@@ -222,11 +222,11 @@ export function FlowPilotAction({
 					{error && <p className="text-xs text-destructive">{error}</p>}
 
 					<div className="text-xs text-muted-foreground border-t pt-2">
-						<p className="font-medium mb-1">Tips:</p>
+						<p className="font-medium mb-1">{t('tips', 'Tips:')}</p>
 						<ul className="space-y-0.5 list-disc list-inside">
-							<li>Select components first to edit them</li>
-							<li>Be specific about colors, sizes, and layout</li>
-							<li>Mention Tailwind classes for precise styling</li>
+							<li>{t('selectComponentsFirstToEditThem', 'Select components first to edit them')}</li>
+							<li>{t('beSpecificAboutColorsSizesAndLayout', 'Be specific about colors, sizes, and layout')}</li>
+							<li>{t('mentionTailwindClassesForPreciseStyling', 'Mention Tailwind classes for precise styling')}</li>
 						</ul>
 					</div>
 				</div>

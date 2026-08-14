@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { FolderOpen, ImageIcon, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
@@ -139,9 +140,10 @@ export function AssetPicker({
 	value,
 	onChange,
 	accept = "all",
-	placeholder = "Select asset...",
+	placeholder = i18next.t('selectAsset', 'Select asset...'),
 	disabled = false,
 }: AssetPickerProps) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const [open, setOpen] = useState(false);
 	const [prefix, setPrefix] = useState("");
@@ -245,7 +247,7 @@ export function AssetPicker({
 			>
 				<DialogContent className="max-w-md">
 					<DialogHeader>
-						<DialogTitle>Select Asset</DialogTitle>
+						<DialogTitle>{t('selectAsset2', 'Select Asset')}</DialogTitle>
 					</DialogHeader>
 
 					{/* Breadcrumbs */}
@@ -255,7 +257,7 @@ export function AssetPicker({
 							onClick={() => setPrefix("")}
 							className="text-muted-foreground hover:text-foreground"
 						>
-							Root
+							{t('root', 'Root')}
 						</button>
 						{breadcrumbParts.map((part, index) => (
 							<div key={part} className="flex items-center gap-1">
@@ -285,7 +287,7 @@ export function AssetPicker({
 									className="flex items-center gap-2 w-full p-2 rounded-md text-left text-sm hover:bg-accent"
 								>
 									<FolderOpen className="h-4 w-4 text-muted-foreground" />
-									<span className="text-muted-foreground">..</span>
+									<span className="text-muted-foreground">{`..`}</span>
 								</button>
 							)}
 							{items.isLoading ? (
@@ -294,7 +296,7 @@ export function AssetPicker({
 								</div>
 							) : filteredItems.length === 0 ? (
 								<div className="p-4 text-center text-sm text-muted-foreground">
-									No assets found
+									{t('noAssetsFound', 'No assets found')}
 								</div>
 							) : (
 								filteredItems.map((item) => (

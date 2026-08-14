@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "../../lib";
 
@@ -140,6 +141,7 @@ function isHint(tip: Tip): boolean {
 }
 
 function TipCard({ tip, transitioning }: { tip: Tip; transitioning: boolean }) {
+	const { t } = useTranslation("common");
 	const hint = isHint(tip);
 
 	return (
@@ -161,7 +163,7 @@ function TipCard({ tip, transitioning }: { tip: Tip; transitioning: boolean }) {
 					hint ? "text-primary/60" : "text-muted-foreground/40",
 				)}
 			>
-				{hint ? "Did you know?" : "Tip"}
+				{hint ? t('didYouKnow', 'Did you know?') : "Tip"}
 			</span>
 
 			{/* body */}
@@ -182,6 +184,7 @@ export function LoadingScreen({
 	progress = 0,
 	className,
 }: Readonly<LoadingScreenProps>) {
+	const { t } = useTranslation("common");
 	const clamped = Math.min(Math.max(progress, 0), 100);
 
 	const allCards = useMemo(() => [...TIPS, ...HINTS], []);
@@ -226,7 +229,7 @@ export function LoadingScreen({
 						<p className="text-sm text-foreground/70">{message}</p>
 					) : (
 						<p className="text-sm text-muted-foreground/60">
-							Loading your workspace
+							{t('loadingYourWorkspace', 'Loading your workspace')}
 						</p>
 					)}
 					{clamped > 0 && (
@@ -256,62 +259,11 @@ export function LoadingScreen({
 				style={{ animationDelay: "0.3s" }}
 			>
 				<span className="text-[10px] tracking-widest uppercase text-muted-foreground/30">
-					Flow Like
+					{t('flowLike', 'Flow Like')}
 				</span>
 			</div>
 
-			<style>{`
-				.ls-enter {
-					animation: ls-enter 0.8s ease-out both;
-				}
-				@keyframes ls-enter {
-					from { opacity: 0; transform: translateY(10px); }
-					to   { opacity: 1; transform: translateY(0); }
-				}
-
-				/* breathing outer ring */
-				.ls-breathe {
-					animation: ls-breathe 4s ease-in-out infinite;
-				}
-				@keyframes ls-breathe {
-					0%, 100% { transform: scale(1); opacity: 0.35; }
-					50%      { transform: scale(1.12); opacity: 0.12; }
-				}
-
-				/* orbiting dot */
-				.ls-orbit {
-					animation: ls-orbit 6s linear infinite;
-				}
-				@keyframes ls-orbit {
-					from { transform: rotate(0deg); }
-					to   { transform: rotate(360deg); }
-				}
-
-				/* svg path draw */
-				.ls-draw {
-					stroke-dasharray: 48;
-					stroke-dashoffset: 48;
-					animation: ls-draw 2.8s ease-in-out infinite;
-				}
-				.ls-draw--reverse {
-					animation-direction: reverse;
-				}
-				@keyframes ls-draw {
-					0%   { stroke-dashoffset: 48; }
-					50%  { stroke-dashoffset: 0; }
-					100% { stroke-dashoffset: -48; }
-				}
-
-				/* center dot pulse */
-				.ls-center-dot {
-					transform-origin: center;
-					animation: ls-center 2.8s ease-in-out infinite;
-				}
-				@keyframes ls-center {
-					0%, 100% { transform: scale(1); opacity: 0.6; }
-					50%      { transform: scale(1.3); opacity: 1; }
-				}
-			`}</style>
+			<style>{`.ls-enter { animation: ls-enter 0.8s ease-out both; } @keyframes ls-enter { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } } /* breathing outer ring */ .ls-breathe { animation: ls-breathe 4s ease-in-out infinite; } @keyframes ls-breathe { 0%, 100% { transform: scale(1); opacity: 0.35; } 50% { transform: scale(1.12); opacity: 0.12; } } /* orbiting dot */ .ls-orbit { animation: ls-orbit 6s linear infinite; } @keyframes ls-orbit { from { transform: rotate(0deg); } to { transform: rotate(360deg); } } /* svg path draw */ .ls-draw { stroke-dasharray: 48; stroke-dashoffset: 48; animation: ls-draw 2.8s ease-in-out infinite; } .ls-draw--reverse { animation-direction: reverse; } @keyframes ls-draw { 0% { stroke-dashoffset: 48; } 50% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: -48; } } /* center dot pulse */ .ls-center-dot { transform-origin: center; animation: ls-center 2.8s ease-in-out infinite; } @keyframes ls-center { 0%, 100% { transform: scale(1); opacity: 0.6; } 50% { transform: scale(1.3); opacity: 1; } }`}</style>
 		</div>
 	);
 }

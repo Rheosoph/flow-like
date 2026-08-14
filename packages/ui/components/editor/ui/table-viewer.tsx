@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	DndContext,
 	type DragEndEvent,
@@ -98,7 +99,7 @@ async function downloadCSV(data: string[][], filename = "table.csv") {
 
 			const filePath = await save({
 				canCreateDirectories: true,
-				title: "Save CSV",
+				title: i18next.t('saveCsv', 'Save CSV'),
 				defaultPath: filename,
 				filters: [{ name: "CSV", extensions: ["csv"] }],
 			});
@@ -206,6 +207,7 @@ function SortableColumnItem({
 	isHidden: boolean;
 	onToggleVisibility: () => void;
 }) {
+	const { t } = useTranslation("common");
 	const {
 		attributes,
 		listeners,
@@ -245,9 +247,9 @@ function SortableColumnItem({
 			<label
 				htmlFor={`col-visibility-${colIdx}`}
 				className="text-xs flex-1 truncate cursor-pointer"
-				title={header || `Column ${colIdx + 1}`}
+				title={header || t('columnVal', 'Column {{val}}', { val: colIdx + 1 })}
 			>
-				{header || `Column ${colIdx + 1}`}
+				{header || t('columnVal', 'Column {{val}}', { val: colIdx + 1 })}
 			</label>
 			{isHidden ? (
 				<EyeOffIcon className="h-3 w-3 text-muted-foreground shrink-0" />
@@ -272,6 +274,7 @@ function SortableHeaderCell({
 	sortDirection: SortDirection;
 	onSort: (colIdx: number) => void;
 }) {
+	const { t } = useTranslation("common");
 	const {
 		attributes,
 		listeners,
@@ -305,10 +308,10 @@ function SortableHeaderCell({
 				/>
 				<span
 					className="truncate max-w-[200px] cursor-pointer"
-					title={header || `Column ${colIdx + 1}`}
+					title={header || t('columnVal', 'Column {{val}}', { val: colIdx + 1 })}
 					onClick={() => onSort(colIdx)}
 				>
-					{header || `Column ${colIdx + 1}`}
+					{header || t('columnVal', 'Column {{val}}', { val: colIdx + 1 })}
 				</span>
 				{sortColumn === colIdx ? (
 					sortDirection === "asc" ? (
@@ -327,6 +330,7 @@ function SortableHeaderCell({
 }
 
 export function TableViewer({ data, children, className }: TableViewerProps) {
+	const { t } = useTranslation("common");
 	const [copied, setCopied] = React.useState(false);
 	const [searchQuery, setSearchQuery] = React.useState("");
 	const [sortColumn, setSortColumn] = React.useState<number | null>(null);
@@ -604,7 +608,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 							className="h-7 px-2 text-xs"
 						>
 							<FilterIcon className="h-3 w-3 mr-1" />
-							Filter
+							{t('filter', 'Filter')}
 							{columnFilters.length > 0 && (
 								<span className="ml-1 bg-primary text-primary-foreground rounded-full px-1.5 text-[10px]">
 									{columnFilters.length}
@@ -615,12 +619,12 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 					<PopoverContent className="w-64 p-3" align="start">
 						<div className="space-y-2">
 							<div className="text-xs font-medium text-muted-foreground mb-2">
-								Filter by column
+								{t('filterByColumn', 'Filter by column')}
 							</div>
 							{headers.map((header, idx) => (
 								<div key={idx} className="flex items-center gap-2">
 									<span className="text-xs w-20 truncate" title={header}>
-										{header || `Col ${idx + 1}`}
+										{header || t('colVal', 'Col {{val}}', { val: idx + 1 })}
 									</span>
 									<Input
 										type="text"
@@ -646,7 +650,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 							className="h-7 px-2 text-xs"
 						>
 							<ColumnsIcon className="h-3 w-3 mr-1" />
-							Columns
+							{t('columns', 'Columns')}
 							{hiddenColumns.size > 0 && (
 								<span className="ml-1 bg-muted-foreground text-muted rounded-full px-1.5 text-[10px]">
 									{headers.length - hiddenColumns.size}/{headers.length}
@@ -658,7 +662,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 						<div className="space-y-1">
 							<div className="flex items-center justify-between mb-2">
 								<span className="text-xs font-medium text-muted-foreground">
-									Show/hide & reorder
+									{t('showhideReorder', 'Show/hide & reorder')}
 								</span>
 								{hasColumnChanges && (
 									<Button
@@ -667,7 +671,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 										className="h-5 px-1 text-[10px]"
 										onClick={resetColumns}
 									>
-										Reset
+										{t('reset', 'Reset')}
 									</Button>
 								)}
 							</div>
@@ -705,11 +709,11 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 							onClick={() => setWrapCells((prev) => !prev)}
 						>
 							<WrapTextIcon className="h-3 w-3 mr-1" />
-							Wrap
+							{t('wrap', 'Wrap')}
 						</Button>
 					</TooltipTrigger>
 					<TooltipContent side="top">
-						{wrapCells ? "Truncate long cells" : "Show full text in every cell"}
+						{wrapCells ? t('truncateLongCells', 'Truncate long cells') : t('showFullTextInEveryCell', 'Show full text in every cell')}
 					</TooltipContent>
 				</Tooltip>
 
@@ -722,7 +726,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 						onClick={clearFilters}
 					>
 						<XIcon className="h-3 w-3 mr-1" />
-						Clear
+						{t('clear', 'Clear')}
 					</Button>
 				)}
 
@@ -730,9 +734,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 
 				{/* Result count */}
 				{hasActiveFilters && (
-					<span className="text-xs text-muted-foreground">
-						{resultCount} of {totalCount} rows
-					</span>
+					<span className="text-xs text-muted-foreground">{t('resultcountOfTotalcountRows', '{{resultCount}} of {{totalCount}} rows', { resultCount, totalCount })}</span>
 				)}
 
 				{/* Copy */}
@@ -751,7 +753,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 							)}
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent side="top">Copy as Markdown</TooltipContent>
+					<TooltipContent side="top">{t('copyAsMarkdown', 'Copy as Markdown')}</TooltipContent>
 				</Tooltip>
 
 				{/* Download */}
@@ -766,7 +768,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 							<DownloadIcon className="h-3.5 w-3.5" />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent side="top">Download CSV</TooltipContent>
+					<TooltipContent side="top">{t('downloadCsv', 'Download CSV')}</TooltipContent>
 				</Tooltip>
 			</div>
 
@@ -812,7 +814,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 										colSpan={visibleColumns.length || 1}
 										className="text-center py-8 text-muted-foreground text-sm"
 									>
-										{hasActiveFilters ? "No matching rows" : "No data"}
+										{hasActiveFilters ? t('noMatchingRows', 'No matching rows') : t('noData', 'No data')}
 									</td>
 								</tr>
 							) : (
@@ -830,7 +832,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 												cell.includes("![") || cell.includes("](");
 											const isLongText =
 												cell.length > 100 && !hasMarkdownContent;
-											const cellKey = `${colIdx}\u0000${cell}`;
+											const cellKey = `${colIdx} ${cell}`;
 											// Cells that already show everything need no toggle
 											const isToggleable =
 												!hasMarkdownContent && !isLongText && !wrapCells;
@@ -861,8 +863,8 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 															onClick={() => toggleCellExpanded(cellKey)}
 															title={
 																showsFullText
-																	? "Click to collapse"
-																	: `${cell}\n\nClick to expand`
+																	? t('clickToCollapse', 'Click to collapse')
+																	: t('cellClickToExpand', "{{cell}} Click to expand", { cell })
 															}
 															className={cn(
 																"block w-full cursor-pointer text-left",
@@ -896,7 +898,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 					onClick={() => setIsExpanded(!isExpanded)}
 					className="w-full mt-1 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
 				>
-					{isExpanded ? "Show less" : `Show more (${rows.length} rows)`}
+					{isExpanded ? "Show less" : t('showMoreLengthRows', 'Show more ({{length}} rows)', { length: rows.length })}
 				</button>
 			)}
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { cn } from "../../../lib/utils";
 import { Checkbox } from "../../ui/checkbox";
 import { Label } from "../../ui/label";
@@ -21,6 +22,7 @@ export function A2UICheckbox({
 	componentId,
 	surfaceId,
 }: ComponentProps<CheckboxComponent>) {
+	const { t } = useTranslation("common");
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const checked = useResolved<boolean>(component.checked);

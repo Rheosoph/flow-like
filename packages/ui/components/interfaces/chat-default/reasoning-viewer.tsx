@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { BrainCircuit, ChevronDown, ChevronUp } from "lucide-react";
 import { Suspense, lazy, useMemo, useState } from "react";
 import { cn } from "../../../lib";
@@ -84,6 +85,7 @@ export function ReasoningViewer({
 	defaultExpanded = false,
 	compact = false,
 }: ReasoningViewerProps) {
+	const { t } = useTranslation("chat");
 	const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 	const [shouldRender, setShouldRender] = useState(defaultExpanded);
 
@@ -120,7 +122,7 @@ export function ReasoningViewer({
 				<span
 					className={cn("font-medium", compact ? "text-[11px]" : "text-xs")}
 				>
-					Reasoning
+					{t('reasoning', 'Reasoning')}
 				</span>
 				{isExpanded ? (
 					<ChevronUp className="size-3.5" />
@@ -153,7 +155,7 @@ export function ReasoningViewer({
 						<Suspense
 							fallback={
 								<div className="flex items-center justify-center py-4 text-muted-foreground">
-									<div className="animate-pulse">Loading…</div>
+									<div className="animate-pulse">{t('loading', 'Loading…')}</div>
 								</div>
 							}
 						>

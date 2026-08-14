@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { Handle, Position } from "@xyflow/react";
 import { EllipsisVerticalIcon, GripIcon, ListIcon } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -118,6 +119,7 @@ export function FlowPreviewPin({
 	node: INode;
 	onPinRemove: (pin: IPin) => Promise<void>;
 }>) {
+	const { t } = useTranslation("flow");
 	if (pin.dynamic)
 		return (
 			<ContextMenu>
@@ -125,13 +127,13 @@ export function FlowPreviewPin({
 					<FlowPinInner pin={pin} index={index} boardId={boardId} node={node} />
 				</ContextMenuTrigger>
 				<ContextMenuContent>
-					<ContextMenuLabel>Pin Actions</ContextMenuLabel>
+					<ContextMenuLabel>{t('pinActions', 'Pin Actions')}</ContextMenuLabel>
 					<ContextMenuItem
 						onClick={() => {
 							onPinRemove(pin);
 						}}
 					>
-						Remove Pin
+						{t('removePin2', 'Remove Pin')}
 					</ContextMenuItem>
 				</ContextMenuContent>
 			</ContextMenu>

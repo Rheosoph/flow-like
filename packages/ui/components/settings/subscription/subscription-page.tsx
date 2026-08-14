@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Crown } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import type { IPricingResponse } from "../../../state/backend-state/user-state";
@@ -21,6 +22,7 @@ export function SubscriptionPage({
 	onManageBilling,
 	isPremiumEnabled = true,
 }: Readonly<SubscriptionPageProps>) {
+	const { t } = useTranslation("settings");
 	const [loadingTier, setLoadingTier] = useState<string | null>(null);
 
 	const handleUpgrade = useCallback(
@@ -52,9 +54,9 @@ export function SubscriptionPage({
 			<div className="container max-w-4xl mx-auto p-6">
 				<div className="text-center py-12">
 					<Crown className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-					<h2 className="text-2xl font-bold mb-2">Premium Features Disabled</h2>
+					<h2 className="text-2xl font-bold mb-2">{t('premiumFeaturesDisabled', 'Premium Features Disabled')}</h2>
 					<p className="text-muted-foreground">
-						Premium subscription features are not available on this instance.
+						{t('premiumSubscriptionFeaturesAreNotAvailableOnThisInstance', 'Premium subscription features are not available on this instance.')}
 					</p>
 				</div>
 			</div>
@@ -83,11 +85,11 @@ export function SubscriptionPage({
 		<div className="container max-w-6xl mx-auto p-6 space-y-8">
 			<div className="text-center space-y-2">
 				<h1 className="text-3xl font-bold tracking-tight">
-					{pricing.conversion?.headline ?? "Choose your plan"}
+					{pricing.conversion?.headline ?? t('chooseYourPlan', 'Choose your plan')}
 				</h1>
 				<p className="text-muted-foreground max-w-2xl mx-auto">
 					{pricing.conversion?.subheadline ??
-						"Unlock more projects, premium AI models and faster cloud executions. Every plan includes the full platform."}
+						t('unlockMoreProjectsPremiumAiModelsAndFasterCloudExecutionsEveryPlanIncludesTheFullPlatform', 'Unlock more projects, premium AI models and faster cloud executions. Every plan includes the full platform.')}
 				</p>
 			</div>
 
@@ -112,10 +114,10 @@ export function SubscriptionPage({
 					<Separator />
 					<div className="flex flex-col items-center gap-4">
 						<p className="text-sm text-muted-foreground">
-							Need to update your payment method or cancel your subscription?
+							{t('needToUpdateYourPaymentMethodOrCancelYourSubscription', 'Need to update your payment method or cancel your subscription?')}
 						</p>
 						<Button variant="outline" onClick={onManageBilling}>
-							Manage Billing
+							{t('manageBilling', 'Manage Billing')}
 						</Button>
 					</div>
 				</>

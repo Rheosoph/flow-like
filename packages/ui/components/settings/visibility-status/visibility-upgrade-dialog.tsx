@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { ArrowRightIcon, LockIcon } from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
@@ -46,6 +47,7 @@ export function VisibilityUpgradeDialog({
 	target,
 	onChanged,
 }: Readonly<VisibilityUpgradeDialogProps>) {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const [pending, setPending] = useState(false);
@@ -60,7 +62,7 @@ export function VisibilityUpgradeDialog({
 			await invalidate(backend.appState.getApp, [appId]);
 			await invalidate(backend.appState.getApps, []);
 			await onChanged?.(target);
-			toast.success(`Visibility changed to ${targetMeta.title}`, {
+			toast.success(t('visibilityChangedToTitle', 'Visibility changed to {{title}}', { title: targetMeta.title }), {
 				icon: <targetMeta.Icon className="w-4 h-4" />,
 			});
 			onOpenChange(false);
@@ -68,7 +70,7 @@ export function VisibilityUpgradeDialog({
 			toast.error(
 				error instanceof Error
 					? error.message
-					: "Could not change the visibility",
+					: t('couldNotChangeTheVisibility', 'Could not change the visibility'),
 			);
 		} finally {
 			setPending(false);
@@ -97,9 +99,7 @@ export function VisibilityUpgradeDialog({
 						<div className="p-2 rounded-full bg-primary/10">
 							<LockIcon className="h-5 w-5 text-primary" />
 						</div>
-						<AlertDialogTitle className="text-left">
-							{feature} needs {targetMeta.title}
-						</AlertDialogTitle>
+						<AlertDialogTitle className="text-left">{t('featureNeedsTitle', '{{feature}} needs {{title}}', { feature, title: targetMeta.title })}</AlertDialogTitle>
 					</div>
 					<AlertDialogDescription className="text-left text-muted-foreground">
 						{reason}
@@ -114,9 +114,8 @@ export function VisibilityUpgradeDialog({
 						<div className={`w-2 h-2 rounded-full ${targetMeta.color}`} />
 						<span className="text-sm font-medium">{targetMeta.title}</span>
 					</div>
-					<p className="text-xs text-muted-foreground">
-						{targetMeta.description}. You can switch back to {currentMeta.title}{" "}
-						at any time — that removes everyone you invited.
+					<p className="text-xs text-muted-foreground">{`${targetMeta.description}. You can switch back to ${currentMeta.title}`}{" "}
+						{t('atAnyTimeThatRemovesEveryoneYouInvited', 'at any time — that removes everyone you invited.')}
 					</p>
 				</div>
 
@@ -127,14 +126,14 @@ export function VisibilityUpgradeDialog({
 						disabled={pending}
 						onClick={() => onOpenChange(false)}
 					>
-						Cancel
+						{t('cancel', 'Cancel')}
 					</Button>
 					<Button
 						className="w-full sm:w-auto"
 						disabled={pending}
 						onClick={confirm}
 					>
-						{pending ? "Switching…" : `Switch to ${targetMeta.title}`}
+						{pending ? "Switching…" : t('switchToTitle', 'Switch to {{title}}', { title: targetMeta.title })}
 					</Button>
 				</AlertDialogFooter>
 			</AlertDialogContent>

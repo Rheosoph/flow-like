@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import {
 	CheckCircle2,
@@ -183,7 +184,7 @@ function getStepStatusIcon(status: ExecutionStepStatus) {
 }
 
 function getStepStatusColor(status: ExecutionStepStatus, isActive: boolean) {
-	if (isActive) return "border-primary/70 bg-primary/20 shadow-sm";
+	if (isActive) return `border-primary/70 bg-primary/20 shadow-sm`;
 	switch (status) {
 		case "planned":
 			return "border-muted-foreground/30 bg-muted/20";
@@ -201,6 +202,7 @@ function ExecutionSteps({
 	currentStepId,
 	isComplete,
 }: { steps: IExecutionStep[]; currentStepId?: string; isComplete?: boolean }) {
+	const { t } = useTranslation("interfaces");
 	const [isExpanded, setIsExpanded] = useState(true);
 	const [expandedSteps, setExpandedSteps] = useState<Set<string>>(
 		new Set(currentStepId ? [currentStepId] : []),
@@ -253,12 +255,10 @@ function ExecutionSteps({
 					) : (
 						<ListTodo className="w-4 h-4 text-primary" />
 					)}
-					Progress
+					{t('progress', 'Progress')}
 				</span>
 				<div className="flex items-center gap-2">
-					<span className="text-xs text-muted-foreground">
-						{completedCount} / {steps.length} completed
-					</span>
+					<span className="text-xs text-muted-foreground">{t('completedcountLengthCompleted', '{{completedCount}} / {{length}} completed', { completedCount, length: steps.length })}</span>
 					{isExpanded ? (
 						<ChevronDown className="w-4 h-4 text-muted-foreground" />
 					) : (
@@ -299,7 +299,7 @@ function ExecutionSteps({
 											<span className="text-sm font-medium">{step.title}</span>
 											{isActive && (
 												<span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/20 text-primary font-medium">
-													Active
+													{t('active', 'Active')}
 												</span>
 											)}
 										</div>
@@ -350,6 +350,7 @@ interface StreamingOutputProps {
 }
 
 function StreamingOutput({ content, isStreaming }: StreamingOutputProps) {
+	const { t } = useTranslation("interfaces");
 	if (!content && !isStreaming) return null;
 
 	return (
@@ -357,7 +358,7 @@ function StreamingOutput({ content, isStreaming }: StreamingOutputProps) {
 			<div className="flex items-center justify-between mb-3">
 				<span className="text-sm font-medium flex items-center gap-2">
 					<Sparkles className="h-4 w-4 text-primary" />
-					Response
+					{t('response', 'Response')}
 				</span>
 				{isStreaming && (
 					<span className="text-xs text-muted-foreground flex items-center gap-2">
@@ -443,6 +444,7 @@ function getAttachmentName(attachment: IStreamAttachment): string {
 function AttachmentsDisplay({
 	attachments,
 }: { attachments: IStreamAttachment[] }) {
+	const { t } = useTranslation("interfaces");
 	if (!attachments || attachments.length === 0) return null;
 
 	const handleAttachmentClick = (attachment: IStreamAttachment) => {
@@ -453,7 +455,7 @@ function AttachmentsDisplay({
 				const newWindow = window.open();
 				if (newWindow) {
 					newWindow.document.write(
-						`<img src="${url}" style="max-width: 100%; height: auto;" />`,
+						t('imgSrcurlStylemaxwidth100HeightAuto', '<img src="{{url}}" style="max-width: 100%; height: auto;" />', { url }),
 					);
 				}
 			} else {
@@ -480,10 +482,8 @@ function AttachmentsDisplay({
 		<div className="rounded-lg border bg-muted/30 p-4 animate-in fade-in duration-200">
 			<div className="flex items-center gap-2 mb-3 text-sm font-medium">
 				<Paperclip className="h-4 w-4 text-primary" />
-				Attachments
-				<span className="text-xs text-muted-foreground">
-					({attachments.length})
-				</span>
+				{t('attachments', 'Attachments')}
+				<span className="text-xs text-muted-foreground">{`(${attachments.length})`}</span>
 			</div>
 			<div className="space-y-4">
 				{/* Images Grid */}
@@ -602,10 +602,10 @@ function AttachmentsDisplay({
 										{size && (
 											<p className="text-xs text-muted-foreground mt-1">
 												{size > 1024 * 1024
-													? `${(size / (1024 * 1024)).toFixed(1)} MB`
+													? t('valMb', '{{val}} MB', { val: (size / (1024 * 1024)).toFixed(1) })
 													: size > 1024
-														? `${(size / 1024).toFixed(1)} KB`
-														: `${size} bytes`}
+														? t('valKb', '{{val}} KB', { val: (size / 1024).toFixed(1) })
+														: t('sizeBytes', '{{size}} bytes', { size })}
 											</p>
 										)}
 									</div>
@@ -625,6 +625,7 @@ function AttachmentsDisplay({
 // ============================================================================
 
 function CollapsibleResult({ outputData }: { outputData: unknown }) {
+	const { t } = useTranslation("interfaces");
 	const [isExpanded, setIsExpanded] = useState(false);
 
 	return (
@@ -636,7 +637,7 @@ function CollapsibleResult({ outputData }: { outputData: unknown }) {
 			>
 				<div className="flex items-center gap-2 text-sm font-medium">
 					<CheckCircle2 className="h-4 w-4 text-green-500" />
-					Result
+					{t('result', 'Result')}
 				</div>
 				{isExpanded ? (
 					<ChevronDown className="h-4 w-4 text-muted-foreground" />
@@ -672,6 +673,7 @@ export function GenericEventFormInterface({
 	config,
 	toolbarRef,
 }: Readonly<IUseInterfaceProps>) {
+	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
 	const executionEngine = useExecutionEngine();
 	const router = useRouter();
@@ -882,7 +884,7 @@ export function GenericEventFormInterface({
 						size="sm"
 						className="rounded-full px-4 gap-2 font-medium"
 					>
-						Navigate
+						{t('navigate', 'Navigate')}
 						<ChevronDownIcon className="h-3.5 w-3.5 opacity-60" />
 					</Button>
 				</DropdownMenuTrigger>
@@ -1156,7 +1158,7 @@ export function GenericEventFormInterface({
 											: [
 													{
 														id: "response-reasoning",
-														title: "Thinking",
+														title: t('thinking', 'Thinking'),
 														status:
 															ev.event_type === "chat_out"
 																? "done"
@@ -1334,7 +1336,11 @@ export function GenericEventFormInterface({
 												/>
 												{files[key]?.length > 0 && (
 													<p className="text-xs text-muted-foreground">
-														{files[key].length} file(s) selected
+														{t('countFilesSelected', {
+															defaultValue_one: '{{count}} file selected',
+															defaultValue_other: '{{count}} files selected',
+															count: files[key].length,
+														})}
 													</p>
 												)}
 												{help && (
@@ -1370,7 +1376,7 @@ export function GenericEventFormInterface({
 												<Input
 													type="number"
 													step={pin.data_type === "Float" ? "any" : "1"}
-													placeholder={`Enter ${label.toLowerCase()}`}
+													placeholder={t('enterVal', 'Enter {{val}}', { val: label.toLowerCase() })}
 													value={String(values[key] ?? "")}
 													onChange={(e) => setFieldValue(key, e.target.value)}
 												/>
@@ -1405,7 +1411,7 @@ export function GenericEventFormInterface({
 												<Textarea
 													value={String(values[key] ?? "")}
 													onChange={(e) => setFieldValue(key, e.target.value)}
-													placeholder="Enter JSON value"
+													placeholder={t('enterJsonValue', 'Enter JSON value')}
 													className="font-mono text-sm min-h-24"
 												/>
 												{help && (
@@ -1422,7 +1428,7 @@ export function GenericEventFormInterface({
 												<Label className="text-sm font-medium">{label}</Label>
 												<Input
 													type="text"
-													placeholder={`Enter ${label.toLowerCase()}`}
+													placeholder={t('enterVal', 'Enter {{val}}', { val: label.toLowerCase() })}
 													value={String(values[key] ?? "")}
 													onChange={(e) => setFieldValue(key, e.target.value)}
 												/>
@@ -1455,7 +1461,7 @@ export function GenericEventFormInterface({
 							) : (
 								<>
 									<Play className="h-4 w-4" />
-									Send
+									{t('send', 'Send')}
 								</>
 							)}
 						</Button>
@@ -1467,7 +1473,7 @@ export function GenericEventFormInterface({
 								className="gap-2"
 							>
 								<RotateCcw className="h-4 w-4" />
-								Reset
+								{t('reset', 'Reset')}
 							</Button>
 						)}
 					</div>
@@ -1478,7 +1484,7 @@ export function GenericEventFormInterface({
 								<XCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
 								<div>
 									<p className="text-sm font-medium text-destructive">
-										Something went wrong
+										{t('somethingWentWrong', 'Something went wrong')}
 									</p>
 									<p className="text-sm text-destructive/80 mt-1">{error}</p>
 								</div>
@@ -1525,10 +1531,10 @@ export function GenericEventFormInterface({
 								<CheckCircle2 className="h-6 w-6 text-green-500" />
 							</div>
 							<p className="font-medium text-green-600 dark:text-green-400">
-								All done!
+								{t('allDone', 'All done!')}
 							</p>
 							<p className="text-sm text-muted-foreground">
-								Your task completed successfully
+								{t('yourTaskCompletedSuccessfully', 'Your task completed successfully')}
 							</p>
 						</div>
 					)}
@@ -1545,7 +1551,7 @@ export function GenericEventFormInterface({
 						runEvents.length > 0 && (
 							<div className="rounded-lg border bg-muted/30 p-4 animate-in fade-in duration-200">
 								<div className="flex items-center justify-between mb-3">
-									<span className="text-sm font-medium">Processing</span>
+									<span className="text-sm font-medium">{t('processing', 'Processing')}</span>
 									{isRunning && (
 										<div className="flex items-center gap-2 text-sm text-muted-foreground">
 											<Loader2 className="h-3 w-3 animate-spin" />
@@ -1565,8 +1571,7 @@ export function GenericEventFormInterface({
 											<div
 												key={`${ev.event_id}-${idx}`}
 												className="text-xs text-muted-foreground"
-											>
-												{ev.event_type}:{" "}
+											>{`${ev.event_type}:`}{" "}
 												{typeof ev.payload === "string"
 													? ev.payload.slice(0, 100)
 													: "..."}

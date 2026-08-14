@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next } from "@flow-like/locales";
 import { usePathname, useRouter } from "next/navigation";
 import {
 	type ReactNode,
@@ -974,8 +975,8 @@ export function useExecuteAction() {
 					const message =
 						typeof payload?.message === "string"
 							? payload.message
-							: "The workflow could not be completed.";
-					toast.error("Workflow execution failed", { description: message });
+							: i18next.t('theWorkflowCouldNotBeCompleted', 'The workflow could not be completed.');
+					toast.error(i18next.t('workflowExecutionFailed', 'Workflow execution failed'), { description: message });
 					continue;
 				}
 
@@ -1037,7 +1038,7 @@ export function useExecuteAction() {
 							navUrl,
 							"replace:",
 							replace,
-							"appId:",
+							i18next.t('appid', 'appId:'),
 							appId,
 							"currentPath:",
 							pathname,
@@ -1348,7 +1349,7 @@ export function useExecuteAction() {
 						const successMessage =
 							typeof context.successMessage === "string"
 								? context.successMessage
-								: "Thanks for the feedback.";
+								: i18next.t('thanksForTheFeedback', 'Thanks for the feedback.');
 						toast.success(successMessage);
 						break;
 					}
@@ -1504,11 +1505,11 @@ export function useExecuteAction() {
 								);
 							} catch (error) {
 								console.error("Failed to execute workflow event:", error);
-								toast.error("Workflow execution failed", {
+								toast.error(i18next.t('workflowExecutionFailed', 'Workflow execution failed'), {
 									description:
 										error instanceof Error
 											? error.message
-											: "The workflow could not be started.",
+											: i18next.t('theWorkflowCouldNotBeStarted', 'The workflow could not be started.'),
 								});
 							}
 						} else {
@@ -1559,15 +1560,13 @@ export function useExecuteAction() {
 							console.warn(
 								"[A2UI] widget_event: no binding found for actionId:",
 								actionId,
-								"available bindings:",
+								i18next.t('availableBindings', 'available bindings:'),
 								widgetInstance?.actionBindings,
 							);
 							toast.warning(
-								`Widget action '${actionId}' is not bound to a workflow${
-									available.length
+								i18next.t('widgetActionActionidIsNotBoundToAWorkflowval', 'Widget action \'{{actionId}}\' is not bound to a workflow{{val}}', { actionId, val: available.length
 										? ` (bound: ${available.join(", ")})`
-										: ". Reference a Widget Action Event from the Instantiate Widget node, then re-run the flow so a fresh widget is pushed."
-								}`,
+										: ". Reference a Widget Action Event from the Instantiate Widget node, then re-run the flow so a fresh widget is pushed." }),
 							);
 							break;
 						}
@@ -1581,7 +1580,7 @@ export function useExecuteAction() {
 								binding,
 							);
 							toast.warning(
-								`Widget action '${actionId}' has a non-workflow binding and cannot run here.`,
+								i18next.t('widgetActionActionidHasANonworkflowBindingAndCannotRunHere', 'Widget action \'{{actionId}}\' has a non-workflow binding and cannot run here.', { actionId }),
 							);
 							break;
 						}
@@ -1690,11 +1689,11 @@ export function useExecuteAction() {
 								);
 							} catch (error) {
 								console.error("[A2UI] Failed to execute widget event:", error);
-								toast.error(`Widget action '${actionId}' failed`, {
+								toast.error(i18next.t('widgetActionActionidFailed', 'Widget action \'{{actionId}}\' failed', { actionId }), {
 									description:
 										error instanceof Error
 											? error.message
-											: "The widget workflow could not be started.",
+											: i18next.t('theWidgetWorkflowCouldNotBeStarted', 'The widget workflow could not be started.'),
 								});
 							}
 						} else {
@@ -1706,7 +1705,7 @@ export function useExecuteAction() {
 								},
 							);
 							toast.warning(
-								"Widget action cannot run: missing app or board context.",
+								i18next.t('widgetActionCannotRunMissingAppOrBoardContext', 'Widget action cannot run: missing app or board context.'),
 							);
 						}
 						break;

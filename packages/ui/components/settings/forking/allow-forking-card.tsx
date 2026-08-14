@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks";
@@ -34,6 +35,7 @@ export function AllowForkingCard({
 	canEdit,
 	onChanged,
 }: Readonly<AllowForkingCardProps>) {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const allowForking = Boolean(localApp.allow_forking);
@@ -75,8 +77,8 @@ export function AllowForkingCard({
 				setPolicy(previous);
 				toast.error(
 					err instanceof Error
-						? `Couldn't update fork settings: ${err.message}`
-						: "Couldn't update fork settings",
+						? t('couldntUpdateForkSettingsMessage', 'Couldn\'t update fork settings: {{message}}', { message: err.message })
+						: t('couldntUpdateForkSettings', 'Couldn\'t update fork settings'),
 				);
 			} finally {
 				setSaving(false);

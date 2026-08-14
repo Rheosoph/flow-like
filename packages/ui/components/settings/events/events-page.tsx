@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -170,6 +171,7 @@ export default function EventsPage({
 	onNavigateToFlow,
 	newEventTemplate,
 }: Readonly<EventsPageProps>) {
+	const { t } = useTranslation("settings");
 	const searchParams = useSearchParams();
 	const id = appIdProp ?? searchParams.get("id");
 	const eventId = eventIdProp ?? searchParams.get("eventId");
@@ -433,7 +435,7 @@ export default function EventsPage({
 			}
 			let additionalParams = "";
 			if (event?.id) {
-				additionalParams = `&eventId=${event.id}`;
+				additionalParams = t('eventidid', '&eventId={{id}}', { id: event.id });
 			}
 
 			router.push(`${basePath}?id=${id}${additionalParams}`);
@@ -548,17 +550,17 @@ export default function EventsPage({
 							<CardContent className="py-12 text-center">
 								<Settings className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
 								<h3 className="text-lg font-semibold mb-2">
-									No events configured
+									{t('noEventsConfigured', 'No events configured')}
 								</h3>
 								<p className="text-muted-foreground mb-4">
-									Get started by creating your first event
+									{t('getStartedByCreatingYourFirstEvent', 'Get started by creating your first event')}
 								</p>
 								<Button
 									onClick={() => setIsCreateDialogOpen(true)}
 									className="gap-2"
 								>
 									<Plus className="h-4 w-4" />
-									Create Event
+									{t('createEvent', 'Create Event')}
 								</Button>
 							</CardContent>
 						</Card>
@@ -587,9 +589,9 @@ export default function EventsPage({
 			<Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
 				<DialogContent className="max-w-2xl">
 					<DialogHeader>
-						<DialogTitle>Create New Event</DialogTitle>
+						<DialogTitle>{t('createNewEvent', 'Create New Event')}</DialogTitle>
 						<DialogDescription>
-							Configure a new event with its properties and settings
+							{`Configure a new event with its properties and settings`}
 						</DialogDescription>
 					</DialogHeader>
 					<DialogBody>
@@ -618,8 +620,8 @@ export default function EventsPage({
 				open={showCreatePatDialog}
 				onOpenChange={setShowCreatePatDialog}
 				onPatSelected={handleCreateWithPat}
-				title="Create Event with Sink"
-				description="This event requires a sink. Select or create a Personal Access Token to activate the event sink."
+				title={t('createEventWithSink', 'Create Event with Sink')}
+				description={t('thisEventRequiresASinkSelectOrCreateAPersonalAccessTokenToActivateTheEventSink', 'This event requires a sink. Select or create a Personal Access Token to activate the event sink.')}
 			/>
 		</div>
 	);
@@ -666,6 +668,7 @@ function EventConfiguration({
 		version?: [number, number, number];
 	}) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const isMobile = useIsMobile();
@@ -966,7 +969,7 @@ function EventConfiguration({
 				return r.eventId !== event.id;
 			});
 			if (conflict) {
-				const message = `Route path already in use: ${desiredRoutePath}`;
+				const message = t('routePathAlreadyInUseDesiredroutepath', 'Route path already in use: {{desiredRoutePath}}', { desiredRoutePath });
 				setRoutePathError(message);
 				toast.error(message);
 				return;
@@ -1002,7 +1005,7 @@ function EventConfiguration({
 				console.error("Failed to upsert route for UI event:", error);
 				setRoutePathError("Failed to save route path");
 				toast.error(
-					`Event saved, but the route path could not be updated: ${errorMessage(error)}`,
+					t('eventSavedButTheRoutePathCouldNotBeUpdatedVal', 'Event saved, but the route path could not be updated: {{val}}', { val: errorMessage(error) }),
 				);
 				return;
 			}
@@ -1302,7 +1305,7 @@ function EventConfiguration({
 					onClick={onDone}
 					className="h-auto shrink-0 p-0 font-normal hover:text-foreground"
 				>
-					Events
+					{t('events', 'Events')}
 				</Button>
 				<span className="shrink-0">/</span>
 				<span className="truncate font-medium text-foreground">
@@ -1339,7 +1342,7 @@ function EventConfiguration({
 						return (
 							<div className="flex shrink-0 items-center gap-2">
 								<Label className="text-xs text-muted-foreground">
-									Execution
+									{t('execution', 'Execution')}
 								</Label>
 								<Select
 									value={currentMode}
@@ -1361,12 +1364,12 @@ function EventConfiguration({
 											disabled={localDisabled}
 										>
 											<span className="inline-flex items-center gap-1.5">
-												<Monitor className="h-3 w-3" /> Local
+												<Monitor className="h-3 w-3" /> {t('local', 'Local')}
 											</span>
 										</SelectItem>
 										<SelectItem value={IEventExecutionMode.Remote}>
 											<span className="inline-flex items-center gap-1.5">
-												<Cloud className="h-3 w-3" /> Remote
+												<Cloud className="h-3 w-3" /> {t('remote', 'Remote')}
 											</span>
 										</SelectItem>
 									</SelectContent>
@@ -1381,7 +1384,7 @@ function EventConfiguration({
 							return (
 								<div className="flex shrink-0 items-center gap-2">
 									<Label className="text-xs text-muted-foreground">
-										Exposure
+										{t('exposure', 'Exposure')}
 									</Label>
 									<Select
 										value={currentExposure}
@@ -1396,8 +1399,8 @@ function EventConfiguration({
 											className="w-32 text-xs"
 											title={
 												currentExposure === IEventExposure.Internal
-													? "Only callable by connected apps — no public endpoint."
-													: "Reachable on its public endpoint with the configured auth."
+													? t('onlyCallableByConnectedAppsNoPublicEndpoint', 'Only callable by connected apps — no public endpoint.')
+													: t('reachableOnItsPublicEndpointWithTheConfiguredAuth', 'Reachable on its public endpoint with the configured auth.')
 											}
 										>
 											<SelectValue />
@@ -1405,12 +1408,12 @@ function EventConfiguration({
 										<SelectContent>
 											<SelectItem value={IEventExposure.Public}>
 												<span className="inline-flex items-center gap-1.5">
-													<Globe className="h-3 w-3" /> Public
+													<Globe className="h-3 w-3" /> {t('public', 'Public')}
 												</span>
 											</SelectItem>
 											<SelectItem value={IEventExposure.Internal}>
 												<span className="inline-flex items-center gap-1.5">
-													<Lock className="h-3 w-3" /> Internal
+													<Lock className="h-3 w-3" /> {t('internal', 'Internal')}
 												</span>
 											</SelectItem>
 										</SelectContent>
@@ -1448,11 +1451,11 @@ function EventConfiguration({
 						>
 							{formData.active ? (
 								<>
-									<Pause className="h-4 w-4" /> Deactivate
+									<Pause className="h-4 w-4" /> {t('deactivate', 'Deactivate')}
 								</>
 							) : (
 								<>
-									<Play className="h-4 w-4" /> Activate
+									<Play className="h-4 w-4" /> {t('activate', 'Activate')}
 								</>
 							)}
 						</Button>
@@ -1462,8 +1465,8 @@ function EventConfiguration({
 						<p className="basis-full text-[0.7rem] leading-tight text-muted-foreground">
 							{(formData.exposure ?? IEventExposure.Public) ===
 							IEventExposure.Internal
-								? "Internal — only callable by connected apps through the app-connection proxy; no public endpoint."
-								: "Public — reachable on its public endpoint with the configured auth."}
+								? t('internalOnlyCallableByConnectedAppsThroughTheAppconnectionProxyNoPublicEndpoint', 'Internal — only callable by connected apps through the app-connection proxy; no public endpoint.')
+								: t('publicReachableOnItsPublicEndpointWithTheConfiguredAuth', 'Public — reachable on its public endpoint with the configured auth.')}
 						</p>
 					)}
 				</div>
@@ -1500,12 +1503,12 @@ function EventConfiguration({
 								<CardHeader>
 									<CardTitle className="flex items-center gap-2">
 										<FileTextIcon className="h-5 w-5" />
-										Basic Information
+										{t('basicInformation', 'Basic Information')}
 									</CardTitle>
 								</CardHeader>
 								<CardContent className="space-y-4">
 									<div>
-										<Label>Event Name</Label>
+										<Label>{t('eventName', 'Event Name')}</Label>
 										{isEditing ? (
 											<Input
 												type="text"
@@ -1525,7 +1528,7 @@ function EventConfiguration({
 										)}
 									</div>
 									<div>
-										<Label>Description</Label>
+										<Label>{t('description', 'Description')}</Label>
 										{isEditing ? (
 											<Textarea
 												value={formData.description}
@@ -1540,14 +1543,14 @@ function EventConfiguration({
 												className="mt-1 text-sm text-muted-foreground text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
 												onClick={enterEdit}
 											>
-												{event.description || "Click to add a description"}
+												{event.description || t('clickToAddADescription', 'Click to add a description')}
 											</button>
 										)}
 									</div>
 									{uiEventTypeSet.has(formData.event_type) ||
 									isPageTargetEvent ? (
 										<div>
-											<Label>Route Path</Label>
+											<Label>{t('routePath', 'Route Path')}</Label>
 											{isEditing ? (
 												<div className="space-y-1">
 													<Input
@@ -1561,7 +1564,7 @@ function EventConfiguration({
 														</p>
 													)}
 													<p className="text-xs text-muted-foreground">
-														Used for path-based navigation. Must be unique.
+														{t('usedForPathbasedNavigationMustBeUnique', 'Used for path-based navigation. Must be unique.')}
 													</p>
 												</div>
 											) : (
@@ -1570,25 +1573,22 @@ function EventConfiguration({
 													className="mt-1 text-sm text-muted-foreground font-mono text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
 													onClick={enterEdit}
 												>
-													{routeForEvent?.path ?? "No route configured"}
+													{routeForEvent?.path ?? t('noRouteConfigured', 'No route configured')}
 												</button>
 											)}
 										</div>
 									) : null}
 									<div>
-										<Label>Event ID</Label>
+										<Label>{t('eventId', 'Event ID')}</Label>
 										<p className="mt-1 text-sm text-muted-foreground font-mono">
 											{event.id}
 										</p>
 									</div>
 									<div>
-										<Label>Case Keys</Label>
+										<Label>{t('caseKeys', 'Case Keys')}</Label>
 										<p className="mt-0.5 text-xs text-muted-foreground">
-											Tie every run to a business object for process mining:
-											each key is read from the payload at the given path (e.g.{" "}
-											<span className="font-mono">order.id</span>) and groups
-											runs into cases across apps.
-										</p>
+											{`Tie every run to a business object for process mining: each key is read from the payload at the given path (e.g.`}{" "}<Trans i18nKey="spanClassnamefontmonoorderidspanAndGroupsRunsIntoCasesAcrossApps"><span className="font-mono">order.id</span>) and groups
+											runs into cases across apps.</Trans></p>
 										{isEditing ? (
 											<div className="mt-2 space-y-2">
 												{caseKeyRows.map((row, index) => (
@@ -1623,7 +1623,7 @@ function EventConfiguration({
 															variant="ghost"
 															size="icon"
 															className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
-															aria-label="Remove case key"
+															aria-label={t('removeCaseKey', 'Remove case key')}
 															onClick={() =>
 																commitCaseKeyRows(
 																	caseKeyRows.filter(
@@ -1648,7 +1648,7 @@ function EventConfiguration({
 													}
 												>
 													<Plus className="mr-1.5 h-3.5 w-3.5" />
-													Add case key
+													{t('addCaseKey', 'Add case key')}
 												</Button>
 											</div>
 										) : (
@@ -1669,15 +1669,13 @@ function EventConfiguration({
 																className="gap-1 font-mono text-[10px] font-normal"
 															>
 																{key}
-																<span className="text-muted-foreground">
-																	← {path}
-																</span>
+																<span className="text-muted-foreground">{`← ${path}`}</span>
 															</Badge>
 														))}
 													</span>
 												) : (
 													<span className="text-sm text-muted-foreground">
-														No case keys — click to configure process mining
+														{t('noCaseKeysClickToConfigureProcessMining', 'No case keys — click to configure process mining')}
 													</span>
 												)}
 											</button>
@@ -1702,11 +1700,11 @@ function EventConfiguration({
 										<div>
 											<Label className="group flex items-center hover:underline">
 												<Link
-													title="Open Page Editor"
+													title={t('openPageEditor', 'Open Page Editor')}
 													className="flex flex-row items-center"
 													href={`/library/config/page-editor?id=${appId}&pageId=${event.default_page_id}`}
 												>
-													Page
+													{t('page', 'Page')}
 													<Button
 														size={"icon"}
 														variant={"ghost"}
@@ -1721,7 +1719,7 @@ function EventConfiguration({
 											</p>
 										</div>
 										<div>
-											<Label>Flow Version</Label>
+											<Label>{t('flowVersion', 'Flow Version')}</Label>
 											<button
 												type="button"
 												className="mt-1 block w-full rounded px-2 py-1 -mx-2 text-left text-sm text-muted-foreground hover:bg-muted/60 transition-colors"
@@ -1737,17 +1735,17 @@ function EventConfiguration({
 								{!isEditing && !event.default_page_id && (
 									<CardContent className="space-y-4">
 										<div>
-											<Label>Flow</Label>
+											<Label>{t('flow', 'Flow')}</Label>
 											<button
 												type="button"
 												className="mt-1 text-sm text-muted-foreground font-mono text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors block"
 												onClick={enterEdit}
 											>
-												{board.data?.name ?? "BOARD NOT FOUND!"}
+												{board.data?.name ?? t('boardNotFound', 'BOARD NOT FOUND!')}
 											</button>
 										</div>
 										<div>
-											<Label>Flow Version</Label>
+											<Label>{t('flowVersion', 'Flow Version')}</Label>
 											<button
 												type="button"
 												className="mt-1 text-sm text-muted-foreground text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors block"
@@ -1763,7 +1761,7 @@ function EventConfiguration({
 												{onNavigateToFlow ? (
 													<button
 														type="button"
-														title="Open Flow and Node"
+														title={t('openFlowAndNode', 'Open Flow and Node')}
 														className="flex flex-row items-center"
 														onClick={() =>
 															onNavigateToFlow({
@@ -1776,18 +1774,18 @@ function EventConfiguration({
 															})
 														}
 													>
-														Node ID
+														{t('nodeId', 'Node ID')}
 														<span className="p-0! w-4 h-4 ml-1 mb-[0.1rem] inline-flex">
 															<ExternalLinkIcon className="w-4 h-4 group-hover:text-primary" />
 														</span>
 													</button>
 												) : (
 													<Link
-														title="Open Flow and Node"
+														title={t('openFlowAndNode', 'Open Flow and Node')}
 														className="flex flex-row items-center"
 														href={`/flow?id=${event.board_id}&app=${appId}&node=${event.node_id}${event.board_version ? `&version=${event.board_version.join("_")}` : ""}`}
 													>
-														Node ID
+														{t('nodeId', 'Node ID')}
 														<Button
 															size={"icon"}
 															variant={"ghost"}
@@ -1800,9 +1798,7 @@ function EventConfiguration({
 											</Label>
 											<p className="mt-1 text-sm text-muted-foreground font-mono">
 												{board.data?.nodes?.[event.node_id]?.friendly_name ??
-													"Node not found"}{" "}
-												({event.node_id})
-											</p>
+													t('nodeNotFound', 'Node not found')}{" "}{`(${event.node_id})`}</p>
 										</div>
 									</CardContent>
 								)}
@@ -1810,7 +1806,7 @@ function EventConfiguration({
 									<CardContent className="space-y-4">
 										{/* Page Selection */}
 										<div className="space-y-2">
-											<Label htmlFor="page">Page</Label>
+											<Label htmlFor="page">{t('page', 'Page')}</Label>
 											<Select
 												value={formData.default_page_id ?? ""}
 												onValueChange={(value) => {
@@ -1825,7 +1821,7 @@ function EventConfiguration({
 												}}
 											>
 												<SelectTrigger>
-													<SelectValue placeholder="Select a page" />
+													<SelectValue placeholder={t('selectAPage', 'Select a page')} />
 												</SelectTrigger>
 												<SelectContent>
 													{(pages.data ?? []).map((p: PageListItem) => (
@@ -1837,7 +1833,7 @@ function EventConfiguration({
 											</Select>
 										</div>
 										<div className="space-y-2">
-											<Label>Flow Version</Label>
+											<Label>{t('flowVersion', 'Flow Version')}</Label>
 											<Select
 												value={formData.board_version?.join(".") ?? "latest"}
 												onValueChange={(value) =>
@@ -1855,7 +1851,7 @@ function EventConfiguration({
 													<SelectValue />
 												</SelectTrigger>
 												<SelectContent>
-													<SelectItem value="latest">Latest</SelectItem>
+													<SelectItem value="latest">{t('latest', 'Latest')}</SelectItem>
 													{versions.data?.map((version) => (
 														<SelectItem
 															key={version.join(".")}
@@ -1874,7 +1870,7 @@ function EventConfiguration({
 										{/* Board Selection */}
 										<div className="space-y-4">
 											<div className="space-y-2">
-												<Label htmlFor="board">Flow</Label>
+												<Label htmlFor="board">{t('flow', 'Flow')}</Label>
 												<Select
 													value={formData.board_id}
 													onValueChange={(value) => {
@@ -1884,7 +1880,7 @@ function EventConfiguration({
 													}}
 												>
 													<SelectTrigger>
-														<SelectValue placeholder="Select a board" />
+														<SelectValue placeholder={t('selectABoard', 'Select a board')} />
 													</SelectTrigger>
 													<SelectContent>
 														{boards.data?.map((board) => (
@@ -1899,7 +1895,7 @@ function EventConfiguration({
 										{/* Board Version Selection */}
 										<div className="space-y-4">
 											<div className="space-y-2">
-												<Label htmlFor="board">Flow Version</Label>
+												<Label htmlFor="board">{t('flowVersion', 'Flow Version')}</Label>
 												<Select
 													value={formData.board_version?.join(".") ?? "latest"}
 													onValueChange={(value) => {
@@ -1918,7 +1914,7 @@ function EventConfiguration({
 														<SelectValue />
 													</SelectTrigger>
 													<SelectContent>
-														<SelectItem value="latest">Latest</SelectItem>
+														<SelectItem value="latest">{t('latest', 'Latest')}</SelectItem>
 														{versions.data?.map((board) => (
 															<SelectItem
 																key={board.join(".")}
@@ -1936,7 +1932,7 @@ function EventConfiguration({
 										{board.data && (
 											<div className="space-y-4">
 												<div className="space-y-2">
-													<Label htmlFor="node">Node</Label>
+													<Label htmlFor="node">{t('node', 'Node')}</Label>
 													<Select
 														value={formData.node_id}
 														onValueChange={(value) =>
@@ -1944,7 +1940,7 @@ function EventConfiguration({
 														}
 													>
 														<SelectTrigger>
-															<SelectValue placeholder="Select a node" />
+															<SelectValue placeholder={t('selectANode', 'Select a node')} />
 														</SelectTrigger>
 														<SelectContent>
 															{Object.values(board.data.nodes)
@@ -1969,19 +1965,19 @@ function EventConfiguration({
 								<CardHeader>
 									<CardTitle className="flex items-center gap-2">
 										<GitBranchIcon className="h-5 w-5" />
-										Version Information
+										{t('versionInformation', 'Version Information')}
 									</CardTitle>
 								</CardHeader>
 								<CardContent>
 									<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 										<div>
-											<Label>Event Version</Label>
+											<Label>{t('eventVersion', 'Event Version')}</Label>
 											<p className="mt-1 text-sm text-muted-foreground">
 												{event.event_version.join(".")}
 											</p>
 										</div>
 										<div>
-											<Label>Created</Label>
+											<Label>{t('created', 'Created')}</Label>
 											<p className="mt-1 text-sm text-muted-foreground">
 												{new Date(
 													event.created_at.secs_since_epoch * 1000,
@@ -1989,7 +1985,7 @@ function EventConfiguration({
 											</p>
 										</div>
 										<div>
-											<Label>Last Updated</Label>
+											<Label>{t('lastUpdated', 'Last Updated')}</Label>
 											<p className="mt-1 text-sm text-muted-foreground">
 												{new Date(
 													event.updated_at.secs_since_epoch * 1000,
@@ -2008,11 +2004,11 @@ function EventConfiguration({
 									<div className="flex items-center justify-between">
 										<div className="flex items-center gap-2">
 											<FormInputIcon className="h-5 w-5" />
-											<CardTitle>Inputs</CardTitle>
+											<CardTitle>{t('inputs', 'Inputs')}</CardTitle>
 											{inputsDrift?.hasDrift && (
 												<Badge variant="destructive" className="ml-2">
 													<AlertTriangle className="h-3 w-3 mr-1" />
-													Drift Detected
+													{t('driftDetected', 'Drift Detected')}
 												</Badge>
 											)}
 										</div>
@@ -2028,32 +2024,29 @@ function EventConfiguration({
 											) : (
 												<RefreshCw className="h-4 w-4" />
 											)}
-											Refresh from Node
+											{`Refresh from Node`}
 										</Button>
 									</div>
 									<CardDescription>
-										Input pins captured at publish time. Changes to the node
-										since then are shown below.
+										{t('inputPinsCapturedAtPublishTimeChangesToTheNodeSinceThenAreShownBelow', "Input pins captured at publish time. Changes to the node since then are shown below.")}
 									</CardDescription>
 								</CardHeader>
 								<CardContent className="space-y-4">
 									{inputsDrift?.isEmpty && !inputsDrift?.hasDrift && (
 										<p className="text-sm text-muted-foreground">
-											No input pins were captured for this event. Click "Refresh
-											from Node" to sync.
+											{`No input pins were captured for this event. Click "Refresh from Node" to sync.`}
 										</p>
 									)}
 
 									{inputsDrift?.hasDrift && (
 										<div className="space-y-3 p-3 bg-destructive/10 rounded-md border border-destructive/20">
 											<p className="text-sm font-medium text-destructive">
-												The node's inputs have changed since this event was
-												published:
+												{t('theNodesInputsHaveChangedSinceThisEventWasPublished', "The node's inputs have changed since this event was published:")}
 											</p>
 											{inputsDrift.added.length > 0 && (
 												<div className="text-sm">
 													<span className="font-medium text-green-600">
-														Added:{" "}
+														{t('added', 'Added:')}{" "}
 													</span>
 													{inputsDrift.added
 														.map((p) => p.friendly_name || p.name)
@@ -2063,7 +2056,7 @@ function EventConfiguration({
 											{inputsDrift.removed.length > 0 && (
 												<div className="text-sm">
 													<span className="font-medium text-red-600">
-														Removed:{" "}
+														{t('removed', 'Removed:')}{" "}
 													</span>
 													{inputsDrift.removed
 														.map((i) => i.friendly_name || i.name)
@@ -2073,7 +2066,7 @@ function EventConfiguration({
 											{inputsDrift.changed.length > 0 && (
 												<div className="text-sm">
 													<span className="font-medium text-yellow-600">
-														Changed:{" "}
+														{t('changed', 'Changed:')}{" "}
 													</span>
 													{inputsDrift.changed
 														.map((c) => `${c.name} (${c.field})`)
@@ -2084,10 +2077,12 @@ function EventConfiguration({
 									)}
 
 									{(event.inputs ?? []).length > 0 && (
-										<div className="space-y-2">
-											<Label className="text-sm font-medium">
-												Captured Inputs ({event.inputs?.length ?? 0})
-											</Label>
+									<div className="space-y-2">
+										<Label className="text-sm font-medium">
+											{t("capturedInputsLength", "Captured Inputs ({{length}})", {
+												length: event.inputs?.length ?? 0,
+											})}
+										</Label>
 											<div className="grid gap-2">
 												{(event.inputs ?? []).map((input) => {
 													// Don't show description if it looks like an ID (all digits) or is too long
@@ -2135,22 +2130,21 @@ function EventConfiguration({
 									<div className="flex items-center justify-between">
 										<CardTitle className="flex flex-row items-center gap-2">
 											<CodeIcon className="h-5 w-5" />
-											<p>Variables</p>
+											<p>{t('variables', 'Variables')}</p>
 										</CardTitle>
 										{isEditing && (
 											<Dialog>
 												<DialogTrigger asChild>
 													<Button variant="outline" className="gap-2 ml-2">
 														<Plus className="h-4 w-4" />
-														Add Flow Variables
+														{t('addFlowVariables', 'Add Flow Variables')}
 													</Button>
 												</DialogTrigger>
 												<DialogContent className="max-w-lg">
 													<DialogHeader>
-														<DialogTitle>Add Flow Variables</DialogTitle>
+														<DialogTitle>{t('addFlowVariables', 'Add Flow Variables')}</DialogTitle>
 														<DialogDescription>
-															Select flow variables to override in this event
-															configuration
+															{t('selectFlowVariablesToOverrideInThisEventConfiguration', "Select flow variables to override in this event configuration")}
 														</DialogDescription>
 													</DialogHeader>
 													<div className="space-y-2 max-h-80 overflow-y-auto">
@@ -2177,7 +2171,7 @@ function EventConfiguration({
 																				</div>
 																				{variable.default_value && (
 																					<div className="text-xs text-muted-foreground mt-1">
-																						Default:{" "}
+																						{t('default2', 'Default:')}{" "}
 																						<span>
 																							{String(
 																								parseUint8ArrayToJson(
@@ -2211,7 +2205,7 @@ function EventConfiguration({
 																					}
 																				}}
 																			>
-																				{isAlreadyAdded ? "Remove" : "Add"}
+																				{isAlreadyAdded ? "Remove" : t('add', 'Add')}
 																			</Button>
 																		</div>
 																	);
@@ -2220,7 +2214,7 @@ function EventConfiguration({
 															Object.keys(board.data.variables).length ===
 																0) && (
 															<div className="text-center py-8 text-muted-foreground">
-																No board variables available
+																{t('noBoardVariablesAvailable', 'No board variables available')}
 															</div>
 														)}
 													</div>
@@ -2256,8 +2250,8 @@ function EventConfiguration({
 									) : (
 										<p className="text-sm text-muted-foreground">
 											{isEditing
-												? "No variables configured. Click 'Add Flow Variables' to get started."
-												: "No variables configured"}
+												? t('noVariablesConfiguredClickAddFlowVariablesToGetStarted', 'No variables configured. Click \'Add Flow Variables\' to get started.')
+												: t('noVariablesConfigured', 'No variables configured')}
 										</p>
 									)}
 								</CardContent>
@@ -2270,7 +2264,7 @@ function EventConfiguration({
 								<CardHeader>
 									<CardTitle className="flex items-center gap-2">
 										<CogIcon className="h-5 w-5" />
-										Node Configuration
+										{t('nodeConfiguration', 'Node Configuration')}
 									</CardTitle>
 								</CardHeader>
 								{/* Always interactive. Gating these behind edit mode made every
@@ -2313,8 +2307,8 @@ function EventConfiguration({
 							<Card>
 								<CardContent className="py-10 text-center text-sm text-muted-foreground">
 									{formData.board_id
-										? "Loading the flow this event is bound to…"
-										: "This event isn't bound to a flow yet, so there is nothing type-specific to configure. Pick one under Flow & target."}
+										? t('loadingTheFlowThisEventIsBoundTo', 'Loading the flow this event is bound to…')
+										: t('thisEventIsntBoundToAFlowYetSoThereIsNothingTypespecificToConfigurePickOneUnderFlowTarget', 'This event isn\'t bound to a flow yet, so there is nothing type-specific to configure. Pick one under Flow & target.')}
 								</CardContent>
 							</Card>
 						)}
@@ -2325,7 +2319,7 @@ function EventConfiguration({
 								<CardHeader>
 									<CardTitle className="flex items-center gap-2">
 										<StickyNote className="h-5 w-5" />
-										Notes
+										{t('notes', 'Notes')}
 									</CardTitle>
 								</CardHeader>
 								<CardContent>
@@ -2335,7 +2329,7 @@ function EventConfiguration({
 											onChange={(e) =>
 												handleInputChange("notes", { NOTES: e.target.value })
 											}
-											placeholder="Add notes about this event..."
+											placeholder={t('addNotesAboutThisEvent', 'Add notes about this event...')}
 											rows={4}
 										/>
 									) : (
@@ -2344,7 +2338,7 @@ function EventConfiguration({
 											className="text-sm text-muted-foreground whitespace-pre-wrap text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
 											onClick={enterEdit}
 										>
-											{event.notes?.NOTES ?? "Click to add notes..."}
+											{event.notes?.NOTES ?? t('clickToAddNotes', 'Click to add notes...')}
 										</button>
 									)}
 								</CardContent>

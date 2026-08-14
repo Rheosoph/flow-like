@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	Background,
 	BackgroundVariant,
@@ -198,7 +199,7 @@ const ProcessAppNode = memo(
 					<Avatar className="h-8 w-8 rounded-md">
 						<AvatarImage
 							src={app.icon ?? undefined}
-							alt={`${appLabel(app)} icon`}
+							alt={i18next.t('valIcon', '{{val}} icon', { val: appLabel(app) })}
 						/>
 						<AvatarFallback className="rounded-md bg-primary/10">
 							<Blocks className="h-4 w-4 text-primary" />
@@ -214,7 +215,7 @@ const ProcessAppNode = memo(
 							{appLabel(app)}
 						</p>
 						{app.is_current && (
-							<p className="text-[10px] font-medium text-primary">This app</p>
+							<p className="text-[10px] font-medium text-primary">{i18next.t('thisApp', 'This app')}</p>
 						)}
 					</div>
 					{app.notes.length > 0 && (
@@ -520,7 +521,7 @@ const ConnectionEdge = memo((props: EdgeProps) => {
 								{capabilities.events && (
 									<Zap
 										className="h-3 w-3 text-muted-foreground"
-										aria-label="Executes events"
+										aria-label={i18next.t('executesEvents', 'Executes events')}
 									/>
 								)}
 								{capabilities.database && (
@@ -531,7 +532,7 @@ const ConnectionEdge = memo((props: EdgeProps) => {
 												? "text-foreground"
 												: "text-muted-foreground",
 										)}
-										aria-label={`Database ${ACCESS_LABEL[capabilities.database]}`}
+										aria-label={i18next.t('databaseVal', 'Database {{val}}', { val: ACCESS_LABEL[capabilities.database] })}
 									/>
 								)}
 								{capabilities.files && (
@@ -542,7 +543,7 @@ const ConnectionEdge = memo((props: EdgeProps) => {
 												? "text-foreground"
 												: "text-muted-foreground",
 										)}
-										aria-label={`Files ${ACCESS_LABEL[capabilities.files]}`}
+										aria-label={i18next.t('filesVal', 'Files {{val}}', { val: ACCESS_LABEL[capabilities.files] })}
 									/>
 								)}
 							</div>
@@ -595,6 +596,7 @@ function NoteItem({
 	onUpdate,
 	onDelete,
 }: Readonly<NoteItemProps>) {
+	const { t } = useTranslation("settings");
 	const [isEditing, setIsEditing] = useState(false);
 	const [draft, setDraft] = useState(note.content);
 	const [isBusy, setIsBusy] = useState(false);
@@ -611,7 +613,7 @@ function NoteItem({
 			toast.error(
 				error instanceof Error && error.message
 					? error.message
-					: "Failed to update note",
+					: t('failedToUpdateNote', 'Failed to update note'),
 			);
 		} finally {
 			setIsBusy(false);
@@ -629,7 +631,7 @@ function NoteItem({
 			toast.error(
 				error instanceof Error && error.message
 					? error.message
-					: "Failed to delete note",
+					: t('failedToDeleteNote', 'Failed to delete note'),
 			);
 		} finally {
 			setIsBusy(false);
@@ -672,19 +674,18 @@ function NoteItem({
 							</AlertDialogTrigger>
 							<AlertDialogContent>
 								<AlertDialogHeader>
-									<AlertDialogTitle>Delete Note</AlertDialogTitle>
+									<AlertDialogTitle>{t('deleteNote', 'Delete Note')}</AlertDialogTitle>
 									<AlertDialogDescription>
-										Are you sure you want to delete this process note? This
-										action cannot be undone.
+										{t('areYouSureYouWantToDeleteThisProcessNoteThisActionCannotBeUndone', "Are you sure you want to delete this process note? This action cannot be undone.")}
 									</AlertDialogDescription>
 								</AlertDialogHeader>
 								<AlertDialogFooter>
-									<AlertDialogCancel>Cancel</AlertDialogCancel>
+									<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
 									<AlertDialogAction
 										onClick={handleDelete}
 										className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 									>
-										Delete
+										{t('delete', 'Delete')}
 									</AlertDialogAction>
 								</AlertDialogFooter>
 							</AlertDialogContent>
@@ -706,7 +707,7 @@ function NoteItem({
 							size="sm"
 							onClick={() => setIsEditing(false)}
 						>
-							Cancel
+							{t('cancel', 'Cancel')}
 						</Button>
 						<Button
 							size="sm"
@@ -793,6 +794,7 @@ function ContentStats({ content }: Readonly<{ content: IAppContentStats }>) {
  * hidden rather than surfacing a failure.
  */
 function AppTables({ appId }: Readonly<{ appId: string }>) {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const tables = useInvoke(backend.dbState.listTables, backend.dbState, [
 		appId,
@@ -820,22 +822,22 @@ function AppTables({ appId }: Readonly<{ appId: string }>) {
 					))}
 				</div>
 			) : (
-				<p className="text-xs text-muted-foreground">No data tables yet.</p>
+				<p className="text-xs text-muted-foreground">{t('noDataTablesYet', 'No data tables yet.')}</p>
 			)}
 		</PanelSection>
 	);
 }
 
 function NoAccessPlaceholder() {
+	const { t } = useTranslation("settings");
 	return (
 		<div className="flex flex-col items-center gap-2 rounded-lg border border-dashed py-8 text-center">
 			<div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
 				<Lock className="h-5 w-5 text-muted-foreground" />
 			</div>
-			<p className="text-sm font-medium">No access to this app</p>
+			<p className="text-sm font-medium">{t('noAccessToThisApp', 'No access to this app')}</p>
 			<p className="max-w-52 text-xs text-muted-foreground">
-				You&apos;re not a member of this app, so its details, contents, and
-				process notes are hidden.
+				{t('youaposreNotAMemberOfThisAppSoItsDetailsContentsAndProcessNotesAreHidden', "You're not a member of this app, so its details, contents, and process notes are hidden.")}
 			</p>
 		</div>
 	);
@@ -856,6 +858,7 @@ function NodeDetailsPanel({
 	onUpdateNote,
 	onDeleteNote,
 }: Readonly<NodeDetailsPanelProps>) {
+	const { t } = useTranslation("settings");
 	const [newNote, setNewNote] = useState("");
 	const [isAdding, setIsAdding] = useState(false);
 	const [showNoteForm, setShowNoteForm] = useState(false);
@@ -874,7 +877,7 @@ function NodeDetailsPanel({
 			toast.error(
 				error instanceof Error && error.message
 					? error.message
-					: "Failed to add note",
+					: t('failedToAddNote', 'Failed to add note'),
 			);
 		} finally {
 			setIsAdding(false);
@@ -906,7 +909,7 @@ function NodeDetailsPanel({
 				size="icon"
 				className="absolute right-2 top-2 z-20 h-7 w-7 bg-background/60 backdrop-blur-sm hover:bg-background/80"
 				onClick={onClose}
-				aria-label="Close details"
+				aria-label={t('closeDetails', 'Close details')}
 			>
 				<X className="h-4 w-4" />
 			</Button>
@@ -936,7 +939,7 @@ function NodeDetailsPanel({
 					>
 						<AvatarImage
 							src={app.icon ?? undefined}
-							alt={`${appLabel(app)} icon`}
+							alt={t('valIcon', '{{val}} icon', { val: appLabel(app) })}
 						/>
 						<AvatarFallback className="rounded-lg bg-primary/10">
 							<Blocks className="h-5 w-5 text-primary" />
@@ -955,7 +958,7 @@ function NodeDetailsPanel({
 							{app.is_current && (
 								<Badge className="h-4 gap-1 px-1.5 text-[10px]">
 									<Sparkles className="h-2.5 w-2.5" />
-									This app
+									{t('thisApp', 'This app')}
 								</Badge>
 							)}
 							{app.unknown && (
@@ -964,7 +967,7 @@ function NodeDetailsPanel({
 									className="h-4 gap-1 px-1.5 text-[10px] text-muted-foreground"
 								>
 									<Lock className="h-2.5 w-2.5" />
-									No access
+									{t('noAccess', 'No access')}
 								</Badge>
 							)}
 							{!app.unknown && app.category && (
@@ -993,7 +996,7 @@ function NodeDetailsPanel({
 								className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
 							>
 								<ExternalLink className="h-3 w-3" />
-								Website
+								{t('website', 'Website')}
 							</a>
 						)}
 						{app.docs_url && (
@@ -1004,7 +1007,7 @@ function NodeDetailsPanel({
 								className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
 							>
 								<BookOpen className="h-3 w-3" />
-								Docs
+								{t('docs', 'Docs')}
 							</a>
 						)}
 					</div>
@@ -1033,12 +1036,12 @@ function NodeDetailsPanel({
 							<AppTables appId={app.id} />
 							<PanelSection
 								icon={StickyNote}
-								title="Process Notes"
+								title={t('processNotes', 'Process Notes')}
 								count={app.notes.length}
 							>
 								{app.notes.length === 0 && !showNoteForm && (
 									<p className="text-xs text-muted-foreground">
-										No process notes yet.
+										{t('noProcessNotesYet', 'No process notes yet.')}
 									</p>
 								)}
 								{app.notes.map((note) => (
@@ -1055,7 +1058,7 @@ function NodeDetailsPanel({
 									(showNoteForm ? (
 										<div className="space-y-2 pt-1">
 											<Textarea
-												placeholder="Describe this app's role in the process..."
+												placeholder={t('describeThisAppsRoleInTheProcess', 'Describe this app\'s role in the process...')}
 												value={newNote}
 												maxLength={MAX_NOTE_LENGTH}
 												onChange={(e) => setNewNote(e.target.value)}
@@ -1070,14 +1073,14 @@ function NodeDetailsPanel({
 														setNewNote("");
 													}}
 												>
-													Cancel
+													{t('cancel', 'Cancel')}
 												</Button>
 												<Button
 													size="sm"
 													onClick={handleAdd}
 													disabled={isAdding || !newNote.trim()}
 												>
-													{isAdding ? "Adding..." : "Add Note"}
+													{isAdding ? "Adding..." : t('addNote', 'Add Note')}
 												</Button>
 											</div>
 										</div>
@@ -1089,7 +1092,7 @@ function NodeDetailsPanel({
 											onClick={() => setShowNoteForm(true)}
 										>
 											<Plus className="mr-1.5 h-3.5 w-3.5" />
-											Add note
+											{t('addNote2', 'Add note')}
 										</Button>
 									))}
 							</PanelSection>
@@ -1106,6 +1109,7 @@ function CapabilityRow({
 	label,
 	access,
 }: Readonly<{ icon: LucideIcon; label: string; access?: AccessLevel }>) {
+	const { t } = useTranslation("settings");
 	return (
 		<div className="flex items-center justify-between rounded-md border bg-muted/30 px-2.5 py-1.5">
 			<span className="flex items-center gap-2 text-xs">
@@ -1125,7 +1129,7 @@ function CapabilityRow({
 					{ACCESS_LABEL[access]}
 				</span>
 			) : (
-				<span className="text-[11px] text-muted-foreground">Execute</span>
+				<span className="text-[11px] text-muted-foreground">{t('execute', 'Execute')}</span>
 			)}
 		</div>
 	);
@@ -1142,6 +1146,7 @@ function EdgeDetailsPanel({
 	nodesById,
 	onClose,
 }: Readonly<EdgeDetailsPanelProps>) {
+	const { t } = useTranslation("settings");
 	const source = nodesById.get(edge.source);
 	const target = nodesById.get(edge.target);
 	const sourceName = source ? appLabel(source) : "Unknown App";
@@ -1161,12 +1166,12 @@ function EdgeDetailsPanel({
 				size="icon"
 				className="absolute right-2 top-2 z-20 h-7 w-7"
 				onClick={onClose}
-				aria-label="Close details"
+				aria-label={t('closeDetails', 'Close details')}
 			>
 				<X className="h-4 w-4" />
 			</Button>
 			<div className="shrink-0 border-b p-4">
-				<h3 className="pr-7 text-sm font-semibold">Connection</h3>
+				<h3 className="pr-7 text-sm font-semibold">{t('connection', 'Connection')}</h3>
 				<div className="mt-2 flex items-center gap-1.5 text-sm">
 					<span className="min-w-0 flex-1 truncate font-medium">
 						{sourceName}
@@ -1199,7 +1204,7 @@ function EdgeDetailsPanel({
 			<ScrollArea className="min-h-0 flex-1">
 				<div className="space-y-5 p-4">
 					{hasConnectionCapabilities(caps) ? (
-						<PanelSection icon={Shield} title="Access granted">
+						<PanelSection icon={Shield} title={t('accessGranted', 'Access granted')}>
 							<div className="space-y-1.5">
 								{caps.events && <CapabilityRow icon={Zap} label="Events" />}
 								{caps.database && (
@@ -1221,14 +1226,14 @@ function EdgeDetailsPanel({
 					) : (
 						<p className="text-xs text-muted-foreground">
 							{edge.observed
-								? "Observed call chain — no static connection details to show."
-								: "This connection grants no event or data access."}
+								? t('observedCallChainNoStaticConnectionDetailsToShow', 'Observed call chain — no static connection details to show.')
+								: t('thisConnectionGrantsNoEventOrDataAccess', 'This connection grants no event or data access.')}
 						</p>
 					)}
 					{permissions.length > 0 && (
 						<PanelSection
 							icon={Lock}
-							title="Role permissions"
+							title={t('rolePermissions', 'Role permissions')}
 							count={permissions.length}
 						>
 							<div className="flex flex-wrap gap-1">
@@ -1251,28 +1256,23 @@ function EdgeDetailsPanel({
 }
 
 function GraphLegend() {
+	const { t } = useTranslation("settings");
 	return (
 		<div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-			<span className="flex items-center gap-1.5">
-				<span className="h-0.5 w-5 rounded bg-primary" />
-				Observed
-			</span>
-			<span className="flex items-center gap-1.5">
-				<span className="h-0.5 w-5 rounded bg-muted-foreground" />
-				Granted
-			</span>
-			<span className="flex items-center gap-1.5">
-				<span className="w-5 border-t-2 border-dashed border-muted-foreground" />
-				Pending
-			</span>
+			<span className="flex items-center gap-1.5"><Trans i18nKey="spanClassnameh05W5RoundedBgprimaryObserved"><span className="h-0.5 w-5 rounded bg-primary" />
+				Observed</Trans></span>
+			<span className="flex items-center gap-1.5"><Trans i18nKey="spanClassnameh05W5RoundedBgmutedforegroundGranted"><span className="h-0.5 w-5 rounded bg-muted-foreground" />
+				Granted</Trans></span>
+			<span className="flex items-center gap-1.5"><Trans i18nKey="spanClassnamew5Bordert2BorderdashedBordermutedforegroundPending"><span className="w-5 border-t-2 border-dashed border-muted-foreground" />
+				Pending</Trans></span>
 			<span className="h-3 w-px bg-border" aria-hidden />
 			<span className="flex items-center gap-1">
 				<Zap className="h-3 w-3" />
-				Events
+				{t('events', 'Events')}
 			</span>
 			<span className="flex items-center gap-1">
 				<Eye className="h-3 w-3" />
-				Read
+				{t('read', 'Read')}
 			</span>
 			<span className="flex items-center gap-1 font-medium text-foreground">
 				<Pencil className="h-3 w-3" />
@@ -1293,6 +1293,7 @@ function ObservedFlows({
 	nodesById,
 	onHoverPath,
 }: Readonly<ObservedFlowsProps>) {
+	const { t } = useTranslation("settings");
 	const sorted = useMemo(
 		() => [...flows].sort((a, b) => b.run_count - a.run_count),
 		[flows],
@@ -1303,18 +1304,16 @@ function ObservedFlows({
 			<CardHeader className="pb-3">
 				<CardTitle className="flex items-center gap-2 text-base">
 					<GitBranch className="h-4 w-4" />
-					Observed Chains
+					{t('observedChains', 'Observed Chains')}
 				</CardTitle>
 				<CardDescription>
-					Event executions observed across connected apps in the selected time
-					window. Data access (database and files) is governed per connection —
-					see the capabilities on each graph edge.
+					{t('eventExecutionsObservedAcrossConnectedAppsInTheSelectedTimeWindowDataAccessDatabaseAndFilesIsGovernedPerConnectionSeeTheCapabilitiesOnEachGraphEdge', "Event executions observed across connected apps in the selected time window. Data access (database and files) is governed per connection — see the capabilities on each graph edge.")}
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
 				{sorted.length === 0 ? (
 					<p className="text-sm text-muted-foreground">
-						No runs observed in this time window.
+						{t('noRunsObservedInThisTimeWindow', 'No runs observed in this time window.')}
 					</p>
 				) : (
 					<div className="space-y-2">
@@ -1356,9 +1355,7 @@ function ObservedFlows({
 											<Zap className="h-3 w-3 shrink-0" />
 											<span className="truncate">{flow.event_name}</span>
 											{flow.event_type && (
-												<span className="shrink-0 opacity-70">
-													· {flow.event_type}
-												</span>
+												<span className="shrink-0 opacity-70">{`· ${flow.event_type}`}</span>
 											)}
 										</span>
 									)}
@@ -1368,9 +1365,7 @@ function ObservedFlows({
 										{flow.run_count} {flow.run_count === 1 ? "run" : "runs"}
 									</Badge>
 									{flow.failed_count > 0 && (
-										<Badge variant="destructive">
-											{flow.failed_count} failed
-										</Badge>
+										<Badge variant="destructive">{t('failed_countFailed', '{{failed_count}} failed', { failed_count: flow.failed_count })}</Badge>
 									)}
 									{flow.avg_duration_ms != null && (
 										<span className="flex items-center gap-1">
@@ -1458,6 +1453,7 @@ function ProcessStats({
 	data,
 	cases,
 }: Readonly<{ data?: IProcessGraphResponse; cases?: IProcessCase[] }>) {
+	const { t } = useTranslation("settings");
 	const stats = useMemo(() => {
 		if (!data) return null;
 		const connectedApps = data.nodes.filter((node) => !node.is_current).length;
@@ -1499,31 +1495,31 @@ function ProcessStats({
 		<div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
 			<StatTile
 				icon={Blocks}
-				label="Connected apps"
+				label={t('connectedApps', 'Connected apps')}
 				value={String(stats.connectedApps)}
 			/>
 			<StatTile
 				icon={Zap}
-				label="Observed runs"
+				label={t('observedRuns', 'Observed runs')}
 				value={String(stats.runs)}
-				sub={stats.failedRuns > 0 ? `${stats.failedRuns} failed` : undefined}
+				sub={stats.failedRuns > 0 ? t('failedrunsFailed', '{{failedRuns}} failed', { failedRuns: stats.failedRuns }) : undefined}
 				subTone="destructive"
 			/>
 			<StatTile
 				icon={CheckCircle2}
-				label="Success rate"
+				label={t('successRate', 'Success rate')}
 				value={stats.successRate != null ? `${stats.successRate}%` : "—"}
 			/>
 			<StatTile
 				icon={Workflow}
-				label="Process cases"
+				label={t('processCases', 'Process cases')}
 				value={String(stats.caseCount)}
-				sub={stats.failedCases > 0 ? `${stats.failedCases} failed` : undefined}
+				sub={stats.failedCases > 0 ? t('failedcasesFailed', '{{failedCases}} failed', { failedCases: stats.failedCases }) : undefined}
 				subTone="destructive"
 			/>
 			<StatTile
 				icon={Clock}
-				label="Avg case time"
+				label={t('avgCaseTime', 'Avg case time')}
 				value={
 					stats.avgDuration != null ? formatDuration(stats.avgDuration) : "—"
 				}
@@ -1548,6 +1544,7 @@ function CaseWaterfall({
 	caseId: string;
 	nameOf: (id: string) => string;
 }>) {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const detail = useInvoke(
 		backend.teamState.getProcessCaseRuns,
@@ -1558,7 +1555,7 @@ function CaseWaterfall({
 	if (detail.error) {
 		return (
 			<p className="border-t pt-2 text-xs text-muted-foreground">
-				Couldn&apos;t load the case timeline.
+				{t('couldnapostLoadTheCaseTimeline', "Couldn't load the case timeline.")}
 			</p>
 		);
 	}
@@ -1592,14 +1589,14 @@ function CaseWaterfall({
 					<div
 						key={run.run_id}
 						className="flex items-center gap-2 text-xs"
-						title={`${run.status} · run ${run.run_id}`}
+						title={t('statusRunRun_id', '{{status}} · run {{run_id}}', { status: run.status, run_id: run.run_id })}
 					>
 						<span
 							className="w-44 shrink-0 truncate text-muted-foreground"
 							style={{ paddingLeft: `${Math.min(run.depth, 6) * 10}px` }}
 						>
 							{nameOf(run.app_id)}
-							{run.event_name ? ` · ${run.event_name}` : ""}
+							{run.event_name ? `· ${run.event_name}` : ""}
 						</span>
 						<div className="relative h-2.5 min-w-0 flex-1 overflow-hidden rounded bg-muted/50">
 							<div
@@ -1644,6 +1641,7 @@ function ProcessCasesCard({
 	nodesById,
 	onHoverPath,
 }: Readonly<ProcessCasesCardProps>) {
+	const { t } = useTranslation("settings");
 	const [statusFilter, setStatusFilter] = useState<CaseFilter>("all");
 	const [search, setSearch] = useState("");
 	const [expandedCaseId, setExpandedCaseId] = useState<string | null>(null);
@@ -1692,12 +1690,10 @@ function ProcessCasesCard({
 			<CardHeader className="pb-3">
 				<CardTitle className="flex items-center gap-2 text-base">
 					<Workflow className="h-4 w-4" />
-					Process Cases
+					{t('processCases2', 'Process Cases')}
 				</CardTitle>
 				<CardDescription>
-					End-to-end cases this app started, reconstructed across apps and
-					events from the run correlation spine. Hover a case to trace its path
-					on the graph.
+					{`End-to-end cases this app started, reconstructed across apps and events from the run correlation spine. Hover a case to trace its path on the graph.`}
 				</CardDescription>
 				{cases.length > 0 && (
 					<div className="flex flex-wrap items-center gap-2 pt-2">
@@ -1722,7 +1718,7 @@ function ProcessCasesCard({
 							<Input
 								value={search}
 								onChange={(event) => setSearch(event.target.value)}
-								placeholder="Filter by key, event, or app"
+								placeholder={t('filterByKeyEventOrApp', 'Filter by key, event, or app')}
 								className="h-8 w-60 pl-7 text-xs"
 							/>
 						</div>
@@ -1732,13 +1728,11 @@ function ProcessCasesCard({
 			<CardContent>
 				{cases.length === 0 ? (
 					<p className="text-sm text-muted-foreground">
-						No process cases in this time window. Cases appear when this
-						app&apos;s events run — pass correlation keys at invoke time to
-						group them by business object.
+						{t('noProcessCasesInThisTimeWindowCasesAppearWhenThisAppapossEventsRunPassCorrelationKeysAtInvokeTimeToGroupThemByBusinessObject', "No process cases in this time window. Cases appear when this app's events run — pass correlation keys at invoke time to group them by business object.")}
 					</p>
 				) : visible.length === 0 ? (
 					<p className="text-sm text-muted-foreground">
-						No cases match the current filter.
+						{t('noCasesMatchTheCurrentFilter', 'No cases match the current filter.')}
 					</p>
 				) : (
 					<div className="space-y-2">
@@ -1750,7 +1744,7 @@ function ProcessCasesCard({
 							return (
 								<div
 									key={processCase.case_id}
-									title={`Case ${processCase.case_id}`}
+									title={t('caseCase_id', 'Case {{case_id}}', { case_id: processCase.case_id })}
 									className={cn(
 										"space-y-2 rounded-md border p-3 transition-colors hover:bg-muted/40",
 										expanded && "bg-muted/30",
@@ -1765,9 +1759,7 @@ function ProcessCasesCard({
 												{nameOf(processCase.root_app_id)}
 											</span>
 											{processCase.root_event_name && (
-												<span className="truncate text-xs text-muted-foreground">
-													· {processCase.root_event_name}
-												</span>
+												<span className="truncate text-xs text-muted-foreground">{`· ${processCase.root_event_name}`}</span>
 											)}
 										</div>
 										<div className="flex shrink-0 items-center gap-1">
@@ -1782,7 +1774,7 @@ function ProcessCasesCard({
 												size="icon"
 												className="h-6 w-6"
 												aria-label={
-													expanded ? "Collapse case" : "Inspect case timeline"
+													expanded ? "Collapse case" : t('inspectCaseTimeline', 'Inspect case timeline')
 												}
 												aria-expanded={expanded}
 												onClick={() =>
@@ -1838,9 +1830,7 @@ function ProcessCasesCard({
 											{processCase.run_count === 1 ? "run" : "runs"}
 										</Badge>
 										{processCase.failed_count > 0 && (
-											<Badge variant="destructive">
-												{processCase.failed_count} failed
-											</Badge>
+											<Badge variant="destructive">{t('failed_countFailed', '{{failed_count}} failed', { failed_count: processCase.failed_count })}</Badge>
 										)}
 										{processCase.duration_ms != null && (
 											<span className="flex items-center gap-1">
@@ -1881,6 +1871,7 @@ export function ProcessGraph({
 	onUpdateNote,
 	onDeleteNote,
 }: Readonly<ProcessGraphProps>) {
+	const { t } = useTranslation("settings");
 	const { resolvedTheme } = useTheme();
 	const [selection, setSelection] = useState<
 		{ kind: "node"; id: string } | { kind: "edge"; id: string } | null
@@ -2048,13 +2039,11 @@ export function ProcessGraph({
 			<div className="flex flex-wrap items-center gap-3">
 				<Select value={days.toString()} onValueChange={handleDaysChange}>
 					<SelectTrigger className="w-36">
-						<SelectValue placeholder="Time window" />
+						<SelectValue placeholder={t('timeWindow', 'Time window')} />
 					</SelectTrigger>
 					<SelectContent>
 						{TIME_WINDOWS.map((window) => (
-							<SelectItem key={window} value={window.toString()}>
-								Last {window} days
-							</SelectItem>
+							<SelectItem key={window} value={window.toString()}>{t('lastWindowDays', 'Last {{window}} days', { window })}</SelectItem>
 						))}
 					</SelectContent>
 				</Select>
@@ -2062,7 +2051,7 @@ export function ProcessGraph({
 					<RefreshCw
 						className={cn("mr-2 h-4 w-4", isLoading && "animate-spin")}
 					/>
-					Refresh
+					{t('refresh', 'Refresh')}
 				</Button>
 				<Button
 					variant="outline"
@@ -2094,8 +2083,8 @@ export function ProcessGraph({
 						<div className="flex h-full items-center justify-center">
 							<EmptyState
 								icons={[GitBranch]}
-								title="No process data"
-								description="No connections or observed call chains were found for this time window."
+								title={t('noProcessData', 'No process data')}
+								description={t('noConnectionsOrObservedCallChainsWereFoundForThisTimeWindow', 'No connections or observed call chains were found for this time window.')}
 							/>
 						</div>
 					) : (
@@ -2139,7 +2128,7 @@ export function ProcessGraph({
 				</div>
 				{selection && (
 					<aside
-						aria-label="App details"
+						aria-label={t('appDetails', 'App details')}
 						className="absolute inset-y-0 right-0 z-10 w-full border-l bg-card md:relative md:inset-auto md:z-auto md:w-80 md:shrink-0"
 					>
 						{selection.kind === "node" && selectedApp && (
@@ -2170,7 +2159,7 @@ export function ProcessGraph({
 					onClick={() => setBottomTab("cases")}
 				>
 					<Workflow className="h-3.5 w-3.5" />
-					Process Cases
+					{t('processCases2', 'Process Cases')}
 					{cases && (
 						<span className="tabular-nums text-muted-foreground">
 							{cases.length}
@@ -2184,7 +2173,7 @@ export function ProcessGraph({
 					onClick={() => setBottomTab("chains")}
 				>
 					<GitBranch className="h-3.5 w-3.5" />
-					Observed Chains
+					{t('observedChains', 'Observed Chains')}
 					{data && (
 						<span className="tabular-nums text-muted-foreground">
 							{data.flows.length}
@@ -2206,11 +2195,9 @@ export function ProcessGraph({
 						<CardContent className="flex items-center gap-3 p-4">
 							<XCircle className="h-4 w-4 shrink-0 text-destructive" />
 							<div className="text-sm">
-								<p className="font-medium">Process cases unavailable</p>
+								<p className="font-medium">{t('processCasesUnavailable', 'Process cases unavailable')}</p>
 								<p className="text-xs text-muted-foreground">
-									The cases endpoint returned an error. Make sure the API is
-									running the latest build and the database migration has been
-									applied, then refresh.
+									{t('theCasesEndpointReturnedAnErrorMakeSureTheApiIsRunningTheLatestBuildAndTheDatabaseMigrationHasBeenAppliedThenRefresh', "The cases endpoint returned an error. Make sure the API is running the latest build and the database migration has been applied, then refresh.")}
 								</p>
 							</div>
 						</CardContent>
@@ -2220,7 +2207,7 @@ export function ProcessGraph({
 				) : (
 					<Card>
 						<CardContent className="p-4 text-sm text-muted-foreground">
-							No process cases loaded yet.
+							{t('noProcessCasesLoadedYet', 'No process cases loaded yet.')}
 						</CardContent>
 					</Card>
 				)

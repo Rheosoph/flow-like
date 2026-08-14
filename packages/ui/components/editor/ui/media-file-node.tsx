@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { TFileElement } from "platejs";
 import type { PlateElementProps } from "platejs/react";
 
@@ -14,6 +15,7 @@ import { Caption, CaptionTextarea } from "./caption";
 export const FileElement = withHOC(
 	ResizableProvider,
 	function FileElement(props: PlateElementProps<TFileElement>) {
+		const { t } = useTranslation("common");
 		const readOnly = useReadOnly();
 		const { name, unsafeUrl } = useMediaState();
 		const resolvedUrl = useEditorAssetUrl(unsafeUrl);
@@ -38,7 +40,7 @@ export const FileElement = withHOC(
 						<CaptionTextarea
 							className="text-left"
 							readOnly={readOnly}
-							placeholder="Write a caption..."
+							placeholder={t('writeACaption', 'Write a caption...')}
 						/>
 					</Caption>
 				</a>

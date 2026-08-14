@@ -1,11 +1,13 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { SlateElementProps, TLinkElement } from "platejs";
 
 import { getLinkAttributes } from "@platejs/link";
 import { SlateElement } from "platejs";
 
 export function LinkElementStatic(props: SlateElementProps<TLinkElement>) {
+	const { t } = useTranslation("common");
 	const url = props.element.url;
 
 	// Check if this is an invalid node reference
@@ -13,7 +15,7 @@ export function LinkElementStatic(props: SlateElementProps<TLinkElement>) {
 		return (
 			<span
 				className="inline-flex items-center gap-1 px-1.5 py-0.5 mx-0.5 text-xs font-medium text-muted-foreground bg-muted/50 rounded-md border border-border/50 cursor-default"
-				title="Node not found in current flow"
+				title={t('nodeNotFoundInCurrentFlow', 'Node not found in current flow')}
 			>
 				<svg
 					xmlns="http://www.w3.org/2000/svg"

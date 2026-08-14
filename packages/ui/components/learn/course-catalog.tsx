@@ -1,9 +1,9 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import { motion } from "framer-motion";
 import {
 	ArrowRight,
 	Award,
-	BookOpenCheck,
 	Compass,
 	GraduationCap,
 	Search,
@@ -25,9 +25,9 @@ import { cn } from "../../lib/utils";
 import { EmptyState } from "../ui/empty-state";
 import { Input } from "../ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { CourseBoardGlyph } from "./course-board-glyph";
 import { CourseCard } from "./course-card";
 import { LearningPathCard } from "./learning-path-card";
-import { UniversityHeroArt } from "./university-hero-art";
 
 interface CourseCatalogProps {
 	readonly courses: ReadonlyArray<CourseListItem>;
@@ -71,6 +71,16 @@ const difficulties: ReadonlyArray<CourseDifficulty | "ALL"> = [
 	"EXPERT",
 ];
 
+/** Difficulty is the only ordering the catalogue actually knows, so it is what groups the shelf. */
+const TIERS: ReadonlyArray<{
+	readonly id: string;
+	readonly levels: ReadonlyArray<CourseDifficulty>;
+}> = [
+	{ id: "foundation", levels: ["BEGINNER"] },
+	{ id: "systems", levels: ["INTERMEDIATE"] },
+	{ id: "depth", levels: ["ADVANCED", "EXPERT"] },
+];
+
 export function CourseCatalog({
 	courses,
 	paths = [],
@@ -82,6 +92,7 @@ export function CourseCatalog({
 	onOpenCertificates,
 	onOpenAuthoring,
 }: CourseCatalogProps) {
+	const { t } = useTranslation();
 	const [query, setQuery] = useState("");
 	const [category, setCategory] =
 		useState<(typeof categories)[number]["value"]>("ALL");
@@ -103,19 +114,6 @@ export function CourseCatalog({
 		[matched, category, difficulty],
 	);
 
-	const inProgress = useMemo(() => {
-		const map = progressByCourseId ?? {};
-		return filtered.filter((c) => {
-			const p = map[c.id];
-			return p !== undefined && p > 0 && p < 1;
-		});
-	}, [filtered, progressByCourseId]);
-
-	const remainingCourses = useMemo(
-		() => filtered.filter((c) => !inProgress.find((i) => i.id === c.id)),
-		[filtered, inProgress],
-	);
-
 	const availableCategories = useMemo(() => {
 		const present = new Set<CourseCategory>();
 		for (const c of courses) {
@@ -126,7 +124,6 @@ export function CourseCatalog({
 		);
 	}, [courses]);
 
-	const greetingName = displayName?.split(" ")[0] || displayName || null;
 	const isFiltering =
 		query.trim().length > 0 || difficulty !== "ALL" || category !== "ALL";
 	const activeFilterCount =
@@ -136,15 +133,88 @@ export function CourseCatalog({
 		setCategory("ALL");
 	};
 
+	const firstVisit = (stats?.enrolled ?? 0) === 0;
+	const greetingName = displayName?.split(" ")[0] || displayName || null;
+
+	const totalMinutes = useMemo(
+		() => courses.reduce((sum, c) => sum + (c.estimated_minutes ?? 0), 0),
+		[courses],
+	);
+
+	/** The one course a brand-new learner should open: step one of a path, else the shortest beginner course. */
+	const recommended = useMemo(() => {
+		const firstStep = [...paths]
+			.sort((a, b) => a.position - b.position)
+			.flatMap((p) => [...p.steps].sort((a, b) => a.position - b.position))
+			.find((s) => s.course != null)?.course;
+		if (firstStep) return firstStep;
+		return (
+			[...courses]
+				.filter((c) => c.difficulty === "BEGINNER")
+				.sort((a, b) => a.estimated_minutes - b.estimated_minutes)[0] ??
+			courses[0] ??
+			null
+		);
+	}, [paths, courses]);
+
+	const inProgress = useMemo(() => {
+		const map = progressByCourseId ?? {};
+		return courses.filter((c) => {
+			const p = map[c.id];
+			return p !== undefined && p > 0 && p < 1;
+		});
+	}, [courses, progressByCourseId]);
+
+	const resume = inProgress[0] ?? null;
+
+	const tiers = useMemo(
+		() =>
+			TIERS.map((tier) => ({
+				...tier,
+				items: filtered.filter((c) =>
+					tier.levels.includes(c.difficulty as CourseDifficulty),
+				),
+			})).filter((tier) => tier.items.length > 0),
+		[filtered],
+	);
+
+	const tierCopy: Record<string, { title: string; note: string }> = {
+		foundation: {
+			title: t("foundation", "Foundation"),
+			note: t(
+				"buildOneThingEndToEndBeforeYouBuildMany",
+				"Build one thing end to end before you build many.",
+			),
+		},
+		systems: {
+			title: t("systems", "Systems"),
+			note: t(
+				"giveItDataEntryPointsAndOtherPeople",
+				"Give it data, entry points, and other people.",
+			),
+		},
+		depth: {
+			title: t("depth", "Depth"),
+			note: t(
+				"whereFlowLikeStopsBeingAToolAndStartsBeingAPlatform",
+				"Where Flow-Like stops being a tool and starts being a platform.",
+			),
+		},
+	};
+
 	return (
-		<div className="flex flex-col gap-4">
-			<header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-				<div>
-					<h1 className="text-xl font-semibold tracking-tight">University</h1>
-					<p className="text-xs text-muted-foreground">
-						{filtered.length} {filtered.length === 1 ? "course" : "courses"}{" "}
-						available
-					</p>
+		<div className="flex flex-col gap-8">
+			<header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+				<div className="flex items-baseline gap-3">
+					<h1 className="text-lg font-semibold tracking-tight">
+						{t("university", "University")}
+					</h1>
+					<span className="font-mono text-[10px] uppercase tracking-wider tabular-nums text-muted-foreground">
+						{t("valCoursesValHours", "{{courses}} courses · {{hours}} h", {
+							courses: courses.length,
+							hours: Math.max(1, Math.round(totalMinutes / 60)),
+						})}
+					</span>
 				</div>
 				<div className="flex w-full gap-2 md:w-auto">
 					<div className="relative min-w-0 flex-1 md:w-80">
@@ -152,8 +222,11 @@ export function CourseCatalog({
 						<Input
 							value={query}
 							onChange={(e) => setQuery(e.target.value)}
-							placeholder="Search by title, tag, or topic…"
-							className="h-9 rounded-lg border-border/60 bg-background/70 pl-9 backdrop-blur-sm"
+							placeholder={t(
+								"searchWhatYouWantToBuild",
+								"Search what you want to build",
+							)}
+							className="h-9 rounded-lg border-border/60 pl-9"
 						/>
 					</div>
 					<Popover>
@@ -161,13 +234,15 @@ export function CourseCatalog({
 							<button
 								type="button"
 								className={cn(
-									"inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-border/60 bg-background/70 px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground",
+									"inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-border/60 px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground",
 									activeFilterCount > 0 &&
 										"border-primary/40 bg-primary/10 text-foreground",
 								)}
 							>
 								<SlidersHorizontal className="size-4" />
-								<span className="hidden sm:inline">Filters</span>
+								<span className="hidden sm:inline">
+									{t("filters", "Filters")}
+								</span>
 								{activeFilterCount > 0 && (
 									<span className="grid size-4 place-items-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground">
 										{activeFilterCount}
@@ -181,9 +256,14 @@ export function CourseCatalog({
 						>
 							<div className="flex items-start justify-between gap-3">
 								<div>
-									<h3 className="text-sm font-semibold">Refine courses</h3>
+									<h3 className="text-sm font-semibold">
+										{t("refineCourses", "Refine courses")}
+									</h3>
 									<p className="text-xs text-muted-foreground">
-										Filter by difficulty or topic.
+										{t(
+											"filterByDifficultyOrTopic",
+											"Filter by difficulty or topic.",
+										)}
 									</p>
 								</div>
 								{activeFilterCount > 0 && (
@@ -193,18 +273,18 @@ export function CourseCatalog({
 										className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground"
 									>
 										<X className="size-3" />
-										Clear
+										{t("clear", "Clear")}
 									</button>
 								)}
 							</div>
 							<div className="space-y-4">
 								<SegmentedSelect
-									label="Difficulty"
+									label={t("difficulty", "Difficulty")}
 									options={difficulties.map((d) => ({
 										value: d,
 										label:
 											d === "ALL"
-												? "All"
+												? t("all", "All")
 												: d.charAt(0) + d.slice(1).toLowerCase(),
 									}))}
 									value={difficulty}
@@ -213,7 +293,7 @@ export function CourseCatalog({
 									}
 								/>
 								<SegmentedSelect
-									label="Topic"
+									label={t("topic", "Topic")}
 									options={categories.map((c) => ({
 										value: c.value,
 										label: c.label,
@@ -229,147 +309,111 @@ export function CourseCatalog({
 				</div>
 			</header>
 
-			<motion.section
-				initial={{ opacity: 0, y: 8 }}
-				animate={{ opacity: 1, y: 0 }}
-				transition={{ duration: 0.45, ease: "easeOut" }}
-				className="relative overflow-hidden rounded-2xl border border-border/60 bg-linear-to-br from-sky-500/15 via-card/85 to-amber-500/10 p-5 shadow-sm md:p-6"
-			>
-				<div className="absolute inset-x-0 top-0 h-1 bg-linear-to-r from-sky-400/80 via-emerald-400/80 to-amber-300/80" />
-				<div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_0%,rgba(255,255,255,0.08)_42%,transparent_74%)]" />
-				<UniversityHeroArt className="absolute right-4 top-1/2 hidden h-44 w-64 -translate-y-1/2 opacity-90 md:block lg:right-8 lg:h-52 lg:w-80" />
-				<div className="relative flex flex-col gap-5">
-					<div className="space-y-3">
-						<div className="inline-flex items-center gap-2 rounded-full border border-border/50 bg-background/45 px-2.5 py-1 text-xs font-medium text-muted-foreground backdrop-blur-sm">
-							<GraduationCap className="size-3.5" />
-							FlowLike University
-						</div>
-						<div className="space-y-1.5">
-							<h1 className="max-w-2xl text-2xl font-semibold tracking-tight md:text-3xl">
-								{greetingName ? (
-									<>
-										Welcome back,{" "}
-										<span className="bg-linear-to-r from-sky-300 via-emerald-300 to-amber-200 bg-clip-text text-transparent">
-											{greetingName}
-										</span>
-										.
-									</>
-								) : (
-									"Learn flows by doing."
-								)}
-							</h1>
-							<p className="max-w-xl text-sm leading-6 text-muted-foreground">
-								Short, practical lessons paired with real apps. Build something
-								useful and keep your momentum visible.
-							</p>
-						</div>
-					</div>
-					{stats && (
-						<dl className="flex flex-wrap items-center gap-1.5">
-							<HeroChip
-								icon={BookOpenCheck}
-								label={`${stats.enrolled} enrolled`}
-								tone="primary"
+			<section className="flex flex-col gap-3">
+				<span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+					{greetingName && !firstVisit
+						? t("welcomeBackVal", "Welcome back, {{val}}", {
+								val: greetingName,
+							})
+						: t("flowLikeUniversity", "Flow-Like University")}
+				</span>
+
+				{firstVisit && (
+					<>
+						<h2 className="max-w-[18ch] text-3xl font-semibold leading-[1.05] tracking-tight text-balance md:text-4xl">
+							{t(
+								"learnFlowLikeByBuildingIt",
+								"Learn Flow-Like by building it.",
+							)}
+						</h2>
+						<p className="max-w-[58ch] font-serif text-[17.5px] leading-[1.6] text-muted-foreground">
+							{t(
+								"everyCourseShipsARealApp",
+								"Every course ships a real App that clones into your library when you enroll. The lessons are the commentary — the board is the deliverable.",
+							)}
+						</p>
+					</>
+				)}
+
+				<div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 pt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+					{firstVisit ? (
+						<>
+							<Fact
+								value={courses.length}
+								label={t("appsToBuild", "to build")}
 							/>
-							<HeroChip
-								icon={GraduationCap}
-								label={`${stats.completed} completed`}
-								tone="green"
+							<Fact
+								value={Math.max(1, Math.round(totalMinutes / 60))}
+								label={t("hoursOfMaterial", "hours of material")}
 							/>
-							<HeroChip
-								icon={Award}
-								label={`${stats.certificates} ${
-									stats.certificates === 1 ? "certificate" : "certificates"
-								}`}
-								tone="amber"
+							{paths.length > 0 && (
+								<Fact
+									value={paths.length}
+									label={t("learningPaths", "learning paths")}
+								/>
+							)}
+							<span>
+								{t("runsLocallyOrInTheCloud", "Runs locally or in the cloud")}
+							</span>
+						</>
+					) : (
+						<>
+							<Fact value={stats?.completed ?? 0} label={t("built", "built")} />
+							<Fact
+								value={inProgress.length}
+								label={t("inProgress", "in progress")}
 							/>
-							<HeroChip
-								icon={Trophy}
-								label={`${(stats.points ?? 0).toLocaleString()} pts`}
-								tone="violet"
+							<Fact
+								value={stats?.certificates ?? 0}
+								label={t("certificates", "certificates")}
 							/>
-						</dl>
+							<Fact value={stats?.points ?? 0} label={t("points", "points")} />
+						</>
 					)}
 				</div>
-			</motion.section>
-
-			<section className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),1fr))]">
-				<HubStripCard
-					icon={Trophy}
-					title="Leaderboard"
-					value={`${(stats?.points ?? 0).toLocaleString()} pts`}
-					description="Track your challenge points."
-					tone="leaderboard"
-					onClick={onOpenLeaderboard}
-				/>
-				<HubStripCard
-					icon={Award}
-					title="Certificates"
-					value={`${stats?.certificates ?? 0}`}
-					description="Review signed course certificates."
-					tone="certificates"
-					onClick={onOpenCertificates}
-				/>
-				{onOpenAuthoring && (
-					<HubStripCard
-						icon={Settings2}
-						title="Course admin"
-						value="Drafts"
-						description="Manage learning content."
-						tone="authoring"
-						onClick={onOpenAuthoring}
-					/>
-				)}
 			</section>
 
-			{paths.length > 0 && (
-				<section className="space-y-3">
-					<div className="space-y-1">
+			{firstVisit && recommended && (
+				<FeatureCourse
+					course={recommended}
+					kicker={t(
+						"startHereNothingToSetUp",
+						"Start here · nothing to set up",
+					)}
+					action={t("startCourse", "Start course")}
+					onSelect={onSelect}
+				/>
+			)}
+
+			{!firstVisit && resume && (
+				<FeatureCourse
+					course={resume}
+					kicker={t("inProgress", "In progress")}
+					action={t("continue", "Continue")}
+					onSelect={onSelect}
+				/>
+			)}
+
+			{paths.length > 0 && !isFiltering && (
+				<section className="flex flex-col gap-3">
+					<div className="flex items-baseline gap-3">
 						<h2 className="text-sm font-semibold tracking-tight">
-							Learning paths
+							{t("learningPaths", "Learning paths")}
 						</h2>
 						<p className="text-xs text-muted-foreground">
-							Curated journeys — finish one course to unlock the next.
+							{t(
+								"finishACourseToEnergizeTheNextWire",
+								"Finish a course to energize the next wire.",
+							)}
 						</p>
 					</div>
-					<div className="space-y-3">
+					<div className="flex flex-col gap-3">
 						{paths.map((path) => (
 							<LearningPathCard
 								key={path.id}
 								path={path}
 								progressByCourseId={progressByCourseId}
 								onSelectCourse={onSelect}
-							/>
-						))}
-					</div>
-				</section>
-			)}
-
-			{inProgress.length > 0 && !isFiltering && (
-				<section className="space-y-3">
-					<div className="flex items-end justify-between gap-2">
-						<div>
-							<h2 className="text-sm font-semibold tracking-tight">
-								Continue learning
-							</h2>
-							<p className="text-xs text-muted-foreground">
-								Pick up where you left off.
-							</p>
-						</div>
-						{inProgress.length > 4 && (
-							<span className="text-xs text-muted-foreground">
-								Showing 4 of {inProgress.length}
-							</span>
-						)}
-					</div>
-					<div className="grid items-stretch gap-4 grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))]">
-						{inProgress.slice(0, 4).map((course, i) => (
-							<CourseCard
-								key={course.id}
-								course={course}
-								progressPct={progressByCourseId?.[course.id]}
-								onSelect={onSelect}
-								index={i}
 							/>
 						))}
 					</div>
@@ -384,36 +428,228 @@ export function CourseCatalog({
 				/>
 			)}
 
-			<section className="grid items-stretch gap-4 grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))]">
-				{(isFiltering ? filtered : remainingCourses).map((course, i) => (
-					<CourseCard
-						key={course.id}
-						course={course}
-						progressPct={progressByCourseId?.[course.id]}
-						onSelect={onSelect}
-						index={i}
-					/>
-				))}
-				{(isFiltering ? filtered : remainingCourses).length === 0 && (
-					<div className="sm:col-span-2 lg:col-span-3">
-						<EmptyState
-							title={
-								isFiltering
-									? "No courses match these filters"
-									: "No courses yet"
-							}
-							description={
-								isFiltering
-									? "Try clearing some filters or searching for something different."
-									: "Courses will show up here once published. Check back soon."
-							}
-							icons={[Compass, GraduationCap, Sparkles]}
-							className="h-full min-h-[220px] max-w-none p-10"
-						/>
+			{filtered.length === 0 ? (
+				<EmptyState
+					title={
+						isFiltering
+							? t(
+									"noCoursesMatchTheseFilters",
+									"No courses match these filters",
+								)
+							: t("noCoursesYet", "No courses yet")
+					}
+					description={
+						isFiltering
+							? t(
+									"tryClearingSomeFilters",
+									"Try clearing some filters or searching for something different.",
+								)
+							: t(
+									"coursesWillShowUpHereOncePublished",
+									"Courses will show up here once published. Check back soon.",
+								)
+					}
+					icons={[Compass, GraduationCap, Sparkles]}
+					className="min-h-55 max-w-none p-10"
+				/>
+			) : isFiltering ? (
+				<section className="flex flex-col gap-3">
+					<div className="flex items-baseline gap-3 border-b border-border/60 pb-3">
+						<h2 className="text-sm font-semibold tracking-tight">
+							{t("matchingCourses", "Matching courses")}
+						</h2>
+						<span className="font-mono text-[10px] uppercase tracking-wider tabular-nums text-muted-foreground">
+							{filtered.length}
+						</span>
 					</div>
+					<CourseGrid
+						courses={filtered}
+						progressByCourseId={progressByCourseId}
+						onSelect={onSelect}
+					/>
+				</section>
+			) : (
+				<div className="flex flex-col gap-9">
+					{tiers.map((tier) => (
+						<section key={tier.id} className="flex flex-col gap-3">
+							<div className="flex items-baseline gap-3">
+								<span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+									{tierCopy[tier.id]?.title}
+								</span>
+								<span className="h-px flex-1 bg-border" />
+								<span className="hidden font-mono text-[10px] uppercase tracking-wider text-muted-foreground sm:inline">
+									{tierCopy[tier.id]?.note}
+								</span>
+							</div>
+							<CourseGrid
+								courses={tier.items}
+								progressByCourseId={progressByCourseId}
+								onSelect={onSelect}
+								recommendedId={firstVisit ? recommended?.id : undefined}
+							/>
+						</section>
+					))}
+				</div>
+			)}
+
+			<section className="grid gap-3 pb-2 sm:grid-cols-2 lg:grid-cols-3">
+				<UtilityLink
+					icon={Trophy}
+					title={t("leaderboard", "Leaderboard")}
+					description={
+						firstVisit
+							? t("youreUnranked", "You're unranked — finish a challenge")
+							: t("valPts", "{{val}} pts", { val: stats?.points ?? 0 })
+					}
+					onClick={onOpenLeaderboard}
+				/>
+				<UtilityLink
+					icon={Award}
+					title={t("certificates", "Certificates")}
+					description={
+						(stats?.certificates ?? 0) === 0
+							? t(
+									"noneYetFinishACourse",
+									"None yet — finish a course to earn one",
+								)
+							: t("valSigned", "{{val}} signed", { val: stats?.certificates })
+					}
+					onClick={onOpenCertificates}
+				/>
+				{onOpenAuthoring && (
+					<UtilityLink
+						icon={Settings2}
+						title={t("courseAdmin", "Course admin")}
+						description={t("manageLearningContent", "Manage learning content")}
+						onClick={onOpenAuthoring}
+					/>
 				)}
 			</section>
 		</div>
+	);
+}
+
+function Fact({
+	value,
+	label,
+}: {
+	readonly value: number;
+	readonly label: string;
+}) {
+	return (
+		<span className="inline-flex items-baseline gap-1.5">
+			<span className="text-base font-semibold tracking-tight tabular-nums text-foreground">
+				{value.toLocaleString()}
+			</span>
+			{label}
+		</span>
+	);
+}
+
+interface CourseGridProps {
+	readonly courses: ReadonlyArray<CourseListItem>;
+	readonly progressByCourseId?: Record<string, number>;
+	readonly onSelect?: (course: CourseListItem) => void;
+	readonly recommendedId?: string;
+}
+
+function CourseGrid({
+	courses,
+	progressByCourseId,
+	onSelect,
+	recommendedId,
+}: CourseGridProps) {
+	return (
+		<div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-3">
+			{courses.map((course, i) => (
+				<CourseCard
+					key={course.id}
+					course={course}
+					progressPct={progressByCourseId?.[course.id]}
+					onSelect={onSelect}
+					index={i}
+					recommended={course.id === recommendedId}
+				/>
+			))}
+		</div>
+	);
+}
+
+interface FeatureCourseProps {
+	readonly course: CourseListItem;
+	readonly kicker: string;
+	readonly action: string;
+	readonly onSelect?: (course: CourseListItem) => void;
+}
+
+/** The single course the learner should open next — the artifact first, the words second. */
+function FeatureCourse({
+	course,
+	kicker,
+	action,
+	onSelect,
+}: FeatureCourseProps) {
+	const { t } = useTranslation();
+	const [bannerFailed, setBannerFailed] = useState(false);
+	const showBanner = Boolean(course.banner_url) && !bannerFailed;
+	const difficultyLabel =
+		course.difficulty.charAt(0) + course.difficulty.slice(1).toLowerCase();
+
+	return (
+		<motion.section
+			initial={{ opacity: 0, y: 8 }}
+			animate={{ opacity: 1, y: 0 }}
+			transition={{ duration: 0.4, ease: "easeOut" }}
+			className="grid gap-5 overflow-hidden rounded-xl border border-border/70 border-l-2 border-l-primary bg-card p-4 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)] md:items-center md:p-5"
+		>
+			<div className="relative aspect-video overflow-hidden rounded-lg border border-border/60">
+				{showBanner ? (
+					<img
+						src={course.banner_url ?? undefined}
+						alt=""
+						loading="lazy"
+						decoding="async"
+						draggable={false}
+						onError={() => setBannerFailed(true)}
+						className="size-full object-cover object-center"
+					/>
+				) : (
+					<CourseBoardGlyph seed={course.id} accent />
+				)}
+			</div>
+
+			<div className="flex flex-col gap-2">
+				<span className="font-mono text-[10px] uppercase tracking-wider text-primary">
+					{kicker}
+				</span>
+				<h2 className="text-xl font-semibold leading-tight tracking-tight text-balance md:text-2xl">
+					{course.name ?? course.id}
+				</h2>
+				{course.description && (
+					<p className="max-w-[56ch] text-sm leading-relaxed text-muted-foreground">
+						{course.description}
+					</p>
+				)}
+				<div className="mt-1 flex flex-wrap items-center gap-3">
+					<button
+						type="button"
+						onClick={() => onSelect?.(course)}
+						className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					>
+						{action}
+						<ArrowRight className="size-4" />
+					</button>
+					<span className="font-mono text-[10px] uppercase tracking-wider tabular-nums text-muted-foreground">
+						{course.estimated_minutes > 0
+							? t("valMinValDifficulty", "{{min}} min · {{difficulty}}", {
+									min: course.estimated_minutes,
+									difficulty: difficultyLabel,
+								})
+							: difficultyLabel}
+					</span>
+				</div>
+			</div>
+		</motion.section>
 	);
 }
 
@@ -429,7 +665,7 @@ interface TopicChipsProps {
 function TopicChips({ options, value, onChange }: TopicChipsProps) {
 	return (
 		<div
-			className="flex flex-wrap items-center gap-1.5"
+			className="flex flex-wrap items-center gap-2"
 			role="tablist"
 			aria-label="Filter by topic"
 		>
@@ -443,10 +679,10 @@ function TopicChips({ options, value, onChange }: TopicChipsProps) {
 						aria-selected={active}
 						onClick={() => onChange(opt.value)}
 						className={cn(
-							"inline-flex h-7 items-center rounded-full border px-3 text-xs font-medium transition-colors",
+							"inline-flex h-8 items-center rounded-full border px-3.5 text-xs font-medium transition-colors",
 							active
-								? "border-primary/60 bg-primary/10 text-foreground"
-								: "border-border/60 bg-background/40 text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground",
+								? "border-foreground bg-foreground text-background"
+								: "border-border/60 text-muted-foreground hover:border-border hover:text-foreground",
 						)}
 					>
 						{opt.label}
@@ -457,120 +693,40 @@ function TopicChips({ options, value, onChange }: TopicChipsProps) {
 	);
 }
 
-interface HeroChipProps {
-	readonly icon: typeof Sparkles;
-	readonly label: string;
-	readonly tone: "primary" | "green" | "amber" | "violet";
-}
-
-const chipTones: Record<HeroChipProps["tone"], string> = {
-	primary:
-		"text-sky-900 bg-sky-100/80 ring-sky-300/70 dark:text-sky-100 dark:bg-sky-500/15 dark:ring-sky-400/30",
-	green:
-		"text-emerald-900 bg-emerald-100/80 ring-emerald-300/70 dark:text-emerald-100 dark:bg-emerald-500/15 dark:ring-emerald-400/30",
-	amber:
-		"text-amber-950 bg-amber-100/80 ring-amber-300/70 dark:text-amber-100 dark:bg-amber-500/15 dark:ring-amber-400/30",
-	violet:
-		"text-violet-950 bg-violet-100/80 ring-violet-300/70 dark:text-violet-100 dark:bg-violet-500/15 dark:ring-violet-400/30",
-};
-
-function HeroChip({ icon: Icon, label, tone }: HeroChipProps) {
-	return (
-		<span
-			className={cn(
-				"inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium ring-1",
-				chipTones[tone],
-			)}
-		>
-			<Icon className="size-3 text-muted-foreground" />
-			{label}
-		</span>
-	);
-}
-
-interface HubStripCardProps {
+interface UtilityLinkProps {
 	readonly icon: typeof Sparkles;
 	readonly title: string;
-	readonly value: string;
 	readonly description: string;
-	readonly tone: "leaderboard" | "certificates" | "authoring";
 	readonly onClick?: () => void;
 }
 
-const hubCardTones: Record<
-	HubStripCardProps["tone"],
-	{
-		readonly card: string;
-		readonly icon: string;
-		readonly value: string;
-	}
-> = {
-	leaderboard: {
-		card: "from-amber-500/10 via-card/95 to-card hover:border-amber-400/50",
-		icon: "bg-amber-500/15 text-amber-500 ring-amber-400/25",
-		value: "text-amber-500",
-	},
-	certificates: {
-		card: "from-sky-500/10 via-card/95 to-card hover:border-sky-400/50",
-		icon: "bg-sky-500/15 text-sky-400 ring-sky-400/25",
-		value: "text-sky-400",
-	},
-	authoring: {
-		card: "from-emerald-500/10 via-card/95 to-card hover:border-emerald-400/50",
-		icon: "bg-emerald-500/15 text-emerald-400 ring-emerald-400/25",
-		value: "text-emerald-400",
-	},
-};
-
-function HubStripCard({
+function UtilityLink({
 	icon: Icon,
 	title,
-	value,
 	description,
-	tone,
 	onClick,
-}: HubStripCardProps) {
-	const style = hubCardTones[tone];
-
+}: UtilityLinkProps) {
 	return (
-		<motion.button
+		<button
 			type="button"
 			onClick={onClick}
 			disabled={!onClick}
-			initial={{ opacity: 0, y: 6 }}
-			animate={{ opacity: 1, y: 0 }}
-			transition={{ duration: 0.35, ease: "easeOut" }}
-			whileTap={onClick ? { scale: 0.985 } : undefined}
 			className={cn(
-				"group relative flex items-center gap-3 overflow-hidden rounded-xl border border-border/60 bg-linear-to-br p-3 text-left shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-				style.card,
-				onClick ? "cursor-pointer" : "cursor-default",
+				"group flex items-center gap-3 rounded-lg border border-border/70 p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+				onClick
+					? "cursor-pointer hover:border-border hover:bg-card"
+					: "cursor-default",
 			)}
 		>
-			<div
-				className={cn(
-					"grid size-9 shrink-0 place-items-center rounded-lg ring-1",
-					style.icon,
-				)}
-			>
-				<Icon className="size-4" />
-			</div>
-			<div className="min-w-0 flex-1">
-				<div className="flex items-baseline gap-2">
-					<h3 className="truncate text-sm font-semibold">{title}</h3>
-					<span
-						className={cn(
-							"shrink-0 text-xs font-semibold tabular-nums",
-							style.value,
-						)}
-					>
-						{value}
-					</span>
-				</div>
-				<p className="truncate text-xs text-muted-foreground">{description}</p>
-			</div>
-			<ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
-		</motion.button>
+			<Icon className="size-4 shrink-0 text-muted-foreground" />
+			<span className="min-w-0 flex-1">
+				<span className="block truncate text-sm font-semibold">{title}</span>
+				<span className="block truncate text-xs text-muted-foreground">
+					{description}
+				</span>
+			</span>
+			<ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+		</button>
 	);
 }
 
@@ -606,7 +762,7 @@ function SegmentedSelect({
 							className={cn(
 								"rounded-md px-2.5 py-1.5 text-xs font-medium ring-1 transition-colors",
 								active
-									? "bg-background text-foreground ring-border shadow-sm"
+									? "bg-background text-foreground ring-border"
 									: "bg-transparent text-muted-foreground ring-border/50 hover:bg-muted/50 hover:text-foreground",
 							)}
 						>

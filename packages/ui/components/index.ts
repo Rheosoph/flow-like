@@ -3,6 +3,7 @@
 export * from "./flow/index";
 export * from "./create-flow-dialog";
 export * from "./index/dark-mode-toggle";
+export * from "./language-switcher";
 export * from "./theme-provider";
 export * from "./ui/index";
 export * from "./verification-dialog";

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
 import { useComponentEventTrigger } from "../ActionHandler";
@@ -23,6 +24,7 @@ export function A2UIChoiceMenu({
 	style,
 	componentId,
 }: ComponentProps<ChoiceMenuComponent>) {
+	const { t } = useTranslation("common");
 	const { resolve } = useData();
 	const choicesRaw = useResolved<ChoiceComponent[]>(component.choices);
 	const title = useResolved<string>(component.title);
@@ -39,9 +41,9 @@ export function A2UIChoiceMenu({
 	};
 
 	const layoutClasses: Record<string, string> = {
-		vertical: "flex flex-col gap-2",
-		horizontal: "flex flex-row gap-2 flex-wrap",
-		grid: "grid grid-cols-2 gap-2",
+		vertical: t('flexFlexcolGap2', 'flex flex-col gap-2'),
+		horizontal: t('flexFlexrowGap2Flexwrap', 'flex flex-row gap-2 flex-wrap'),
+		grid: t('gridGridcols2Gap2', 'grid grid-cols-2 gap-2'),
 	};
 
 	const layoutClass = layoutClasses[layout] ?? layoutClasses.vertical;

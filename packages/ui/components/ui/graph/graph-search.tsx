@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Search } from "lucide-react";
 import { useState } from "react";
 import { Button } from "../button";
@@ -11,6 +12,7 @@ export interface GraphSearchProps {
 }
 
 export function GraphSearch({ onSearch, placeholder }: GraphSearchProps) {
+	const { t } = useTranslation("common");
 	const [query, setQuery] = useState("");
 
 	const handleSubmit = (e: React.FormEvent) => {
@@ -27,12 +29,12 @@ export function GraphSearch({ onSearch, placeholder }: GraphSearchProps) {
 				<Input
 					value={query}
 					onChange={(e) => setQuery(e.target.value)}
-					placeholder={placeholder ?? "Search nodes..."}
+					placeholder={placeholder ?? t('searchNodes', 'Search nodes...')}
 					className="pl-8 h-9"
 				/>
 			</div>
 			<Button type="submit" size="sm" variant="secondary">
-				Find
+				{t('find', 'Find')}
 			</Button>
 		</form>
 	);

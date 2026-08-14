@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import { type Node, useStore } from "@xyflow/react";
 import { Layers } from "lucide-react";
 import { memo, useMemo } from "react";
@@ -44,6 +45,7 @@ export const FlowLayerIndicators = memo(function FlowLayerIndicators({
 	peerUsers: Map<string, PeerUserInfo>;
 	onJumpToLayer?: (layerPath: string) => void;
 }) {
+	const { t } = useTranslation("flow");
 	const transform = useStore((state) => state.transform);
 	const [tx, ty, zoom] = transform;
 
@@ -175,12 +177,10 @@ export const FlowLayerIndicators = memo(function FlowLayerIndicators({
 							</TooltipTrigger>
 							<TooltipContent side="top" className="text-xs">
 								<div className="flex flex-col gap-0.5">
-									<span className="font-medium">
-										{indicator.peers.length} user
-										{indicator.peers.length > 1 ? "s" : ""} inside this layer
+									<span className="font-medium">{t('countUsersInThisLayer', { defaultValue_one: '{{count}} user in this layer', defaultValue_other: '{{count}} users in this layer', count: indicator.peers.length })}
 									</span>
 									<span className="text-muted-foreground">
-										Click to jump in
+										{t('clickToJumpIn', 'Click to jump in')}
 									</span>
 								</div>
 							</TooltipContent>

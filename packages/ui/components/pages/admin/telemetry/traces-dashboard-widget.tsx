@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, GitBranch, Timer, TriangleAlert } from "lucide-react";
 import Link from "next/link";
@@ -31,6 +32,7 @@ interface DashboardTelemetryTracesWidgetProps {
 export function DashboardTelemetryTracesWidget({
 	profile,
 }: Readonly<DashboardTelemetryTracesWidgetProps>) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 
 	const stats = useQuery<ITelemetrySpanStatsResponse>({
@@ -67,18 +69,18 @@ export function DashboardTelemetryTracesWidget({
 				<div className="space-y-1">
 					<CardTitle className="flex items-center gap-2 text-base">
 						<GitBranch className="h-4 w-4 text-primary" />
-						Slow operations
+						{t('slowOperations', 'Slow operations')}
 						<Badge variant="outline" className="text-[10px]">
 							24h
 						</Badge>
 					</CardTitle>
 					<CardDescription>
-						Slowest traced operations by p95 latency
+						{t('slowestTracedOperationsByP95Latency', 'Slowest traced operations by p95 latency')}
 					</CardDescription>
 				</div>
 				<Button asChild size="sm" variant="outline">
 					<Link href="/admin/telemetry/traces">
-						Open Traces
+						{t('openTraces', 'Open Traces')}
 						<ExternalLink className="ml-1 h-3 w-3" />
 					</Link>
 				</Button>
@@ -92,7 +94,7 @@ export function DashboardTelemetryTracesWidget({
 						hint="Distinct span names"
 					/>
 					<StatTile
-						label="Slowest p95"
+						label={t('slowestP95', 'Slowest p95')}
 						value={
 							stats.isLoading
 								? "…"
@@ -101,10 +103,10 @@ export function DashboardTelemetryTracesWidget({
 									: "—"
 						}
 						icon={<Timer className="h-4 w-4" />}
-						hint={operations[0]?.name ?? "No spans yet"}
+						hint={operations[0]?.name ?? t('noSpansYet', 'No spans yet')}
 					/>
 					<StatTile
-						label="Worst error rate"
+						label={t('worstErrorRate', 'Worst error rate')}
 						value={
 							stats.isLoading ? "…" : `${(worstErrorRate * 100).toFixed(1)}%`
 						}
@@ -150,7 +152,7 @@ export function DashboardTelemetryTracesWidget({
 									</div>
 									{operation.errorRate > 0 ? (
 										<span className="shrink-0 text-[11px] tabular-nums text-destructive">
-											{(operation.errorRate * 100).toFixed(1)}% err
+											{(operation.errorRate * 100).toFixed(1)}{t('err', '% err')}
 										</span>
 									) : null}
 									<span className="w-16 shrink-0 text-right text-xs tabular-nums text-foreground">

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import { SuggestionPlugin } from "@platejs/suggestion/react";
@@ -21,6 +22,7 @@ import {
 import { ToolbarButton } from "./toolbar";
 
 export function ModeToolbarButton(props: DropdownMenuProps) {
+	const { t } = useTranslation("common");
 	const editor = useEditorRef();
 	const [readOnly, setReadOnly] = usePlateState("readOnly");
 	const [open, setOpen] = React.useState(false);
@@ -36,15 +38,15 @@ export function ModeToolbarButton(props: DropdownMenuProps) {
 	const item: Record<string, { icon: React.ReactNode; label: string }> = {
 		editing: {
 			icon: <PenIcon />,
-			label: "Editing",
+			label: t('editing', 'Editing'),
 		},
 		suggestion: {
 			icon: <PencilLineIcon />,
-			label: "Suggestion",
+			label: t('suggestion', 'Suggestion'),
 		},
 		viewing: {
 			icon: <EyeIcon />,
-			label: "Viewing",
+			label: t('viewing', 'Viewing'),
 		},
 	};
 

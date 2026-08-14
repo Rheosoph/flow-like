@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import { isEqualTags } from "@platejs/tag";
@@ -165,6 +166,7 @@ export const SelectEditorInput = ({
 };
 
 export function SelectEditorCombobox() {
+	const { t } = useTranslation("common");
 	const editor = useEditorRef();
 	const containerRef = useEditorContainerRef();
 	const { items, open, onValueChange } = useSelectEditorContext();
@@ -206,8 +208,8 @@ export function SelectEditorCombobox() {
 								{item.isNew ? (
 									<div className="flex items-center gap-1">
 										<PlusIcon className="size-4 text-foreground" />
-										Create new label:
-										<span className="text-gray-600">"{item.value}"</span>
+										{`Create new label:`}
+										<span className="text-gray-600">{`"${item.value}"`}</span>
 									</div>
 								) : (
 									item.value

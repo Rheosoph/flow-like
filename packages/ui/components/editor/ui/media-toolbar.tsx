@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { WithRequiredKey } from "platejs";
 
 import {
@@ -37,6 +38,7 @@ export function MediaToolbar({
 	children: React.ReactNode;
 	plugin: WithRequiredKey;
 }) {
+	const { t } = useTranslation("common");
 	const editor = useEditorRef();
 	const readOnly = useReadOnly();
 	const selected = useSelected();
@@ -79,7 +81,7 @@ export function MediaToolbar({
 
 							<FloatingMediaPrimitive.UrlInput
 								className={inputVariants()}
-								placeholder="Paste the embed link..."
+								placeholder={t('pasteTheEmbedLink', 'Paste the embed link...')}
 								options={{ plugin }}
 							/>
 						</div>
@@ -89,11 +91,11 @@ export function MediaToolbar({
 						<FloatingMediaPrimitive.EditButton
 							className={buttonVariants({ size: "sm", variant: "ghost" })}
 						>
-							Edit link
+							{t('editLink', 'Edit link')}
 						</FloatingMediaPrimitive.EditButton>
 
 						<CaptionButton size="sm" variant="ghost">
-							Caption
+							{t('caption', 'Caption')}
 						</CaptionButton>
 
 						<Separator orientation="vertical" className="mx-1 h-6" />

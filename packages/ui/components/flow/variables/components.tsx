@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { EllipsisVerticalIcon, GripIcon, ListIcon } from "lucide-react";
 import { IValueType, type IVariable, type IVariableType } from "../../../lib";
 import { Badge, Label } from "../../ui";
@@ -62,8 +63,9 @@ export function VariableTypeIndicator({
 	type: IValueType;
 	valueType: IVariableType;
 }>) {
+	const { t } = useTranslation("flow");
 	const color = typeToColor(valueType);
-	const baseStyle = "w-6 h-6 p-1 flex items-center justify-center";
+	const baseStyle = t('w6H6P1FlexItemscenterJustifycenter', 'w-6 h-6 p-1 flex items-center justify-center');
 
 	switch (type) {
 		case IValueType.Normal:
@@ -109,6 +111,7 @@ function VariableTypeBadge({
 	type: IValueType;
 	valueType: IVariableType;
 }>) {
+	const { t } = useTranslation("flow");
 	const getTypeLabel = () => {
 		switch (type) {
 			case IValueType.Array:

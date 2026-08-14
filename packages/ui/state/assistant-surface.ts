@@ -91,7 +91,8 @@ export interface AssistantWidgetSurface {
 
 /**
  * Live context published by an open Data Studio page while it is mounted, so the global assistant
- * knows which app's data / ontology the user is looking at and defaults `data_studio_agent` there.
+ * knows which app's data / ontology the user is looking at. The routing policy still checks that
+ * app's configured Events before choosing a direct Data Studio fallback.
  */
 export interface AssistantDataStudioSurface {
 	/** App whose Data Studio is open. */

@@ -1,4 +1,5 @@
 // dnd-kit imports
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	DndContext,
 	type DragEndEvent,
@@ -53,6 +54,11 @@ import {
 import * as React from "react";
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { cn } from "../../lib";
+import {
+	formatAbsoluteDateTime,
+	formatRelativeTime,
+	parseTemporalValue,
+} from "../../lib/date";
 import type { IIndexConfig } from "../../state/backend-state/db-state";
 import {
 	Badge,
@@ -250,6 +256,7 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 	onSearch,
 	className,
 }) => {
+	const { t } = useTranslation("common");
 	const [schema, setSchema] = useState<LanceSchema | null>(null);
 
 	const [page, setPage] = useState(initialPage);
@@ -414,14 +421,14 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 				<Checkbox
 					checked={table.getIsAllPageRowsSelected()}
 					onCheckedChange={(v) => table.toggleAllPageRowsSelected(!!v)}
-					aria-label="Select all"
+					aria-label={t('selectAll', 'Select all')}
 				/>
 			),
 			cell: ({ row }) => (
 				<Checkbox
 					checked={row.getIsSelected()}
 					onCheckedChange={(v) => row.toggleSelected(!!v)}
-					aria-label="Select row"
+					aria-label={t('selectRow', 'Select row')}
 				/>
 			),
 			enableSorting: false,
@@ -512,8 +519,8 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 		: lastCount < pageSize;
 
 	const containerCls = cn(
-		"flex h-full w-full flex-col gap-3",
-		fullscreen && "fixed inset-0 z-[60] bg-background p-4",
+		t('flexHfullWfullFlexcolGap3', 'flex h-full w-full flex-col gap-3'),
+		fullscreen && t('fixedInset0Z60BgbackgroundP4', 'fixed inset-0 z-[60] bg-background p-4'),
 		className,
 	);
 
@@ -544,11 +551,11 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 						>
 							{fullscreen ? (
 								<>
-									<Minimize2 className="h-4 w-4 mr-2" /> Exit
+									<Minimize2 className="h-4 w-4 mr-2" /> {t('exit', 'Exit')}
 								</>
 							) : (
 								<>
-									<Maximize2 className="h-4 w-4 mr-2" /> Fullscreen
+									<Maximize2 className="h-4 w-4 mr-2" /> {t('fullscreen', 'Fullscreen')}
 								</>
 							)}
 						</Button>
@@ -677,7 +684,7 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 											colSpan={columns.length}
 											className="h-24 text-center text-muted-foreground"
 										>
-											Loading…
+											{t('loading', 'Loading…')}
 										</TableCell>
 									</TableRow>
 								) : table.getRowModel().rows?.length ? (
@@ -721,7 +728,7 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 										>
 											<div className="flex w-full h-full items-center justify-center">
 												<div className="flex items-center gap-2">
-													<Info className="h-4 w-4" /> No results.
+													<Info className="h-4 w-4" /> {t('noResults', 'No results.')}
 												</div>
 											</div>
 										</TableCell>
@@ -735,16 +742,14 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 						<div className="text-xs text-muted-foreground">
 							{knowsTotal ? (
 								<>
-									Showing <b>{currentFrom}</b>–<b>{currentTo}</b> of{" "}
+									{t('showing', 'Showing')} <b>{currentFrom}</b>–<b>{currentTo}</b> of{" "}
 									<b>{(total ?? 0).toLocaleString()}</b>
 								</>
 							) : (
 								<>—</>
 							)}
 							{selectedCount > 0 && (
-								<Badge variant="secondary" className="ml-2">
-									{selectedCount} selected
-								</Badge>
+								<Badge variant="secondary" className="ml-2">{t('selectedcountSelected', '{{selectedCount}} selected', { selectedCount })}</Badge>
 							)}
 						</div>
 						<div className="flex items-center gap-2">
@@ -753,13 +758,11 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 								onValueChange={(v) => handlePageSizeChange(Number(v))}
 							>
 								<SelectTrigger className="h-8 w-[120px]">
-									<SelectValue placeholder="Page size" />
+									<SelectValue placeholder={t('pageSize', 'Page size')} />
 								</SelectTrigger>
 								<SelectContent>
 									{pageSizeOptions.map((n) => (
-										<SelectItem key={n} value={String(n)}>
-											{n} / page
-										</SelectItem>
+										<SelectItem key={n} value={String(n)}>{t('nPage', '{{n}} / page', { n })}</SelectItem>
 									))}
 								</SelectContent>
 							</Select>
@@ -769,7 +772,7 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 								onClick={() => handlePageChange(Math.max(1, page - 1))}
 								disabled={page === 1}
 							>
-								Prev
+								{t('prev', 'Prev')}
 							</Button>
 							<div className="text-sm w-14 text-center">{page}</div>
 							<Button
@@ -778,7 +781,7 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 								onClick={() => handlePageChange(page + 1)}
 								disabled={isLastPage}
 							>
-								Next
+								{t('next', 'Next')}
 							</Button>
 
 							<DropdownMenu>
@@ -789,11 +792,10 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 								</DropdownMenuTrigger>
 								<DropdownMenuContent align="end">
 									<DropdownMenuItem onClick={copySelectedAsCSV}>
-										<Download className="h-4 w-4 mr-2" /> Copy selected as CSV
+										<Download className="h-4 w-4 mr-2" /> {t('copySelectedAsCsv', 'Copy selected as CSV')}
 									</DropdownMenuItem>
 									<DropdownMenuItem onClick={copySelectedAsJSON}>
-										<ClipboardList className="h-4 w-4 mr-2" /> Copy selected as
-										JSON
+										<ClipboardList className="h-4 w-4 mr-2" /> {t('copySelectedAsJson', "Copy selected as JSON")}
 									</DropdownMenuItem>
 									<DropdownMenuSeparator />
 									<DropdownMenuItem
@@ -804,7 +806,7 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 											setColumnSizing({});
 										}}
 									>
-										<RefreshCcw className="h-4 w-4 mr-2" /> Reset layout
+										<RefreshCcw className="h-4 w-4 mr-2" /> {t('resetLayout', 'Reset layout')}
 									</DropdownMenuItem>
 								</DropdownMenuContent>
 							</DropdownMenu>
@@ -830,6 +832,7 @@ const SortableHeaderCell: React.FC<{
 	table: any;
 	isDraggable?: boolean;
 }> = ({ header, table, isDraggable = true }) => {
+	const { t } = useTranslation("common");
 	if (!header.column.getIsVisible?.()) return null;
 
 	const {
@@ -863,7 +866,7 @@ const SortableHeaderCell: React.FC<{
 			<div className="flex items-center gap-1">
 				{isDraggable && (
 					<span
-						title="Drag to reorder"
+						title={t('dragToReorder', 'Drag to reorder')}
 						className="inline-flex h-4 w-4 items-center justify-center text-muted-foreground cursor-grab active:cursor-grabbing"
 						{...attributes}
 						{...listeners}
@@ -895,6 +898,7 @@ const ColumnVisibilityDropdown: React.FC<{
 	visibility: VisibilityState;
 	onChange: React.Dispatch<React.SetStateAction<VisibilityState>>;
 }> = ({ columns, visibility, onChange }) => {
+	const { t } = useTranslation("common");
 	const [query, setQuery] = useState("");
 
 	const isVisible = useCallback(
@@ -943,34 +947,32 @@ const ColumnVisibilityDropdown: React.FC<{
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
 				<Button variant="outline" size="sm">
-					<Columns3 className="h-4 w-4 mr-2" /> Columns
+					<Columns3 className="h-4 w-4 mr-2" /> {t('columns', 'Columns')}
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-64">
 				<DropdownMenuLabel className="flex items-center justify-between">
-					<span>Toggle columns</span>
+					<span>{t('toggleColumns', 'Toggle columns')}</span>
 					<SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
 				</DropdownMenuLabel>
 				<div className="px-2 pb-2">
 					<Input
 						value={query}
 						onChange={(e) => setQuery(e.target.value)}
-						placeholder="Filter columns…"
+						placeholder={t('filterColumns', 'Filter columns…')}
 						className="h-8"
 					/>
 				</div>
 				<div className="px-2 pb-2 flex items-center justify-between gap-2">
 					<div className="flex flex-row items-center gap-2">
 						<Button size="sm" variant="outline" onClick={showAll}>
-							All
+							{t('all', 'All')}
 						</Button>
 						<Button size="sm" variant="outline" onClick={hideAll}>
-							None
+							{t('none', 'None')}
 						</Button>
 					</div>
-					<span className="text-xs text-muted-foreground">
-						{filtered.length}/{columns.filter((c) => c.canHide).length}
-					</span>
+					<span className="text-xs text-muted-foreground">{`${filtered.length}/${columns.filter((c) => c.canHide).length}`}</span>
 				</div>
 				<DropdownMenuSeparator />
 				<div className="max-h-64 overflow-auto pr-1">
@@ -987,7 +989,7 @@ const ColumnVisibilityDropdown: React.FC<{
 					))}
 					{filtered.length === 0 && (
 						<div className="px-2 py-2 text-xs text-muted-foreground">
-							No columns.
+							{t('noColumns', 'No columns.')}
 						</div>
 					)}
 				</div>
@@ -1000,6 +1002,7 @@ const DensityToggle: React.FC<{
 	value: "compact" | "comfortable" | "spacious";
 	onChange: (v: "compact" | "comfortable" | "spacious") => void;
 }> = ({ value, onChange }) => {
+	const { t } = useTranslation("common");
 	const label =
 		value === "compact"
 			? "Compact"
@@ -1009,19 +1012,19 @@ const DensityToggle: React.FC<{
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
-				<Button variant="outline" size="sm" title="Row density">
+				<Button variant="outline" size="sm" title={t('rowDensity', 'Row density')}>
 					<SlidersHorizontal className="h-4 w-4 mr-2" /> {label}
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-40">
 				<DropdownMenuItem onClick={() => onChange("compact")}>
-					Compact
+					{t('compact', 'Compact')}
 				</DropdownMenuItem>
 				<DropdownMenuItem onClick={() => onChange("comfortable")}>
-					Comfortable
+					{t('comfortable', 'Comfortable')}
 				</DropdownMenuItem>
 				<DropdownMenuItem onClick={() => onChange("spacious")}>
-					Spacious
+					{t('spacious', 'Spacious')}
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
@@ -1032,26 +1035,15 @@ const DateCell: React.FC<{ value: any; onClick: () => void }> = ({
 	value,
 	onClick,
 }) => {
-	const date = new Date(value);
-	const isValid = !isNaN(date.getTime());
+	const date = parseTemporalValue(value);
 
-	if (!isValid) {
+	if (!date) {
 		return (
 			<Button variant="ghost" size="sm" className="h-6 px-2" onClick={onClick}>
 				{String(value)}
 			</Button>
 		);
 	}
-
-	const relativeTime = getRelativeTime(date);
-	const fullDate = date.toLocaleString(undefined, {
-		year: "numeric",
-		month: "long",
-		day: "numeric",
-		hour: "2-digit",
-		minute: "2-digit",
-		second: "2-digit",
-	});
 
 	return (
 		<Tooltip>
@@ -1063,38 +1055,14 @@ const DateCell: React.FC<{ value: any; onClick: () => void }> = ({
 					onClick={onClick}
 				>
 					<Clock className="h-3 w-3 text-muted-foreground" />
-					{relativeTime}
+					{formatRelativeTime(date, "long")}
 				</Button>
 			</TooltipTrigger>
 			<TooltipContent side="bottom" className="text-xs">
-				{fullDate}
+				{formatAbsoluteDateTime(date)}
 			</TooltipContent>
 		</Tooltip>
 	);
-};
-
-const getRelativeTime = (date: Date): string => {
-	const now = new Date();
-	const diff = now.getTime() - date.getTime();
-	const absDiff = Math.abs(diff);
-	const isFuture = diff < 0;
-
-	const seconds = Math.floor(absDiff / 1000);
-	const minutes = Math.floor(seconds / 60);
-	const hours = Math.floor(minutes / 60);
-	const days = Math.floor(hours / 24);
-
-	if (seconds < 60) return isFuture ? "in a moment" : "just now";
-	if (minutes < 60) return isFuture ? `in ${minutes}m` : `${minutes}m ago`;
-	if (hours < 24) return isFuture ? `in ${hours}h` : `${hours}h ago`;
-	if (days < 7) return isFuture ? `in ${days}d` : `${days}d ago`;
-
-	// For older dates, show abbreviated date
-	return date.toLocaleDateString(undefined, {
-		month: "short",
-		day: "numeric",
-		year: date.getFullYear() !== now.getFullYear() ? "numeric" : undefined,
-	});
 };
 
 const buildColumnForField = (
@@ -1115,6 +1083,7 @@ const Cell: React.FC<{
 	field: LanceField;
 	rowData: Record<string, any>;
 }> = ({ value, field, rowData }) => {
+	const { t } = useTranslation("common");
 	const { onUpdateItem } = useContext(LanceDBContext);
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [editValue, setEditValue] = useState("");
@@ -1133,7 +1102,7 @@ const Cell: React.FC<{
 					className="h-6 px-2 text-muted-foreground"
 					onClick={openDialog}
 				>
-					NULL
+					{`NULL`}
 				</Button>
 			);
 		}
@@ -1173,7 +1142,7 @@ const Cell: React.FC<{
 						className="h-6 px-2 flex items-center gap-2"
 						onClick={openDialog}
 					>
-						<Badge variant="outline">{dims}d</Badge>
+						<Badge variant="outline">{`${dims}d`}</Badge>
 						<Sparkline data={arr.slice(0, 64)} />
 					</Button>
 				);
@@ -1188,7 +1157,7 @@ const Cell: React.FC<{
 						className="h-6 px-2"
 						onClick={openDialog}
 					>
-						<ListTree className="h-3 w-3 mr-1" /> View
+						<ListTree className="h-3 w-3 mr-1" /> {t('view', 'View')}
 					</Button>
 				);
 			default: {
@@ -1249,6 +1218,7 @@ const CellViewDialog: React.FC<{
 	rowData,
 	onUpdateItem,
 }) => {
+	const { t } = useTranslation("common");
 	const [localValue, setLocalValue] = useState(valueStr);
 	const [isEditing, setIsEditing] = useState(false);
 	const [saving, setSaving] = useState(false);
@@ -1319,7 +1289,7 @@ const CellViewDialog: React.FC<{
 
 	const PreviewContent = useMemo(() => {
 		if (value == null) {
-			return <div className="text-sm text-muted-foreground">NULL</div>;
+			return <div className="text-sm text-muted-foreground">{`NULL`}</div>;
 		}
 
 		switch (field.kind) {
@@ -1335,13 +1305,13 @@ const CellViewDialog: React.FC<{
 			case "number":
 				return <code className="text-sm">{String(value)}</code>;
 			case "date":
-				return <code className="text-sm">{formatDate(value)}</code>;
+				return <DateDetail value={value} />;
 			case "vector": {
 				const arr = ensureNumericArray(value);
 				const dims = field.dims ?? arr.length;
 				return (
 					<div className="flex items-center gap-3">
-						<Badge variant="outline">{dims}d</Badge>
+						<Badge variant="outline">{`${dims}d`}</Badge>
 						<Sparkline data={arr.slice(0, 128)} />
 					</div>
 				);
@@ -1373,7 +1343,7 @@ const CellViewDialog: React.FC<{
 				<DialogHeader>
 					<DialogTitle className="flex items-center justify-between">
 						<span>
-							{isEditing ? `Edit ${field.name}` : `Preview ${field.name}`}
+							{isEditing ? t('editName', 'Edit {{name}}', { name: field.name }) : t('previewName', 'Preview {{name}}', { name: field.name })}
 						</span>
 						<div className="flex items-center gap-3 mr-4">
 							<div className="flex items-center gap-2">
@@ -1381,7 +1351,7 @@ const CellViewDialog: React.FC<{
 									htmlFor="edit-switch"
 									className="text-xs text-muted-foreground"
 								>
-									Edit
+									{t('edit', 'Edit')}
 								</Label>
 								<Switch
 									id="edit-switch"
@@ -1403,12 +1373,12 @@ const CellViewDialog: React.FC<{
 							value={localValue}
 							onChange={(e) => setLocalValue(e.target.value)}
 							className="min-h-[300px] max-h-[60vh] font-mono text-sm"
-							placeholder="Enter value..."
+							placeholder={t('enterValue', 'Enter value...')}
 						/>
 					)}
 					<div className="flex justify-end gap-2">
 						<Button variant="outline" onClick={() => onOpenChange(false)}>
-							<X className="h-4 w-4 mr-2" /> Close
+							<X className="h-4 w-4 mr-2" /> {t('close', 'Close')}
 						</Button>
 						{isEditing && (
 							<Button onClick={handleSave} disabled={saving || !onUpdateItem}>
@@ -1479,7 +1449,7 @@ const Toolbar: React.FC<{
 			<Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
 			<Input
 				className="pl-8"
-				placeholder="Search…"
+				placeholder={i18next.t('search', 'Search…')}
 				value={value}
 				onChange={(e) => onValueChange(e.target.value)}
 				onKeyDown={(e) => {
@@ -1488,10 +1458,10 @@ const Toolbar: React.FC<{
 			/>
 		</div>
 		<Button variant="outline" size="sm" onClick={onSearch}>
-			Apply
+			{i18next.t('apply', 'Apply')}
 		</Button>
 		<Button variant="ghost" size="sm" onClick={onReset}>
-			Reset
+			{i18next.t('reset', 'Reset')}
 		</Button>
 	</div>
 );
@@ -1500,6 +1470,7 @@ const DatabaseActionsDropdown: React.FC<{
 	onOptimize?: (keepVersions?: boolean) => Promise<void>;
 	onRefresh?: () => void;
 }> = ({ onOptimize, onRefresh }) => {
+	const { t } = useTranslation("common");
 	const [optimizing, setOptimizing] = useState(false);
 
 	const handleOptimize = async (keepVersions: boolean) => {
@@ -1515,16 +1486,16 @@ const DatabaseActionsDropdown: React.FC<{
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
-				<Button variant="outline" size="sm" title="Database Actions">
-					<Wrench className="h-4 w-4 mr-2" /> Actions
+				<Button variant="outline" size="sm" title={t('databaseActions', 'Database Actions')}>
+					<Wrench className="h-4 w-4 mr-2" /> {t('actions', 'Actions')}
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-56">
-				<DropdownMenuLabel>Database Operations</DropdownMenuLabel>
+				<DropdownMenuLabel>{t('databaseOperations', 'Database Operations')}</DropdownMenuLabel>
 				<DropdownMenuSeparator />
 				{onRefresh && (
 					<DropdownMenuItem onClick={onRefresh}>
-						<RefreshCcw className="h-4 w-4 mr-2" /> Refresh Data
+						<RefreshCcw className="h-4 w-4 mr-2" /> {t('refreshData', 'Refresh Data')}
 					</DropdownMenuItem>
 				)}
 				{onOptimize && (
@@ -1534,7 +1505,7 @@ const DatabaseActionsDropdown: React.FC<{
 							disabled={optimizing}
 						>
 							<Zap className="h-4 w-4 mr-2" />
-							{optimizing ? "Optimizing..." : "Optimize (Keep Versions)"}
+							{optimizing ? "Optimizing..." : t('optimizeKeepVersions', 'Optimize (Keep Versions)')}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onClick={() => handleOptimize(false)}
@@ -1569,6 +1540,7 @@ const SchemaDialog: React.FC<{
 	onGetIndices,
 	onDropIndex,
 }) => {
+	const { t } = useTranslation("common");
 	const [open, setOpen] = useState(false);
 	const [activeTab, setActiveTab] = useState<"schema" | "indices" | "add">(
 		"schema",
@@ -1655,12 +1627,12 @@ const SchemaDialog: React.FC<{
 	return (
 		<>
 			<Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-				<Settings className="h-4 w-4 mr-2" /> Schema
+				<Settings className="h-4 w-4 mr-2" /> {t('schema', 'Schema')}
 			</Button>
 			<Dialog open={open} onOpenChange={setOpen}>
 				<DialogContent className="w-full max-w-lg max-h-[80vh] overflow-y-auto">
 					<DialogHeader>
-						<DialogTitle>Table: {tableName}</DialogTitle>
+						<DialogTitle>{t('tableTablename', 'Table: {{tableName}}', { tableName })}</DialogTitle>
 					</DialogHeader>
 
 					{(hasSchemaOps || hasIndexOps) && (
@@ -1670,7 +1642,7 @@ const SchemaDialog: React.FC<{
 								size="sm"
 								onClick={() => setActiveTab("schema")}
 							>
-								Schema
+								{t('schema', 'Schema')}
 							</Button>
 							{hasIndexOps && (
 								<Button
@@ -1678,7 +1650,7 @@ const SchemaDialog: React.FC<{
 									size="sm"
 									onClick={() => setActiveTab("indices")}
 								>
-									Indices
+									{t('indices', 'Indices')}
 								</Button>
 							)}
 							{hasSchemaOps && (
@@ -1687,7 +1659,7 @@ const SchemaDialog: React.FC<{
 									size="sm"
 									onClick={() => setActiveTab("add")}
 								>
-									Modify
+									{t('modify', 'Modify')}
 								</Button>
 							)}
 						</div>
@@ -1731,7 +1703,7 @@ const SchemaDialog: React.FC<{
 								</ScrollArea>
 							) : (
 								<div className="text-sm text-muted-foreground py-4">
-									No schema loaded yet.
+									{t('noSchemaLoadedYet', 'No schema loaded yet.')}
 								</div>
 							)}
 						</>
@@ -1740,7 +1712,7 @@ const SchemaDialog: React.FC<{
 					{activeTab === "indices" && (
 						<div className="space-y-4">
 							<div className="space-y-2">
-								<Label>Current Indices</Label>
+								<Label>{t('currentIndices', 'Current Indices')}</Label>
 								{loadingIndices ? (
 									<div className="text-sm text-muted-foreground">
 										Loading...
@@ -1757,8 +1729,7 @@ const SchemaDialog: React.FC<{
 														<div className="font-medium text-sm truncate">
 															{idx.name}
 														</div>
-														<div className="text-xs text-muted-foreground truncate">
-															{idx.index_type} on {idx.columns.join(", ")}
+														<div className="text-xs text-muted-foreground truncate">{t('index_typeOn', '{{index_type}} on', { index_type: idx.index_type })}{idx.columns.join(", ")}
 														</div>
 													</div>
 													{onDropIndex && (
@@ -1778,18 +1749,18 @@ const SchemaDialog: React.FC<{
 									</ScrollArea>
 								) : (
 									<div className="text-sm text-muted-foreground">
-										No indices found.
+										{t('noIndicesFound', 'No indices found.')}
 									</div>
 								)}
 							</div>
 
 							{onBuildIndex && schema && (
 								<div className="space-y-3 border-t pt-4">
-									<Label>Create New Index</Label>
+									<Label>{t('createNewIndex', 'Create New Index')}</Label>
 									<div className="flex gap-2">
 										<Select value={indexColumn} onValueChange={setIndexColumn}>
 											<SelectTrigger className="flex-1">
-												<SelectValue placeholder="Select column" />
+												<SelectValue placeholder={t('selectColumn', 'Select column')} />
 											</SelectTrigger>
 											<SelectContent>
 												{schema.fields.map((f) => (
@@ -1820,10 +1791,10 @@ const SchemaDialog: React.FC<{
 						<div className="space-y-4 flex flex-col">
 							{onAddColumn && (
 								<div className="space-y-3 flex-shrink-0">
-									<Label>Add New Column</Label>
+									<Label>{t('addNewColumn', 'Add New Column')}</Label>
 									<div className="grid gap-2 sm:grid-cols-[1fr_150px]">
 										<Input
-											placeholder="Column name"
+											placeholder={t('columnName', 'Column name')}
 											value={newColumnName}
 											onChange={(e) => setNewColumnName(e.target.value)}
 										/>
@@ -1834,31 +1805,28 @@ const SchemaDialog: React.FC<{
 										/>
 									</div>
 									<Input
-										placeholder="Default value (optional — leave empty for NULL)"
+										placeholder={t('defaultValueOptionalLeaveEmptyForNull', 'Default value (optional — leave empty for NULL)')}
 										value={newColumnDefault}
 										onChange={(e) => setNewColumnDefault(e.target.value)}
 									/>
 									<div className="text-xs text-muted-foreground">
-										New columns are added as nullable. Leave the default empty
-										to backfill existing rows with NULL, or provide a typed
-										default value.
+										{t('newColumnsAreAddedAsNullableLeaveTheDefaultEmptyToBackfillExistingRowsWithNullOrProvideATypedDefaultValue', "New columns are added as nullable. Leave the default empty to backfill existing rows with NULL, or provide a typed default value.")}
 									</div>
 									<Button
 										onClick={handleAddColumn}
 										disabled={!newColumnName || processing}
 										className="w-full"
 									>
-										{processing ? "Adding..." : "Add Column"}
+										{processing ? "Adding..." : t('addColumn', 'Add Column')}
 									</Button>
 								</div>
 							)}
 
 							{onAlterColumn && schema && (
 								<div className="space-y-3 border-t pt-4 flex-1 min-h-0 flex flex-col">
-									<Label className="flex-shrink-0">Make Column Nullable</Label>
+									<Label className="flex-shrink-0">{t('makeColumnNullable', 'Make Column Nullable')}</Label>
 									<div className="text-xs text-muted-foreground mb-2 flex-shrink-0">
-										Note: LanceDB only supports making columns nullable, not the
-										reverse.
+										{t('noteLancedbOnlySupportsMakingColumnsNullableNotTheReverse', "Note: LanceDB only supports making columns nullable, not the reverse.")}
 									</div>
 									<ScrollArea className="flex-1 min-h-0">
 										<div className="space-y-1 pr-2">
@@ -1872,7 +1840,7 @@ const SchemaDialog: React.FC<{
 															{f.name}
 														</span>
 														<span className="text-xs text-muted-foreground">
-															{f.nullable ? "Nullable" : "Not Nullable"}
+															{f.nullable ? "Nullable" : t('notNullable', 'Not Nullable')}
 														</span>
 													</div>
 													{!f.nullable && (
@@ -1883,7 +1851,7 @@ const SchemaDialog: React.FC<{
 															onClick={() => onAlterColumn(f.name, true)}
 															disabled={processing}
 														>
-															Make Nullable
+															{t('makeNullable', 'Make Nullable')}
 														</Button>
 													)}
 												</div>
@@ -2040,51 +2008,19 @@ const parseVector = (text: string | undefined): number[] | undefined => {
 	}
 };
 
-const formatDate = (v: any): string => {
-	try {
-		const d = new Date(v);
-		if (isNaN(d.getTime())) return String(v);
+/** The expanded view has the room for both readings, so it shows both. */
+const DateDetail: React.FC<{ value: any }> = ({ value }) => {
+	const date = parseTemporalValue(value);
+	if (!date) return <code className="text-sm">{String(value)}</code>;
 
-		const now = new Date();
-		const diff = now.getTime() - d.getTime();
-		const absDiff = Math.abs(diff);
-
-		// For very recent times (< 1 minute), show "just now"
-		if (absDiff < 60_000) return "just now";
-
-		// For recent times (< 1 hour), show minutes
-		if (absDiff < 3_600_000) {
-			const mins = Math.floor(absDiff / 60_000);
-			return diff > 0 ? `${mins}m ago` : `in ${mins}m`;
-		}
-
-		// For today, show time only
-		if (d.toDateString() === now.toDateString()) {
-			return d.toLocaleTimeString(undefined, {
-				hour: "2-digit",
-				minute: "2-digit",
-			});
-		}
-
-		// For this year, show month and day
-		if (d.getFullYear() === now.getFullYear()) {
-			return d.toLocaleDateString(undefined, {
-				month: "short",
-				day: "numeric",
-				hour: "2-digit",
-				minute: "2-digit",
-			});
-		}
-
-		// For older dates, show full date
-		return d.toLocaleDateString(undefined, {
-			year: "numeric",
-			month: "short",
-			day: "numeric",
-		});
-	} catch {
-		return String(v);
-	}
+	return (
+		<div className="space-y-0.5">
+			<code className="text-sm">{formatAbsoluteDateTime(date)}</code>
+			<p className="text-xs text-muted-foreground">
+				{formatRelativeTime(date, "long")}
+			</p>
+		</div>
+	);
 };
 
 const describeField = (f: LanceField): string => {
@@ -2092,11 +2028,9 @@ const describeField = (f: LanceField): string => {
 		case "vector":
 			return `${f.kind}${f.dims ? `(${f.dims})` : ""}`;
 		case "array":
-			return `array<${
-				typeof f.items === "string"
+			return `array<${typeof f.items === "string"
 					? f.items
-					: ((f.items as any)?.kind ?? "unknown")
-			}>`;
+					: ((f.items as any)?.kind ?? "unknown")}>`;
 		default:
 			return f.kind;
 	}

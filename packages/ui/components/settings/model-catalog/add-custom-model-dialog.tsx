@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, i18n as i18next, useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import {
 	ArrowLeft,
@@ -84,7 +85,7 @@ interface IProviderDef {
 
 const apiKeyField = (placeholder: string): IProviderField => ({
 	key: "api_key",
-	label: "API key",
+	label: i18next.t('apiKey', 'API key'),
 	placeholder,
 	secret: true,
 	required: true,
@@ -105,10 +106,10 @@ const endpointField = (
 	advanced = true,
 ): IProviderField => ({
 	key: "endpoint",
-	label: "Endpoint",
+	label: i18next.t('endpoint', 'Endpoint'),
 	placeholder,
 	advanced,
-	description: advanced ? "Override the default API endpoint" : undefined,
+	description: advanced ? i18next.t('overrideTheDefaultApiEndpoint', 'Override the default API endpoint') : undefined,
 });
 
 const PROVIDERS: IProviderDef[] = [
@@ -351,7 +352,7 @@ const PROVIDERS: IProviderDef[] = [
 			if (isEdit) return null;
 			if (values.service_account_json?.trim() || values.access_token?.trim())
 				return null;
-			return "Vertex AI needs a service account JSON or an access token";
+			return i18next.t('vertexAiNeedsAServiceAccountJsonOrAnAccessToken', 'Vertex AI needs a service account JSON or an access token');
 		},
 	},
 	{
@@ -603,6 +604,7 @@ export function AddCustomModelDialog({
 	existingBit,
 	webMode = false,
 }: Readonly<AddCustomModelDialogProps>) {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const download = useDownloadManager((s) => s.download);
@@ -811,7 +813,7 @@ export function AddCustomModelDialog({
 			const trimmed = reference.trim();
 			if (!trimmed) {
 				setHfImportError(
-					"Enter a Hugging Face repository or direct GGUF file URL",
+					t('enterAHuggingFaceRepositoryOrDirectGgufFileUrl', 'Enter a Hugging Face repository or direct GGUF file URL'),
 				);
 				return;
 			}
@@ -823,17 +825,17 @@ export function AddCustomModelDialog({
 				if (sequence !== hfInspectionSequence.current) return;
 				if (imported.access.private || imported.access.gated !== false) {
 					throw new Error(
-						"Private and gated repositories need Hugging Face authentication, which this direct-reference flow does not store",
+						t('privateAndGatedRepositoriesNeedHuggingFaceAuthenticationWhichThisDirectreferenceFlowDoesNotStore', 'Private and gated repositories need Hugging Face authentication, which this direct-reference flow does not store'),
 					);
 				}
 				if (imported.format === "mlx" && !canHostMLX) {
 					throw new Error(
-						"That is an MLX repository, but MLX is only available on supported Apple devices",
+						t('thatIsAnMlxRepositoryButMlxIsOnlyAvailableOnSupportedAppleDevices', 'That is an MLX repository, but MLX is only available on supported Apple devices'),
 					);
 				}
 				if (imported.format === "gguf" && !canHostLlamaCPP) {
 					throw new Error(
-						"That is a GGUF repository, but llama.cpp is unavailable on this device",
+						t('thatIsAGgufRepositoryButLlamacppIsUnavailableOnThisDevice', 'That is a GGUF repository, but llama.cpp is unavailable on this device'),
 					);
 				}
 
@@ -876,7 +878,7 @@ export function AddCustomModelDialog({
 					setHfImportError(
 						error instanceof Error
 							? error.message
-							: "Choose a supported GGUF variant",
+							: t('chooseASupportedGgufVariant', 'Choose a supported GGUF variant'),
 					);
 				}
 			} catch (error) {
@@ -885,7 +887,7 @@ export function AddCustomModelDialog({
 				setHfImportError(
 					error instanceof Error
 						? error.message
-						: "Failed to inspect the Hugging Face repository",
+						: t('failedToInspectTheHuggingFaceRepository', 'Failed to inspect the Hugging Face repository'),
 				);
 			} finally {
 				if (sequence === hfInspectionSequence.current) {
@@ -936,7 +938,7 @@ export function AddCustomModelDialog({
 				setHfImportError(
 					error instanceof Error
 						? error.message
-						: "Choose a compatible GGUF model and projector",
+						: t('chooseACompatibleGgufModelAndProjector', 'Choose a compatible GGUF model and projector'),
 				);
 			}
 		},
@@ -1027,31 +1029,31 @@ export function AddCustomModelDialog({
 
 	const validationError = useMemo((): string | null => {
 		if (step !== "form") return null;
-		if (!displayName.trim()) return "Give the model a display name";
+		if (!displayName.trim()) return t('giveTheModelADisplayName', 'Give the model a display name');
 		const ctx = Number.parseInt(contextLength, 10);
 		if (!Number.isFinite(ctx) || ctx <= 0)
-			return "Context length must be a positive number";
+			return t('contextLengthMustBeAPositiveNumber', 'Context length must be a positive number');
 		if (source === "huggingface") {
 			if (localFormat === "mlx") {
-				if (!canHostMLX) return "MLX is unavailable on this device";
+				if (!canHostMLX) return t('mlxIsUnavailableOnThisDevice', 'MLX is unavailable on this device');
 				if (
 					hfImport?.format !== "mlx" &&
 					!hasHuggingFaceMlxManifest(existingBit?.parameters)
 				) {
-					return "Paste and inspect a public MLX repository";
+					return t('pasteAndInspectAPublicMlxRepository', 'Paste and inspect a public MLX repository');
 				}
 				if (
 					hfImport?.format === "mlx" &&
 					(hfImport.kind === "vlm") !== isVision
 				) {
 					return hfImport.kind === "vlm"
-						? "This MLX repository is a VLM; keep Vision model enabled"
-						: "This MLX repository is an LLM and cannot be saved as a vision model";
+						? t('thisMlxRepositoryIsAVlmKeepVisionModelEnabled', 'This MLX repository is a VLM; keep Vision model enabled')
+						: t('thisMlxRepositoryIsAnLlmAndCannotBeSavedAsAVisionModel', 'This MLX repository is an LLM and cannot be saved as a vision model');
 				}
 				return null;
 			}
 			if (!canHostLlamaCPP) {
-				return "GGUF models are unavailable on this device";
+				return t('ggufModelsAreUnavailableOnThisDevice', 'GGUF models are unavailable on this device');
 			}
 			if (hfImport?.format === "gguf") {
 				try {
@@ -1063,48 +1065,44 @@ export function AddCustomModelDialog({
 				} catch (error) {
 					return error instanceof Error
 						? error.message
-						: "Choose a supported GGUF variant";
+						: t('chooseASupportedGgufVariant', 'Choose a supported GGUF variant');
 				}
 			}
 			if (!hfDownload.trim())
-				return "A direct download link to the GGUF file is required";
+				return t('aDirectDownloadLinkToTheGgufFileIsRequired', 'A direct download link to the GGUF file is required');
 			try {
 				validateHuggingFacePinnedGgufDownloadUrl(hfDownload);
 			} catch (error) {
-				return `Model link: ${
-					error instanceof Error
+				return t('modelLinkVal', 'Model link: {{val}}', { val: error instanceof Error
 						? error.message
-						: "Use an immutable Hugging Face URL"
-				}`;
+						: "Use an immutable Hugging Face URL" });
 			}
-			if (!hfFileName.trim()) return "File name is required";
+			if (!hfFileName.trim()) return t('fileNameIsRequired', 'File name is required');
 			const size = Number.parseInt(hfSize, 10);
 			if (!Number.isFinite(size) || size <= 0)
-				return "File size is required — use Detect or enter it in bytes";
+				return t('fileSizeIsRequiredUseDetectOrEnterItInBytes', 'File size is required — use Detect or enter it in bytes');
 			if (isVision) {
 				if (!mmprojDownload.trim())
-					return "Vision needs a projector: add the mmproj download link";
+					return t('visionNeedsAProjectorAddTheMmprojDownloadLink', 'Vision needs a projector: add the mmproj download link');
 				try {
 					validateHuggingFacePinnedGgufDownloadUrl(mmprojDownload);
 				} catch (error) {
-					return `Projector link: ${
-						error instanceof Error
+					return t('projectorLinkVal', 'Projector link: {{val}}', { val: error instanceof Error
 							? error.message
-							: "Use an immutable Hugging Face URL"
-					}`;
+							: "Use an immutable Hugging Face URL" });
 				}
-				if (!mmprojFileName.trim()) return "Projector file name is required";
+				if (!mmprojFileName.trim()) return t('projectorFileNameIsRequired', 'Projector file name is required');
 				const projectorSize = Number.parseInt(mmprojSize, 10);
 				if (!Number.isFinite(projectorSize) || projectorSize <= 0)
-					return "Projector size is required — use Detect or enter it in bytes";
+					return t('projectorSizeIsRequiredUseDetectOrEnterItInBytes', 'Projector size is required — use Detect or enter it in bytes');
 			}
 			return null;
 		}
-		if (!providerDef) return "Pick a provider first";
+		if (!providerDef) return t('pickAProviderFirst', 'Pick a provider first');
 		for (const field of providerDef.fields) {
 			if (!field.required) continue;
 			if (field.secret && isEdit) continue;
-			if (!fieldValues[field.key]?.trim()) return `${field.label} is required`;
+			if (!fieldValues[field.key]?.trim()) return t('labelIsRequired', '{{label}} is required', { label: field.label });
 		}
 		return providerDef.validate?.(fieldValues, isEdit) ?? null;
 	}, [
@@ -1156,7 +1154,7 @@ export function AddCustomModelDialog({
 				support_url: existingEn?.support_url ?? null,
 				use_case:
 					existingEn?.use_case ??
-					(selectedImport ? (isVision ? "Vision and chat" : "Chat") : null),
+					(selectedImport ? (isVision ? t('visionAndChat', 'Vision and chat') : "Chat") : null),
 				website: existingEn?.website ?? selectedImport?.repositoryUrl ?? null,
 				organization_specific_values:
 					existingEn?.organization_specific_values ?? null,
@@ -1334,9 +1332,7 @@ export function AddCustomModelDialog({
 				void download(saved ?? bit).catch((error) => {
 					console.error("Custom model download failed", error);
 					toast.error(
-						`Model saved, but the download failed: ${
-							error instanceof Error ? error.message : String(error)
-						}`,
+						t('modelSavedButTheDownloadFailedVal', 'Model saved, but the download failed: {{val}}', { val: error instanceof Error ? error.message : String(error) }),
 					);
 				});
 			}
@@ -1345,9 +1341,7 @@ export function AddCustomModelDialog({
 			onOpenChange(false);
 		} catch (error) {
 			toast.error(
-				`Failed to save model: ${
-					error instanceof Error ? error.message : String(error)
-				}`,
+				t('failedToSaveModelVal', 'Failed to save model: {{val}}', { val: error instanceof Error ? error.message : String(error) }),
 			);
 		} finally {
 			setSaving(false);
@@ -1383,21 +1377,21 @@ export function AddCustomModelDialog({
 	]);
 
 	const title = useMemo(() => {
-		if (isEdit) return "Edit custom model";
-		if (step === "pick") return "Add a custom model";
+		if (isEdit) return t('editCustomModel', 'Edit custom model');
+		if (step === "pick") return t('addACustomModel', 'Add a custom model');
 		return source === "huggingface"
 			? "HuggingFace model"
 			: (providerDef?.label ?? "Configure model");
 	}, [isEdit, step, source, providerDef]);
 
 	const subtitle = useMemo(() => {
-		if (isEdit) return "Only you can see and use this model.";
+		if (isEdit) return t('onlyYouCanSeeAndUseThisModel', 'Only you can see and use this model.');
 		if (step === "pick")
-			return "Bring your own API key or run a model locally. Private to you.";
+			return t('bringYourOwnApiKeyOrRunAModelLocallyPrivateToYou', 'Bring your own API key or run a model locally. Private to you.');
 		return source === "huggingface"
 			? localFormat === "mlx"
-				? "Reference an MLX repository and run it locally on this Apple device."
-				: "Reference GGUF weights and run them locally with llama.cpp."
+				? t('referenceAnMlxRepositoryAndRunItLocallyOnThisAppleDevice', 'Reference an MLX repository and run it locally on this Apple device.')
+				: t('referenceGgufWeightsAndRunThemLocallyWithLlamacpp', 'Reference GGUF weights and run them locally with llama.cpp.')
 			: (providerDef?.description ?? "");
 	}, [isEdit, step, source, localFormat, providerDef]);
 
@@ -1414,7 +1408,7 @@ export function AddCustomModelDialog({
 								onClick={() => setStep("pick")}
 							>
 								<ArrowLeft className="h-4 w-4" />
-								<span className="sr-only">Back to provider selection</span>
+								<span className="sr-only">{t('backToProviderSelection', 'Back to provider selection')}</span>
 							</Button>
 						)}
 						<DialogTitle>{title}</DialogTitle>
@@ -1488,7 +1482,7 @@ export function AddCustomModelDialog({
 											setHfImportError(
 												error instanceof Error
 													? error.message
-													: "Choose a supported GGUF variant",
+													: t('chooseASupportedGgufVariant', 'Choose a supported GGUF variant'),
 											);
 										}
 									}}
@@ -1505,7 +1499,7 @@ export function AddCustomModelDialog({
 											setHfImportError(
 												error instanceof Error
 													? error.message
-													: "Choose a supported GGUF projector",
+													: t('chooseASupportedGgufProjector', 'Choose a supported GGUF projector'),
 											);
 										}
 									}}
@@ -1587,14 +1581,14 @@ export function AddCustomModelDialog({
 								onClick={() => onOpenChange(false)}
 								disabled={saving}
 							>
-								Cancel
+								{t('cancel', 'Cancel')}
 							</Button>
 							<Button
 								onClick={handleSave}
 								disabled={!!validationError || saving}
 							>
 								{saving && <Loader2 className="h-4 w-4 animate-spin" />}
-								{isEdit ? "Save changes" : "Add model"}
+								{isEdit ? t('saveChanges2', 'Save changes') : t('addModel', 'Add model')}
 							</Button>
 						</div>
 					</DialogFooter>
@@ -1671,6 +1665,7 @@ function SourcePickStep({
 	onPickProvider: (key: string) => void;
 	onPickHuggingFace: () => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const [showMore, setShowMore] = useState(false);
 	const primary = useMemo(() => PROVIDERS.filter((p) => p.primary), []);
 	const secondary = useMemo(() => PROVIDERS.filter((p) => !p.primary), []);
@@ -1680,7 +1675,7 @@ function SourcePickStep({
 			<div className="space-y-3">
 				<SectionHeading
 					icon={Plug}
-					label="Connect a provider"
+					label={t('connectAProvider', 'Connect a provider')}
 					hint="Use your own API key — requests go directly to the provider."
 				/>
 				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -1696,9 +1691,7 @@ function SourcePickStep({
 						>
 							<ChevronDown
 								className={`h-3.5 w-3.5 transition-transform ${showMore ? "rotate-180" : ""}`}
-							/>
-							More providers ({secondary.length})
-						</button>
+							/>{t('moreProvidersLength', 'More providers ({{length}})', { length: secondary.length })}</button>
 					</CollapsibleTrigger>
 					<CollapsibleContent>
 						<div className="grid grid-cols-1 gap-2 pt-2 sm:grid-cols-2">
@@ -1714,7 +1707,7 @@ function SourcePickStep({
 				<div className="space-y-3 border-t border-border/20 pt-4">
 					<SectionHeading
 						icon={HardDriveDownload}
-						label="Run locally"
+						label={t('runLocally', 'Run locally')}
 						hint="Download model weights and run them on this device."
 					/>
 					<button
@@ -1726,13 +1719,13 @@ function SourcePickStep({
 							<HardDriveDownload className="h-4 w-4" />
 						</div>
 						<div className="min-w-0 flex-1">
-							<p className="text-sm font-medium">HuggingFace model</p>
+							<p className="text-sm font-medium">{t('huggingfaceModel', 'HuggingFace model')}</p>
 							<p className="text-xs text-muted-foreground">
 								{canHostLlamaCPP && canHostMLX
-									? "Reference a GGUF or MLX repository and run it offline"
+									? t('referenceAGgufOrMlxRepositoryAndRunItOffline', 'Reference a GGUF or MLX repository and run it offline')
 									: canHostMLX
-										? "Reference an MLX repository and run it offline"
-										: "Reference a GGUF model and run it offline"}
+										? t('referenceAnMlxRepositoryAndRunItOffline', 'Reference an MLX repository and run it offline')
+										: t('referenceAGgufModelAndRunItOffline', 'Reference a GGUF model and run it offline')}
 							</p>
 						</div>
 					</button>
@@ -1753,11 +1746,12 @@ function LocalFormatSelector({
 	canHostMLX: boolean;
 	onChange: (format: LocalModelFormat) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	return (
 		<div className="space-y-3">
 			<SectionHeading
 				icon={HardDriveDownload}
-				label="Local runtime"
+				label={t('localRuntime', 'Local runtime')}
 				hint="The model stays private to your account. Its files are downloaded directly from Hugging Face to this device."
 			/>
 			<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -1772,15 +1766,15 @@ function LocalFormatSelector({
 					}`}
 				>
 					<div className="flex items-center justify-between gap-2">
-						<p className="text-sm font-medium">GGUF</p>
+						<p className="text-sm font-medium">{`GGUF`}</p>
 						<Badge variant="outline">llama.cpp</Badge>
 					</div>
 					<p className="mt-1 text-xs text-muted-foreground">
-						One model file, with an optional vision projector.
+						{t('oneModelFileWithAnOptionalVisionProjector', 'One model file, with an optional vision projector.')}
 					</p>
 					{!canHostLlamaCPP && (
 						<p className="mt-1 text-xs text-muted-foreground">
-							Unavailable on this device
+							{t('unavailableOnThisDevice', 'Unavailable on this device')}
 						</p>
 					)}
 				</button>
@@ -1796,14 +1790,14 @@ function LocalFormatSelector({
 				>
 					<div className="flex items-center justify-between gap-2">
 						<p className="text-sm font-medium">MLX</p>
-						<Badge variant="outline">Apple only</Badge>
+						<Badge variant="outline">{t('appleOnly', 'Apple only')}</Badge>
 					</div>
 					<p className="mt-1 text-xs text-muted-foreground">
-						A complete multi-file repository for Apple silicon.
+						{t('aCompleteMultifileRepositoryForAppleSilicon', 'A complete multi-file repository for Apple silicon.')}
 					</p>
 					{!canHostMLX && (
 						<p className="mt-1 text-xs text-muted-foreground">
-							Unavailable on this device
+							{t('unavailableOnThisDevice', 'Unavailable on this device')}
 						</p>
 					)}
 				</button>
@@ -1829,6 +1823,7 @@ function HuggingFaceRepositorySection({
 	onReferenceChange: (value: string) => void;
 	onInspect: (reference?: string) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const fileCount =
 		imported?.format === "mlx"
 			? imported.assets.length
@@ -1844,7 +1839,7 @@ function HuggingFaceRepositorySection({
 		<div className="space-y-3">
 			<SectionHeading
 				icon={ScanSearch}
-				label="Hugging Face repository"
+				label={t('huggingFaceRepository', 'Hugging Face repository')}
 				hint="Paste a repository or direct GGUF file URL. Flow-Like pins the current commit and fills the model details."
 			/>
 			<div className="flex flex-col gap-2 sm:flex-row">
@@ -1881,7 +1876,7 @@ function HuggingFaceRepositorySection({
 					) : (
 						<ScanSearch className="h-3.5 w-3.5" />
 					)}
-					Inspect &amp; fill
+					{t('inspectAmpFill', "Inspect & fill")}
 				</Button>
 			</div>
 
@@ -1905,9 +1900,7 @@ function HuggingFaceRepositorySection({
 						<Badge variant="outline">{imported.license}</Badge>
 					</div>
 					<p className="text-xs text-muted-foreground">
-						This user-only model keeps immutable Hugging Face references. Files
-						download directly to the device when needed and are not copied into
-						the shared store or CDN.
+						{t('thisUseronlyModelKeepsImmutableHuggingFaceReferencesFilesDownloadDirectlyToTheDeviceWhenNeededAndAreNotCopiedIntoTheSharedStoreOrCdn', "This user-only model keeps immutable Hugging Face references. Files download directly to the device when needed and are not copied into the shared store or CDN.")}
 					</p>
 					{imported.warnings.map((warning) => (
 						<p key={warning} className="text-xs text-amber-600">
@@ -1935,18 +1928,17 @@ function GgufSelectionSection({
 	onVariantChange: (variantId: string) => void;
 	onProjectorChange: (projectorPath: string) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	return (
 		<div className="space-y-3">
 			<SectionHeading
 				icon={SlidersHorizontal}
-				label="GGUF selection"
+				label={t('ggufSelection', 'GGUF selection')}
 				hint="Choose one complete, single-file quantization. Split GGUF variants are listed but not supported yet."
 			/>
 			<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
 				<div className="space-y-1.5">
-					<Label htmlFor="custom-model-gguf-variant" className="text-xs">
-						Quantization<span className="text-destructive"> *</span>
-					</Label>
+					<Label htmlFor="custom-model-gguf-variant" className="text-xs"><Trans i18nKey="quantizationspanClassnametextdestructiveSpan">Quantization<span className="text-destructive"> *</span></Trans></Label>
 					<select
 						id="custom-model-gguf-variant"
 						value={variantId}
@@ -1954,19 +1946,18 @@ function GgufSelectionSection({
 						className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
 					>
 						<option value="" disabled>
-							Choose a GGUF variant
+							{t('chooseAGgufVariant', 'Choose a GGUF variant')}
 						</option>
 						{imported.variants.map((variant) => (
 							<option
 								key={variant.id}
 								value={variant.id}
 								disabled={!variant.complete || variant.split}
-							>
-								{variant.label} · {humanFileSize(variant.totalSize)}
+							>{`${variant.label} ·`}{humanFileSize(variant.totalSize)}
 								{variant.split
-									? " · split (unsupported)"
+									? t('splitUnsupported', "· split (unsupported)")
 									: !variant.complete
-										? " · incomplete"
+										? t('incomplete', "· incomplete")
 										: ""}
 							</option>
 						))}
@@ -1975,9 +1966,7 @@ function GgufSelectionSection({
 
 				{isVision && (
 					<div className="space-y-1.5">
-						<Label htmlFor="custom-model-gguf-projector" className="text-xs">
-							Vision projector<span className="text-destructive"> *</span>
-						</Label>
+						<Label htmlFor="custom-model-gguf-projector" className="text-xs"><Trans i18nKey="visionProjectorspanClassnametextdestructiveSpan">Vision projector<span className="text-destructive"> *</span></Trans></Label>
 						<select
 							id="custom-model-gguf-projector"
 							value={projectorPath}
@@ -1985,11 +1974,10 @@ function GgufSelectionSection({
 							className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
 						>
 							<option value="" disabled>
-								Choose an mmproj file
+								{t('chooseAnMmprojFile', 'Choose an mmproj file')}
 							</option>
 							{imported.projectors.map((projector) => (
-								<option key={projector.path} value={projector.path}>
-									{projector.path} · {humanFileSize(projector.size)}
+								<option key={projector.path} value={projector.path}>{`${projector.path} ·`}{humanFileSize(projector.size)}
 								</option>
 							))}
 						</select>
@@ -2011,9 +1999,10 @@ function ProviderFieldInput({
 	onChange: (value: string) => void;
 	isEdit: boolean;
 }>) {
+	const { t } = useTranslation("settings");
 	const placeholder =
 		field.secret && isEdit
-			? "Stored securely — type to replace"
+			? t('storedSecurelyTypeToReplace', 'Stored securely — type to replace')
 			: field.placeholder;
 	const inputId = `custom-model-${field.key}`;
 	return (
@@ -2062,6 +2051,7 @@ function ProviderConnectionSection({
 	onChange: (key: string, value: string) => void;
 	isEdit: boolean;
 }>) {
+	const { t } = useTranslation("settings");
 	const [showAdvanced, setShowAdvanced] = useState(false);
 	const basicFields = useMemo(
 		() => def.fields.filter((f) => !f.advanced),
@@ -2103,7 +2093,7 @@ function ProviderConnectionSection({
 							<ChevronDown
 								className={`h-3.5 w-3.5 transition-transform ${showAdvanced ? "rotate-180" : ""}`}
 							/>
-							Advanced options
+							{t('advancedOptions', 'Advanced options')}
 						</button>
 					</CollapsibleTrigger>
 					<CollapsibleContent>
@@ -2150,18 +2140,17 @@ function HuggingFaceSection({
 	onSizeChange: (value: string) => void;
 	onDetectSize: () => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const parsedSize = Number.parseInt(size, 10);
 	return (
 		<div className="space-y-3">
 			<SectionHeading
 				icon={HardDriveDownload}
-				label="Model files"
+				label={t('modelFiles', 'Model files')}
 				hint="Paste the direct download link of a GGUF file — the rest is filled in automatically."
 			/>
 			<div className="space-y-1.5">
-				<Label htmlFor="custom-model-hf-download" className="text-xs">
-					Download link (GGUF)<span className="text-destructive"> *</span>
-				</Label>
+				<Label htmlFor="custom-model-hf-download" className="text-xs"><Trans i18nKey="downloadLinkGgufspanClassnametextdestructiveSpan">Download link (GGUF)<span className="text-destructive"> *</span></Trans></Label>
 				<Input
 					id="custom-model-hf-download"
 					value={download}
@@ -2174,9 +2163,7 @@ function HuggingFaceSection({
 			</div>
 			<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
 				<div className="space-y-1.5">
-					<Label htmlFor="custom-model-hf-file" className="text-xs">
-						File name<span className="text-destructive"> *</span>
-					</Label>
+					<Label htmlFor="custom-model-hf-file" className="text-xs"><Trans i18nKey="fileNamespanClassnametextdestructiveSpan">File name<span className="text-destructive"> *</span></Trans></Label>
 					<Input
 						id="custom-model-hf-file"
 						value={fileName}
@@ -2187,9 +2174,7 @@ function HuggingFaceSection({
 					/>
 				</div>
 				<div className="space-y-1.5">
-					<Label htmlFor="custom-model-hf-size" className="text-xs">
-						File size (bytes)<span className="text-destructive"> *</span>
-					</Label>
+					<Label htmlFor="custom-model-hf-size" className="text-xs"><Trans i18nKey="fileSizeBytesspanClassnametextdestructiveSpan">File size (bytes)<span className="text-destructive"> *</span></Trans></Label>
 					<div className="flex items-center gap-2">
 						<Input
 							id="custom-model-hf-size"
@@ -2211,7 +2196,7 @@ function HuggingFaceSection({
 							) : (
 								<ScanSearch className="h-3.5 w-3.5" />
 							)}
-							Detect
+							{t('detect', 'Detect')}
 						</Button>
 					</div>
 					{Number.isFinite(parsedSize) && parsedSize > 0 && (
@@ -2223,7 +2208,7 @@ function HuggingFaceSection({
 			</div>
 			<div className="space-y-1.5">
 				<Label htmlFor="custom-model-hf-repo" className="text-xs">
-					Repository
+					{t('repository', 'Repository')}
 				</Label>
 				<Input
 					id="custom-model-hf-repo"
@@ -2263,18 +2248,17 @@ function ProjectorSection({
 	onSizeChange: (value: string) => void;
 	onDetectSize: () => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const parsedSize = Number.parseInt(size, 10);
 	return (
 		<div className="space-y-3">
 			<SectionHeading
 				icon={ScanEye}
-				label="Vision projector"
+				label={t('visionProjector', 'Vision projector')}
 				hint="Vision runs through a separate mmproj file — usually next to the model in the same repo."
 			/>
 			<div className="space-y-1.5">
-				<Label htmlFor="custom-model-mmproj-download" className="text-xs">
-					Projector link (mmproj)<span className="text-destructive"> *</span>
-				</Label>
+				<Label htmlFor="custom-model-mmproj-download" className="text-xs"><Trans i18nKey="projectorLinkMmprojspanClassnametextdestructiveSpan">Projector link (mmproj)<span className="text-destructive"> *</span></Trans></Label>
 				<Input
 					id="custom-model-mmproj-download"
 					value={download}
@@ -2287,9 +2271,7 @@ function ProjectorSection({
 			</div>
 			<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
 				<div className="space-y-1.5">
-					<Label htmlFor="custom-model-mmproj-file" className="text-xs">
-						File name<span className="text-destructive"> *</span>
-					</Label>
+					<Label htmlFor="custom-model-mmproj-file" className="text-xs"><Trans i18nKey="fileNamespanClassnametextdestructiveSpan">File name<span className="text-destructive"> *</span></Trans></Label>
 					<Input
 						id="custom-model-mmproj-file"
 						value={fileName}
@@ -2300,9 +2282,7 @@ function ProjectorSection({
 					/>
 				</div>
 				<div className="space-y-1.5">
-					<Label htmlFor="custom-model-mmproj-size" className="text-xs">
-						File size (bytes)<span className="text-destructive"> *</span>
-					</Label>
+					<Label htmlFor="custom-model-mmproj-size" className="text-xs"><Trans i18nKey="fileSizeBytesspanClassnametextdestructiveSpan">File size (bytes)<span className="text-destructive"> *</span></Trans></Label>
 					<div className="flex items-center gap-2">
 						<Input
 							id="custom-model-mmproj-size"
@@ -2324,7 +2304,7 @@ function ProjectorSection({
 							) : (
 								<ScanSearch className="h-3.5 w-3.5" />
 							)}
-							Detect
+							{t('detect', 'Detect')}
 						</Button>
 					</div>
 					{Number.isFinite(parsedSize) && parsedSize > 0 && (
@@ -2349,14 +2329,15 @@ function ModelSettingsSection({
 	isVision: boolean;
 	onVisionChange: (value: boolean) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const parsed = Number.parseInt(contextLength, 10);
 	return (
 		<div className="space-y-3">
-			<SectionHeading icon={SlidersHorizontal} label="Model settings" />
+			<SectionHeading icon={SlidersHorizontal} label={t('modelSettings', 'Model settings')} />
 			<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
 				<div className="space-y-1.5">
 					<Label htmlFor="custom-model-context" className="text-xs">
-						Context length (tokens)
+						{t('contextLengthTokens', 'Context length (tokens)')}
 					</Label>
 					<Input
 						id="custom-model-context"
@@ -2379,10 +2360,10 @@ function ModelSettingsSection({
 						<Eye className="h-4 w-4 shrink-0 text-cyan-500" />
 						<div className="min-w-0">
 							<Label htmlFor="custom-model-vision" className="text-xs">
-								Supports vision
+								{t('supportsVision', 'Supports vision')}
 							</Label>
 							<p className="text-xs text-muted-foreground/60">
-								The model accepts images as input
+								{t('theModelAcceptsImagesAsInput', 'The model accepts images as input')}
 							</p>
 						</div>
 					</div>
@@ -2418,6 +2399,7 @@ function MetadataSection({
 	onTagsChange: (value: string) => void;
 	parsedTags: string[];
 }>) {
+	const { t } = useTranslation("settings");
 	return (
 		<div className="space-y-3">
 			<SectionHeading
@@ -2434,20 +2416,18 @@ function MetadataSection({
 				</Avatar>
 				<div className="min-w-0 flex-1 space-y-3">
 					<div className="space-y-1.5">
-						<Label htmlFor="custom-model-name" className="text-xs">
-							Display name<span className="text-destructive"> *</span>
-						</Label>
+						<Label htmlFor="custom-model-name" className="text-xs"><Trans i18nKey="displayNamespanClassnametextdestructiveSpan">Display name<span className="text-destructive"> *</span></Trans></Label>
 						<Input
 							id="custom-model-name"
 							value={name}
 							onChange={(e) => onNameChange(e.target.value)}
-							placeholder="My GPT-4o"
+							placeholder={t('myGpt4o', 'My GPT-4o')}
 							autoComplete="off"
 						/>
 					</div>
 					<div className="space-y-1.5">
 						<Label htmlFor="custom-model-icon" className="text-xs">
-							Icon URL
+							{t('iconUrl', 'Icon URL')}
 						</Label>
 						<Input
 							id="custom-model-icon"
@@ -2462,25 +2442,25 @@ function MetadataSection({
 			</div>
 			<div className="space-y-1.5">
 				<Label htmlFor="custom-model-description" className="text-xs">
-					Description
+					{t('description', 'Description')}
 				</Label>
 				<Textarea
 					id="custom-model-description"
 					value={description}
 					onChange={(e) => onDescriptionChange(e.target.value)}
-					placeholder="What is this model good at?"
+					placeholder={t('whatIsThisModelGoodAt', 'What is this model good at?')}
 					rows={2}
 				/>
 			</div>
 			<div className="space-y-1.5">
 				<Label htmlFor="custom-model-tags" className="text-xs">
-					Tags
+					{t('tags', 'Tags')}
 				</Label>
 				<Input
 					id="custom-model-tags"
 					value={tags}
 					onChange={(e) => onTagsChange(e.target.value)}
-					placeholder="chat, coding, … (comma separated)"
+					placeholder={t('chatCodingCommaSeparated', 'chat, coding, … (comma separated)')}
 					autoComplete="off"
 				/>
 				{parsedTags.length > 0 && (
@@ -2504,6 +2484,7 @@ function CharacteristicsSection({
 	classification: Record<string, number>;
 	onChange: (key: string, value: number) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const [open, setOpen] = useState(false);
 	return (
 		<Collapsible open={open} onOpenChange={setOpen}>
@@ -2517,7 +2498,7 @@ function CharacteristicsSection({
 					/>
 					<SectionHeading
 						icon={SlidersHorizontal}
-						label="Model characteristics"
+						label={t('modelCharacteristics', 'Model characteristics')}
 						hint="Optional — drives automatic model selection (e.g. the Find Model node)."
 					/>
 				</button>

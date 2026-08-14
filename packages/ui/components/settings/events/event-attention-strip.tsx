@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { TriangleAlertIcon } from "lucide-react";
 import type {
 	EventSectionId,
@@ -22,6 +23,7 @@ export function EventAttentionStrip({
 	sections: IEventSection[];
 	onNavigate: (section: EventSectionId) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	if (issues.length === 0) return null;
 	const hasBlocking = issues.some((i) => i.severity === "blocking");
 
@@ -54,7 +56,7 @@ export function EventAttentionStrip({
 						</span>
 						<span className="min-w-0 flex-1">
 							<span className="font-semibold">{issue.title}</span>
-							<span className="text-muted-foreground"> — {issue.detail}</span>
+							<span className="text-muted-foreground">{`— ${issue.detail}`}</span>
 						</span>
 						{target && (
 							<Button
@@ -62,9 +64,7 @@ export function EventAttentionStrip({
 								size="sm"
 								className="h-auto shrink-0 p-0 text-[12px]"
 								onClick={() => onNavigate(issue.section)}
-							>
-								Go to {target.label}
-							</Button>
+							>{t('goToLabel', 'Go to {{label}}', { label: target.label })}</Button>
 						)}
 					</div>
 				);

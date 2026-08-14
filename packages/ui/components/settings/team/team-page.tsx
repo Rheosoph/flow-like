@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	BellIcon,
 	BlocksIcon,
@@ -36,6 +37,7 @@ interface RailItem {
 }
 
 export function TeamManagementPage() {
+	const { t } = useTranslation("settings");
 	const searchParams = useSearchParams();
 	const appId = searchParams.get("id") ?? "";
 	const [section, setSection] = useState<TeamSectionKey>("members");
@@ -46,20 +48,20 @@ export function TeamManagementPage() {
 			[
 				{
 					key: "members",
-					label: "People",
+					label: t('people', 'People'),
 					icon: UsersIcon,
 					count: overview.memberCount,
 				},
 				{
 					key: "requests",
-					label: "Join requests",
+					label: t('joinRequests', 'Join requests'),
 					icon: ClockIcon,
 					count: overview.joinRequestCount,
 					attention: overview.joinRequestCount > 0,
 				},
 				{
 					key: "invites",
-					label: "Invites & links",
+					label: t('invitesLinks', 'Invites & links'),
 					icon: LinkIcon,
 					count: overview.inviteLinkCount,
 				},
@@ -67,13 +69,13 @@ export function TeamManagementPage() {
 			[
 				{
 					key: "keys",
-					label: "API keys",
+					label: t('apiKeys', 'API keys'),
 					icon: KeyIcon,
 					count: overview.apiKeyCount,
 				},
 				{
 					key: "connections",
-					label: "Connected apps",
+					label: t('connectedApps', 'Connected apps'),
 					icon: BlocksIcon,
 					count: overview.connectedAppCount + overview.pendingAppRequestCount,
 					attention: overview.pendingAppRequestCount > 0,
@@ -86,7 +88,7 @@ export function TeamManagementPage() {
 	if (!appId) {
 		return (
 			<div className="p-10 text-center text-muted-foreground">
-				No app selected.
+				{t('noAppSelected', 'No app selected.')}
 			</div>
 		);
 	}
@@ -95,16 +97,16 @@ export function TeamManagementPage() {
 		<div className="flex flex-col gap-5 pb-8">
 			<header className="flex flex-wrap items-start justify-between gap-4">
 				<div className="min-w-0">
-					<h1 className="text-xl font-semibold tracking-tight">Access</h1>
+					<h1 className="text-xl font-semibold tracking-tight">{t('access', 'Access')}</h1>
 					<p className="mt-0.5 text-sm text-muted-foreground">
-						Who and what can reach this app.
+						{t('whoAndWhatCanReachThisApp', 'Who and what can reach this app.')}
 					</p>
 				</div>
 				<div className="flex shrink-0 items-center gap-2">
 					<Button variant="outline" asChild>
 						<a href={`/library/config/roles?id=${appId}`}>
 							<ShieldIcon className="size-4" />
-							Roles
+							{t('roles', 'Roles')}
 						</a>
 					</Button>
 					<InviteUserDialog
@@ -112,7 +114,7 @@ export function TeamManagementPage() {
 						trigger={
 							<Button className={TEAM_ACTION_GRADIENT}>
 								<UserPlusIcon className="size-4" />
-								Invite people
+								{t('invitePeople', 'Invite people')}
 							</Button>
 						}
 					/>
@@ -124,17 +126,28 @@ export function TeamManagementPage() {
 					icon={UsersIcon}
 					label="People"
 					value={`${overview.memberCount}${overview.memberCountExact ? "" : "+"}`}
-					note={`${overview.editorCount} can edit · ${overview.viewerCount} read-only`}
+					note={t('editorcountCanEditViewercountReadonly', '{{editorCount}} can edit · {{viewerCount}} read-only', { editorCount: overview.editorCount, viewerCount: overview.viewerCount })}
 					onClick={() => setSection("members")}
 				/>
 				<StatTile
 					icon={BellIcon}
-					label="Needs review"
+					label={t('needsReview', 'Needs review')}
 					value={overview.needsReviewCount}
 					note={
 						overview.needsReviewCount === 0
-							? "Nothing waiting"
-							: `${overview.joinRequestCount} people · ${overview.pendingAppRequestCount} apps`
+							? t('nothingWaiting', 'Nothing waiting')
+							: [
+									t('countPeople', {
+										defaultValue_one: '{{count}} person',
+										defaultValue_other: '{{count}} people',
+										count: overview.joinRequestCount,
+									}),
+									t('countApps', {
+										defaultValue_one: '{{count}} App',
+										defaultValue_other: '{{count}} Apps',
+										count: overview.pendingAppRequestCount,
+									}),
+								].join(' · ')
 					}
 					attention={overview.needsReviewCount > 0}
 					onClick={() =>
@@ -145,23 +158,23 @@ export function TeamManagementPage() {
 				/>
 				<StatTile
 					icon={KeyIcon}
-					label="API keys"
+					label={t('apiKeys', 'API keys')}
 					value={overview.apiKeyCount}
 					note={
 						overview.expiredKeyCount > 0
-							? `${overview.expiredKeyCount} expired`
-							: "All valid"
+							? t('expiredkeycountExpired', '{{expiredKeyCount}} expired', { expiredKeyCount: overview.expiredKeyCount })
+							: t('allValid', 'All valid')
 					}
 					onClick={() => setSection("keys")}
 				/>
 				<StatTile
 					icon={BlocksIcon}
-					label="Connected apps"
+					label={t('connectedApps', 'Connected apps')}
 					value={overview.connectedAppCount}
 					note={
 						overview.pendingAppRequestCount > 0
-							? `${overview.pendingAppRequestCount} awaiting approval`
-							: "No pending requests"
+							? t('pendingapprequestcountAwaitingApproval', '{{pendingAppRequestCount}} awaiting approval', { pendingAppRequestCount: overview.pendingAppRequestCount })
+							: t('noPendingRequests', 'No pending requests')
 					}
 					onClick={() => setSection("connections")}
 				/>
@@ -169,7 +182,7 @@ export function TeamManagementPage() {
 
 			<div className="grid items-start gap-6 md:grid-cols-[212px_minmax(0,1fr)]">
 				<nav
-					aria-label="Access sections"
+					aria-label={t('accessSections', 'Access sections')}
 					className="flex gap-1 overflow-x-auto md:sticky md:top-0 md:flex-col md:overflow-visible"
 				>
 					{rail.map((group, index) => (
@@ -183,7 +196,7 @@ export function TeamManagementPage() {
 									index === 0 ? "pt-0" : "pt-3",
 								)}
 							>
-								{index === 0 ? "People" : "Machines"}
+								{t('machines', { defaultValue_zero: 'People', defaultValue_other: 'Machines', count: index })}
 							</span>
 							{group.map((item) => (
 								<RailButton

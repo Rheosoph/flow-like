@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Play, Plus, TriangleAlert, X } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import {
@@ -72,6 +73,7 @@ function FilterRow({
 	readonly onChange: (index: number, next: ITelemetryQueryFilter) => void;
 	readonly onRemove: (index: number) => void;
 }) {
+	const { t } = useTranslation("admin");
 	const fields = telemetryDatasetSpec(dataset)?.fields ?? [];
 	const spec = telemetryFieldSpec(dataset, filter.field);
 	const ops = telemetryFilterOpsForKind(spec?.kind);
@@ -151,7 +153,7 @@ function FilterRow({
 					onChange={(e) => setValue(e.target.value)}
 					inputMode={spec?.kind === "number" ? "decimal" : "text"}
 					placeholder={
-						filter.op === "in" ? "value, value, …" : (spec?.label ?? "Value")
+						filter.op === "in" ? t('valueValue', 'value, value, …') : (spec?.label ?? "Value")
 					}
 					className="h-8 min-w-[7rem] flex-1 text-xs"
 				/>
@@ -161,7 +163,7 @@ function FilterRow({
 				size="icon"
 				className="h-8 w-8 shrink-0"
 				onClick={() => onRemove(index)}
-				aria-label={`Remove filter ${index + 1}`}
+				aria-label={t('removeFilterVal', 'Remove filter {{val}}', { val: index + 1 })}
 			>
 				<X className="h-3.5 w-3.5" />
 			</Button>
@@ -184,6 +186,7 @@ export function TelemetryQueryBuilderForm({
 	running = false,
 	errors = [],
 }: Readonly<TelemetryQueryBuilderFormProps>) {
+	const { t } = useTranslation("admin");
 	const spec = telemetryDatasetSpec(value.dataset);
 	const fields = spec?.fields ?? [];
 	const numeric = useMemo(
@@ -323,7 +326,7 @@ export function TelemetryQueryBuilderForm({
 							<SelectContent>
 								{metricFields.length === 0 ? (
 									<SelectItem value={NONE} disabled>
-										No numeric field on this dataset
+										{t('noNumericFieldOnThisDataset', 'No numeric field on this dataset')}
 									</SelectItem>
 								) : (
 									metricFields.map((field) => (
@@ -341,7 +344,7 @@ export function TelemetryQueryBuilderForm({
 			<div className="space-y-1.5">
 				<div className="flex items-center justify-between">
 					<Label className="text-xs uppercase tracking-wide text-muted-foreground">
-						Filters
+						{t('filters', 'Filters')}
 					</Label>
 					<Button
 						variant="ghost"
@@ -351,12 +354,12 @@ export function TelemetryQueryBuilderForm({
 						disabled={filters.length >= TELEMETRY_QUERY_MAX_FILTERS}
 					>
 						<Plus className="mr-1 h-3.5 w-3.5" />
-						Add
+						{t('add', 'Add')}
 					</Button>
 				</div>
 				{filters.length === 0 ? (
 					<div className="flex items-center justify-center rounded-lg border border-dashed py-4 text-[11px] text-muted-foreground">
-						No filters — the whole dataset is scanned.
+						{t('noFiltersTheWholeDatasetIsScanned', 'No filters — the whole dataset is scanned.')}
 					</div>
 				) : (
 					<div className="space-y-1.5">
@@ -382,10 +385,10 @@ export function TelemetryQueryBuilderForm({
 					}
 				>
 					<SelectTrigger className="w-full">
-						<SelectValue placeholder="No breakdown" />
+						<SelectValue placeholder={t('noBreakdown', 'No breakdown')} />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value={NONE}>No breakdown</SelectItem>
+						<SelectItem value={NONE}>{t('noBreakdown', 'No breakdown')}</SelectItem>
 						{breakdownFields.map((field) => (
 							<SelectItem key={field.field} value={field.field}>
 								{field.label}
@@ -415,7 +418,7 @@ export function TelemetryQueryBuilderForm({
 						</SelectContent>
 					</Select>
 				</FieldSection>
-				<FieldSection label="Time range">
+				<FieldSection label={t('timeRange', 'Time range')}>
 					<Select
 						value={String(value.hours)}
 						onValueChange={(v) =>
@@ -423,7 +426,7 @@ export function TelemetryQueryBuilderForm({
 						}
 					>
 						<SelectTrigger className="w-full">
-							<SelectValue placeholder="Time range" />
+							<SelectValue placeholder={t('timeRange', 'Time range')} />
 						</SelectTrigger>
 						<SelectContent>
 							{TELEMETRY_QUERY_HOUR_OPTIONS.map((option) => (

@@ -91,38 +91,105 @@ export function formatAbsoluteDateValue(
 	return parsed ? format(parsed, pattern) : fallback;
 }
 
+/** Days in the average month and year, so the ladder rolls over where a reader expects. */
+const RELATIVE_DIVISIONS: readonly {
+	amount: number;
+	unit: Intl.RelativeTimeFormatUnit;
+}[] = [
+	{ amount: 60, unit: "second" },
+	{ amount: 60, unit: "minute" },
+	{ amount: 24, unit: "hour" },
+	{ amount: 7, unit: "day" },
+	{ amount: 4.34524, unit: "week" },
+	{ amount: 12, unit: "month" },
+	{ amount: Number.POSITIVE_INFINITY, unit: "year" },
+];
+
+/**
+ * "2 days ago" in the viewer's locale. Walks the whole unit ladder, so a value
+ * years old reads as years rather than as a four-digit day count.
+ */
 export function formatRelativeTime(
-	dateInput: IDate | string,
+	dateInput: DateValue,
 	style: Intl.RelativeTimeFormatStyle = "long",
+	fallback = "Invalid date",
 ) {
 	const parsed = parseDateValue(dateInput);
 	const targetTimeMs = parsed?.getTime() ?? Number.NaN;
 
-	if (isNaN(targetTimeMs)) {
-		return "Invalid date";
+	if (Number.isNaN(targetTimeMs)) {
+		return fallback;
 	}
-
-	const diffMilliseconds = Date.now() - targetTimeMs;
-	const seconds = Math.round(diffMilliseconds / 1000);
-	const minutes = Math.round(seconds / 60);
-	const hours = Math.round(minutes / 60);
-	const days = Math.round(hours / 24);
 
 	const formatter = new Intl.RelativeTimeFormat(undefined, {
 		numeric: "auto",
 		style: style,
 	});
 
-	if (Math.abs(seconds) < 60) {
-		return formatter.format(-seconds, "second");
+	let duration = (targetTimeMs - Date.now()) / 1000;
+	for (const division of RELATIVE_DIVISIONS) {
+		if (Math.abs(duration) < division.amount) {
+			return formatter.format(Math.round(duration), division.unit);
+		}
+		duration /= division.amount;
 	}
-	if (Math.abs(minutes) < 60) {
-		return formatter.format(-minutes, "minute");
+	return formatter.format(Math.round(duration), "year");
+}
+
+/** The unambiguous reading of a timestamp, for tooltips behind a relative label. */
+export function formatAbsoluteDateTime(dateInput: DateValue, fallback = "") {
+	const parsed = parseDateValue(dateInput);
+	if (!parsed) return fallback;
+	return parsed.toLocaleString(undefined, {
+		dateStyle: "full",
+		timeStyle: "medium",
+	});
+}
+
+/** Below this a number is a day count (chrono/Arrow Date32), not an instant. */
+const MAX_EPOCH_DAYS = 100_000;
+const MAX_EPOCH_SECONDS = 1e11;
+const MAX_EPOCH_MILLIS = 1e14;
+const MAX_EPOCH_MICROS = 1e17;
+
+function parseEpochNumber(value: number): Date | null {
+	if (!Number.isFinite(value)) return null;
+
+	const magnitude = Math.abs(value);
+	const milliseconds =
+		magnitude < MAX_EPOCH_DAYS
+			? value * 86_400_000
+			: magnitude < MAX_EPOCH_SECONDS
+				? value * 1000
+				: magnitude < MAX_EPOCH_MILLIS
+					? value
+					: magnitude < MAX_EPOCH_MICROS
+						? value / 1000
+						: value / 1_000_000;
+
+	const parsed = new Date(milliseconds);
+	return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
+ * Parses a value a column has already been *declared* temporal — only then is a
+ * bare number an instant rather than a quantity, and the magnitude decides which
+ * epoch unit a backend meant (Arrow ships days, seconds, millis, micros and nanos).
+ *
+ * Numeric strings stay with the string parser: `"2026"` is a year to every reader
+ * and a day count to this ladder.
+ */
+export function parseTemporalValue(value: unknown): Date | null {
+	if (typeof value === "bigint") return parseEpochNumber(Number(value));
+	if (typeof value === "number") return parseEpochNumber(value);
+	if (
+		typeof value === "string" ||
+		typeof value === "object" ||
+		value === undefined
+	) {
+		return parseDateValue(value as DateValue);
 	}
-	if (Math.abs(hours) < 24) {
-		return formatter.format(-hours, "hour");
-	}
-	return formatter.format(-days, "day");
+	return null;
 }
 
 export function parseTimespan(start: IDate, end: IDate) {

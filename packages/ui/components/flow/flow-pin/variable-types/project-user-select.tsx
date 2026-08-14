@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { ChevronDown } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useBackend } from "../../../..";
@@ -62,6 +63,7 @@ export function ProjectUserSelect({
 	appId: string;
 	setValue: (value: number[] | undefined) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const [open, setOpen] = useState(false);
 	const [members, setMembers] = useState<IMember[]>([]);
@@ -182,11 +184,11 @@ export function ProjectUserSelect({
 					<SelectGroup>
 						<SelectLabel>{pin.friendly_name}</SelectLabel>
 						{loading && projectMembers.length === 0 && (
-							<SelectLabel>Loading users...</SelectLabel>
+							<SelectLabel>{t('loadingUsers', 'Loading users...')}</SelectLabel>
 						)}
-						{error && <SelectLabel>Could not load project users</SelectLabel>}
+						{error && <SelectLabel>{t('couldNotLoadProjectUsers', 'Could not load project users')}</SelectLabel>}
 						{!loading && !error && projectMembers.length === 0 && (
-							<SelectLabel>No project users found</SelectLabel>
+							<SelectLabel>{t('noProjectUsersFound', 'No project users found')}</SelectLabel>
 						)}
 						{projectMembers.map((member) => {
 							const user = usersBySub[member.user_id];

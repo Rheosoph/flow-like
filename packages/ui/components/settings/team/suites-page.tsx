@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useSearchParams } from "next/navigation";
 import { GroupManagement } from "./group-management";
 
@@ -9,13 +10,14 @@ import { GroupManagement } from "./group-management";
  * still be able to curate and be invited into one.
  */
 export function SuitesPage() {
+	const { t } = useTranslation("settings");
 	const searchParams = useSearchParams();
 	const appId = searchParams.get("id");
 
 	if (!appId) {
 		return (
 			<div className="p-10 text-center text-muted-foreground">
-				No app selected.
+				{t('noAppSelected', 'No app selected.')}
 			</div>
 		);
 	}

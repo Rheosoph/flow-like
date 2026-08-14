@@ -1,12 +1,12 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Shield, Trash2, UserPlus } from "lucide-react";
 import { useCallback, useState } from "react";
 import {
 	PackagePermissionBits,
 	isMaintainer,
 	isOwner,
-	permissionLabel,
 } from "../../lib/permission/wasm-package-permission";
 import type {
 	InviteUserRequest,
@@ -108,6 +108,7 @@ function UserActions({
 	onRemoveUser: (userId: string) => void;
 	isMutating: boolean;
 }) {
+	const { t } = useTranslation("store");
 	const manageable = canManageUser(callerPermission, user.permission);
 	if (!manageable)
 		return <span className="text-xs text-muted-foreground">—</span>;
@@ -149,9 +150,13 @@ function UserActions({
 					<SelectValue />
 				</SelectTrigger>
 				<SelectContent>
-					{callerIsOwner && <SelectItem value="owner">Owner</SelectItem>}
-					<SelectItem value="maintainer">Maintainer</SelectItem>
-					<SelectItem value="user">User</SelectItem>
+					{callerIsOwner && (
+						<SelectItem value="owner">{t("owner", "Owner")}</SelectItem>
+					)}
+					<SelectItem value="maintainer">
+						{t("maintainer", "Maintainer")}
+					</SelectItem>
+					<SelectItem value="user">{t("user", "User")}</SelectItem>
 				</SelectContent>
 			</Select>
 
@@ -168,7 +173,7 @@ function UserActions({
 							<Trash2 className="h-4 w-4" />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent>Remove user</TooltipContent>
+					<TooltipContent>{t("removeUser", "Remove user")}</TooltipContent>
 				</Tooltip>
 			</TooltipProvider>
 		</div>
@@ -199,6 +204,7 @@ export function PackageUsersTab({
 	onRemoveUser,
 	isMutating,
 }: PackageUsersTabProps) {
+	const { t } = useTranslation("store");
 	const [inviteOpen, setInviteOpen] = useState(false);
 	const canInvite = isMaintainer(currentUserPermission);
 
@@ -210,7 +216,11 @@ export function PackageUsersTab({
 				<div className="flex items-center gap-2">
 					<Shield className="h-5 w-5 text-muted-foreground" />
 					<h3 className="text-sm font-medium">
-						{users.length} {users.length === 1 ? "user" : "users"}
+						{t("userCount", {
+							count: users.length,
+							defaultValue_one: "{{count}} user",
+							defaultValue_other: "{{count}} users",
+						})}
 					</h3>
 				</div>
 				{canInvite && (
@@ -220,23 +230,25 @@ export function PackageUsersTab({
 						onClick={() => setInviteOpen(true)}
 					>
 						<UserPlus className="mr-2 h-4 w-4" />
-						Invite User
+						{t("inviteUser", "Invite User")}
 					</Button>
 				)}
 			</div>
 
 			{users.length === 0 ? (
 				<p className="py-8 text-center text-sm text-muted-foreground">
-					No users found for this package.
+					{t("noUsersFoundForThisPackage", "No users found for this package.")}
 				</p>
 			) : (
 				<Table>
 					<TableHeader>
 						<TableRow>
-							<TableHead>User</TableHead>
-							<TableHead>Role</TableHead>
-							<TableHead>Added</TableHead>
-							<TableHead className="text-right">Actions</TableHead>
+							<TableHead>{t("user", "User")}</TableHead>
+							<TableHead>{t("role", "Role")}</TableHead>
+							<TableHead>{t("added", "Added")}</TableHead>
+							<TableHead className="text-right">
+								{t("actions", "Actions")}
+							</TableHead>
 						</TableRow>
 					</TableHeader>
 					<TableBody>
@@ -265,7 +277,11 @@ export function PackageUsersTab({
 									</TableCell>
 									<TableCell>
 										<Badge variant={roleBadgeVariant(user.permission)}>
-											{permissionLabel(user.permission)}
+											{isOwner(user.permission)
+												? t("owner", "Owner")
+												: isMaintainer(user.permission)
+													? t("maintainer", "Maintainer")
+													: t("user", "User")}
 										</Badge>
 									</TableCell>
 									<TableCell className="text-sm text-muted-foreground">

@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Input } from "../../../components/ui/input";
 import type { IVariable } from "../../../lib/schema/flow/variable";
@@ -20,6 +21,7 @@ export function StringVariable({
 	variable: IVariable;
 	onChange: (variable: IVariable) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const [isFocused, setIsFocused] = useState(false);
 	const value = parseUint8ArrayToJson(variable.default_value);
@@ -63,7 +65,7 @@ export function StringVariable({
 					onChange={(e) => handleChange(e.target.value)}
 					type="password"
 					id="default_value"
-					placeholder="Enter secret value..."
+					placeholder={t('enterSecretValue', 'Enter secret value...')}
 					className="font-mono"
 				/>
 			</div>
@@ -87,7 +89,7 @@ export function StringVariable({
 					onChange={(e) => handleChange(e.target.value)}
 					onFocus={() => setIsFocused(true)}
 					onBlur={() => setIsFocused(false)}
-					placeholder="Enter text..."
+					placeholder={t('enterText', 'Enter text...')}
 					autoComplete="off"
 					spellCheck="false"
 					autoCorrect="off"
@@ -110,9 +112,7 @@ export function StringVariable({
 
 				{/* Character count */}
 				{(value?.length ?? 0) > 0 && (
-					<div className="absolute bottom-1 right-2 text-[10px] text-muted-foreground/60 font-mono select-none pointer-events-none">
-						{value.length} chars
-						{value.includes("\n") && ` · ${value.split("\n").length} lines`}
+					<div className="absolute bottom-1 right-2 text-[10px] text-muted-foreground/60 font-mono select-none pointer-events-none">{t('countCharacters', { defaultValue_one: '{{count}} character', defaultValue_other: '{{count}} characters', count: value.length })}{value.includes("\n") && <> · {t('countLines', { defaultValue_one: '{{count}} line', defaultValue_other: '{{count}} lines', count: value.split("\n").length })}</>}
 					</div>
 				)}
 			</div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { ArrowRight, X } from "lucide-react";
 import { useCallback, useState } from "react";
 import type { SubgraphEdge } from "../../../state/backend-state/graph-state";
@@ -25,6 +26,7 @@ export function GraphEdgeInspector({
 	targetCaption,
 	onClose,
 }: GraphEdgeInspectorProps) {
+	const { t } = useTranslation("common");
 	const [hiddenFields, setHiddenFields] = useState<Set<string>>(new Set());
 
 	if (!edge) return null;
@@ -59,7 +61,7 @@ export function GraphEdgeInspector({
 					</div>
 					<div className="min-w-0">
 						<h3 className="font-semibold text-sm truncate">{edge.label}</h3>
-						<p className="text-xs text-muted-foreground">Edge</p>
+						<p className="text-xs text-muted-foreground">{t('edge', 'Edge')}</p>
 					</div>
 				</div>
 				<div className="flex items-center gap-1 shrink-0">
@@ -113,12 +115,10 @@ export function GraphEdgeInspector({
 						<div>
 							<div className="flex items-center justify-between mb-2">
 								<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-									Properties
+									{t('properties', 'Properties')}
 								</p>
 								{hiddenFields.size > 0 && (
-									<span className="text-[10px] text-muted-foreground">
-										{hiddenFields.size} hidden
-									</span>
+									<span className="text-[10px] text-muted-foreground">{t('sizeHidden', '{{size}} hidden', { size: hiddenFields.size })}</span>
 								)}
 							</div>
 							<div className="space-y-2">
@@ -140,12 +140,12 @@ export function GraphEdgeInspector({
 					)}
 					{propEntries.length === 0 && (
 						<p className="text-xs text-muted-foreground italic">
-							No properties available
+							{t('noPropertiesAvailable', 'No properties available')}
 						</p>
 					)}
 					{propEntries.length > 0 && visibleEntries.length === 0 && (
 						<p className="text-xs text-muted-foreground italic">
-							All fields hidden — use the filter to show them
+							{t('allFieldsHiddenUseTheFilterToShowThem', 'All fields hidden — use the filter to show them')}
 						</p>
 					)}
 				</div>

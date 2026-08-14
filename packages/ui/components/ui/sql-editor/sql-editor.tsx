@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import Editor, { type Monaco, type OnMount } from "@monaco-editor/react";
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -32,6 +33,7 @@ export function SqlEditor({
 	onCursorChange,
 	height = "100%",
 }: Readonly<SqlEditorProps>) {
+	const { t } = useTranslation("common");
 	const { resolvedTheme } = useTheme();
 	const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
 	const monacoRef = useRef<Monaco | null>(null);
@@ -99,11 +101,11 @@ export function SqlEditor({
 			onMount={handleMount}
 			options={{
 				readOnly,
-				ariaLabel: "SQL query editor",
+				ariaLabel: t('sqlQueryEditor', 'SQL query editor'),
 				minimap: { enabled: false },
 				fontSize: 13,
 				fontFamily:
-					"'SF Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+					t('sfMonoUimonospaceSfmonoregularMenloMonacoConsolasLiberationMonoCourierNewMonospace', '\'SF Mono\', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \'Liberation Mono\', \'Courier New\', monospace'),
 				fontLigatures: true,
 				scrollBeyondLastLine: false,
 				automaticLayout: true,

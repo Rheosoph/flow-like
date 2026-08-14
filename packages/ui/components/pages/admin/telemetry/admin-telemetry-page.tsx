@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	Activity,
@@ -187,6 +188,7 @@ function TelemetryChart({
 	points: { ts: string; count: number; installs: number }[];
 	bucket: string;
 }) {
+	const { t } = useTranslation("admin");
 	const data = useMemo(
 		() =>
 			points.map((p) => ({
@@ -200,7 +202,7 @@ function TelemetryChart({
 	if (data.length === 0) {
 		return (
 			<div className="flex h-64 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
-				No telemetry in the selected window.
+				{t('noTelemetryInTheSelectedWindow', 'No telemetry in the selected window.')}
 			</div>
 		);
 	}
@@ -303,6 +305,7 @@ function BreakdownCard({
 	loading: boolean;
 	onPick?: (b: { key: string; label: string; count: number }) => void;
 }) {
+	const { t } = useTranslation("admin");
 	const max = Math.max(1, ...buckets.map((b) => b.count));
 	return (
 		<Card>
@@ -318,7 +321,7 @@ function BreakdownCard({
 					</div>
 				) : buckets.length === 0 ? (
 					<div className="flex items-center justify-center rounded-lg border border-dashed py-6 text-xs text-muted-foreground">
-						No data in the selected window.
+						{t('noDataInTheSelectedWindow', 'No data in the selected window.')}
 					</div>
 				) : (
 					<ul className="space-y-1.5">
@@ -381,6 +384,7 @@ function TelemetryEventSheet({
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 }) {
+	const { t } = useTranslation("admin");
 	const propsString = useMemo(() => {
 		if (!event?.props) return null;
 		return safeStringify(event.props);
@@ -419,7 +423,7 @@ function TelemetryEventSheet({
 								) : null}
 							</div>
 							<div className="flex items-center gap-2">
-								<span className="text-xs text-muted-foreground">Install</span>
+								<span className="text-xs text-muted-foreground">{t('install', 'Install')}</span>
 								<code className="flex-1 truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
 									{event.anonId}
 								</code>
@@ -427,7 +431,7 @@ function TelemetryEventSheet({
 							{event.clientTs ? (
 								<div className="flex items-center gap-2">
 									<span className="text-xs text-muted-foreground">
-										Client time
+										{t('clientTime', 'Client time')}
 									</span>
 									<code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
 										{event.clientTs}
@@ -440,7 +444,7 @@ function TelemetryEventSheet({
 							<div className="space-y-1">
 								<div className="flex items-center justify-between">
 									<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-										Properties
+										{t('properties', 'Properties')}
 									</div>
 									<Button
 										variant="ghost"
@@ -453,7 +457,7 @@ function TelemetryEventSheet({
 										}}
 									>
 										<Copy className="mr-1 h-3 w-3" />
-										Copy
+										{t('copy', 'Copy')}
 									</Button>
 								</div>
 								<pre className="max-h-96 overflow-auto rounded-lg border bg-muted/40 p-3 font-mono text-[11px] leading-relaxed">
@@ -462,15 +466,14 @@ function TelemetryEventSheet({
 							</div>
 						) : (
 							<div className="flex items-center justify-center rounded-lg border border-dashed py-6 text-xs text-muted-foreground">
-								No properties attached to this event.
+								{t('noPropertiesAttachedToThisEvent', 'No properties attached to this event.')}
 							</div>
 						)}
 
 						<Separator />
 
 						<p className="text-xs text-muted-foreground">
-							Telemetry is anonymous: the install id is a random identifier and
-							no user identity or IP address is ever stored.
+							{t('telemetryIsAnonymousTheInstallIdIsARandomIdentifierAndNoUserIdentityOrIpAddressIsEverStored', "Telemetry is anonymous: the install id is a random identifier and no user identity or IP address is ever stored.")}
 						</p>
 					</div>
 				) : null}
@@ -486,6 +489,7 @@ interface AdminTelemetryPageProps {
 export function AdminTelemetryPage({
 	basePath = "/admin/telemetry",
 }: Readonly<AdminTelemetryPageProps>) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const auth = useAuth();
 	const router = useRouter();
@@ -648,11 +652,9 @@ export function AdminTelemetryPage({
 					<CardHeader>
 						<CardTitle className="flex items-center justify-center gap-2 text-base">
 							<Lock className="h-4 w-4" />
-							Insufficient permissions
+							{t('insufficientPermissions', 'Insufficient permissions')}
 						</CardTitle>
-						<CardDescription>
-							You need the <b>Admin</b> permission to view telemetry.
-						</CardDescription>
+						<CardDescription><Trans i18nKey="youNeedTheBadminbPermissionToViewTelemetry">You need the <b>Admin</b> permission to view telemetry.</Trans></CardDescription>
 					</CardHeader>
 				</Card>
 			</main>
@@ -674,7 +676,7 @@ export function AdminTelemetryPage({
 					: ArrowRight;
 	const hourLabel =
 		HOUR_OPTIONS.find((o) => o.value === filters.hours)?.label ??
-		`Last ${filters.hours} hours`;
+		t('lastHoursHours', 'Last {{hours}} hours', { hours: filters.hours });
 
 	return (
 		<main className="flex h-full min-h-0 w-full grow flex-col overflow-hidden bg-background">
@@ -684,12 +686,11 @@ export function AdminTelemetryPage({
 						<div>
 							<h1 className="flex items-center gap-2 text-3xl font-bold">
 								<Activity className="h-7 w-7 text-primary" />
-								Telemetry
+								{t('telemetry', 'Telemetry')}
 								<TelemetryGranularityNotice response={overview.data} />
 							</h1>
 							<p className="text-muted-foreground">
-								Anonymous opt-in product metrics — no user identity, no IP
-								addresses.
+								{t('anonymousOptinProductMetricsNoUserIdentityNoIpAddresses', "Anonymous opt-in product metrics — no user identity, no IP addresses.")}
 							</p>
 						</div>
 						<div className="flex flex-wrap items-center gap-2">
@@ -720,7 +721,7 @@ export function AdminTelemetryPage({
 									<SelectValue placeholder="Event" />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value={ALL_EVENTS}>All events</SelectItem>
+									<SelectItem value={ALL_EVENTS}>{t('allEvents', 'All events')}</SelectItem>
 									{eventNameOptions.map((name) => (
 										<SelectItem key={name} value={name}>
 											{name}
@@ -736,7 +737,7 @@ export function AdminTelemetryPage({
 									<SelectValue placeholder="Source" />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="all">All sources</SelectItem>
+									<SelectItem value="all">{t('allSources', 'All sources')}</SelectItem>
 									{SOURCE_OPTIONS.map((source) => (
 										<SelectItem key={source} value={source}>
 											{source}
@@ -747,25 +748,25 @@ export function AdminTelemetryPage({
 							<Button asChild variant="outline" size="sm">
 								<Link href={`${basePath}/issues`}>
 									<Bug className="mr-1 h-3.5 w-3.5" />
-									Issues
+									{t('issues', 'Issues')}
 								</Link>
 							</Button>
 							<Button asChild variant="outline" size="sm">
 								<Link href={`${basePath}/traces`}>
 									<GitBranch className="mr-1 h-3.5 w-3.5" />
-									Traces
+									{t('traces', 'Traces')}
 								</Link>
 							</Button>
 							<Button variant="outline" size="sm" onClick={refresh}>
 								<RefreshCw className="mr-1 h-3.5 w-3.5" />
-								Refresh
+								{t('refresh', 'Refresh')}
 							</Button>
 						</div>
 					</div>
 
 					<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
 						<StatHero
-							label="Total events"
+							label={t('totalEvents', 'Total events')}
 							value={
 								overview.isLoading
 									? "…"
@@ -775,7 +776,7 @@ export function AdminTelemetryPage({
 							hint={hourLabel}
 						/>
 						<StatHero
-							label="Active installs"
+							label={t('activeInstalls', 'Active installs')}
 							value={
 								overview.isLoading
 									? "…"
@@ -798,13 +799,13 @@ export function AdminTelemetryPage({
 							hint="vs previous period"
 						/>
 						<StatHero
-							label="Top source"
+							label={t('topSource', 'Top source')}
 							value={overview.isLoading ? "…" : (topSource?.source ?? "—")}
 							icon={<Layers className="h-4 w-4" />}
 							hint={
 								topSource
-									? `${topSource.count.toLocaleString()} events`
-									: "No events yet"
+									? t('valEvents', '{{val}} events', { val: topSource.count.toLocaleString() })
+									: t('noEventsYet', 'No events yet')
 							}
 						/>
 					</div>
@@ -813,15 +814,15 @@ export function AdminTelemetryPage({
 						<CardHeader className="pb-3">
 							<CardTitle className="flex items-center gap-2 text-base">
 								<Activity className="h-4 w-4" />
-								Events over time
+								{t('eventsOverTime', 'Events over time')}
 								<TelemetryGranularityNotice response={series.data} />
 							</CardTitle>
 							<CardDescription>
-								Events and active installs bucketed by{" "}
+								{t('eventsAndActiveInstallsBucketedBy', 'Events and active installs bucketed by')}{" "}
 								<span className="font-mono">
 									{series.data?.bucket ?? "auto"}
 								</span>{" "}
-								over the selected window.
+								{t('overTheSelectedWindow2', 'over the selected window.')}
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -838,7 +839,7 @@ export function AdminTelemetryPage({
 
 					<div className="grid gap-4 lg:grid-cols-2">
 						<BreakdownCard
-							title="Top events"
+							title={t('topEvents', 'Top events')}
 							buckets={
 								overview.data?.topEvents.map((e) => ({
 									key: e.name,
@@ -927,9 +928,9 @@ export function AdminTelemetryPage({
 					<Card>
 						<CardHeader className="pb-3">
 							<div className="flex flex-wrap items-center justify-between gap-2">
-								<CardTitle className="text-base">Recent events</CardTitle>
+								<CardTitle className="text-base">{t('recentEvents', 'Recent events')}</CardTitle>
 								<CardDescription>
-									{(events.data?.total ?? 0).toLocaleString()} matching events
+									{(events.data?.total ?? 0).toLocaleString()} {t('matchingEvents', 'matching events')}
 								</CardDescription>
 							</div>
 						</CardHeader>
@@ -942,18 +943,18 @@ export function AdminTelemetryPage({
 								</div>
 							) : (events.data?.events.length ?? 0) === 0 ? (
 								<div className="flex h-40 items-center justify-center rounded-lg border border-dashed m-4 text-sm text-muted-foreground">
-									No events match the current filters.
+									{t('noEventsMatchTheCurrentFilters', 'No events match the current filters.')}
 								</div>
 							) : (
 								<Table>
 									<TableHeader>
 										<TableRow>
-											<TableHead>Time</TableHead>
+											<TableHead>{t('time', 'Time')}</TableHead>
 											<TableHead>Name</TableHead>
-											<TableHead>Source</TableHead>
-											<TableHead>Install</TableHead>
-											<TableHead>Platform</TableHead>
-											<TableHead>Version</TableHead>
+											<TableHead>{t('source', 'Source')}</TableHead>
+											<TableHead>{t('install', 'Install')}</TableHead>
+											<TableHead>{t('platform', 'Platform')}</TableHead>
+											<TableHead>{t('version', 'Version')}</TableHead>
 										</TableRow>
 									</TableHeader>
 									<TableBody>
@@ -1005,8 +1006,7 @@ export function AdminTelemetryPage({
 					{totalPages > 1 && (
 						<div className="flex items-center justify-between">
 							<div className="text-sm text-muted-foreground">
-								Page {page + 1} of {totalPages}
-							</div>
+								{t('pagePageOfTotalpages', 'Page {{page}} of {{totalPages}}', { page: page + 1, totalPages })}</div>
 							<div className="flex gap-2">
 								<Button
 									variant="outline"
@@ -1014,7 +1014,7 @@ export function AdminTelemetryPage({
 									onClick={() => setPage((p) => Math.max(0, p - 1))}
 									disabled={page === 0}
 								>
-									Previous
+									{t('previous', 'Previous')}
 								</Button>
 								<Button
 									variant="outline"
@@ -1024,7 +1024,7 @@ export function AdminTelemetryPage({
 									}
 									disabled={page >= totalPages - 1}
 								>
-									Next
+									{t('next', 'Next')}
 								</Button>
 							</div>
 						</div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebounce } from "@uidotdev/usehooks";
 import {
@@ -101,6 +102,7 @@ function IssueRow({
 	readonly issue: ITelemetryIssue;
 	readonly onOpen: (issue: ITelemetryIssue) => void;
 }) {
+	const { t } = useTranslation("admin");
 	return (
 		<button
 			type="button"
@@ -135,7 +137,7 @@ function IssueRow({
 				<div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
 					<RelativeTime value={issue.lastSeen} />
 					<span>·</span>
-					<span>first seen</span>
+					<span>{t('firstSeen', 'first seen')}</span>
 					<RelativeTime value={issue.firstSeen} />
 					{issue.lastRelease ? (
 						<>
@@ -174,6 +176,7 @@ interface AdminTelemetryIssuesPageProps {
 export function AdminTelemetryIssuesPage({
 	basePath = "/admin/telemetry/issues",
 }: Readonly<AdminTelemetryIssuesPageProps>) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const auth = useAuth();
 	const router = useRouter();
@@ -293,11 +296,9 @@ export function AdminTelemetryIssuesPage({
 					<CardHeader>
 						<CardTitle className="flex items-center justify-center gap-2 text-base">
 							<Lock className="h-4 w-4" />
-							Insufficient permissions
+							{t('insufficientPermissions', 'Insufficient permissions')}
 						</CardTitle>
-						<CardDescription>
-							You need the <b>Admin</b> permission to view crash issues.
-						</CardDescription>
+						<CardDescription><Trans i18nKey="youNeedTheBadminbPermissionToViewCrashIssues">You need the <b>Admin</b> permission to view crash issues.</Trans></CardDescription>
 					</CardHeader>
 				</Card>
 			</main>
@@ -323,23 +324,22 @@ export function AdminTelemetryIssuesPage({
 						<div>
 							<h1 className="flex items-center gap-2 text-3xl font-bold">
 								<Bug className="h-7 w-7 text-primary" />
-								Issues
+								{t('issues', 'Issues')}
 							</h1>
 							<p className="text-muted-foreground">
-								Grouped crashes and errors reported by installs — anonymous, no
-								user identity.
+								{t('groupedCrashesAndErrorsReportedByInstallsAnonymousNoUserIdentity', "Grouped crashes and errors reported by installs — anonymous, no user identity.")}
 							</p>
 						</div>
 						<div className="flex flex-wrap items-center gap-2">
 							<Button asChild variant="ghost" size="sm">
 								<Link href="/admin/telemetry">
 									<ArrowLeft className="mr-1 h-3.5 w-3.5" />
-									Telemetry
+									{t('telemetry', 'Telemetry')}
 								</Link>
 							</Button>
 							<Button variant="outline" size="sm" onClick={refresh}>
 								<RefreshCw className="mr-1 h-3.5 w-3.5" />
-								Refresh
+								{t('refresh', 'Refresh')}
 							</Button>
 						</div>
 					</div>
@@ -352,7 +352,7 @@ export function AdminTelemetryIssuesPage({
 									<Input
 										value={filters.query}
 										onChange={(e) => setFilterValue("query", e.target.value)}
-										placeholder="Search title, kind or culprit"
+										placeholder={t('searchTitleKindOrCulprit', 'Search title, kind or culprit')}
 										className="pl-8"
 									/>
 								</div>
@@ -381,7 +381,7 @@ export function AdminTelemetryIssuesPage({
 										<SelectValue placeholder="Status" />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value={ALL}>All statuses</SelectItem>
+										<SelectItem value={ALL}>{t('allStatuses', 'All statuses')}</SelectItem>
 										{ISSUE_STATUS_OPTIONS.map((status) => (
 											<SelectItem key={status} value={status}>
 												{status}
@@ -397,7 +397,7 @@ export function AdminTelemetryIssuesPage({
 										<SelectValue placeholder="Source" />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value={ALL}>All sources</SelectItem>
+										<SelectItem value={ALL}>{t('allSources', 'All sources')}</SelectItem>
 										{ISSUE_SOURCE_OPTIONS.map((source) => (
 											<SelectItem key={source} value={source}>
 												{source}
@@ -413,7 +413,7 @@ export function AdminTelemetryIssuesPage({
 										<SelectValue placeholder="Level" />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value={ALL}>All levels</SelectItem>
+										<SelectItem value={ALL}>{t('allLevels', 'All levels')}</SelectItem>
 										{ISSUE_LEVEL_OPTIONS.map((level) => (
 											<SelectItem key={level} value={level}>
 												{level}
@@ -423,14 +423,14 @@ export function AdminTelemetryIssuesPage({
 								</Select>
 							</div>
 							<CardDescription className="flex flex-wrap items-center gap-3">
-								<span>{total.toLocaleString()} matching issues</span>
+								<span>{total.toLocaleString()} {t('matchingIssues', 'matching issues')}</span>
 								<span className="inline-flex items-center gap-1">
 									<Zap className="h-3 w-3" />
-									{totalEvents.toLocaleString()} events on this page
+									{totalEvents.toLocaleString()} {t('eventsOnThisPage', 'events on this page')}
 								</span>
 								<span className="inline-flex items-center gap-1">
 									<MonitorSmartphone className="h-3 w-3" />
-									{totalInstalls.toLocaleString()} installs affected
+									{totalInstalls.toLocaleString()} {t('installsAffected', 'installs affected')}
 								</span>
 							</CardDescription>
 						</CardHeader>
@@ -459,8 +459,7 @@ export function AdminTelemetryIssuesPage({
 					{totalPages > 1 && (
 						<div className="flex items-center justify-between">
 							<div className="text-sm text-muted-foreground">
-								Page {page + 1} of {totalPages}
-							</div>
+								{t('pagePageOfTotalpages', 'Page {{page}} of {{totalPages}}', { page: page + 1, totalPages })}</div>
 							<div className="flex gap-2">
 								<Button
 									variant="outline"
@@ -468,7 +467,7 @@ export function AdminTelemetryIssuesPage({
 									onClick={() => setPage((p) => Math.max(0, p - 1))}
 									disabled={page === 0}
 								>
-									Previous
+									{t('previous', 'Previous')}
 								</Button>
 								<Button
 									variant="outline"
@@ -478,7 +477,7 @@ export function AdminTelemetryIssuesPage({
 									}
 									disabled={page >= totalPages - 1}
 								>
-									Next
+									{t('next', 'Next')}
 								</Button>
 							</div>
 						</div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	BookOpenIcon,
 	CheckIcon,
@@ -165,6 +166,7 @@ function EndpointRow({
 	appId: string;
 	baseUrl: string;
 }) {
+	const { t } = useTranslation("settings");
 	const [open, setOpen] = useState(false);
 	const filledPath = endpoint.path.replace("{app_id}", appId);
 	const fullUrl = `${baseUrl}${filledPath}`;
@@ -211,7 +213,7 @@ function EndpointRow({
 					)}
 
 					<div className="flex items-center gap-2">
-						<span className="text-xs text-muted-foreground">Full URL:</span>
+						<span className="text-xs text-muted-foreground">{t('fullUrl', 'Full URL:')}</span>
 						<code className="text-xs font-mono bg-muted rounded px-2 py-0.5 flex-1 truncate">
 							{fullUrl}
 						</code>
@@ -220,7 +222,7 @@ function EndpointRow({
 
 					{nonAppParams.length > 0 && (
 						<div className="space-y-1.5">
-							<span className="text-xs font-medium">Parameters</span>
+							<span className="text-xs font-medium">{t('parameters', 'Parameters')}</span>
 							<div className="rounded-md border overflow-hidden">
 								<table className="w-full text-sm">
 									<thead>
@@ -229,16 +231,16 @@ function EndpointRow({
 												Name
 											</th>
 											<th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground">
-												In
+												{t('in', 'In')}
 											</th>
 											<th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground">
 												Type
 											</th>
 											<th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground">
-												Required
+												{t('required', 'Required')}
 											</th>
 											<th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground">
-												Description
+												{t('description', 'Description')}
 											</th>
 										</tr>
 									</thead>
@@ -280,7 +282,7 @@ function EndpointRow({
 					)}
 
 					<div className="space-y-1.5">
-						<span className="text-xs font-medium">Example (cURL)</span>
+						<span className="text-xs font-medium">{t('exampleCurl', 'Example (cURL)')}</span>
 						<CodeBlock
 							language="bash"
 							code={buildCurlExample(endpoint, fullUrl)}
@@ -378,6 +380,7 @@ function groupByTag(endpoints: OpenApiPath[]): Record<string, OpenApiPath[]> {
 }
 
 export function EndpointsPage() {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const searchParams = useSearchParams();
 	const appId = searchParams.get("id") ?? "";
@@ -473,74 +476,30 @@ export function EndpointsPage() {
 				<CardHeader>
 					<div className="flex items-center gap-2">
 						<PackageIcon className="h-5 w-5" />
-						<CardTitle>SDK Installation</CardTitle>
+						<CardTitle>{t('sdkInstallation', 'SDK Installation')}</CardTitle>
 					</div>
 					<CardDescription>
-						Use the official Flow-Like SDK to interact with your app
-						programmatically.
+						{t('useTheOfficialFlowlikeSdkToInteractWithYourAppProgrammatically', "Use the official Flow-Like SDK to interact with your app programmatically.")}
 					</CardDescription>
 				</CardHeader>
 				<CardContent>
 					<Tabs defaultValue="npm">
 						<TabsList>
-							<TabsTrigger value="npm">npm / TypeScript</TabsTrigger>
-							<TabsTrigger value="python">Python</TabsTrigger>
+							<TabsTrigger value="npm">{`npm / TypeScript`}</TabsTrigger>
+							<TabsTrigger value="python">{t('python', 'Python')}</TabsTrigger>
 						</TabsList>
 						<TabsContent value="npm" className="space-y-3 mt-3">
 							<CodeBlock language="bash" code="npm install @flow-like/sdk" />
 							<CodeBlock
 								language="typescript"
-								code={`import { FlowLikeClient } from "@flow-like/sdk";
-
-const client = new FlowLikeClient({
-  baseUrl: "${baseUrl}",
-  // Authenticate with a Personal Access Token (format: pat_{id}.{secret})
-  pat: "<your-pat-token>",
-  // Or use a Technical User API Key (format: flk_{app_id}.{key_id}.{secret})
-  // apiKey: "<your-api-key>",
-});
-
-const appId = "${appId}";
-
-// Trigger an event (returns AsyncIterable<SSEChunk>)
-for await (const chunk of client.triggerEvent(appId, "event-id", { key: "value" })) {
-  console.log(chunk);
-}
-
-// Upload a file
-const uploaded = await client.uploadFile(appId, file);
-
-// Query a database table
-const rows = await client.queryTable(appId, "table-name", {
-  filter: "column = 'value'",
-});`}
+								code={`import { FlowLikeClient } from "@flow-like/sdk"; const client = new FlowLikeClient({ baseUrl: "${baseUrl}", // Authenticate with a Personal Access Token (format: pat_{id}.{secret}) pat: "<your-pat-token>", // Or use a Technical User API Key (format: flk_{app_id}.{key_id}.{secret}) // apiKey: "<your-api-key>", }); const appId = "${appId}"; // Trigger an event (returns AsyncIterable<SSEChunk>) for await (const chunk of client.triggerEvent(appId, "event-id", { key: "value" })) { console.log(chunk); } // Upload a file const uploaded = await client.uploadFile(appId, file); // Query a database table const rows = await client.queryTable(appId, "table-name", { filter: "column = 'value'", });`}
 							/>
 						</TabsContent>
 						<TabsContent value="python" className="space-y-3 mt-3">
 							<CodeBlock language="bash" code="pip install flow-like" />
 							<CodeBlock
 								language="python"
-								code={`from flow_like import FlowLikeClient
-
-client = FlowLikeClient(
-    base_url="${baseUrl}",
-    # Authenticate with a Personal Access Token (format: pat_{id}.{secret})
-    pat="<your-pat-token>",
-    # Or use a Technical User API Key (format: flk_{app_id}.{key_id}.{secret})
-    # api_key="<your-api-key>",
-)
-
-app_id = "${appId}"
-
-# Trigger an event (returns Iterator[SSEEvent])
-for event in client.trigger_event(app_id, "event-id", {"key": "value"}):
-    print(event)
-
-# Upload a file
-uploaded = client.upload_file(app_id, file)
-
-# Query a database table
-rows = client.query_table(app_id, "table-name", {"filter": "column = 'value'"})`}
+								code={t('fromFlow_likeImportFlowlikeclientClientFlowlikeclientBase_urlbaseurlAuthenticateWithAPersonalAccessTokenFormatPat_idsecretPatyourpattokenOrUseATechnicalUserApiKeyFormatFlk_app_idkey_idsecretApi_keyyourapikeyApp_idAppidTriggerAnEventReturnsIteratorsseeventForEventInClienttrigger_eventapp_idEventidKeyValuePrinteventUploadAFileUploadedClientupload_fileapp_idFileQueryADatabaseTableRowsClientquery_tableapp_idTablenameFilterColumnValue', "from flow_like import FlowLikeClient client = FlowLikeClient( base_url=\"{{baseUrl}}\", # Authenticate with a Personal Access Token (format: pat_{id}.{secret}) pat=\"<your-pat-token>\", # Or use a Technical User API Key (format: flk_{app_id}.{key_id}.{secret}) # api_key=\"<your-api-key>\", ) app_id = \"{{appId}}\" # Trigger an event (returns Iterator[SSEEvent]) for event in client.trigger_event(app_id, \"event-id\", {\"key\": \"value\"}): print(event) # Upload a file uploaded = client.upload_file(app_id, file) # Query a database table rows = client.query_table(app_id, \"table-name\", {\"filter\": \"column = 'value'\"})", { baseUrl, appId })}
 							/>
 						</TabsContent>
 					</Tabs>
@@ -552,10 +511,10 @@ rows = client.query_table(app_id, "table-name", {"filter": "column = 'value'"})`
 				<CardHeader>
 					<div className="flex items-center gap-2">
 						<ShieldIcon className="h-5 w-5" />
-						<CardTitle>Authentication</CardTitle>
+						<CardTitle>{t('authentication', 'Authentication')}</CardTitle>
 					</div>
 					<CardDescription>
-						Choose one of the supported authentication methods for API access.
+						{t('chooseOneOfTheSupportedAuthenticationMethodsForApiAccess', 'Choose one of the supported authentication methods for API access.')}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
@@ -565,21 +524,20 @@ rows = client.query_table(app_id, "table-name", {"filter": "column = 'value'"})`
 								<div className="flex items-center gap-2">
 									<KeyIcon className="h-4 w-4" />
 									<CardTitle className="text-sm">
-										Personal Access Token (PAT)
+										{t('personalAccessTokenPat', 'Personal Access Token (PAT)')}
 									</CardTitle>
 								</div>
 							</CardHeader>
 							<CardContent className="space-y-2">
 								<p className="text-xs text-muted-foreground">
-									Create PATs in your user settings. Best for personal scripts
-									and development. Token format:{" "}
+									{t('createPatsInYourUserSettingsBestForPersonalScriptsAndDevelopmentTokenFormat', "Create PATs in your user settings. Best for personal scripts and development. Token format:")}{" "}
 									<code className="text-xs font-mono">
 										pat_&#123;id&#125;.&#123;secret&#125;
 									</code>
 								</p>
 								<CodeBlock
 									language="http"
-									code={"Authorization: pat_{id}.{secret}"}
+									code={t('authorizationPat_idsecret', 'Authorization: pat_{id}.{secret}')}
 								/>
 							</CardContent>
 						</Card>
@@ -588,14 +546,13 @@ rows = client.query_table(app_id, "table-name", {"filter": "column = 'value'"})`
 								<div className="flex items-center gap-2">
 									<ServerIcon className="h-4 w-4" />
 									<CardTitle className="text-sm">
-										Technical User API Key
+										{t('technicalUserApiKey', 'Technical User API Key')}
 									</CardTitle>
 								</div>
 							</CardHeader>
 							<CardContent className="space-y-2">
 								<p className="text-xs text-muted-foreground">
-									Create API keys in the Team settings of this app. Best for
-									server-to-server integrations. Key format:{" "}
+									{t('createApiKeysInTheTeamSettingsOfThisAppBestForServertoserverIntegrationsKeyFormat', "Create API keys in the Team settings of this app. Best for server-to-server integrations. Key format:")}{" "}
 									<code className="text-xs font-mono">
 										flk_&#123;app_id&#125;.&#123;key_id&#125;.&#123;secret&#125;
 									</code>
@@ -615,14 +572,14 @@ rows = client.query_table(app_id, "table-name", {"filter": "column = 'value'"})`
 				<CardHeader>
 					<div className="flex items-center gap-2">
 						<BookOpenIcon className="h-5 w-5" />
-						<CardTitle>App Endpoints</CardTitle>
+						<CardTitle>{t('appEndpoints', 'App Endpoints')}</CardTitle>
 					</div>
 					<CardDescription>
-						These endpoints are scoped to your app. The app ID{" "}
+						{t('theseEndpointsAreScopedToYourAppTheAppId', 'These endpoints are scoped to your app. The app ID')}{" "}
 						<code className="text-xs rounded bg-muted px-1.5 py-0.5 font-mono">
 							{appId}
 						</code>{" "}
-						is pre-filled in all paths.
+						{t('isPrefilledInAllPaths', 'is pre-filled in all paths.')}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
@@ -635,13 +592,13 @@ rows = client.query_table(app_id, "table-name", {"filter": "column = 'value'"})`
 								className="ml-2 h-auto p-0"
 								onClick={loadSpec}
 							>
-								Retry
+								{t('retry', 'Retry')}
 							</Button>
 						</div>
 					)}
 					{!error && appEndpoints.length === 0 && (
 						<p className="text-sm text-muted-foreground">
-							No app-scoped endpoints found.
+							{t('noAppscopedEndpointsFound', 'No app-scoped endpoints found.')}
 						</p>
 					)}
 					{Object.entries(groupedApp).map(([tag, endpoints]) => (
@@ -678,11 +635,10 @@ rows = client.query_table(app_id, "table-name", {"filter": "column = 'value'"})`
 					<CardHeader>
 						<div className="flex items-center gap-2">
 							<ServerIcon className="h-5 w-5" />
-							<CardTitle>Utility Endpoints</CardTitle>
+							<CardTitle>{t('utilityEndpoints', 'Utility Endpoints')}</CardTitle>
 						</div>
 						<CardDescription>
-							Global endpoints for temporary file uploads, chat completions, and
-							other utilities.
+							{t('globalEndpointsForTemporaryFileUploadsChatCompletionsAndOtherUtilities', "Global endpoints for temporary file uploads, chat completions, and other utilities.")}
 						</CardDescription>
 					</CardHeader>
 					<CardContent className="space-y-4">
@@ -720,11 +676,10 @@ rows = client.query_table(app_id, "table-name", {"filter": "column = 'value'"})`
 				<CardHeader>
 					<div className="flex items-center gap-2">
 						<ExternalLinkIcon className="h-5 w-5" />
-						<CardTitle>Full API Documentation</CardTitle>
+						<CardTitle>{t('fullApiDocumentation', 'Full API Documentation')}</CardTitle>
 					</div>
 					<CardDescription>
-						View the complete interactive API documentation in Swagger UI,
-						including request/response schemas and the ability to try endpoints.
+						{t('viewTheCompleteInteractiveApiDocumentationInSwaggerUiIncludingRequestresponseSchemasAndTheAbilityToTryEndpoints', "View the complete interactive API documentation in Swagger UI, including request/response schemas and the ability to try endpoints.")}
 					</CardDescription>
 				</CardHeader>
 				<CardContent>
@@ -736,7 +691,7 @@ rows = client.query_table(app_id, "table-name", {"filter": "column = 'value'"})`
 							className="gap-2"
 						>
 							<ExternalLinkIcon className="h-4 w-4" />
-							Open Swagger UI
+							{t('openSwaggerUi', 'Open Swagger UI')}
 						</a>
 					</Button>
 				</CardContent>

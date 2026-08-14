@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	Activity,
@@ -415,6 +416,7 @@ function SectionCard({
 	section: AdminSection;
 	hasAccess: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	const Icon = section.icon;
 
 	if (!hasAccess) {
@@ -429,7 +431,7 @@ function SectionCard({
 				</CardHeader>
 				<CardContent>
 					<Badge variant="outline" className="text-xs text-muted-foreground">
-						Insufficient permissions
+						{t('insufficientPermissions', 'Insufficient permissions')}
 					</Badge>
 				</CardContent>
 			</Card>
@@ -516,7 +518,7 @@ function formatCompactCount(value: number) {
 
 function formatDuration(ms: number | null) {
 	if (ms === null) return "n/a";
-	if (ms < 1000) return `${Math.round(ms)} ms`;
+	if (ms < 1000) return i18next.t('valMs', '{{val}} ms', { val: Math.round(ms) });
 	return `${(ms / 1000).toFixed(1)} s`;
 }
 
@@ -595,12 +597,13 @@ function UsageHealthSummary({
 	loading: boolean;
 	period: IUsageLimitPeriod;
 }) {
+	const { t } = useTranslation("admin");
 	const stats = overview?.userStats;
 	const totals = overview?.totals;
 
 	const groups = [
 		{
-			title: "Audience",
+			title: t('audience', 'Audience'),
 			items: [
 				["DAU", formatCount(stats?.activeUsersDaily ?? 0)],
 				["WAU", formatCount(stats?.activeUsersWeekly ?? 0)],
@@ -608,7 +611,7 @@ function UsageHealthSummary({
 			],
 		},
 		{
-			title: "Growth",
+			title: t('growth', 'Growth'),
 			items: [
 				["Today", formatCount(stats?.newUsersToday ?? 0)],
 				["7d", formatCount(stats?.newUsersWeekly ?? 0)],
@@ -616,7 +619,7 @@ function UsageHealthSummary({
 			],
 		},
 		{
-			title: "Workload",
+			title: t('workload', 'Workload'),
 			items: [
 				[
 					"AI",
@@ -629,7 +632,7 @@ function UsageHealthSummary({
 			],
 		},
 		{
-			title: "Efficiency",
+			title: t('efficiency', 'Efficiency'),
 			items: [
 				["Spend", formatCost(totals?.totalPrice ?? 0)],
 				["/ MAU", formatDollars(stats?.averageCostPerActiveUser ?? null)],
@@ -642,10 +645,10 @@ function UsageHealthSummary({
 		<Card>
 			<CardHeader>
 				<CardTitle className="text-base">
-					{periodTitle(period)} Health
+					{periodTitle(period)} {t('health', 'Health')}
 				</CardTitle>
 				<CardDescription>
-					Users, growth, workload, and spend in one operational view.
+					{t('usersGrowthWorkloadAndSpendInOneOperationalView', 'Users, growth, workload, and spend in one operational view.')}
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
@@ -684,6 +687,7 @@ function ActivityTrendChart({
 	overview: IAdminUsageOverview | undefined;
 	loading: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	const data = useMemo(
 		() =>
 			overview?.trend.map((point) => ({
@@ -703,16 +707,16 @@ function ActivityTrendChart({
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-base">Activity Over Time</CardTitle>
+				<CardTitle className="text-base">{t('activityOverTime', 'Activity Over Time')}</CardTitle>
 				<CardDescription>
-					AI calls, app executions, active users, and signups.
+					{t('aiCallsAppExecutionsActiveUsersAndSignups', 'AI calls, app executions, active users, and signups.')}
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
 				{loading ? (
 					<Skeleton className="h-80 w-full" />
 				) : !hasData ? (
-					<EmptyChart label="No activity recorded for this period." />
+					<EmptyChart label={t('noActivityRecordedForThisPeriod', 'No activity recorded for this period.')} />
 				) : (
 					<ChartContainer config={activityChartConfig} className="h-80 w-full">
 						<ComposedChart
@@ -778,6 +782,7 @@ function SpendTokenTrendChart({
 	overview: IAdminUsageOverview | undefined;
 	loading: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	const data = useMemo(
 		() =>
 			overview?.trend.map((point) => ({
@@ -792,16 +797,16 @@ function SpendTokenTrendChart({
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-base">Spend & Tokens</CardTitle>
+				<CardTitle className="text-base">{t('spendTokens', 'Spend & Tokens')}</CardTitle>
 				<CardDescription>
-					Remote model cost against token volume.
+					{t('remoteModelCostAgainstTokenVolume', 'Remote model cost against token volume.')}
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
 				{loading ? (
 					<Skeleton className="h-72 w-full" />
 				) : !hasData ? (
-					<EmptyChart label="No remote model spend for this period." />
+					<EmptyChart label={t('noRemoteModelSpendForThisPeriod', 'No remote model spend for this period.')} />
 				) : (
 					<ChartContainer config={spendChartConfig} className="h-72 w-full">
 						<ComposedChart
@@ -866,6 +871,7 @@ function SpendMixChart({
 	overview: IAdminUsageOverview | undefined;
 	loading: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	const data = useMemo(
 		() => [
 			{
@@ -875,7 +881,7 @@ function SpendMixChart({
 			},
 			{
 				key: "embedding",
-				name: "Embeddings",
+				name: t('embeddings', 'Embeddings'),
 				value: overview?.totals.embeddingPrice ?? 0,
 			},
 		],
@@ -886,14 +892,14 @@ function SpendMixChart({
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-base">Spend Mix</CardTitle>
-				<CardDescription>LLM cost versus embedding cost.</CardDescription>
+				<CardTitle className="text-base">{t('spendMix', 'Spend Mix')}</CardTitle>
+				<CardDescription>{t('llmCostVersusEmbeddingCost', 'LLM cost versus embedding cost.')}</CardDescription>
 			</CardHeader>
 			<CardContent>
 				{loading ? (
 					<Skeleton className="h-72 w-full" />
 				) : total === 0 ? (
-					<EmptyChart label="No paid remote usage yet." />
+					<EmptyChart label={t('noPaidRemoteUsageYet', 'No paid remote usage yet.')} />
 				) : (
 					<div className="grid gap-4 md:grid-cols-[1fr_auto] lg:grid-cols-1 xl:grid-cols-[1fr_auto]">
 						<ChartContainer
@@ -957,12 +963,13 @@ function TechnicalUsers({
 	profile: IProfile | undefined;
 	period: IUsageLimitPeriod;
 }) {
+	const { t } = useTranslation("admin");
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-base">Technical Users</CardTitle>
+				<CardTitle className="text-base">{t('technicalUsers', 'Technical Users')}</CardTitle>
 				<CardDescription>
-					API keys with the highest tracked usage.
+					{t('apiKeysWithTheHighestTrackedUsage', 'API keys with the highest tracked usage.')}
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-2">
@@ -1018,7 +1025,7 @@ function TechnicalUsers({
 				})}
 				{overview && overview.technicalUsers.length === 0 && (
 					<div className="rounded-md border p-4 text-sm text-muted-foreground">
-						No API-key usage for this period.
+						{t('noApikeyUsageForThisPeriod', 'No API-key usage for this period.')}
 					</div>
 				)}
 			</CardContent>
@@ -1035,6 +1042,7 @@ function TechnicalUserLimitEditor({
 	period: IUsageLimitPeriod;
 	profile: IProfile;
 }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const [cost, setCost] = useState(
@@ -1075,14 +1083,14 @@ function TechnicalUserLimitEditor({
 		<div className="grid gap-2 border-t pt-3 sm:grid-cols-[1fr_1fr_auto]">
 			<Input
 				inputMode="decimal"
-				placeholder="$ limit"
+				placeholder={t('limit', '$ limit')}
 				value={cost}
 				onChange={(event) => setCost(event.target.value)}
 				className="h-8"
 			/>
 			<Input
 				inputMode="numeric"
-				placeholder="Token limit"
+				placeholder={t('tokenLimit', 'Token limit')}
 				value={tokens}
 				onChange={(event) => setTokens(event.target.value)}
 				className="h-8"
@@ -1092,7 +1100,7 @@ function TechnicalUserLimitEditor({
 				variant="outline"
 				disabled={mutation.isPending}
 				onClick={() => mutation.mutate()}
-				aria-label="Save technical user usage limit"
+				aria-label={t('saveTechnicalUserUsageLimit', 'Save technical user usage limit')}
 			>
 				<Save className="h-4 w-4" />
 			</Button>
@@ -1107,6 +1115,7 @@ function PowerUsers({
 	overview: IAdminUsageOverview | undefined;
 	loading: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	const maxInteractions = Math.max(
 		1,
 		...(overview?.powerUsers.map((user) => user.totalInteractions) ?? []),
@@ -1115,9 +1124,9 @@ function PowerUsers({
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-base">Power Users</CardTitle>
+				<CardTitle className="text-base">{t('powerUsers', 'Power Users')}</CardTitle>
 				<CardDescription>
-					Highest activity across the last 30 days.
+					{t('highestActivityAcrossTheLast30Days', 'Highest activity across the last 30 days.')}
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-2">
@@ -1132,9 +1141,8 @@ function PowerUsers({
 								{user.displayName ?? user.email ?? user.userId}
 							</div>
 							<div className="truncate text-xs text-muted-foreground">
-								{formatCount(user.aiInvocations)} AI,{" "}
-								{formatCount(user.executions)} runs, {user.activeDays} active
-								days
+								{formatCount(user.aiInvocations)} {t('ai', 'AI,')}{" "}
+								{formatCount(user.executions)} runs, {user.activeDays} {t('activeDays', "active days")}
 							</div>
 						</div>
 						<div className="text-right">
@@ -1160,7 +1168,7 @@ function PowerUsers({
 				))}
 				{overview && overview.powerUsers.length === 0 && (
 					<div className="rounded-md border p-4 text-sm text-muted-foreground">
-						No power users in the last 30 days.
+						{t('noPowerUsersInTheLast30Days', 'No power users in the last 30 days.')}
 					</div>
 				)}
 			</CardContent>
@@ -1175,11 +1183,12 @@ function TopAppsActivityChart({
 	overview: IAdminUsageOverview | undefined;
 	loading: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	const data = useMemo(
 		() =>
 			(overview?.apps ?? []).slice(0, 8).map((app, index) => ({
 				name: truncateChartLabel(
-					app.appName ?? app.appId ?? `App ${index + 1}`,
+					app.appName ?? app.appId ?? t('appVal', 'App {{val}}', { val: index + 1 }),
 				),
 				fullName: app.appName ?? app.appId ?? "Unknown app",
 				aiCalls: app.llmInvocations + app.embeddingInvocations,
@@ -1193,14 +1202,14 @@ function TopAppsActivityChart({
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-base">Top Apps by Activity</CardTitle>
-				<CardDescription>Remote AI calls and app executions.</CardDescription>
+				<CardTitle className="text-base">{t('topAppsByActivity', 'Top Apps by Activity')}</CardTitle>
+				<CardDescription>{t('remoteAiCallsAndAppExecutions', 'Remote AI calls and app executions.')}</CardDescription>
 			</CardHeader>
 			<CardContent>
 				{loading ? (
 					<Skeleton className="h-72 w-full" />
 				) : !hasData ? (
-					<EmptyChart label="No app activity for this period." />
+					<EmptyChart label={t('noAppActivityForThisPeriod', 'No app activity for this period.')} />
 				) : (
 					<ChartContainer
 						config={appActivityChartConfig}
@@ -1258,6 +1267,7 @@ function TopModelsChart({
 	overview: IAdminUsageOverview | undefined;
 	loading: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	const data = useMemo(
 		() =>
 			(overview?.models ?? []).slice(0, 8).map((model) => ({
@@ -1275,16 +1285,16 @@ function TopModelsChart({
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-base">Remote Model Mix</CardTitle>
+				<CardTitle className="text-base">{t('remoteModelMix', 'Remote Model Mix')}</CardTitle>
 				<CardDescription>
-					Which remote models are carrying traffic.
+					{t('whichRemoteModelsAreCarryingTraffic', 'Which remote models are carrying traffic.')}
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
 				{loading ? (
 					<Skeleton className="h-72 w-full" />
 				) : !hasData ? (
-					<EmptyChart label="No remote model usage for this period." />
+					<EmptyChart label={t('noRemoteModelUsageForThisPeriod', 'No remote model usage for this period.')} />
 				) : (
 					<div className="space-y-4">
 						<ChartContainer config={modelChartConfig} className="h-64 w-full">
@@ -1327,8 +1337,7 @@ function TopModelsChart({
 									className="rounded-md border px-3 py-2"
 								>
 									<div className="truncate font-medium">{model.fullName}</div>
-									<div className="text-muted-foreground">
-										{model.kind} - {formatCount(model.tokens)} tokens -{" "}
+									<div className="text-muted-foreground">{`${model.kind} -`}{formatCount(model.tokens)} tokens -{" "}
 										{formatCost(model.cost)}
 									</div>
 								</div>
@@ -1350,6 +1359,7 @@ function LimitUtilization({
 	loading: boolean;
 	period: IUsageLimitPeriod;
 }) {
+	const { t } = useTranslation("admin");
 	const rows = useMemo(
 		() =>
 			(overview?.apps ?? [])
@@ -1384,10 +1394,8 @@ function LimitUtilization({
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-base">Limit Utilization</CardTitle>
-				<CardDescription>
-					Apps closest to their {period} guardrails.
-				</CardDescription>
+				<CardTitle className="text-base">{t('limitUtilization', 'Limit Utilization')}</CardTitle>
+				<CardDescription>{t('appsClosestToTheirPeriodGuardrails', 'Apps closest to their {{period}} guardrails.', { period })}</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-3">
 				{loading && <Skeleton className="h-64 w-full" />}
@@ -1419,13 +1427,13 @@ function LimitUtilization({
 								</div>
 								<div className="flex gap-3 text-[11px] text-muted-foreground">
 									<span>
-										Cost{" "}
+										{t('cost', 'Cost')}{" "}
 										{row.costPercent === null
 											? "n/a"
 											: formatPercent(row.costPercent)}
 									</span>
 									<span>
-										Tokens{" "}
+										{t('tokens', 'Tokens')}{" "}
 										{row.tokenPercent === null
 											? "n/a"
 											: formatPercent(row.tokenPercent)}
@@ -1436,7 +1444,7 @@ function LimitUtilization({
 					})}
 				{!loading && rows.length === 0 && (
 					<div className="rounded-md border p-4 text-sm text-muted-foreground">
-						No limits configured for active apps in this period.
+						{t('noLimitsConfiguredForActiveAppsInThisPeriod', 'No limits configured for active apps in this period.')}
 					</div>
 				)}
 			</CardContent>
@@ -1453,6 +1461,7 @@ function LimitEditor({
 	period: IUsageLimitPeriod;
 	profile: IProfile;
 }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const [cost, setCost] = useState(costInputValue(app.limits, period));
@@ -1487,7 +1496,7 @@ function LimitEditor({
 
 	if (!app.appId) {
 		return (
-			<span className="text-xs text-muted-foreground">No app context</span>
+			<span className="text-xs text-muted-foreground">{t('noAppContext', 'No app context')}</span>
 		);
 	}
 
@@ -1495,14 +1504,14 @@ function LimitEditor({
 		<div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
 			<Input
 				inputMode="decimal"
-				placeholder="$ limit"
+				placeholder={t('limit', '$ limit')}
 				value={cost}
 				onChange={(event) => setCost(event.target.value)}
 				className="h-8"
 			/>
 			<Input
 				inputMode="numeric"
-				placeholder="Token limit"
+				placeholder={t('tokenLimit', 'Token limit')}
 				value={tokens}
 				onChange={(event) => setTokens(event.target.value)}
 				className="h-8"
@@ -1512,7 +1521,7 @@ function LimitEditor({
 				variant="outline"
 				disabled={mutation.isPending}
 				onClick={() => mutation.mutate()}
-				aria-label="Save usage limit"
+				aria-label={t('saveUsageLimit', 'Save usage limit')}
 			>
 				<Save className="h-4 w-4" />
 			</Button>
@@ -1527,6 +1536,7 @@ function ManualLimitEditor({
 	profile: IProfile;
 	period: IUsageLimitPeriod;
 }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const [appId, setAppId] = useState("");
@@ -1562,7 +1572,7 @@ function ManualLimitEditor({
 	return (
 		<div className="grid gap-3 border-t pt-4 sm:grid-cols-[1.5fr_1fr_1fr_auto]">
 			<div className="space-y-1">
-				<Label htmlFor="usage-limit-app-id">App ID</Label>
+				<Label htmlFor="usage-limit-app-id">{t('appId', 'App ID')}</Label>
 				<Input
 					id="usage-limit-app-id"
 					value={appId}
@@ -1571,7 +1581,7 @@ function ManualLimitEditor({
 				/>
 			</div>
 			<div className="space-y-1">
-				<Label htmlFor="usage-limit-cost">Cost limit</Label>
+				<Label htmlFor="usage-limit-cost">{t('costLimit', 'Cost limit')}</Label>
 				<Input
 					id="usage-limit-cost"
 					inputMode="decimal"
@@ -1581,7 +1591,7 @@ function ManualLimitEditor({
 				/>
 			</div>
 			<div className="space-y-1">
-				<Label htmlFor="usage-limit-tokens">Token limit</Label>
+				<Label htmlFor="usage-limit-tokens">{t('tokenLimit', 'Token limit')}</Label>
 				<Input
 					id="usage-limit-tokens"
 					inputMode="numeric"
@@ -1597,7 +1607,7 @@ function ManualLimitEditor({
 					onClick={() => mutation.mutate()}
 				>
 					<Save className="mr-2 h-4 w-4" />
-					Save
+					{t('save', 'Save')}
 				</Button>
 			</div>
 		</div>
@@ -1611,6 +1621,7 @@ function UsageOperations({
 	profile: IProfile;
 	period: IUsageLimitPeriod;
 }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const alerts = useQuery<IAdminPaginated<IAdminUsageAlert>>({
@@ -1659,9 +1670,9 @@ function UsageOperations({
 			<Card>
 				<CardHeader className="flex flex-row items-start justify-between gap-3">
 					<div>
-						<CardTitle className="text-base">Usage Ledger</CardTitle>
+						<CardTitle className="text-base">{t('usageLedger', 'Usage Ledger')}</CardTitle>
 						<CardDescription>
-							Recent provider calls, including pending and unknown usage.
+							{t('recentProviderCallsIncludingPendingAndUnknownUsage', 'Recent provider calls, including pending and unknown usage.')}
 						</CardDescription>
 					</div>
 					<Button
@@ -1671,7 +1682,7 @@ function UsageOperations({
 						onClick={() => reconcile.mutate()}
 					>
 						<RefreshCw className="mr-2 h-4 w-4" />
-						Reconcile
+						{t('reconcile', 'Reconcile')}
 					</Button>
 				</CardHeader>
 				<CardContent className="space-y-2">
@@ -1686,9 +1697,9 @@ function UsageOperations({
 									{item.modelId ?? item.kind}
 								</div>
 								<div className="truncate text-xs text-muted-foreground">
-									{item.provider ?? "provider"} - {item.status} -{" "}
-									{item.appId ?? "no app"}
-									{item.technicalUserId ? ` - key ${item.technicalUserId}` : ""}
+									{item.provider ?? "provider"}{`- ${item.status} -`}{" "}
+									{item.appId ?? t('noApp', 'no app')}
+									{item.technicalUserId ? t('keyTechnicaluserid', '- key {{technicalUserId}}', { technicalUserId: item.technicalUserId }) : ""}
 								</div>
 							</div>
 							<div className="text-right">
@@ -1710,16 +1721,16 @@ function UsageOperations({
 					))}
 					{invocations.data?.items.length === 0 && (
 						<div className="rounded-md border p-4 text-sm text-muted-foreground">
-							No ledger entries for this period.
+							{t('noLedgerEntriesForThisPeriod', 'No ledger entries for this period.')}
 						</div>
 					)}
 				</CardContent>
 			</Card>
 			<Card>
 				<CardHeader>
-					<CardTitle className="text-base">Usage Alerts</CardTitle>
+					<CardTitle className="text-base">{t('usageAlerts', 'Usage Alerts')}</CardTitle>
 					<CardDescription>
-						Limit warnings, hard blocks, and cost anomalies.
+						{t('limitWarningsHardBlocksAndCostAnomalies', 'Limit warnings, hard blocks, and cost anomalies.')}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-2">
@@ -1734,9 +1745,8 @@ function UsageOperations({
 									<AlertTriangle className="h-4 w-4 text-amber-500" />
 									<span className="truncate">{alert.message}</span>
 								</div>
-								<div className="truncate text-xs text-muted-foreground">
-									{alert.severity} - {alert.period ?? "period"} -{" "}
-									{alert.appId ?? "no app"}
+								<div className="truncate text-xs text-muted-foreground">{`${alert.severity} -`}{alert.period ?? "period"} -{" "}
+									{alert.appId ?? t('noApp', 'no app')}
 								</div>
 							</div>
 							<Button
@@ -1748,13 +1758,13 @@ function UsageOperations({
 								onClick={() => acknowledge.mutate(alert.id)}
 							>
 								<CheckCircle className="mr-2 h-4 w-4" />
-								Ack
+								{t('ack', 'Ack')}
 							</Button>
 						</div>
 					))}
 					{alerts.data?.items.length === 0 && (
 						<div className="rounded-md border p-4 text-sm text-muted-foreground">
-							No usage alerts.
+							{t('noUsageAlerts', 'No usage alerts.')}
 						</div>
 					)}
 				</CardContent>
@@ -1770,6 +1780,7 @@ function UsageOverviewSection({
 	profile: IProfile | undefined;
 	hasAdminAccess: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const [period, setPeriod] = useState<IUsageLimitPeriod>("monthly");
 	const overview = useQuery<IAdminUsageOverview>({
@@ -1790,9 +1801,9 @@ function UsageOverviewSection({
 		<div className="space-y-4">
 			<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 				<div>
-					<h2 className="text-lg font-semibold">Usage Dashboard</h2>
+					<h2 className="text-lg font-semibold">{t('usageDashboard', 'Usage Dashboard')}</h2>
 					<p className="text-sm text-muted-foreground">
-						Remote model spend, app executions, user activity, and limits.
+						{t('remoteModelSpendAppExecutionsUserActivityAndLimits', 'Remote model spend, app executions, user activity, and limits.')}
 					</p>
 				</div>
 				<Select
@@ -1859,10 +1870,8 @@ function UsageOverviewSection({
 
 			<Card>
 				<CardHeader>
-					<CardTitle className="text-base">Top Apps</CardTitle>
-					<CardDescription>
-						Set rolling {period} cost and token limits per app.
-					</CardDescription>
+					<CardTitle className="text-base">{t('topApps', 'Top Apps')}</CardTitle>
+					<CardDescription>{t('setRollingPeriodCostAndTokenLimitsPerApp', 'Set rolling {{period}} cost and token limits per app.', { period })}</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="space-y-2">
@@ -1877,24 +1886,24 @@ function UsageOverviewSection({
 										{app.appName ?? app.appId ?? "Unknown app"}
 									</div>
 									<div className="truncate text-xs text-muted-foreground">
-										{app.appId ?? "usage without app context"}
+										{app.appId ?? t('usageWithoutAppContext', 'usage without app context')}
 									</div>
 								</div>
 								<div className="grid grid-cols-3 gap-2 text-xs">
 									<div>
-										<div className="text-muted-foreground">Cost</div>
+										<div className="text-muted-foreground">{t('cost', 'Cost')}</div>
 										<div className="font-medium">
 											{formatCost(app.totalPrice)}
 										</div>
 									</div>
 									<div>
-										<div className="text-muted-foreground">Tokens</div>
+										<div className="text-muted-foreground">{t('tokens', 'Tokens')}</div>
 										<div className="font-medium">
 											{formatCount(app.totalTokens)}
 										</div>
 									</div>
 									<div>
-										<div className="text-muted-foreground">Runs</div>
+										<div className="text-muted-foreground">{t('runs', 'Runs')}</div>
 										<div className="font-medium">
 											{formatCount(app.executions)}
 										</div>
@@ -1907,7 +1916,7 @@ function UsageOverviewSection({
 						))}
 						{overview.data && overview.data.apps.length === 0 && (
 							<div className="rounded-md border p-4 text-sm text-muted-foreground">
-								No usage recorded for this period.
+								{t('noUsageRecordedForThisPeriod', 'No usage recorded for this period.')}
 							</div>
 						)}
 					</div>
@@ -1918,7 +1927,7 @@ function UsageOverviewSection({
 			<div className="grid gap-4 lg:grid-cols-2">
 				<Card>
 					<CardHeader>
-						<CardTitle className="text-base">Top Users</CardTitle>
+						<CardTitle className="text-base">{t('topUsers', 'Top Users')}</CardTitle>
 					</CardHeader>
 					<CardContent className="space-y-2">
 						{overview.isLoading && <Skeleton className="h-28 w-full" />}
@@ -1935,7 +1944,7 @@ function UsageOverviewSection({
 											"Unknown user"}
 									</div>
 									<div className="truncate text-xs text-muted-foreground">
-										{user.email ?? user.userId ?? "usage without user context"}
+										{user.email ?? user.userId ?? t('usageWithoutUserContext', 'usage without user context')}
 									</div>
 								</div>
 								<div className="text-right">
@@ -1952,7 +1961,7 @@ function UsageOverviewSection({
 				</Card>
 				<Card>
 					<CardHeader>
-						<CardTitle className="text-base">Top Remote Models</CardTitle>
+						<CardTitle className="text-base">{t('topRemoteModels', 'Top Remote Models')}</CardTitle>
 					</CardHeader>
 					<CardContent className="space-y-2">
 						{overview.isLoading && <Skeleton className="h-28 w-full" />}
@@ -1965,7 +1974,7 @@ function UsageOverviewSection({
 									<div className="truncate font-medium">{model.modelId}</div>
 									<div className="truncate text-xs text-muted-foreground">
 										{model.kind}
-										{model.provider ? ` - ${model.provider}` : ""}
+										{model.provider ? `- ${model.provider}` : ""}
 									</div>
 								</div>
 								<div className="text-right">
@@ -2009,6 +2018,7 @@ interface AiActExportRow {
 function AiActConformityPreview({
 	profile,
 }: { profile: IProfile | undefined }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const features = useFeatures();
 	const aiActEnabled = features.data?.ai_act === true;
@@ -2059,10 +2069,10 @@ function AiActConformityPreview({
 			<div className="flex flex-col items-start gap-2 min-[400px]:flex-row min-[400px]:items-center min-[400px]:justify-between">
 				<div className="flex items-center gap-2 text-sm font-medium">
 					<Scale className="h-4 w-4 text-indigo-500" />
-					EU AI Act Conformity
+					{t('euAiActConformity', 'EU AI Act Conformity')}
 				</div>
 				<Button asChild variant="ghost" size="sm" className="h-7 px-2 text-xs">
-					<Link href="/admin/ai-act">Open Inventory</Link>
+					<Link href="/admin/ai-act">{t('openInventory', 'Open Inventory')}</Link>
 				</Button>
 			</div>
 			{inventory.isLoading ? (
@@ -2070,7 +2080,7 @@ function AiActConformityPreview({
 			) : (
 				<div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
 					<div className="rounded-md border bg-background p-2">
-						<div className="text-[11px] text-muted-foreground">Assessed</div>
+						<div className="text-[11px] text-muted-foreground">{t('assessed', 'Assessed')}</div>
 						<div className="text-lg font-semibold">{stats.total}</div>
 					</div>
 					<div
@@ -2078,7 +2088,7 @@ function AiActConformityPreview({
 							stats.prohibited > 0 ? "border-red-500/50" : ""
 						}`}
 					>
-						<div className="text-[11px] text-muted-foreground">Prohibited</div>
+						<div className="text-[11px] text-muted-foreground">{t('prohibited', 'Prohibited')}</div>
 						<div
 							className={`text-lg font-semibold ${
 								stats.prohibited > 0 ? "text-red-600 dark:text-red-400" : ""
@@ -2092,7 +2102,7 @@ function AiActConformityPreview({
 							stats.high > 0 ? "border-amber-500/50" : ""
 						}`}
 					>
-						<div className="text-[11px] text-muted-foreground">High-risk</div>
+						<div className="text-[11px] text-muted-foreground">{t('highrisk', 'High-risk')}</div>
 						<div
 							className={`text-lg font-semibold ${
 								stats.high > 0 ? "text-amber-600 dark:text-amber-400" : ""
@@ -2102,12 +2112,12 @@ function AiActConformityPreview({
 						</div>
 					</div>
 					<div className="rounded-md border bg-background p-2">
-						<div className="text-[11px] text-muted-foreground">Limited</div>
+						<div className="text-[11px] text-muted-foreground">{t('limited', 'Limited')}</div>
 						<div className="text-lg font-semibold">{stats.limited}</div>
 					</div>
 					<div className="rounded-md border bg-background p-2">
 						<div className="text-[11px] text-muted-foreground">
-							Avg. conformity
+							{t('avgConformity', 'Avg. conformity')}
 						</div>
 						<div className="text-lg font-semibold">
 							{stats.avgConformity ?? "—"}
@@ -2127,6 +2137,7 @@ function GovernanceScoresSummary({
 }: {
 	profile: IProfile | undefined;
 }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 
 	const summary = useQuery<GovernanceScoresSummaryData>({
@@ -2166,15 +2177,14 @@ function GovernanceScoresSummary({
 										: "text-green-500"
 							}`}
 						/>
-						AI Inventory & Governance
+						{t('aiInventoryGovernance', 'AI Inventory & Governance')}
 					</CardTitle>
 					<CardDescription>
-						EU AI Act conformity together with security and quality scores
-						across published apps
+						{t('euAiActConformityTogetherWithSecurityAndQualityScoresAcrossPublishedApps', "EU AI Act conformity together with security and quality scores across published apps")}
 					</CardDescription>
 				</div>
 				<Button asChild variant="outline" size="sm">
-					<Link href="/admin/ai-act">View Full Inventory</Link>
+					<Link href="/admin/ai-act">{t('viewFullInventory', 'View Full Inventory')}</Link>
 				</Button>
 			</CardHeader>
 			<CardContent>
@@ -2182,7 +2192,7 @@ function GovernanceScoresSummary({
 					<Skeleton className="h-32 w-full" />
 				) : summary.error ? (
 					<div className="rounded-md border border-destructive/40 p-4 text-center text-sm text-destructive">
-						Failed to load governance scores. Please check the API logs.
+						{t('failedToLoadGovernanceScoresPleaseCheckTheApiLogs', 'Failed to load governance scores. Please check the API logs.')}
 					</div>
 				) : summary.data ? (
 					<div className="space-y-4">
@@ -2190,7 +2200,7 @@ function GovernanceScoresSummary({
 
 						<div className="grid gap-3 sm:grid-cols-3">
 							<div className="rounded-lg border p-3">
-								<div className="text-xs text-muted-foreground">Total Apps</div>
+								<div className="text-xs text-muted-foreground">{t('totalApps', 'Total Apps')}</div>
 								<div className="text-2xl font-semibold">
 									{summary.data.totalApps ?? 0}
 								</div>
@@ -2203,7 +2213,7 @@ function GovernanceScoresSummary({
 								}`}
 							>
 								<div className="text-xs text-muted-foreground">
-									Critical Issues
+									{t('criticalIssues', 'Critical Issues')}
 								</div>
 								<div
 									className={`text-2xl font-semibold ${
@@ -2214,7 +2224,7 @@ function GovernanceScoresSummary({
 								>
 									{summary.data.criticalApps ?? 0}
 								</div>
-								<div className="text-xs text-muted-foreground">Score ≤ 3</div>
+								<div className="text-xs text-muted-foreground">{t('score3', 'Score ≤ 3')}</div>
 							</div>
 							<div
 								className={`rounded-lg border p-3 ${
@@ -2224,7 +2234,7 @@ function GovernanceScoresSummary({
 								}`}
 							>
 								<div className="text-xs text-muted-foreground">
-									Flagged Apps
+									{t('flaggedApps', 'Flagged Apps')}
 								</div>
 								<div
 									className={`text-2xl font-semibold ${
@@ -2235,14 +2245,14 @@ function GovernanceScoresSummary({
 								>
 									{summary.data.flaggedApps ?? 0}
 								</div>
-								<div className="text-xs text-muted-foreground">Score ≤ 6</div>
+								<div className="text-xs text-muted-foreground">{t('score6', 'Score ≤ 6')}</div>
 							</div>
 						</div>
 
 						{summary.data.worstApps && summary.data.worstApps.length > 0 && (
 							<div className="space-y-2">
 								<div className="text-sm font-medium">
-									Apps Requiring Attention
+									{t('appsRequiringAttention', 'Apps Requiring Attention')}
 								</div>
 								{summary.data.worstApps.map((app) => (
 									<Link
@@ -2261,7 +2271,7 @@ function GovernanceScoresSummary({
 											</div>
 											<div className="flex items-center gap-3">
 												<div className="text-right text-xs">
-													<div className="text-muted-foreground">Security</div>
+													<div className="text-muted-foreground">{t('security', 'Security')}</div>
 													<div
 														className={`font-semibold ${
 															app.security >= 7
@@ -2275,7 +2285,7 @@ function GovernanceScoresSummary({
 													</div>
 												</div>
 												<div className="text-right text-xs">
-													<div className="text-muted-foreground">Privacy</div>
+													<div className="text-muted-foreground">{t('privacy', 'Privacy')}</div>
 													<div
 														className={`font-semibold ${
 															app.privacy >= 7
@@ -2290,7 +2300,7 @@ function GovernanceScoresSummary({
 												</div>
 												<div className="text-right">
 													<div className="text-xs text-muted-foreground">
-														Worst
+														{t('worst', 'Worst')}
 													</div>
 													<div
 														className={`text-lg font-bold ${
@@ -2313,8 +2323,7 @@ function GovernanceScoresSummary({
 					</div>
 				) : (
 					<div className="rounded-md border p-4 text-center text-sm text-muted-foreground">
-						No governance data available yet. Scores will appear after apps are
-						published and analyzed.
+						{t('noGovernanceDataAvailableYetScoresWillAppearAfterAppsArePublishedAndAnalyzed', "No governance data available yet. Scores will appear after apps are published and analyzed.")}
 					</div>
 				)}
 			</CardContent>
@@ -2331,6 +2340,7 @@ export function AdminDashboardPage({
 	infoEnabled = true,
 	infoDependencyKey = [],
 }: AdminDashboardPageProps) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const profile = useInvoke(
@@ -2432,9 +2442,9 @@ export function AdminDashboardPage({
 			<div className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-6">
 				<div className="mx-auto min-w-0 max-w-7xl space-y-4 sm:space-y-6">
 					<div>
-						<h1 className="text-2xl font-bold sm:text-3xl">Admin Dashboard</h1>
+						<h1 className="text-2xl font-bold sm:text-3xl">{t('adminDashboard', 'Admin Dashboard')}</h1>
 						<p className="text-muted-foreground">
-							Central hub for registry, publishing, usage, and learning content.
+							{t('centralHubForRegistryPublishingUsageAndLearningContent', 'Central hub for registry, publishing, usage, and learning content.')}
 						</p>
 					</div>
 
@@ -2445,16 +2455,15 @@ export function AdminDashboardPage({
 									<Clock className="h-4 w-4" />
 									{packageStats.data?.pendingReview} package
 									{(packageStats.data?.pendingReview ?? 0) > 1 ? "s" : ""}{" "}
-									pending review
+									{t('pendingReview2', 'pending review')}
 								</CardTitle>
 								<CardDescription>
-									Packages are waiting for approval before they can be
-									published.
+									{t('packagesAreWaitingForApprovalBeforeTheyCanBePublished', "Packages are waiting for approval before they can be published.")}
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
 								<Button asChild variant="outline" size="sm">
-									<Link href="/admin/packages">Review Now</Link>
+									<Link href="/admin/packages">{t('reviewNow', 'Review Now')}</Link>
 								</Button>
 							</CardContent>
 						</Card>
@@ -2466,11 +2475,10 @@ export function AdminDashboardPage({
 								<div>
 									<CardTitle className="flex items-center gap-2 text-base">
 										<Cpu className="h-4 w-4 text-green-500" />
-										WASM Artifact Compatibility
+										{t('wasmArtifactCompatibility', 'WASM Artifact Compatibility')}
 									</CardTitle>
 									<CardDescription>
-										Check active package versions for current Linux Wasmtime
-										artifacts and queue missing compiles.
+										{t('checkActivePackageVersionsForCurrentLinuxWasmtimeArtifactsAndQueueMissingCompiles', "Check active package versions for current Linux Wasmtime artifacts and queue missing compiles.")}
 									</CardDescription>
 								</div>
 								<Button
@@ -2482,7 +2490,7 @@ export function AdminDashboardPage({
 									<RefreshCw
 										className={`mr-2 h-4 w-4 ${ensureWasmArtifacts.isPending ? "animate-spin" : ""}`}
 									/>
-									Check Artifacts
+									{t('checkArtifacts', 'Check Artifacts')}
 								</Button>
 							</CardHeader>
 							{(ensureResult || ensureError) && (
@@ -2490,35 +2498,33 @@ export function AdminDashboardPage({
 									{ensureResult ? (
 										<div className="grid gap-3 text-sm sm:grid-cols-4">
 											<div>
-												<div className="text-muted-foreground">Target</div>
+												<div className="text-muted-foreground">{t('target', 'Target')}</div>
 												<div className="font-medium">
 													{ensureResult.targetPlatform}
 												</div>
 											</div>
 											<div>
-												<div className="text-muted-foreground">Checked</div>
+												<div className="text-muted-foreground">{t('checked', 'Checked')}</div>
 												<div className="font-medium">
 													{ensureResult.checkedVersions}
 												</div>
 											</div>
 											<div>
 												<div className="text-muted-foreground">
-													Jobs started
+													{t('jobsStarted', 'Jobs started')}
 												</div>
 												<div className="font-medium">
 													{ensureResult.jobsStarted}
 												</div>
 											</div>
 											<div>
-												<div className="text-muted-foreground">Ready</div>
+												<div className="text-muted-foreground">{t('ready', 'Ready')}</div>
 												<div className="font-medium">
 													{ensureResult.alreadyAvailable}
 												</div>
 											</div>
 											{ensureResult.failed > 0 && (
-												<div className="sm:col-span-4 rounded-md border border-destructive/40 p-3 text-destructive">
-													Failed dispatches: {ensureResult.failed}
-												</div>
+												<div className="sm:col-span-4 rounded-md border border-destructive/40 p-3 text-destructive">{t('failedDispatchesFailed', 'Failed dispatches: {{failed}}', { failed: ensureResult.failed })}</div>
 											)}
 										</div>
 									) : (
@@ -2540,46 +2546,46 @@ export function AdminDashboardPage({
 
 					<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
 						<StatCard
-							title="Pending Review"
+							title={t('pendingReview3', 'Pending Review')}
 							value={packageStats.data?.pendingReview ?? 0}
-							description="Packages awaiting review"
+							description={t('packagesAwaitingReview', 'Packages awaiting review')}
 							icon={<Clock className="h-4 w-4 text-yellow-500" />}
 							loading={statsLoading}
 							href="/admin/packages"
 						/>
 						<StatCard
-							title="Open Solutions"
+							title={t('openSolutions', 'Open Solutions')}
 							value={
 								openSolutions.isLoading
 									? "\u2014"
 									: (openSolutions.data?.total ?? 0)
 							}
-							description="Solution requests pending"
+							description={t('solutionRequestsPending', 'Solution requests pending')}
 							icon={<Lightbulb className="h-4 w-4 text-cyan-500" />}
 							loading={openSolutions.isLoading}
 							href="/admin/solutions"
 						/>
 						<StatCard
-							title="Active Packages"
+							title={t('activePackages', 'Active Packages')}
 							value={packageStats.data?.activePackages ?? 0}
-							description="Published and available"
+							description={t('publishedAndAvailable', 'Published and available')}
 							icon={<CheckCircle className="h-4 w-4 text-green-500" />}
 							loading={statsLoading}
 							href="/admin/packages"
 						/>
 						<StatCard
-							title="Total Downloads"
+							title={t('totalDownloads', 'Total Downloads')}
 							value={(packageStats.data?.totalDownloads ?? 0).toLocaleString()}
-							description="Across all packages"
+							description={t('acrossAllPackages', 'Across all packages')}
 							icon={<Download className="h-4 w-4 text-blue-500" />}
 							loading={statsLoading}
 						/>
 						<StatCard
-							title="Profile Templates"
+							title={t('profileTemplates', 'Profile Templates')}
 							value={
 								profiles.isLoading ? "\u2014" : (profiles.data?.length ?? 0)
 							}
-							description="Reusable user profiles"
+							description={t('reusableUserProfiles', 'Reusable user profiles')}
 							icon={<Users className="h-4 w-4 text-purple-500" />}
 							loading={profiles.isLoading}
 							href="/admin/user/edit"
@@ -2588,23 +2594,23 @@ export function AdminDashboardPage({
 
 					<div className="grid gap-4 sm:grid-cols-3">
 						<StatCard
-							title="Total Packages"
+							title={t('totalPackages', 'Total Packages')}
 							value={packageStats.data?.totalPackages ?? 0}
-							description="All-time registered packages"
+							description={t('alltimeRegisteredPackages', 'All-time registered packages')}
 							icon={<Package className="h-4 w-4 text-muted-foreground" />}
 							loading={statsLoading}
 						/>
 						<StatCard
-							title="Total Versions"
+							title={t('totalVersions', 'Total Versions')}
 							value={packageStats.data?.totalVersions ?? 0}
-							description="Published package versions"
+							description={t('publishedPackageVersions', 'Published package versions')}
 							icon={<Box className="h-4 w-4 text-muted-foreground" />}
 							loading={statsLoading}
 						/>
 						<StatCard
-							title="Rejected Packages"
+							title={t('rejectedPackages', 'Rejected Packages')}
 							value={packageStats.data?.rejectedPackages ?? 0}
-							description="Packages that failed review"
+							description={t('packagesThatFailedReview', 'Packages that failed review')}
 							icon={<Shield className="h-4 w-4 text-destructive" />}
 							loading={statsLoading}
 						/>
@@ -2627,7 +2633,7 @@ export function AdminDashboardPage({
 					)}
 
 					<div>
-						<h2 className="mb-3 text-lg font-semibold">Manage</h2>
+						<h2 className="mb-3 text-lg font-semibold">{t('manage', 'Manage')}</h2>
 						<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 							{visibleSections.map((section) => (
 								<SectionCard

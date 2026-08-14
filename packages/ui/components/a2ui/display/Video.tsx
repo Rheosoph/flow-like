@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useState } from "react";
 import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
@@ -17,6 +18,7 @@ export function A2UIVideo({
 	component,
 	style,
 }: ComponentProps<VideoComponent>) {
+	const { t } = useTranslation("common");
 	const src = useResolved<string>(component.src);
 	const poster = useResolved<string>(component.poster);
 	const controls = useResolved<boolean>(component.controls);
@@ -34,7 +36,7 @@ export function A2UIVideo({
 				)}
 				style={resolveInlineStyle(style)}
 			>
-				Video unavailable
+				{t('videoUnavailable', 'Video unavailable')}
 			</div>
 		);
 	}

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	DndContext,
 	type DragEndEvent,
@@ -143,6 +144,7 @@ export function A2UIGantt({
 	componentId,
 	style,
 }: ComponentProps<GanttComponent>) {
+	const { t } = useTranslation("common");
 	const containerRef = useRef<HTMLDivElement>(null);
 	const timelineRef = useRef<HTMLDivElement>(null);
 	const listBodyRef = useRef<HTMLDivElement>(null);
@@ -387,7 +389,7 @@ export function A2UIGantt({
 			const copy: GanttTask = {
 				...task,
 				id: genId("task"),
-				name: `${task.name} (copy)`,
+				name: t('nameCopy', '{{name}} (copy)', { name: task.name }),
 			};
 			setTasks((list) => {
 				const i = list.findIndex((t) => t.id === task.id);
@@ -725,21 +727,21 @@ export function A2UIGantt({
 	const menuGroupsFor = useCallback(
 		(task: GanttTask): PlanningMenuAction[][] => {
 			const viewItem: PlanningMenuAction = {
-				label: "View details",
+				label: t('viewDetails', 'View details'),
 				icon: <EyeIcon className="h-3.5 w-3.5" />,
 				onSelect: () => openTask(task, "view"),
 			};
 			if (!editable) return [[viewItem]];
 			const secondary: PlanningMenuAction[] = [
 				{
-					label: "Duplicate",
+					label: t('duplicate', 'Duplicate'),
 					icon: <CopyIcon className="h-3.5 w-3.5" />,
 					onSelect: () => duplicateTask(task),
 				},
 			];
 			if (!task.milestone) {
 				secondary.push({
-					label: "Complete",
+					label: t('complete', 'Complete'),
 					icon: <CheckCircle2Icon className="h-3.5 w-3.5" />,
 					onSelect: () => completeTask(task),
 				});
@@ -748,7 +750,7 @@ export function A2UIGantt({
 				[
 					viewItem,
 					{
-						label: "Edit",
+						label: t('edit', 'Edit'),
 						icon: <PencilIcon className="h-3.5 w-3.5" />,
 						onSelect: () => setDialogState({ task, mode: "edit" }),
 					},
@@ -756,7 +758,7 @@ export function A2UIGantt({
 				secondary,
 				[
 					{
-						label: "Delete",
+						label: t('delete', 'Delete'),
 						icon: <Trash2Icon className="h-3.5 w-3.5" />,
 						destructive: true,
 						onSelect: () => deleteTask(task),
@@ -860,7 +862,7 @@ export function A2UIGantt({
 							className="h-7"
 							onClick={openCreateDraft}
 						>
-							<PlusIcon className="h-3.5 w-3.5 mr-1" /> Task
+							<PlusIcon className="h-3.5 w-3.5 mr-1" /> {t('task', 'Task')}
 						</Button>
 					)}
 					{showViewSwitcher && !isNarrow && (
@@ -882,7 +884,7 @@ export function A2UIGantt({
 								className="flex shrink-0 items-center gap-2 border-b border-border bg-card px-2 text-xs font-medium text-muted-foreground"
 								style={{ height: HEADER_HEIGHT }}
 							>
-								<span className="flex-1">Task</span>
+								<span className="flex-1">{t('task', 'Task')}</span>
 								{extraColumns.map((c) => (
 									<span key={c} className="w-14 truncate text-right capitalize">
 										{c}
@@ -1051,7 +1053,7 @@ export function A2UIGantt({
 										role="img"
 										aria-hidden="true"
 									>
-										<title>New dependency</title>
+										<title>{t('newDependency', 'New dependency')}</title>
 										<path
 											d={`M ${linkLine.x1} ${linkLine.y1} C ${linkLine.x1 + 24} ${linkLine.y1}, ${linkLine.x2 - 24} ${linkLine.y2}, ${linkLine.x2} ${linkLine.y2}`}
 											className="stroke-primary"
@@ -1264,6 +1266,7 @@ function TaskListRow({
 	onDelete: () => void;
 	onHover: (over: boolean) => void;
 }) {
+	const { t } = useTranslation("common");
 	const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	useEffect(
 		() => () => {
@@ -1326,7 +1329,7 @@ function TaskListRow({
 				{editable && (
 					<button
 						type="button"
-						aria-label="Drag to reorder"
+						aria-label={t('dragToReorder', 'Drag to reorder')}
 						className="shrink-0 cursor-grab touch-none opacity-0 transition-opacity active:cursor-grabbing group-hover/row:opacity-100"
 						{...attributes}
 						{...listeners}
@@ -1400,7 +1403,7 @@ function TaskListRow({
 						type="button"
 						onClick={onDelete}
 						className="hidden shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent group-hover/row:block"
-						aria-label="Delete task"
+						aria-label={t('deleteTask', 'Delete task')}
 					>
 						<XIcon className="h-3 w-3" />
 					</button>
@@ -1459,6 +1462,7 @@ function GanttTaskBar({
 	onDoubleClick: (task: GanttTask) => void;
 	onHover: (over: boolean) => void;
 }) {
+	const { t } = useTranslation("common");
 	const [hovered, setHovered] = useState(false);
 	const geom = taskBarDays(shown, range);
 	const top = row * rowHeight;
@@ -1635,7 +1639,7 @@ function GanttTaskBar({
 						<div
 							onPointerDown={(e) => onStartLink(task, e)}
 							className="absolute -right-1.5 top-1/2 z-30 h-3 w-3 -translate-y-1/2 cursor-crosshair rounded-full border border-primary bg-background opacity-0 transition-opacity group-hover/bar:opacity-100"
-							title="Drag to link a dependency"
+							title={t('dragToLinkADependency', 'Drag to link a dependency')}
 						/>
 					)}
 				</div>
@@ -1673,6 +1677,7 @@ function DependencyArrows({
 	hoveredId: string | null;
 	displayTask: (task: GanttTask) => GanttTask;
 }) {
+	const { t } = useTranslation("common");
 	const taskMap = new Map(tasks.map((t) => [t.id, t]));
 	const edges: { from: GanttTask; to: GanttTask; active: boolean }[] = [];
 	for (const task of visibleTasks) {
@@ -1695,7 +1700,7 @@ function DependencyArrows({
 			role="img"
 			aria-hidden="true"
 		>
-			<title>Task dependencies</title>
+			<title>{t('taskDependencies', 'Task dependencies')}</title>
 			{edges.map(({ from, to, active }) => {
 				const fromGeom = taskBarDays(displayTask(from), range);
 				const toGeom = taskBarDays(displayTask(to), range);
@@ -1756,13 +1761,14 @@ function GanttEmptyState({
 	editable: boolean;
 	onAdd: () => void;
 }) {
+	const { t } = useTranslation("common");
 	return (
 		<div className="flex flex-1 flex-col items-center justify-center gap-2 py-10">
 			<GanttChartIcon className="h-8 w-8 text-muted-foreground/40" />
-			<p className="text-sm text-muted-foreground">No tasks yet</p>
+			<p className="text-sm text-muted-foreground">{t('noTasksYet', 'No tasks yet')}</p>
 			{editable && (
 				<Button variant="outline" size="sm" onClick={onAdd}>
-					<PlusIcon className="h-3.5 w-3.5 mr-1" /> Add task
+					<PlusIcon className="h-3.5 w-3.5 mr-1" /> {t('addTask', 'Add task')}
 				</Button>
 			)}
 		</div>

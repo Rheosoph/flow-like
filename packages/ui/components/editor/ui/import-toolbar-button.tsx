@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import type { DropdownMenuProps } from "@radix-ui/react-dropdown-menu";
@@ -23,6 +24,7 @@ import { ToolbarButton } from "./toolbar";
 type ImportType = "html" | "markdown";
 
 export function ImportToolbarButton(props: DropdownMenuProps) {
+	const { t } = useTranslation("common");
 	const editor = useEditorRef();
 	const [open, setOpen] = React.useState(false);
 
@@ -82,7 +84,7 @@ export function ImportToolbarButton(props: DropdownMenuProps) {
 							openHtmlFilePicker();
 						}}
 					>
-						Import from HTML
+						{`Import from HTML`}
 					</DropdownMenuItem>
 
 					<DropdownMenuItem
@@ -90,7 +92,7 @@ export function ImportToolbarButton(props: DropdownMenuProps) {
 							openMdFilePicker();
 						}}
 					>
-						Import from Markdown
+						{`Import from Markdown`}
 					</DropdownMenuItem>
 				</DropdownMenuGroup>
 			</DropdownMenuContent>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { SlateElementProps } from "platejs";
 
 import { User } from "lucide-react";
@@ -15,6 +16,7 @@ export interface TUserMentionElement {
 export function UserMentionElementStatic(
 	props: SlateElementProps<TUserMentionElement>,
 ) {
+	const { t } = useTranslation("common");
 	const { sub } = props.element;
 
 	return (
@@ -49,9 +51,7 @@ export function UserMentionElementStatic(
 			}}
 		>
 			<User className="w-3 h-3 shrink-0 opacity-80" />
-			<span contentEditable={false} className="leading-none">
-				@{sub}
-			</span>
+			<span contentEditable={false} className="leading-none">{`@${sub}`}</span>
 			{props.children}
 		</SlateElement>
 	);

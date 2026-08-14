@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useEffect, useRef } from "react";
 import { resolveColorToRgb } from "../../../lib/chart-theme";
 import {
@@ -65,6 +66,7 @@ export function ChatEmptyOrb({
 	activity,
 	typingMotion = false,
 }: IChatEmptyOrbProps) {
+	const { t } = useTranslation("chat");
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const typingMotionRef = useRef(typingMotion);
 	typingMotionRef.current = typingMotion;

@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { useDraggable } from "@dnd-kit/core";
 import {
 	BracesIcon,
@@ -86,6 +87,7 @@ export function VariablesMenu({
 	pushLayer?: (layer: ILayer) => Promise<void>;
 	boardRef?: RefObject<IBoard | undefined>;
 }>) {
+	const { t } = useTranslation("flow");
 	const [showNewVariableDialog, setShowNewVariableDialog] = useState(false);
 	const [showNewLocalVariableDialog, setShowNewLocalVariableDialog] =
 		useState(false);
@@ -215,7 +217,7 @@ export function VariablesMenu({
 				{!currentFunctionLayer && (
 					<div className="flex flex-row items-center gap-4 pb-2 shrink-0">
 						<h3 className="text-sm font-semibold text-muted-foreground">
-							Variables
+							{t('variables', 'Variables')}
 						</h3>
 						<Button
 							variant="ghost"
@@ -224,7 +226,7 @@ export function VariablesMenu({
 							onClick={() => setShowNewVariableDialog(true)}
 						>
 							<CirclePlusIcon className="w-3 h-3" />
-							New
+							{t('new', 'New')}
 						</Button>
 					</div>
 				)}
@@ -246,9 +248,7 @@ export function VariablesMenu({
 				{currentFunctionLayer && localTree && (
 					<>
 						<div className="flex flex-row items-center gap-4 pb-2 shrink-0">
-							<h3 className="text-xs font-semibold text-muted-foreground">
-								Local — {currentFunctionLayer.name}
-							</h3>
+							<h3 className="text-xs font-semibold text-muted-foreground">{t('localName', 'Local — {{name}}', { name: currentFunctionLayer.name })}</h3>
 							<Button
 								variant="ghost"
 								size="sm"
@@ -256,7 +256,7 @@ export function VariablesMenu({
 								onClick={() => setShowNewLocalVariableDialog(true)}
 							>
 								<CirclePlusIcon className="w-3 h-3" />
-								New
+								{t('new', 'New')}
 							</Button>
 						</div>
 						<CategoryTree
@@ -285,7 +285,7 @@ export function VariablesMenu({
 					<>
 						<div className="flex flex-row items-center gap-4 pb-2 shrink-0">
 							<h3 className="text-xs font-semibold text-muted-foreground">
-								Global
+								{t('global', 'Global')}
 							</h3>
 						</div>
 						{globalVariables}
@@ -297,7 +297,7 @@ export function VariablesMenu({
 						<Separator className="my-3" />
 						<div className="flex flex-row items-center gap-4 pb-2 shrink-0">
 							<h3 className="text-sm font-semibold text-muted-foreground">
-								Functions
+								{t('functions', 'Functions')}
 							</h3>
 							<Button
 								variant="ghost"
@@ -306,7 +306,7 @@ export function VariablesMenu({
 								onClick={createFunction}
 							>
 								<CirclePlusIcon className="w-3 h-3" />
-								New
+								{t('new', 'New')}
 							</Button>
 						</div>
 						<FunctionsList
@@ -335,6 +335,7 @@ export function Variable({
 	preview?: boolean;
 	refs?: Record<string, string>;
 }>) {
+	const { t } = useTranslation("flow");
 	const { attributes, listeners, setNodeRef, transform } = useDraggable({
 		id: variable.id,
 		data: variable,
@@ -411,7 +412,7 @@ export function Variable({
 						className="w-4 h-2 rounded-full"
 						style={{ backgroundColor: typeToColor(localVariable.data_type) }}
 					/>{" "}
-					Single
+					{t('single', 'Single')}
 				</DropdownMenuItem>
 				<DropdownMenuItem
 					className="gap-2"
@@ -430,7 +431,7 @@ export function Variable({
 						className="w-4 h-4"
 						style={{ color: typeToColor(localVariable.data_type) }}
 					/>{" "}
-					Array
+					{t('array', 'Array')}
 				</DropdownMenuItem>
 				<DropdownMenuItem
 					className="gap-2"
@@ -449,7 +450,7 @@ export function Variable({
 						className="w-4 h-4"
 						style={{ color: typeToColor(localVariable.data_type) }}
 					/>{" "}
-					Set
+					{t('set', 'Set')}
 				</DropdownMenuItem>
 				<DropdownMenuItem
 					className="gap-2"
@@ -468,7 +469,7 @@ export function Variable({
 						className="w-4 h-4"
 						style={{ color: typeToColor(localVariable.data_type) }}
 					/>{" "}
-					Map
+					{t('map', 'Map')}
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
@@ -585,18 +586,18 @@ export function Variable({
 			<SheetContent className="flex flex-col max-h-screen overflow-hidden px-3 pt-2 pb-4">
 				<SheetHeader className="shrink-0">
 					<SheetTitle className="flex flex-row items-center gap-2">
-						Edit Variable
+						{t('editVariable', 'Edit Variable')}
 					</SheetTitle>
 					<SheetDescription className="flex flex-col gap-6 text-foreground">
 						<p className="text-muted-foreground">
-							Edit the variable properties to your liking.
+							{t('editTheVariablePropertiesToYourLiking', 'Edit the variable properties to your liking.')}
 						</p>
 					</SheetDescription>
 				</SheetHeader>
 
 				<div className="flex-1 overflow-y-auto space-y-6 pr-2">
 					<div className="grid w-full max-w-sm items-center gap-1.5">
-						<Label htmlFor="name">Variable Name</Label>
+						<Label htmlFor="name">{t('variableName', 'Variable Name')}</Label>
 						<Input
 							value={localVariable.name}
 							onChange={(e) => {
@@ -608,7 +609,7 @@ export function Variable({
 					</div>
 
 					<div className="grid w-full max-w-sm items-center gap-1.5">
-						<Label htmlFor="category">Category</Label>
+						<Label htmlFor="category">{t('category', 'Category')}</Label>
 						<Input
 							id="category"
 							value={localVariable.category ?? ""}
@@ -619,15 +620,15 @@ export function Variable({
 									category: v.trim() === "" ? undefined : v,
 								}));
 							}}
-							placeholder="e.g. Main/Bools"
+							placeholder={t('egMainbools', 'e.g. Main/Bools')}
 						/>
 						<small className="text-[0.8rem] text-muted-foreground">
-							Use “/” to create nested folders. Leave empty for top-level.
+							{t('useToCreateNestedFoldersLeaveEmptyForToplevel', 'Use “/” to create nested folders. Leave empty for top-level.')}
 						</small>
 					</div>
 
 					<div className="grid w-full max-w-sm items-center gap-1.5">
-						<Label htmlFor="var_type">Variable Type</Label>
+						<Label htmlFor="var_type">{t('variableType', 'Variable Type')}</Label>
 						<div className="flex flex-row gap-2">
 							<Select
 								value={localVariable.data_type}
@@ -645,11 +646,11 @@ export function Variable({
 								}
 							>
 								<SelectTrigger id="var_type" className="flex-1">
-									<SelectValue placeholder="Data Type" />
+									<SelectValue placeholder={t('dataType', 'Data Type')} />
 								</SelectTrigger>
 								<SelectContent>
 									<SelectGroup>
-										<SelectLabel>Data Type</SelectLabel>
+										<SelectLabel>{t('dataType', 'Data Type')}</SelectLabel>
 										<SelectItem value="Boolean">
 											{selectPreviewElement(IVariableType.Boolean)}
 										</SelectItem>
@@ -693,11 +694,11 @@ export function Variable({
 								}
 							>
 								<SelectTrigger className="w-28">
-									<SelectValue placeholder="Value Type" />
+									<SelectValue placeholder={t('valueType', 'Value Type')} />
 								</SelectTrigger>
 								<SelectContent>
 									<SelectGroup>
-										<SelectLabel>Value Type</SelectLabel>
+										<SelectLabel>{t('valueType', 'Value Type')}</SelectLabel>
 										<SelectItem value="Normal">
 											{valueTypePreviewElement(IValueType.Normal)}
 										</SelectItem>
@@ -725,11 +726,10 @@ export function Variable({
 								}
 								id="exposed"
 							/>
-							<Label htmlFor="exposed">Is Exposed?</Label>
+							<Label htmlFor="exposed">{t('isExposed', 'Is Exposed?')}</Label>
 						</div>
 						<small className="text-[0.8rem] text-muted-foreground">
-							If you expose a variable it will be visible in the configuration
-							tab of your App.
+							{t('ifYouExposeAVariableItWillBeVisibleInTheConfigurationTabOfYourApp', "If you expose a variable it will be visible in the configuration tab of your App.")}
 						</small>
 					</div>
 
@@ -742,10 +742,10 @@ export function Variable({
 								}
 								id="secret"
 							/>
-							<Label htmlFor="secret">Is Secret?</Label>
+							<Label htmlFor="secret">{t('isSecret', 'Is Secret?')}</Label>
 						</div>
 						<small className="text-[0.8rem] text-muted-foreground">
-							A secret variable will be covered for input (e.g passwords)
+							{t('aSecretVariableWillBeCoveredForInputEgPasswords', 'A secret variable will be covered for input (e.g passwords)')}
 						</small>
 					</div>
 
@@ -761,11 +761,10 @@ export function Variable({
 								}
 								id="runtime_configured"
 							/>
-							<Label htmlFor="runtime_configured">Runtime Configured?</Label>
+							<Label htmlFor="runtime_configured">{t('runtimeConfigured', 'Runtime Configured?')}</Label>
 						</div>
 						<small className="text-[0.8rem] text-muted-foreground">
-							Runtime configured variables are set per-user locally. They are
-							never stored in the flow itself.
+							{t('runtimeConfiguredVariablesAreSetPeruserLocallyTheyAreNeverStoredInTheFlowItself', "Runtime configured variables are set per-user locally. They are never stored in the flow itself.")}
 						</small>
 					</div>
 
@@ -871,6 +870,7 @@ function StructSchemaEditor({
 	refs?: Record<string, string>;
 	onSchemaChange: (schema: string | null) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const resolvedSchema = useMemo(() => {
 		if (!variable.schema) return "";
 		return resolveRef(variable.schema, refs);
@@ -925,10 +925,10 @@ function StructSchemaEditor({
 		<div className="flex flex-col gap-2">
 			<Label className="flex items-center gap-2">
 				<BracesIcon className="w-4 h-4" />
-				Schema
+				{t('schema', 'Schema')}
 			</Label>
 			<small className="text-[0.8rem] text-muted-foreground -mt-1">
-				Define a JSON schema to enable form-based editing for this struct.
+				{t('defineAJsonSchemaToEnableFormbasedEditingForThisStruct', 'Define a JSON schema to enable form-based editing for this struct.')}
 			</small>
 
 			<Tabs
@@ -938,17 +938,17 @@ function StructSchemaEditor({
 				<TabsList className="grid w-full grid-cols-2">
 					<TabsTrigger value="example" className="gap-1">
 						<WandIcon className="w-3 h-3" />
-						From Example
+						{t('fromExample', 'From Example')}
 					</TabsTrigger>
 					<TabsTrigger value="schema" className="gap-1">
 						<BracesIcon className="w-3 h-3" />
-						Edit Schema
+						{t('editSchema', 'Edit Schema')}
 					</TabsTrigger>
 				</TabsList>
 
 				<TabsContent value="example" className="space-y-2">
 					<small className="text-[0.8rem] text-muted-foreground">
-						Paste an example JSON and generate a schema automatically.
+						{t('pasteAnExampleJsonAndGenerateASchemaAutomatically', 'Paste an example JSON and generate a schema automatically.')}
 					</small>
 					<div
 						className={cn(
@@ -965,7 +965,7 @@ function StructSchemaEditor({
 							onChange={(e) => setExampleJson(e.target.value)}
 							onFocus={() => setIsFocused(true)}
 							onBlur={() => setIsFocused(false)}
-							placeholder='{"name": "John", "age": 30}'
+							placeholder={`{"name": "John", "age": 30}`}
 							rows={5}
 							className="w-full resize-none bg-transparent px-3 py-2 text-sm outline-none font-mono"
 						/>
@@ -978,13 +978,13 @@ function StructSchemaEditor({
 						onClick={handleGenerateFromExample}
 					>
 						<WandIcon className="w-3 h-3" />
-						Generate Schema
+						{t('generateSchema', 'Generate Schema')}
 					</Button>
 				</TabsContent>
 
 				<TabsContent value="schema" className="space-y-2">
 					<small className="text-[0.8rem] text-muted-foreground">
-						Edit the JSON schema directly. Leave empty to disable form mode.
+						{t('editTheJsonSchemaDirectlyLeaveEmptyToDisableFormMode', 'Edit the JSON schema directly. Leave empty to disable form mode.')}
 					</small>
 					<div
 						className={cn(
@@ -999,7 +999,7 @@ function StructSchemaEditor({
 							onChange={(e) => handleSchemaChange(e.target.value)}
 							onFocus={() => setIsFocused(true)}
 							onBlur={() => setIsFocused(false)}
-							placeholder='{"type": "object", "properties": {...}}'
+							placeholder={`{"type": "object", "properties": {...}}`}
 							rows={8}
 							className="w-full resize-none bg-transparent px-3 py-2 text-sm outline-none font-mono"
 						/>
@@ -1012,7 +1012,7 @@ function StructSchemaEditor({
 							size="sm"
 							onClick={() => handleSchemaChange("")}
 						>
-							Clear Schema
+							{t('clearSchema', 'Clear Schema')}
 						</Button>
 					)}
 				</TabsContent>

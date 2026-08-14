@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	AlertTriangle,
 	CheckCircle2,
@@ -112,6 +113,7 @@ function summariseSteps(steps: IPlanStep[]): IStepSummary {
  * expanding anything.
  */
 function StatusDots({ steps }: { steps: IPlanStep[] }) {
+	const { t } = useTranslation("chat");
 	const shown = steps.slice(0, SUMMARY_DOT_LIMIT);
 	const overflow = steps.length - shown.length;
 
@@ -131,9 +133,7 @@ function StatusDots({ steps }: { steps: IPlanStep[] }) {
 				/>
 			))}
 			{overflow > 0 && (
-				<span className="text-[10px] tabular-nums text-muted-foreground/60">
-					+{overflow}
-				</span>
+				<span className="text-[10px] tabular-nums text-muted-foreground/60">{`+${overflow}`}</span>
 			)}
 		</span>
 	);
@@ -149,19 +149,18 @@ function ActivitySummaryLabel({
 	running: boolean;
 	activeTitle?: string;
 }) {
+	const { t } = useTranslation("chat");
 	if (running) {
 		return (
 			<span className="min-w-0 flex-1 truncate">
 				<span className="text-foreground">{activeTitle ?? "Working…"}</span>
 				<span className="text-muted-foreground">
-					{" · "}
-					{summary.settledCount}/{summary.total}
-				</span>
+					{` · `}{`${summary.settledCount}/${summary.total}`}</span>
 			</span>
 		);
 	}
 
-	const parts = [`${summary.total} step${summary.total === 1 ? "" : "s"}`];
+	const parts = [t('countSteps', '{{count}} step', { count: summary.total })];
 	if (summary.laneCount > 1) parts.push(`across ${summary.laneCount} lanes`);
 	if (summary.durationLabel) parts.push(summary.durationLabel);
 	if (summary.failedCount > 0) {
@@ -190,6 +189,7 @@ function BuildLaneRow({
 	detail: IBuildLaneDetail;
 	isActive: boolean;
 }) {
+	const { t } = useTranslation("chat");
 	const { label, Icon } = LANE_META[detail.lane];
 	const total = detail.segmentsTotal ?? detail.segments?.length ?? 0;
 	const applied =
@@ -227,14 +227,10 @@ function BuildLaneRow({
 				)}
 				<span className="ml-auto flex items-center gap-1.5 shrink-0">
 					{total > 1 && (
-						<span className="text-[10px] font-mono text-muted-foreground/70">
-							{applied}/{total}
-						</span>
+						<span className="text-[10px] font-mono text-muted-foreground/70">{`${applied}/${total}`}</span>
 					)}
 					{detail.earnedMinutes ? (
-						<span className="text-[10px] font-mono text-muted-foreground/70">
-							+{detail.earnedMinutes}m
-						</span>
+						<span className="text-[10px] font-mono text-muted-foreground/70">{`+${detail.earnedMinutes}m`}</span>
 					) : null}
 				</span>
 			</div>
@@ -269,9 +265,7 @@ function BuildLaneRow({
 					<div className="flex items-center gap-1.5">
 						<AlertTriangle className="size-3 shrink-0 text-amber-500" />
 						<span className="text-[11px] font-medium text-amber-600 dark:text-amber-400">
-							{detail.gaps.length === 1
-								? "1 function needs your logic"
-								: `${detail.gaps.length} functions need your logic`}
+							{t('countFunctionsNeedYourLogic', { defaultValue_one: '1 function needs your logic', defaultValue_other: '{{count}} functions need your logic', count: detail.gaps.length })}
 						</span>
 					</div>
 					<ul className="mt-0.5 grid gap-0.5">
@@ -285,7 +279,7 @@ function BuildLaneRow({
 										{gap.function}
 									</span>
 								)}
-								{gap.function && gap.detail ? " — " : ""}
+								{gap.function && gap.detail ? ` — ` : ""}
 								{gap.detail}
 							</li>
 						))}
@@ -506,6 +500,7 @@ export function PlanSteps({
 	loading,
 	turnActive,
 }: PlanStepsProps) {
+	const { t } = useTranslation("chat");
 	const [expandedSteps, setExpandedSteps] = useState<Set<string>>(
 		new Set(currentStepId ? [currentStepId] : []),
 	);
@@ -629,9 +624,7 @@ export function PlanSteps({
 						>
 							<History className="size-3.5 shrink-0" />
 							<span className="flex-1">
-								{showOlderSteps ? "Hide" : "Show"} {olderSteps.length} earlier
-								step{olderSteps.length === 1 ? "" : "s"}
-							</span>
+								{showOlderSteps ? "Hide" : "Show"}{t('countEarlierSteps', { defaultValue_one: "{{count}} earlier step", defaultValue_other: "{{count}} earlier steps", count: olderSteps.length })}</span>
 							<ChevronDown
 								className={cn(
 									"size-3.5 transition-transform",

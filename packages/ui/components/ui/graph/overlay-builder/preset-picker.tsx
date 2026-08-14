@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Check } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../../../../lib/utils";
@@ -39,6 +40,7 @@ function PresetPreview({ preset }: { preset: DomainPreset }) {
 }
 
 export function PresetPicker({ nodes, edges, onApply }: PresetPickerProps) {
+	const { t } = useTranslation("common");
 	const presets = getPresets();
 	const [activePreset, setActivePreset] = useState<string | null>(null);
 
@@ -51,7 +53,7 @@ export function PresetPicker({ nodes, edges, onApply }: PresetPickerProps) {
 	return (
 		<div className="space-y-3">
 			<p className="text-sm text-muted-foreground">
-				Pick a domain preset to auto-style your node and edge mappings.
+				{t('pickADomainPresetToAutostyleYourNodeAndEdgeMappings', 'Pick a domain preset to auto-style your node and edge mappings.')}
 			</p>
 			<div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
 				{presets.map((preset) => {

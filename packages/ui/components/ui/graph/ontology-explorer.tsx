@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -107,6 +108,7 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 	onError,
 	renderError,
 }) => {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const [overlay, setOverlay] = useState<GraphOverlay | null>(null);
 	const [data, setData] = useState<SubgraphResult | null>(null);
@@ -320,7 +322,7 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 				setData((prev) => mergeSubgraphData(prev, enriched));
 			} catch (err) {
 				toast.error(
-					`Failed to expand neighbors: ${extractGraphErrorMessage(err)}`,
+					t('failedToExpandNeighborsVal', 'Failed to expand neighbors: {{val}}', { val: extractGraphErrorMessage(err) }),
 				);
 			} finally {
 				setLoading(false);
@@ -368,7 +370,7 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 				}
 			} catch (err) {
 				toast.error(
-					`Failed to expand children: ${extractGraphErrorMessage(err)}`,
+					t('failedToExpandChildrenVal', 'Failed to expand children: {{val}}', { val: extractGraphErrorMessage(err) }),
 				);
 			} finally {
 				setLoading(false);
@@ -589,7 +591,7 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 						}),
 					);
 					throw new Error(
-						"OAuth authorization is required. Complete authorization, then confirm the action again.",
+						t('oauthAuthorizationIsRequiredCompleteAuthorizationThenConfirmTheActionAgain', 'OAuth authorization is required. Complete authorization, then confirm the action again.'),
 					);
 				}
 				payload = { ...payload, oauth_tokens: oauth.tokens };
@@ -613,7 +615,7 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 				<div className="space-y-2 text-center">
 					<p className="text-sm text-destructive">{error}</p>
 					<Button variant="outline" onClick={retry}>
-						Try again
+						{t('tryAgain', 'Try again')}
 					</Button>
 				</div>
 			</div>
@@ -624,7 +626,7 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 		return (
 			<div className="flex h-full min-h-0 items-center justify-center p-6">
 				<span className="text-sm text-muted-foreground animate-pulse">
-					Loading ontology...
+					{t('loadingOntology', 'Loading ontology...')}
 				</span>
 			</div>
 		);
@@ -645,7 +647,7 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 						className="h-6 shrink-0 text-xs"
 						onClick={retry}
 					>
-						Retry
+						{t('retry', 'Retry')}
 					</Button>
 				</div>
 			)}

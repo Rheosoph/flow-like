@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useId, useMemo } from "react";
 import type { BoardVersion } from "../../lib/schema/flow/board-version";
 import { cn } from "../../lib/utils";
@@ -139,6 +140,7 @@ export function A2UIRenderer({
 	openDialog,
 	closeDialog,
 }: A2UIRendererProps) {
+	const { t } = useTranslation("common");
 	const canvasId = useId();
 	const components = useMemo(
 		() => surface.components ?? {},
@@ -210,7 +212,7 @@ export function A2UIRenderer({
 		return (
 			<div className={className}>
 				<div className="text-muted-foreground text-sm">
-					No content to display
+					{t('noContentToDisplay', 'No content to display')}
 				</div>
 			</div>
 		);

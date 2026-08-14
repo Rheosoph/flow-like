@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { Check, Crown, Loader2, Mail, Sparkles, Zap } from "lucide-react";
 import { useMemo } from "react";
 import { cn } from "../../lib/utils";
@@ -59,7 +60,7 @@ export function deriveTierFeatures(tier: ITierInfo): string[] {
 		items.push("Unlimited cloud runs");
 	} else if (tier.max_remote_executions > 0) {
 		items.push(
-			`${tier.max_remote_executions.toLocaleString("en-US")} cloud runs/month`,
+			i18next.t('valCloudRunsmonth', '{{val}} cloud runs/month', { val: tier.max_remote_executions.toLocaleString("en-US") }),
 		);
 	}
 	if (tier.max_total_size < 0) {
@@ -74,9 +75,9 @@ export function deriveTierFeatures(tier: ITierInfo): string[] {
 	}
 	if (tier.llm_tiers.length > 0) {
 		items.push(
-			`Access to ${tier.llm_tiers
+			i18next.t('accessToValModels', 'Access to {{val}} models', { val: tier.llm_tiers
 				.map((t) => t.toLowerCase())
-				.join(", ")} models`,
+				.join(", ") }),
 		);
 	}
 	return items;
@@ -110,6 +111,7 @@ export function TierCard({
 	compact = false,
 	emphasize,
 }: Readonly<TierCardProps>) {
+	const { t } = useTranslation("common");
 	const features = useMemo(
 		() => (tier.features?.length ? tier.features : deriveTierFeatures(tier)),
 		[tier],
@@ -150,7 +152,7 @@ export function TierCard({
 					variant="outline"
 					className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-card"
 				>
-					Current plan
+					{t('currentPlan', 'Current plan')}
 				</Badge>
 			)}
 
@@ -179,7 +181,7 @@ export function TierCard({
 				className={cn("flex items-baseline gap-1", compact ? "mt-4" : "mt-5")}
 			>
 				{isEnterprise ? (
-					<span className="text-3xl font-bold tracking-tight">Custom</span>
+					<span className="text-3xl font-bold tracking-tight">{t('custom', 'Custom')}</span>
 				) : tier.price ? (
 					<>
 						<span className="text-3xl font-bold tracking-tight">
@@ -196,7 +198,7 @@ export function TierCard({
 						—
 					</span>
 				) : (
-					<span className="text-3xl font-bold tracking-tight">Free</span>
+					<span className="text-3xl font-bold tracking-tight">{t('free', 'Free')}</span>
 				)}
 			</div>
 
@@ -212,7 +214,7 @@ export function TierCard({
 			<div className={compact ? "mt-5" : "mt-6"}>
 				{isCurrentTier ? (
 					<Button className="w-full" variant="outline" disabled>
-						Current plan
+						{t('currentPlan', 'Current plan')}
 					</Button>
 				) : isEnterprise ? (
 					<Button className="w-full" variant="outline" asChild>
@@ -222,12 +224,12 @@ export function TierCard({
 							rel="noreferrer external"
 						>
 							<Mail className="h-4 w-4" />
-							Talk to sales
+							{t('talkToSales', 'Talk to sales')}
 						</a>
 					</Button>
 				) : isEnterpriseCustomer ? (
 					<Button className="w-full" variant="outline" disabled>
-						Managed by your agreement
+						{t('managedByYourAgreement', 'Managed by your agreement')}
 					</Button>
 				) : isPaid ? (
 					<Button
@@ -246,16 +248,16 @@ export function TierCard({
 						) : hasExistingSubscription ? (
 							"Change plan"
 						) : (
-							`Upgrade to ${displayName}`
+							t('upgradeToDisplayname', 'Upgrade to {{displayName}}', { displayName })
 						)}
 					</Button>
 				) : tierKey === "FREE" ? (
 					<Button className="w-full" variant="outline" disabled>
-						Included
+						{t('included', 'Included')}
 					</Button>
 				) : (
 					<Button className="w-full" variant="outline" disabled>
-						Not available
+						{t('notAvailable', 'Not available')}
 					</Button>
 				)}
 			</div>

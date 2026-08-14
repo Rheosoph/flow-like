@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Bug, Check, Copy, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { captureTelemetryError } from "../../../lib/telemetry/errors";
@@ -138,6 +139,7 @@ export function CrashReportDialog({
 	reportingEnabled = true,
 	onSubmit,
 }: Readonly<CrashReportDialogProps>) {
+	const { t } = useTranslation("settings");
 	const [description, setDescription] = useState("");
 	const [reportId, setReportId] = useState("");
 	const [sent, setSent] = useState(false);
@@ -169,12 +171,10 @@ export function CrashReportDialog({
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
 						<Bug className="h-4 w-4" />
-						Report a problem
+						{t('reportAProblem', 'Report a problem')}
 					</DialogTitle>
 					<DialogDescription>
-						This report is anonymous. It carries no name, no email address and
-						no account information &mdash; only what you write below, the app
-						version and the random install id.
+						{t('thisReportIsAnonymousItCarriesNoNameNoEmailAddressAndNoAccountInformationMdashOnlyWhatYouWriteBelowTheAppVersionAndTheRandomInstallId', "This report is anonymous. It carries no name, no email address and no account information — only what you write below, the app version and the random install id.")}
 					</DialogDescription>
 				</DialogHeader>
 
@@ -182,11 +182,11 @@ export function CrashReportDialog({
 					<div className="space-y-3">
 						<p className="flex items-center gap-2 text-sm">
 							<ShieldCheck className="h-4 w-4 text-primary" />
-							Thanks &mdash; the anonymous report was queued.
+							{t('thanksMdashTheAnonymousReportWasQueued', "Thanks — the anonymous report was queued.")}
 						</p>
 						<div className="space-y-1">
 							<Label className="text-xs text-muted-foreground">
-								Reference id
+								{t('referenceId', 'Reference id')}
 							</Label>
 							<ReportReference reportId={reportId} />
 						</div>
@@ -194,31 +194,28 @@ export function CrashReportDialog({
 				) : (
 					<div className="space-y-4">
 						<div className="space-y-1.5">
-							<Label htmlFor="crash-report-description">What happened?</Label>
+							<Label htmlFor="crash-report-description">{t('whatHappened', 'What happened?')}</Label>
 							<Textarea
 								id="crash-report-description"
 								value={description}
 								maxLength={MAX_DESCRIPTION_LENGTH}
 								rows={5}
-								placeholder="What were you doing when it broke? Please leave out personal details."
+								placeholder={t('whatWereYouDoingWhenItBrokePleaseLeaveOutPersonalDetails', 'What were you doing when it broke? Please leave out personal details.')}
 								onChange={(event) => setDescription(event.target.value)}
 							/>
-							<p className="text-right text-[11px] tabular-nums text-muted-foreground">
-								{description.length}/{MAX_DESCRIPTION_LENGTH}
-							</p>
+							<p className="text-right text-[11px] tabular-nums text-muted-foreground">{`${description.length}/${MAX_DESCRIPTION_LENGTH}`}</p>
 						</div>
 
 						<div className="space-y-1">
 							<Label className="text-xs text-muted-foreground">
-								Reference id
+								{t('referenceId', 'Reference id')}
 							</Label>
 							<ReportReference reportId={reportId} />
 						</div>
 
 						{!reportingEnabled && (
 							<p className="text-sm text-muted-foreground">
-								Crash &amp; error reports are turned off, so nothing can be
-								sent. You can enable them under Settings &rsaquo; Privacy.
+								{t('crashAmpErrorReportsAreTurnedOffSoNothingCanBeSentYouCanEnableThemUnderSettingsRsaquoPrivacy', "Crash & error reports are turned off, so nothing can be sent. You can enable them under Settings &rsaquo; Privacy.")}
 							</p>
 						)}
 					</div>
@@ -227,7 +224,7 @@ export function CrashReportDialog({
 				<DialogFooter>
 					{sent ? (
 						<Button type="button" onClick={() => onOpenChange(false)}>
-							Close
+							{t('close', 'Close')}
 						</Button>
 					) : (
 						<>
@@ -236,14 +233,14 @@ export function CrashReportDialog({
 								variant="outline"
 								onClick={() => onOpenChange(false)}
 							>
-								Cancel
+								{t('cancel', 'Cancel')}
 							</Button>
 							<Button
 								type="button"
 								disabled={!reportingEnabled || description.trim().length === 0}
 								onClick={() => void send()}
 							>
-								Send anonymous report
+								{t('sendAnonymousReport', 'Send anonymous report')}
 							</Button>
 						</>
 					)}

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
 import { useComponentEventTrigger } from "../ActionHandler";
@@ -21,6 +22,7 @@ export function A2UIImageHotspot({
 	surfaceId,
 	componentId,
 }: ComponentProps<ImageHotspotComponent>) {
+	const { t } = useTranslation("common");
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const imageRef = useRef<HTMLImageElement>(null);
@@ -154,7 +156,7 @@ export function A2UIImageHotspot({
 		isActive: boolean,
 	) => {
 		const base =
-			"absolute flex items-center justify-center transition-all duration-200 cursor-pointer";
+			t('absoluteFlexItemscenterJustifycenterTransitionallDuration200Cursorpointer', 'absolute flex items-center justify-center transition-all duration-200 cursor-pointer');
 		const disabled = hotspot.disabled ? "opacity-50 cursor-not-allowed" : "";
 		const hovered = isHovered ? "scale-125 z-10" : "";
 		const active = isActive ? "scale-90" : "";

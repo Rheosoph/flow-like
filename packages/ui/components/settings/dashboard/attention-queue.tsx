@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	AlertTriangleIcon,
 	ArrowRightIcon,
@@ -28,6 +29,7 @@ function SignalChip({
 	signal: AttentionSignal;
 	onOpenPanel: (panel: InspectorPanel) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const body = (
 		<>
 			<StateDot tone={TONE_DOT[signal.tone]} />
@@ -35,7 +37,7 @@ function SignalChip({
 				{signal.label}
 				{signal.subject && (
 					<>
-						{" — "}
+						{` — `}
 						<span className="font-medium text-foreground">
 							{signal.subject}
 						</span>
@@ -47,7 +49,7 @@ function SignalChip({
 	);
 
 	const className =
-		"flex max-w-full items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground";
+		t('flexMaxwfullItemscenterGap2RoundedfullBorderBgcardPx3Py1TextxsTextmutedforegroundTransitioncolorsHoverborderprimary40Hovertextforeground', 'flex max-w-full items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground');
 
 	if (signal.href) {
 		return (
@@ -82,6 +84,7 @@ export function AttentionQueue({
 	onOpenPanel: (panel: InspectorPanel) => void;
 	className?: string;
 }>) {
+	const { t } = useTranslation("settings");
 	if (signals.length === 0) {
 		return (
 			<div
@@ -91,7 +94,7 @@ export function AttentionQueue({
 				)}
 			>
 				<CheckCircle2Icon className="h-3.5 w-3.5 text-emerald-500" />
-				Nothing needs your attention.
+				{t('nothingNeedsYourAttention', 'Nothing needs your attention.')}
 			</div>
 		);
 	}
@@ -104,9 +107,7 @@ export function AttentionQueue({
 			)}
 		>
 			<span className="flex items-center gap-1.5 whitespace-nowrap text-xs font-semibold text-amber-600 dark:text-amber-400">
-				<AlertTriangleIcon className="h-3.5 w-3.5" />
-				Needs you · {signals.length}
-			</span>
+				<AlertTriangleIcon className="h-3.5 w-3.5" />{t('needsYouLength', 'Needs you · {{length}}', { length: signals.length })}</span>
 			<div className="flex min-w-0 flex-wrap items-center gap-2">
 				{signals.map((signal) => (
 					<SignalChip

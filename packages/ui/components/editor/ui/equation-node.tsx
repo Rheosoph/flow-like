@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 import TextareaAutosize, {
 	type TextareaAutosizeProps,
@@ -25,6 +26,7 @@ import { Button, Popover, PopoverContent, PopoverTrigger } from "../../..";
 import { cn } from "../../../lib/utils";
 
 export function EquationElement(props: PlateElementProps<TEquationElement>) {
+	const { t } = useTranslation("common");
 	const selected = useSelected();
 	const [open, setOpen] = React.useState(selected);
 	const katexRef = React.useRef<HTMLDivElement | null>(null);
@@ -52,9 +54,7 @@ export function EquationElement(props: PlateElementProps<TEquationElement>) {
 					<div
 						className={cn(
 							"group flex cursor-pointer items-center justify-center rounded-sm select-none hover:bg-primary/10 data-[selected=true]:bg-primary/10",
-							props.element.texExpression.length === 0
-								? "bg-muted p-3 pr-9"
-								: "px-2 py-1",
+							t('px2Py1', { defaultValue_zero: 'bg-muted p-3 pr-9', defaultValue_other: 'px-2 py-1', count: props.element.texExpression.length }),
 						)}
 						data-selected={selected}
 						contentEditable={false}
@@ -65,7 +65,7 @@ export function EquationElement(props: PlateElementProps<TEquationElement>) {
 						) : (
 							<div className="flex h-7 w-full items-center gap-2 text-sm whitespace-nowrap text-muted-foreground">
 								<RadicalIcon className="size-6 text-muted-foreground/80" />
-								<div>Add a Tex equation</div>
+								<div>{t('addATexEquation', 'Add a Tex equation')}</div>
 							</div>
 						)}
 					</div>
@@ -73,7 +73,7 @@ export function EquationElement(props: PlateElementProps<TEquationElement>) {
 
 				<EquationPopoverContent
 					open={open}
-					placeholder={`f(x) = \\begin{cases}\n  x^2, &\\quad x > 0 \\\\\n  0, &\\quad x = 0 \\\\\n  -x^2, &\\quad x < 0\n\\end{cases}`}
+					placeholder={`f(x) = \\begin{cases}\n x^2, &\\quad x > 0 \\\\\n 0, &\\quad x = 0 \\\\\n -x^2, &\\quad x < 0\n\\end{cases}`}
 					isInline={false}
 					setOpen={setOpen}
 				/>
@@ -87,6 +87,7 @@ export function EquationElement(props: PlateElementProps<TEquationElement>) {
 export function InlineEquationElement(
 	props: PlateElementProps<TEquationElement>,
 ) {
+	const { t } = useTranslation("common");
 	const element = props.element;
 	const katexRef = React.useRef<HTMLDivElement | null>(null);
 	const selected = useSelected();
@@ -148,7 +149,7 @@ export function InlineEquationElement(
 						{element.texExpression.length === 0 && (
 							<span>
 								<RadicalIcon className="mr-1 inline-block h-[19px] w-4 py-[1.5px] align-text-bottom" />
-								New equation
+								{t('newEquation', 'New equation')}
 							</span>
 						)}
 					</div>
@@ -157,7 +158,7 @@ export function InlineEquationElement(
 				<EquationPopoverContent
 					className="my-auto"
 					open={open}
-					placeholder="E = mc^2"
+					placeholder={`E = mc^2`}
 					setOpen={setOpen}
 					isInline
 				/>
@@ -183,6 +184,7 @@ const EquationPopoverContent = ({
 	open: boolean;
 	setOpen: (open: boolean) => void;
 } & TextareaAutosizeProps) => {
+	const { t } = useTranslation("common");
 	const editor = useEditorRef();
 	const readOnly = useReadOnly();
 	const element = useElement<TEquationElement>();
@@ -223,7 +225,7 @@ const EquationPopoverContent = ({
 			/>
 
 			<Button variant="secondary" className="px-3" onClick={onClose}>
-				Done <CornerDownLeftIcon className="size-3.5" />
+				{t('done', 'Done')} <CornerDownLeftIcon className="size-3.5" />
 			</Button>
 		</PopoverContent>
 	);

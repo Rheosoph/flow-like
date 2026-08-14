@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { ChevronRight, Info, Link, Play, Unlink } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { cn } from "../../lib";
@@ -57,6 +58,7 @@ export function WidgetInstanceInspector({
 	className,
 	onInstanceChange,
 }: WidgetInstanceInspectorProps) {
+	const { t } = useTranslation("flow");
 	const updateCustomization = useCallback(
 		(key: string, value: unknown) => {
 			onInstanceChange({
@@ -123,13 +125,13 @@ export function WidgetInstanceInspector({
 						value="properties"
 						className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3 text-xs"
 					>
-						Props
+						{t('props', 'Props')}
 					</TabsTrigger>
 					<TabsTrigger
 						value="actions"
 						className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3 text-xs"
 					>
-						Actions
+						{t('actions', 'Actions')}
 						{widget.actions.length > 0 && (
 							<Badge variant="secondary" className="ml-1 h-4 text-[10px]">
 								{widget.actions.length}
@@ -169,9 +171,7 @@ function WidgetRefBadge({ widgetRef }: WidgetRefBadgeProps) {
 	return (
 		<div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
 			<Link className="h-3 w-3" />
-			<span className="truncate">
-				{widgetRef.appId}/{widgetRef.widgetId}
-				{widgetRef.version && `@${widgetRef.version}`}
+			<span className="truncate">{`${widgetRef.appId}/${widgetRef.widgetId}`}{widgetRef.version && `@${widgetRef.version}`}
 			</span>
 		</div>
 	);
@@ -188,6 +188,7 @@ function CustomizationEditor({
 	values,
 	onChange,
 }: CustomizationEditorProps) {
+	const { t } = useTranslation("flow");
 	const groups = useMemo(() => {
 		const grouped: Record<string, typeof options> = { default: [] };
 		for (const opt of options) {
@@ -205,7 +206,7 @@ function CustomizationEditor({
 	if (options.length === 0) {
 		return (
 			<div className="text-sm text-muted-foreground text-center py-4">
-				No customization options
+				{t('noCustomizationOptions', 'No customization options')}
 			</div>
 		);
 	}
@@ -252,6 +253,7 @@ function CustomizationField({
 	value,
 	onChange,
 }: CustomizationFieldProps) {
+	const { t } = useTranslation("flow");
 	const renderField = () => {
 		switch (option.type) {
 			case "string":
@@ -281,8 +283,8 @@ function CustomizationField({
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="true">True</SelectItem>
-							<SelectItem value="false">False</SelectItem>
+							<SelectItem value="true">{t('true', 'True')}</SelectItem>
+							<SelectItem value="false">{t('false', 'False')}</SelectItem>
 						</SelectContent>
 					</Select>
 				);
@@ -376,10 +378,11 @@ function ActionBindingsEditor({
 	availableWorkflows,
 	onBindingChange,
 }: ActionBindingsEditorProps) {
+	const { t } = useTranslation("flow");
 	if (actions.length === 0) {
 		return (
 			<div className="text-sm text-muted-foreground text-center py-4">
-				No actions defined
+				{t('noActionsDefined', 'No actions defined')}
 			</div>
 		);
 	}
@@ -412,6 +415,7 @@ function ActionBindingField({
 	availableWorkflows,
 	onChange,
 }: ActionBindingFieldProps) {
+	const { t } = useTranslation("flow");
 	const [isOpen, setIsOpen] = useState(!!binding);
 
 	const bindingType = binding
@@ -447,7 +451,7 @@ function ActionBindingField({
 					</Button>
 				) : (
 					<Badge variant="outline" className="text-[10px]">
-						Unbound
+						{t('unbound', 'Unbound')}
 					</Badge>
 				)}
 			</div>
@@ -459,13 +463,13 @@ function ActionBindingField({
 
 				{action.contextSchema.length > 0 && (
 					<div className="text-xs">
-						<span className="text-muted-foreground">Context: </span>
+						<span className="text-muted-foreground">{t('context', 'Context:')} </span>
 						{action.contextSchema.map((f) => f.name).join(", ")}
 					</div>
 				)}
 
 				<div className="space-y-2">
-					<Label className="text-xs">Bind to</Label>
+					<Label className="text-xs">{t('bindTo', 'Bind to')}</Label>
 					<Select
 						value={bindingType}
 						onValueChange={(v) => {
@@ -483,12 +487,12 @@ function ActionBindingField({
 						}}
 					>
 						<SelectTrigger className="h-8 text-sm">
-							<SelectValue placeholder="Select binding type" />
+							<SelectValue placeholder={t('selectBindingType', 'Select binding type')} />
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="none">No binding</SelectItem>
-							<SelectItem value="workflow">Workflow</SelectItem>
-							<SelectItem value="command">Command</SelectItem>
+							<SelectItem value="none">{t('noBinding', 'No binding')}</SelectItem>
+							<SelectItem value="workflow">{t('workflow', 'Workflow')}</SelectItem>
+							<SelectItem value="command">{t('command', 'Command')}</SelectItem>
 						</SelectContent>
 					</Select>
 				</div>
@@ -496,7 +500,7 @@ function ActionBindingField({
 				{bindingType === "workflow" && (
 					<div className="space-y-2 border-l-2 border-muted pl-3">
 						<Label className="text-xs text-muted-foreground">
-							Select Workflow
+							{t('selectWorkflow', 'Select Workflow')}
 						</Label>
 						<Select
 							value={workflowBinding?.flowId ?? ""}
@@ -510,12 +514,12 @@ function ActionBindingField({
 							}}
 						>
 							<SelectTrigger className="h-8 text-sm">
-								<SelectValue placeholder="Choose workflow..." />
+								<SelectValue placeholder={t('chooseWorkflow', 'Choose workflow...')} />
 							</SelectTrigger>
 							<SelectContent>
 								{availableWorkflows.length === 0 ? (
 									<div className="p-2 text-sm text-muted-foreground text-center">
-										No workflows available
+										{t('noWorkflowsAvailable', 'No workflows available')}
 									</div>
 								) : (
 									availableWorkflows.map((wf) => (
@@ -530,7 +534,7 @@ function ActionBindingField({
 						{workflowBinding?.flowId && action.contextSchema.length > 0 && (
 							<div className="space-y-2 mt-2">
 								<Label className="text-xs text-muted-foreground">
-									Input Mappings
+									{t('inputMappings', 'Input Mappings')}
 								</Label>
 								{action.contextSchema.map((field) => (
 									<InputMappingField
@@ -564,7 +568,7 @@ function ActionBindingField({
 				{bindingType === "command" && binding && "command" in binding && (
 					<div className="space-y-2 border-l-2 border-muted pl-3">
 						<Label className="text-xs text-muted-foreground">
-							Command Name
+							{t('commandName', 'Command Name')}
 						</Label>
 						<Input
 							className="h-8 text-sm"
@@ -599,6 +603,7 @@ function InputMappingField({
 	value,
 	onChange,
 }: InputMappingFieldProps) {
+	const { t } = useTranslation("flow");
 	const valueType = value ? Object.keys(value)[0] : "literalString";
 
 	return (
@@ -624,10 +629,10 @@ function InputMappingField({
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="path">Path</SelectItem>
-							<SelectItem value="literalString">Text</SelectItem>
-							<SelectItem value="literalNumber">Num</SelectItem>
-							<SelectItem value="literalBool">Bool</SelectItem>
+							<SelectItem value="path">{t('path', 'Path')}</SelectItem>
+							<SelectItem value="literalString">{t('text', 'Text')}</SelectItem>
+							<SelectItem value="literalNumber">{t('num', 'Num')}</SelectItem>
+							<SelectItem value="literalBool">{t('bool', 'Bool')}</SelectItem>
 						</SelectContent>
 					</Select>
 					{valueType === "path" && (
@@ -675,8 +680,8 @@ function InputMappingField({
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="true">True</SelectItem>
-								<SelectItem value="false">False</SelectItem>
+								<SelectItem value="true">{t('true', 'True')}</SelectItem>
+								<SelectItem value="false">{t('false', 'False')}</SelectItem>
 							</SelectContent>
 						</Select>
 					)}

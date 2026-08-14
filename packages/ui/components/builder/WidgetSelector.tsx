@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useDraggable } from "@dnd-kit/core";
 import {
 	ChevronRight,
@@ -47,6 +48,7 @@ export function WidgetSelector({
 	onSelectWidget,
 	onDragStart,
 }: WidgetSelectorProps) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const [searchQuery, setSearchQuery] = useState("");
 	const [viewMode, setViewMode] = useState<"list" | "grid">("list");
@@ -217,7 +219,7 @@ export function WidgetSelector({
 			<div className={cn("flex items-center justify-center p-4", className)}>
 				<Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
 				<span className="ml-2 text-sm text-muted-foreground">
-					Loading widgets...
+					{t('loadingWidgets', 'Loading widgets...')}
 				</span>
 			</div>
 		);
@@ -226,9 +228,9 @@ export function WidgetSelector({
 	if (isError) {
 		return (
 			<div className={cn("flex flex-col items-center p-4 gap-2", className)}>
-				<p className="text-sm text-muted-foreground">Failed to load widgets</p>
+				<p className="text-sm text-muted-foreground">{t('failedToLoadWidgets', 'Failed to load widgets')}</p>
 				<Button variant="outline" size="sm" onClick={() => refetch()}>
-					Retry
+					{t('retry', 'Retry')}
 				</Button>
 			</div>
 		);
@@ -246,7 +248,7 @@ export function WidgetSelector({
 				<div className="flex items-center justify-between">
 					<div className="flex items-center gap-2">
 						<Layers className="h-4 w-4 text-muted-foreground" />
-						<span className="text-sm font-medium">Widgets</span>
+						<span className="text-sm font-medium">{t('widgets', 'Widgets')}</span>
 					</div>
 					<div className="flex items-center gap-1">
 						<Button
@@ -270,7 +272,7 @@ export function WidgetSelector({
 				<div className="relative">
 					<Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
 					<Input
-						placeholder="Search widgets..."
+						placeholder={t('searchWidgets', 'Search widgets...')}
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						className="pl-8"
@@ -286,8 +288,8 @@ export function WidgetSelector({
 					className="flex-1 flex flex-col min-h-0"
 				>
 					<TabsList className="mx-3 mt-2 grid grid-cols-2">
-						<TabsTrigger value="current">Current Project</TabsTrigger>
-						<TabsTrigger value="all">All Projects</TabsTrigger>
+						<TabsTrigger value="current">{t('currentProject', 'Current Project')}</TabsTrigger>
+						<TabsTrigger value="all">{t('allProjects', 'All Projects')}</TabsTrigger>
 					</TabsList>
 
 					<TabsContent value="current" className="flex-1 min-h-0 mt-0">
@@ -296,8 +298,8 @@ export function WidgetSelector({
 								{filteredCurrentWidgets.length === 0 ? (
 									<div className="p-4 text-center text-sm text-muted-foreground">
 										{searchQuery
-											? "No widgets match your search"
-											: "No widgets in this project"}
+											? t('noWidgetsMatchYourSearch', 'No widgets match your search')
+											: t('noWidgetsInThisProject', 'No widgets in this project')}
 									</div>
 								) : viewMode === "list" ? (
 									filteredCurrentWidgets.map((widget) => (
@@ -332,8 +334,8 @@ export function WidgetSelector({
 								{filteredOtherWidgets.length === 0 ? (
 									<div className="p-4 text-center text-sm text-muted-foreground">
 										{searchQuery
-											? "No widgets match your search"
-											: "No widgets from other projects"}
+											? t('noWidgetsMatchYourSearch', 'No widgets match your search')
+											: `No widgets from other projects`}
 									</div>
 								) : (
 									filteredOtherWidgets.map((group) => (
@@ -396,8 +398,8 @@ export function WidgetSelector({
 						{filteredGroupedWidgets.length === 0 ? (
 							<div className="p-4 text-center text-sm text-muted-foreground">
 								{searchQuery
-									? "No widgets match your search"
-									: "No widgets available"}
+									? t('noWidgetsMatchYourSearch', 'No widgets match your search')
+									: t('noWidgetsAvailable', 'No widgets available')}
 							</div>
 						) : (
 							filteredGroupedWidgets.map((group) => {
@@ -479,7 +481,7 @@ export function WidgetSelector({
 							)}
 							<p className="text-sm text-muted-foreground">
 								{previewWidget.metadata.description ||
-									"No description available"}
+									t('noDescriptionAvailable', 'No description available')}
 							</p>
 							{previewWidget.metadata.tags.length > 0 && (
 								<div className="flex flex-wrap gap-1">
@@ -497,7 +499,7 @@ export function WidgetSelector({
 									setPreviewWidget(null);
 								}}
 							>
-								Use Widget
+								{t('useWidget', 'Use Widget')}
 							</Button>
 						</div>
 					)}
@@ -540,6 +542,7 @@ function WidgetListItem({
 	onPreview,
 	onDragStart,
 }: WidgetItemProps) {
+	const { t } = useTranslation("flow");
 	const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
 		id: `selector-list-${widget.appId}-${widget.widgetId}`,
 		data: {
@@ -601,6 +604,7 @@ function WidgetGridItem({
 	onPreview,
 	onDragStart,
 }: WidgetItemProps) {
+	const { t } = useTranslation("flow");
 	const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
 		id: `selector-grid-${widget.appId}-${widget.widgetId}`,
 		data: {

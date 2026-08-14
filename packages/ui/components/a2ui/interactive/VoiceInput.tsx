@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { Loader2, Mic, Trash2 } from "lucide-react";
 import {
 	type MouseEvent as ReactMouseEvent,
@@ -80,8 +81,8 @@ function formatDuration(seconds: number): string {
 
 function formatFileSize(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	if (bytes < 1024 * 1024) return i18next.t('valKb', '{{val}} KB', { val: (bytes / 1024).toFixed(1) });
+	return i18next.t('valMb', '{{val}} MB', { val: (bytes / (1024 * 1024)).toFixed(1) });
 }
 
 function errorName(error: unknown): string | undefined {
@@ -104,20 +105,20 @@ function voiceCaptureErrorMessage(error: unknown): string {
 		case "SecurityError":
 			return MICROPHONE_BLOCKED_MESSAGE;
 		case "NotFoundError":
-			return "No microphone was found. Connect or enable a microphone and try again.";
+			return i18next.t('noMicrophoneWasFoundConnectOrEnableAMicrophoneAndTryAgain', 'No microphone was found. Connect or enable a microphone and try again.');
 		case "NotReadableError":
-		case "AbortError":
-			return "The microphone is unavailable. Close other apps using it and try again.";
+		case i18next.t('aborterror', 'AbortError'):
+			return i18next.t('theMicrophoneIsUnavailableCloseOtherAppsUsingItAndTryAgain', 'The microphone is unavailable. Close other apps using it and try again.');
 		default:
-			return "Microphone access failed. Check your browser and system permissions, then try again.";
+			return i18next.t('microphoneAccessFailedCheckYourBrowserAndSystemPermissionsThenTryAgain', 'Microphone access failed. Check your browser and system permissions, then try again.');
 	}
 }
 
 function unsupportedVoiceCaptureMessage(): string {
 	if (typeof window !== "undefined" && window.isSecureContext === false) {
-		return "Voice recording requires HTTPS or localhost.";
+		return i18next.t('voiceRecordingRequiresHttpsOrLocalhost', 'Voice recording requires HTTPS or localhost.');
 	}
-	return "Voice recording is not supported in this browser or embedded page.";
+	return i18next.t('voiceRecordingIsNotSupportedInThisBrowserOrEmbeddedPage', 'Voice recording is not supported in this browser or embedded page.');
 }
 
 export function A2UIVoiceInput({
@@ -126,6 +127,7 @@ export function A2UIVoiceInput({
 	componentId,
 	surfaceId,
 }: ComponentProps<VoiceInputComponent>) {
+	const { t } = useTranslation("common");
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const isTriggering = useIsComponentTriggering(componentId);
@@ -281,7 +283,7 @@ export function A2UIVoiceInput({
 				setLocalVoice({
 					...voiceData,
 					uploading: false,
-					uploadError: "Upload failed",
+					uploadError: t('uploadFailed', 'Upload failed'),
 				});
 				setIsUploading(false);
 			}
@@ -377,15 +379,15 @@ export function A2UIVoiceInput({
 			}
 			if (code === "audio-capture") {
 				setCaptureError(
-					"No microphone was found. Connect or enable a microphone and try again.",
+					t('noMicrophoneWasFoundConnectOrEnableAMicrophoneAndTryAgain', 'No microphone was found. Connect or enable a microphone and try again.'),
 				);
 				return;
 			}
 			setSpeechFailed(true);
 			setCaptureError(
 				recorder.isSupported
-					? "Speech recognition is unavailable. Tap again to record audio instead."
-					: "Speech recognition is unavailable, and this browser cannot record audio.",
+					? t('speechRecognitionIsUnavailableTapAgainToRecordAudioInstead', 'Speech recognition is unavailable. Tap again to record audio instead.')
+					: t('speechRecognitionIsUnavailableAndThisBrowserCannotRecordAudio', 'Speech recognition is unavailable, and this browser cannot record audio.'),
 			);
 		},
 	});
@@ -416,7 +418,7 @@ export function A2UIVoiceInput({
 			console.warn(
 				"[voiceInput] STT requested but the Web Speech API is unavailable here " +
 					"(common in desktop/Tauri webviews); falling back to audio recording. " +
-					"Transcribe the recording in the flow instead.",
+					t('transcribeTheRecordingInTheFlowInstead', 'Transcribe the recording in the flow instead.'),
 			);
 		}
 	}, [mounted, mode, speech.isSupported]);
@@ -523,9 +525,9 @@ export function A2UIVoiceInput({
 				clearRecording(false);
 			}
 		};
-		window.addEventListener("a2ui:clearFileInput", handleClear);
+		window.addEventListener(t('a2uiclearfileinput', 'a2ui:clearFileInput'), handleClear);
 		return () => {
-			window.removeEventListener("a2ui:clearFileInput", handleClear);
+			window.removeEventListener(t('a2uiclearfileinput', 'a2ui:clearFileInput'), handleClear);
 		};
 	}, [surfaceId, componentId, clearRecording]);
 
@@ -591,7 +593,7 @@ export function A2UIVoiceInput({
 				};
 
 	const recordAgainHint =
-		invoke === "hold" ? "Hold to record again" : "Tap to record again";
+		invoke === "hold" ? t('holdToRecordAgain', 'Hold to record again') : t('tapToRecordAgain', 'Tap to record again');
 
 	const hint = arming
 		? "Starting…"
@@ -600,12 +602,12 @@ export function A2UIVoiceInput({
 				? speech.transcript || "Listening…"
 				: formatDuration(recorder.recordingTime)
 			: invoke === "hold"
-				? "Hold to record"
+				? t('holdToRecord', 'Hold to record')
 				: effectiveMode === "stt"
-					? "Tap to dictate"
+					? t('tapToDictate', 'Tap to dictate')
 					: invoke === "auto"
-						? "Tap to start — stops when you pause"
-						: "Tap to start recording";
+						? t('tapToStartStopsWhenYouPause', 'Tap to start — stops when you pause')
+						: t('tapToStartRecording', 'Tap to start recording');
 
 	const containerStyle = resolveStyle(style);
 	const inlineStyle = resolveInlineStyle(style);
@@ -655,7 +657,7 @@ export function A2UIVoiceInput({
 								/>
 							</div>
 							<p className="animate-pulse text-sm text-muted-foreground">
-								Processing…
+								{t('processing', 'Processing…')}
 							</p>
 							<div className="flex items-center gap-3">
 								{!blocked && (
@@ -717,7 +719,7 @@ export function A2UIVoiceInput({
 								</p>
 								{!display.transcript && (
 									<p className="text-xs text-muted-foreground">
-										{formatDuration(display.duration)} &middot;{" "}
+										{formatDuration(display.duration)} {t('middot', '&middot;')}{" "}
 										{formatFileSize(display.size)}
 									</p>
 								)}

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Loader2, Package, Rocket } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -59,6 +60,7 @@ export function PublishDialog({
 	onPublish,
 	isPublishing,
 }: PublishDialogProps) {
+	const { t } = useTranslation("store");
 	const [versionBump, setVersionBump] = useState<VersionBump>("patch");
 	const [releaseNotes, setReleaseNotes] = useState("");
 
@@ -99,15 +101,15 @@ export function PublishDialog({
 					</DialogTitle>
 					<DialogDescription>
 						{isNewPackage
-							? `Publish ${packageName} to the registry for the first time.`
-							: `Publish a new version of ${packageName}.`}
+							? t('publishPackagenameToTheRegistryForTheFirstTime', 'Publish {{packageName}} to the registry for the first time.', { packageName })
+							: t('publishANewVersionOfPackagename', 'Publish a new version of {{packageName}}.', { packageName })}
 					</DialogDescription>
 				</DialogHeader>
 
 				<div className="space-y-4 py-2">
 					{!isNewPackage && currentVersion && (
 						<div className="space-y-2">
-							<Label>Version Bump</Label>
+							<Label>{t('versionBump', 'Version Bump')}</Label>
 							<div className="flex items-center gap-3">
 								<Select
 									value={versionBump}
@@ -117,9 +119,9 @@ export function PublishDialog({
 										<SelectValue />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value="patch">Patch</SelectItem>
-										<SelectItem value="minor">Minor</SelectItem>
-										<SelectItem value="major">Major</SelectItem>
+										<SelectItem value="patch">{t('patch', 'Patch')}</SelectItem>
+										<SelectItem value="minor">{t('minor', 'Minor')}</SelectItem>
+										<SelectItem value="major">{t('major', 'Major')}</SelectItem>
 									</SelectContent>
 								</Select>
 
@@ -133,10 +135,10 @@ export function PublishDialog({
 					)}
 
 					<div className="space-y-2">
-						<Label htmlFor="release-notes">Release Notes</Label>
+						<Label htmlFor="release-notes">{t('releaseNotes', 'Release Notes')}</Label>
 						<Textarea
 							id="release-notes"
-							placeholder="Describe what changed in this version…"
+							placeholder={t('describeWhatChangedInThisVersion', 'Describe what changed in this version…')}
 							value={releaseNotes}
 							onChange={(e) => setReleaseNotes(e.target.value)}
 							rows={4}
@@ -145,8 +147,11 @@ export function PublishDialog({
 						{releaseNotes.length > 0 &&
 							releaseNotes.trim().length < MIN_RELEASE_NOTES_LENGTH && (
 								<p className="text-xs text-destructive">
-									Release notes must be at least {MIN_RELEASE_NOTES_LENGTH}{" "}
-									characters.
+									{t(
+										"releaseNotesMustBeAtLeastMin_release_notes_length",
+										"Release notes must be at least {{MIN_RELEASE_NOTES_LENGTH}} characters.",
+										{ MIN_RELEASE_NOTES_LENGTH },
+									)}
 								</p>
 							)}
 					</div>
@@ -158,13 +163,13 @@ export function PublishDialog({
 						onClick={() => handleOpenChange(false)}
 						disabled={isPublishing}
 					>
-						Cancel
+						{t('cancel', 'Cancel')}
 					</Button>
 					<Button onClick={handlePublish} disabled={!isValid || isPublishing}>
 						{isPublishing ? (
 							<>
 								<Loader2 className="h-4 w-4 mr-2 animate-spin" />
-								Publishing…
+								{t('publishing', 'Publishing…')}
 							</>
 						) : (
 							"Publish"

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { PlateElementProps } from "platejs/react";
 
 import { useTocElement, useTocElementState } from "@platejs/toc/react";
@@ -22,6 +23,7 @@ const headingItemVariants = cva(
 );
 
 export function TocElement(props: PlateElementProps) {
+	const { t } = useTranslation("common");
 	const state = useTocElementState();
 	const { props: btnProps } = useTocElement(state);
 	const { headingList } = state;
@@ -45,7 +47,7 @@ export function TocElement(props: PlateElementProps) {
 					))
 				) : (
 					<div className="text-sm text-gray-500">
-						Create a heading to display the table of contents.
+						{t('createAHeadingToDisplayTheTableOfContents', 'Create a heading to display the table of contents.')}
 					</div>
 				)}
 			</div>

@@ -1,3 +1,4 @@
+import { i18n as i18next } from "@flow-like/locales";
 import Dexie from "dexie";
 import { HistoryIcon } from "lucide-react";
 import type { IGenericCommand } from "../../lib";
@@ -38,7 +39,7 @@ class UndoRedoDB extends Dexie {
 		});
 		this.version(2).stores({
 			stacks: "key",
-			deliveries: "key, boardKey, createdAt",
+			deliveries: i18next.t('keyBoardkeyCreatedat', 'key, boardKey, createdAt'),
 		});
 	}
 }
@@ -77,7 +78,7 @@ const writeStacks = async (key: string, stacks: IHistoryStacks) => {
 
 const toastStaleHistory = (action: "Undo" | "Redo") => {
 	toastWarning(
-		`${action} history was recorded against an older version of this board and has been cleared`,
+		i18next.t('actionHistoryWasRecordedAgainstAnOlderVersionOfThisBoardAndHasBeenCleared', '{{action}} history was recorded against an older version of this board and has been cleared', { action }),
 		<HistoryIcon className="w-4 h-4" />,
 	);
 };
@@ -108,7 +109,7 @@ export const useUndoRedo = (appId: string, boardId: string) => {
 		deliveryId: string,
 		historyMode: BoardEditReceiptHistoryMode = "append",
 	) => {
-		const deliveryKey = `${key}\u001f${deliveryId}`;
+		const deliveryKey = `${key}${deliveryId}`;
 		await db.transaction("rw", db.stacks, db.deliveries, async () => {
 			if (await db.deliveries.get(deliveryKey)) return;
 			const data = await db.stacks.get(key);

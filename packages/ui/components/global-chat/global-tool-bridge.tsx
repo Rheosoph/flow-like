@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef } from "react";
@@ -145,6 +146,7 @@ import {
 	resolveAppEventTarget,
 	resolveAppEventType,
 } from "./app-event-target";
+import { dataStudioRoutingGate } from "./data-studio-routing";
 import {
 	type DetachedPageLookup,
 	assertDetachedWriteSafe,
@@ -716,7 +718,7 @@ function createSubRunStream(options: {
 		record: options.recordDebugEvent,
 	});
 	const subAcc = createStreamAccumulator();
-	const subPrefix = `${SUB_STEP_PREFIX}${options.parentRequestId}:`;
+	const subPrefix = `${SUB_STEP_PREFIX}${parentRequestId}:`;
 	// If the sub-run outlives its owning response (bridge timeout, user moved on), stop publishing
 	// — otherwise stale "↳" steps leak into another reply.
 	const runIsLive = () => options.scope.isLive();
@@ -828,13 +830,13 @@ function compactFlowScriptDiagnostic(diagnostic: unknown): unknown {
 			try {
 				compacted[key] = JSON.stringify(value).slice(0, 400);
 			} catch {
-				compacted[key] = "[diagnostic detail unavailable]";
+				compacted[key] = `[diagnostic detail unavailable]`;
 			}
 		}
 	}
 	return Object.keys(compacted).length > 0
 		? compacted
-		: "[unstructured diagnostic omitted]";
+		: `[unstructured diagnostic omitted]`;
 }
 
 function flowScriptCandidatePlanReasoning(
@@ -1192,11 +1194,11 @@ function promptForDialog(
 			id: promptId,
 			kind: "ask" as const,
 			toolName: request.toolName,
-			title: "FlowPilot needs input",
+			title: i18next.t('flowpilotNeedsInput', 'FlowPilot needs input'),
 			description:
 				argString(request.arguments, "question") ||
 				argString(request.arguments, "prompt") ||
-				"Please provide the requested information.",
+				i18next.t('pleaseProvideTheRequestedInformation', 'Please provide the requested information.'),
 			ask: parseAsk(request.arguments),
 			respond: bound,
 		};
@@ -1207,11 +1209,11 @@ function promptForDialog(
 		destructive: dialog.override?.destructive ?? false,
 		toolName: request.toolName,
 		title:
-			dialog.override?.title || request.approval?.title || "Approve action",
+			dialog.override?.title || request.approval?.title || i18next.t('approveAction', 'Approve action'),
 		description:
 			dialog.override?.description ||
 			request.approval?.description ||
-			`FlowPilot wants to run '${request.toolName}'.`,
+			i18next.t('flowpilotWantsToRunToolname', 'FlowPilot wants to run \'{{toolName}}\'.', { toolName: request.toolName }),
 		// App-scoped tools (call_app_chat/call_app_event/flowpilot_board) carry the target app id
 		// in their arguments — the card resolves it to the app's name + icon.
 		appId:
@@ -1241,6 +1243,7 @@ function dialogPromptDebugInput(prompt: GlobalToolPrompt) {
  * `flowpilot_frontend_tool_result` command.
  */
 export function GlobalToolBridge() {
+	const { t } = useTranslation("chat");
 	const router = useRouter();
 	const pathname = usePathname();
 	const backend = useBackend();
@@ -1455,7 +1458,7 @@ export function GlobalToolBridge() {
 			if (!isRequestExpired(request)) return;
 			markRequestExpired(request.requestId);
 			throw new Error(
-				`Frontend tool request '${request.requestId}' expired before ${stage}; late side effects were blocked.`,
+				"Frontend tool request '{{requestId}}' expired before {{stage}}; late side effects were blocked.",
 			);
 		},
 		[isRequestExpired, markRequestExpired],
@@ -1581,7 +1584,7 @@ export function GlobalToolBridge() {
 						status: "not_ready" as const,
 						job,
 						message:
-							"Open the edited board to durably record its undo history and finish receipt delivery.",
+							`Open the edited board to durably record its undo history and finish receipt delivery.`,
 					};
 				}
 				// No board surface means there is no live renderer history stack to append to.
@@ -1735,11 +1738,9 @@ export function GlobalToolBridge() {
 					.join(", ");
 				const retainedSummaries = job.review.commandSummaries.slice(0, 8);
 				const commandSummary = retainedSummaries.length
-					? ` Reviewed changes: ${retainedSummaries.join("; ")}${
-							job.review.commandSummaries.length > retainedSummaries.length
+					? `Reviewed changes: ${retainedSummaries.join("; ")}${job.review.commandSummaries.length > retainedSummaries.length
 								? "; …"
-								: ""
-						}`
+								: ""}`
 					: "";
 				const syntheticRequest: FrontendToolRequest = {
 					requestId: `board-edit-job:${job.jobId}`,
@@ -1773,19 +1774,9 @@ export function GlobalToolBridge() {
 								title:
 									job.approval.title ||
 									(destructive
-										? "Approve destructive workflow change"
+										? `Approve destructive workflow change`
 										: "Apply compiled workflow"),
-								description: `${job.approval.description ? `${job.approval.description} ` : ""}${
-									job.error
-										? `The previous apply attempt failed: ${job.error} `
-										: ""
-								}${job.review.commandCount} exact compiled board command(s) are ready${
-									commandBreakdown ? `: ${commandBreakdown}` : "."
-								}${commandSummary}${
-									job.review.destructiveEffects.length > 0
-										? ` Destructive effects: ${job.review.destructiveEffects.join("; ")}`
-										: " The live board will be checked again before the atomic apply."
-								}`,
+								description: "{{val}}{{val2}}{{commandCount}} exact compiled board command(s) are ready{{val3}}{{commandSummary}}{{val4}}",
 								destructive,
 							},
 						});
@@ -2114,7 +2105,7 @@ export function GlobalToolBridge() {
 						...(truncated
 							? {
 									truncated: true,
-									note: `Only the first ${MAX_LISTED_APPS} of ${visible.length} profile apps are listed (sorted by name). If the user references an app not shown, it may fall past this cap rather than not exist.`,
+									note: "Only the first {{MAX_LISTED_APPS}} of {{length}} profile apps are listed (sorted by name). If the user references an app not shown, it may fall past this cap rather than not exist.",
 								}
 							: {}),
 						apps: detailed,
@@ -2140,20 +2131,20 @@ export function GlobalToolBridge() {
 					if (!appId || !eventId)
 						return {
 							status: "error",
-							message: "describe_app_interface requires app_id and event_id.",
+							message: `describe_app_interface requires app_id and event_id.`,
 						};
 					const profileAppIds = await getProfileAppIds();
 					if (!profileAppIds.has(appId))
 						return {
 							status: "error",
-							message: `App '${appId}' is not visible in the current profile.`,
+							message: "App '{{appId}}' is not visible in the current profile.",
 						};
 					const events = await backend.eventState.getEvents(appId);
 					const event = events.find((candidate) => candidate.id === eventId);
 					if (!event)
 						return {
 							status: "error",
-							message: `Event '${eventId}' not found in app '${appId}'.`,
+							message: "Event '{{eventId}}' not found in app '{{appId}}'.",
 						};
 					scope.referenceApp(appId);
 					// The event configuration is the user-readable interface contract (chat
@@ -2190,7 +2181,7 @@ export function GlobalToolBridge() {
 					if (!appId)
 						return {
 							status: "error",
-							message: "fork_app requires an app_id.",
+							message: `fork_app requires an app_id.`,
 						};
 					const target =
 						argString(args, "target") === "offline" ? "offline" : "online";
@@ -2216,7 +2207,7 @@ export function GlobalToolBridge() {
 						return {
 							status: "error",
 							message:
-								"Offline forks are only available in the desktop app. Use target 'online' here.",
+								`Offline forks are only available in the desktop app. Use target 'online' here.`,
 						};
 					}
 
@@ -2258,7 +2249,7 @@ export function GlobalToolBridge() {
 					if (!appId)
 						return {
 							status: "error",
-							message: "acquire_app requires an app_id.",
+							message: `acquire_app requires an app_id.`,
 						};
 
 					let app: Awaited<ReturnType<typeof backend.appState.getApp>>;
@@ -2267,7 +2258,7 @@ export function GlobalToolBridge() {
 					} catch (error) {
 						return {
 							status: "error",
-							message: `Could not read app '${appId}': ${getErrorMessage(error)}`,
+							message: "Could not read app '{{appId}}': {{val}}",
 						};
 					}
 
@@ -2291,7 +2282,7 @@ export function GlobalToolBridge() {
 								checkout_url: purchase.checkoutUrl,
 								price,
 								message:
-									"This app is paid. Show the checkout link and let the user decide.",
+									`This app is paid. Show the checkout link and let the user decide.`,
 							};
 						}
 
@@ -2306,7 +2297,7 @@ export function GlobalToolBridge() {
 								acquire_status: "request_pending",
 								app_id: appId,
 								message:
-									"Access was requested. The app owner must approve it before the app can be used.",
+									`Access was requested. The app owner must approve it before the app can be used.`,
 							};
 						}
 
@@ -2326,7 +2317,7 @@ export function GlobalToolBridge() {
 					} catch (error) {
 						return {
 							status: "error",
-							message: `Could not get access to '${appId}': ${getErrorMessage(error)}`,
+							message: "Could not get access to '{{appId}}': {{val}}",
 						};
 					}
 				}
@@ -2350,13 +2341,13 @@ export function GlobalToolBridge() {
 					if (!appId)
 						return {
 							status: "error",
-							message: "open_app_chat requires an app_id.",
+							message: `open_app_chat requires an app_id.`,
 						};
 					const profileAppIds = await getProfileAppIds();
 					if (!profileAppIds.has(appId))
 						return {
 							status: "error",
-							message: `App '${appId}' is not visible in the current profile.`,
+							message: "App '{{appId}}' is not visible in the current profile.",
 						};
 					const eventId =
 						argString(args, "event_id") || argString(args, "eventId");
@@ -2372,7 +2363,7 @@ export function GlobalToolBridge() {
 					if (!chatEvent)
 						return {
 							status: "error",
-							message: `App '${appId}' has no chat event.`,
+							message: "App '{{appId}}' has no chat event.",
 						};
 					addInlineAppChat({
 						appId,
@@ -2391,13 +2382,13 @@ export function GlobalToolBridge() {
 					if (!appId)
 						return {
 							status: "error",
-							message: "open_app_page requires an app_id.",
+							message: `open_app_page requires an app_id.`,
 						};
 					const profileAppIds = await getProfileAppIds();
 					if (!profileAppIds.has(appId))
 						return {
 							status: "error",
-							message: `App '${appId}' is not visible in the current profile.`,
+							message: "App '{{appId}}' is not visible in the current profile.",
 						};
 					const eventId =
 						argString(args, "event_id") || argString(args, "eventId");
@@ -2409,7 +2400,7 @@ export function GlobalToolBridge() {
 						relist_required: true,
 						inventory_stale: true,
 						available_page_events: [],
-						message: `Could not refresh app '${appId}' Event metadata${target ? ` to verify Event '${target}'` : ""}, so page availability cannot be established. Do not guess an Event id or route; refresh list_apps once if the goal still requires this interface.`,
+						message: "Could not refresh app '{{appId}}' Event metadata{{val}}, so page availability cannot be established. Do not guess an Event id or route; refresh list_apps once if the goal still requires this interface.",
 					});
 					// Exact ids use the freshness-reconciled single-Event read. The injected
 					// resolver keeps it authoritative even if a later bulk snapshot drifts.
@@ -2434,15 +2425,15 @@ export function GlobalToolBridge() {
 						const message = (() => {
 							switch (resolution.code) {
 								case "event_not_found":
-									return `Event '${eventId}' no longer exists in app '${appId}', or the supplied id is neither an Event id nor a uniquely mapped page id.`;
+									return "Event '{{eventId}}' no longer exists in app '{{appId}}', or the supplied id is neither an Event id nor a uniquely mapped page id.";
 								case "event_inactive":
-									return `Event '${eventId}' is currently inactive and cannot be opened.`;
+									return "Event '{{eventId}}' is currently inactive and cannot be opened.";
 								case "event_interface_changed":
-									return `Event '${eventId}' is currently '${resolution.actual_kind}', not an embeddable page. Its current interface state supersedes the earlier inventory.`;
+									return "Event '{{eventId}}' is currently '{{actual_kind}}', not an embeddable page. Its current interface state supersedes the earlier inventory.";
 								case "page_target_missing":
-									return `Event '${eventId}' is marked as a page but has no persisted page target, so it cannot be embedded.`;
+									return "Event '{{eventId}}' is marked as a page but has no persisted page target, so it cannot be embedded.";
 								case "no_page_event":
-									return `App '${appId}' currently has no active embeddable page Event.`;
+									return "App '{{appId}}' currently has no active embeddable page Event.";
 							}
 						})();
 						return {
@@ -2455,7 +2446,7 @@ export function GlobalToolBridge() {
 							actual_kind: resolution.actual_kind,
 							correct_consumer_tool: correctConsumer,
 							available_page_events: availablePageEvents,
-							message: `${message} Do not guess another Event id or route, and do not use navigate_view as a substitute for embedding or page evidence.${resolution.relist_required ? " Refresh list_apps once if the original goal still requires this interface." : ""}`,
+							message: "{{message}} Do not guess another Event id or route, and do not use navigate_view as a substitute for embedding or page evidence.{{val}}",
 						};
 					}
 					const pageEvent = resolution.event;
@@ -2503,7 +2494,7 @@ export function GlobalToolBridge() {
 											};
 									if (!/^https?:\/\//i.test(temporaryFile.url)) {
 										throw new Error(
-											"Temporary upload did not return a remotely readable URL.",
+											`Temporary upload did not return a remotely readable URL.`,
 										);
 									}
 									return {
@@ -2538,7 +2529,7 @@ export function GlobalToolBridge() {
 							: {}),
 						message:
 							screenshotCount > 0
-								? `Embedded the page '${pageEvent.name}' inline and attached ${screenshotCount} visual capture${screenshotCount === 1 ? "" : "s"} of its rendered content for inspection.`
+								? "Embedded the page '{{name}}' inline and attached {{screenshotCount}} visual capture{{val}} of its rendered content for inspection."
 								: `Embedded the page '${pageEvent.name}' inline, but its rendered content could not be captured. Do not claim to have read the page visually.`,
 						screenshot_count: screenshotCount,
 						screenshot_complete: screenshotComplete,
@@ -2554,30 +2545,30 @@ export function GlobalToolBridge() {
 					if (!appId || !eventId)
 						return {
 							status: "error",
-							message: "call_app_event requires app_id and event_id.",
+							message: `call_app_event requires app_id and event_id.`,
 						};
 					const profileAppIds = await getProfileAppIds();
 					if (!profileAppIds.has(appId))
 						return {
 							status: "error",
-							message: `App '${appId}' is not visible in the current profile.`,
+							message: "App '{{appId}}' is not visible in the current profile.",
 						};
 					const events = await backend.eventState.getEvents(appId);
 					const event = events.find((candidate) => candidate.id === eventId);
 					if (!event)
 						return {
 							status: "error",
-							message: `Event '${eventId}' not found in app '${appId}'.`,
+							message: "Event '{{eventId}}' not found in app '{{appId}}'.",
 						};
 					if (!event.active)
 						return {
 							status: "error",
-							message: `Event '${eventId}' in app '${appId}' is not active.`,
+							message: "Event '{{eventId}}' in app '{{appId}}' is not active.",
 						};
 					if (isChatEventType(event.event_type))
 						return {
 							status: "error",
-							message: `Event '${eventId}' is a chat interface — use call_app_chat instead.`,
+							message: "Event '{{eventId}}' is a chat interface — use call_app_chat instead.",
 						};
 
 					const payload =
@@ -2618,7 +2609,7 @@ export function GlobalToolBridge() {
 						return {
 							status: "error",
 							message:
-								'create_app requires a `name`. Derive a short name from the request (e.g. "Weather App") and call create_app once with it — do not call it again with empty arguments.',
+								`create_app requires a \`name\`. Derive a short name from the request (e.g. "Weather App") and call create_app once with it — do not call it again with empty arguments.`,
 						};
 					const description = argString(args, "description");
 					const idempotencyKey =
@@ -2629,7 +2620,7 @@ export function GlobalToolBridge() {
 						? {
 								conversationId: creationConversationId,
 								toolName: "create_app",
-								instruction: `${name}\n${description}`,
+								instruction: "{{name}} {{description}}",
 								...(idempotencyKey ? { idempotencyKey } : {}),
 							}
 						: undefined;
@@ -2651,7 +2642,7 @@ export function GlobalToolBridge() {
 							app_id: existingAppId,
 							name,
 							already_created: true,
-							note: "An app for this exact request was already created earlier in this conversation; its app_id is returned instead of creating a duplicate. Continue building on this app_id. Only if the user truly wants a second, separate app, call create_app again with a distinct `idempotency_key`.",
+							note: `An app for this exact request was already created earlier in this conversation; its app_id is returned instead of creating a duplicate. Continue building on this app_id. Only if the user truly wants a second, separate app, call create_app again with a distinct \`idempotency_key\`.`,
 						};
 					}
 					const meta: IMetadata = {
@@ -2681,14 +2672,12 @@ export function GlobalToolBridge() {
 							return {
 								status: "error",
 								message:
-									"The user's plan does not allow creating another online project; an upgrade dialog was shown to them. Either wait for the user to upgrade, or offer to create the app locally instead (online:false).",
+									`The user's plan does not allow creating another online project; an upgrade dialog was shown to them. Either wait for the user to upgrade, or offer to create the app locally instead (online:false).`,
 							};
 						}
 						return {
 							status: "error",
-							message: `create_app failed: ${
-								error instanceof Error ? error.message : String(error)
-							}`,
+							message: `create_app failed: ${error instanceof Error ? error.message : String(error)}`,
 						};
 					}
 					// Associate the app with the current profile so it surfaces in list_apps
@@ -2737,13 +2726,13 @@ export function GlobalToolBridge() {
 					if (!appId)
 						return {
 							status: "error",
-							message: "upsert_event requires an app_id.",
+							message: `upsert_event requires an app_id.`,
 						};
 					const name = argString(args, "name").trim();
 					if (!name)
 						return {
 							status: "error",
-							message: "upsert_event requires a name.",
+							message: `upsert_event requires a name.`,
 						};
 					const eventId =
 						argString(args, "event_id") || argString(args, "eventId");
@@ -2754,7 +2743,7 @@ export function GlobalToolBridge() {
 						} catch (error) {
 							return {
 								status: "error",
-								message: `Cannot update event '${eventId}': ${error instanceof Error ? error.message : String(error)}`,
+								message: "Cannot update event '{{eventId}}': {{val}}",
 							};
 						}
 					}
@@ -2810,13 +2799,13 @@ export function GlobalToolBridge() {
 						if (!entryNodeName || !entryConfig) {
 							return {
 								status: "error",
-								message: `Node '${eventNodeId}' is not a supported Event entry. Use flowpilot_board to create eventsSimple(), eventsGeneric(payload: Struct, fieldName: string, ...), or eventsChat(...), then pass the returned event_nodes id.`,
+								message: "Node '{{eventNodeId}}' is not a supported Event entry. Use flowpilot_board to create eventsSimple(), eventsGeneric(payload: Struct, fieldName: string, ...), or eventsChat(...), then pass the returned event_nodes id.",
 							};
 						}
 						if (!isRunnableWorkflowEventEntry(eventBoard, eventNodeId)) {
 							return {
 								status: "error",
-								message: `Node '${eventNodeId}' is an empty or unconnected Event entry. Build and connect the board logic first, then use the exact runnable event_nodes id returned by flowpilot_board. No Event was registered.`,
+								message: "Node '{{eventNodeId}}' is an empty or unconnected Event entry. Build and connect the board logic first, then use the exact runnable event_nodes id returned by flowpilot_board. No Event was registered.",
 							};
 						}
 					}
@@ -2832,7 +2821,7 @@ export function GlobalToolBridge() {
 					if (entryConfig && !entryConfig.eventTypes.includes(eventType)) {
 						return {
 							status: "error",
-							message: `Event type '${eventType}' is incompatible with ${entryNodeName}. Supported types: ${entryConfig.eventTypes.join(", ")}. Cron setup requires an events_simple entry.`,
+							message: "Event type '{{eventType}}' is incompatible with {{entryNodeName}}. Supported types: {{val}}. Cron setup requires an events_simple entry.",
 						};
 					}
 
@@ -2886,7 +2875,7 @@ export function GlobalToolBridge() {
 							return {
 								status: "error",
 								message:
-									"A cron Event requires cron_expression for a recurring schedule OR scheduled_for {date, time} for a one-time run.",
+									`A cron Event requires cron_expression for a recurring schedule OR scheduled_for {date, time} for a one-time run.`,
 							};
 						}
 						if (
@@ -2897,7 +2886,7 @@ export function GlobalToolBridge() {
 							return {
 								status: "error",
 								message:
-									"scheduled_for requires string fields date (YYYY-MM-DD) and time (HH:mm).",
+									`scheduled_for requires string fields date (YYYY-MM-DD) and time (HH:mm).`,
 							};
 						}
 						const timezone =
@@ -2993,10 +2982,10 @@ export function GlobalToolBridge() {
 						...(pageId ? { page_id: pageId } : {}),
 						...(routePath ? { route: routePath } : {}),
 						note: pageId
-							? "Page event upserted (bound to the page)."
+							? `Page event upserted (bound to the page).`
 							: eventType === "cron"
-								? "Cron setup attached to the Simple Event entry."
-								: "Compatible Event setup attached to the workflow entry.",
+								? `Cron setup attached to the Simple Event entry.`
+								: `Compatible Event setup attached to the workflow entry.`,
 					};
 				}
 				case "delete_event": {
@@ -3006,7 +2995,7 @@ export function GlobalToolBridge() {
 					if (!appId || !eventId)
 						return {
 							status: "error",
-							message: "delete_event requires app_id and event_id.",
+							message: `delete_event requires app_id and event_id.`,
 						};
 					try {
 						await backend.eventState.deleteEvent(appId, eventId);
@@ -3022,7 +3011,7 @@ export function GlobalToolBridge() {
 						// best-effort route cleanup
 					}
 					scope.referenceApp(appId);
-					return { status: "ok", note: "Event deleted." };
+					return { status: "ok", note: `Event deleted.` };
 				}
 				case "set_page_load_event": {
 					const appId = argString(args, "app_id") || argString(args, "appId");
@@ -3031,7 +3020,7 @@ export function GlobalToolBridge() {
 					if (!appId || !pageId)
 						return {
 							status: "error",
-							message: "set_page_load_event requires app_id and page_id.",
+							message: `set_page_load_event requires app_id and page_id.`,
 						};
 					const boardId =
 						argString(args, "board_id") ||
@@ -3063,7 +3052,7 @@ export function GlobalToolBridge() {
 						return {
 							status: "error",
 							code: "FLOWPILOT_PAGE_BOARD_MISMATCH",
-							message: `Page '${pageId}' belongs to board '${page.boardId}', not '${boardId}'. No lifecycle event was changed.`,
+							message: "Page '{{pageId}}' belongs to board '{{boardId}}', not '{{boardId2}}'. No lifecycle event was changed.",
 						};
 					}
 					// The persisted page owns this choice. A caller-supplied board is only a scope
@@ -3073,7 +3062,7 @@ export function GlobalToolBridge() {
 						return {
 							status: "error",
 							message:
-								"The page has no board_id. Recreate or repair its ownership before wiring lifecycle events.",
+								`The page has no board_id. Recreate or repair its ownership before wiring lifecycle events.`,
 						};
 					}
 					const releasePageLifecycle = await boardEditCoordinator.acquire(
@@ -3095,7 +3084,7 @@ export function GlobalToolBridge() {
 							return {
 								status: "error",
 								code: "FLOWPILOT_PAGE_BOARD_CHANGED",
-								message: `Page '${pageId}' ownership changed from board '${pageBoardId}' to '${page.boardId ?? "none"}' while lifecycle wiring waited. Retry against the current page.`,
+								message: "Page '{{pageId}}' ownership changed from board '{{pageBoardId}}' to '{{val}}' while lifecycle wiring waited. Retry against the current page.",
 							};
 						}
 						const configuredEntryIds = [
@@ -3128,7 +3117,7 @@ export function GlobalToolBridge() {
 								) {
 									return {
 										status: "error",
-										message: `${field} '${nodeId}' is not a connected events_simple entry on board '${pageBoardId}'. Build and connect the board logic first; the page was not changed.`,
+										message: "{{field}} '{{nodeId}}' is not a connected events_simple entry on board '{{pageBoardId}}'. Build and connect the board logic first; the page was not changed.",
 									};
 								}
 							}
@@ -3153,26 +3142,35 @@ export function GlobalToolBridge() {
 						return {
 							status: "ok",
 							note: onLoad
-								? "Page onLoad event wired — it runs when the page opens."
-								: "Page onLoad event cleared.",
+								? `Page onLoad event wired — it runs when the page opens.`
+								: `Page onLoad event cleared.`,
 						};
 					} finally {
 						releasePageLifecycle();
 					}
 				}
 				case "data_studio_agent": {
+					const routingState = scope.runId
+						? solveRoutingStateByRun.get(scope.runId)
+						: undefined;
+					const routingError = dataStudioRoutingGate({
+						routingReason: args.routing_reason ?? args.routingReason,
+						appInventoryComplete: routingState?.appInventoryComplete === true,
+					});
+					if (routingError) return routingError;
+
 					const instruction = argString(args, "instruction");
 					if (!instruction)
 						return {
 							status: "error",
-							message: "data_studio_agent requires an instruction.",
+							message: `data_studio_agent requires an instruction.`,
 						};
 					const appId = argString(args, "app_id") || argString(args, "appId");
 					if (!appId)
 						return {
 							status: "error",
 							message:
-								"data_studio_agent requires an app_id. Use list_apps to find one, or open a Data Studio page.",
+								`data_studio_agent requires an app_id. Use list_apps to find one, or open a Data Studio page.`,
 						};
 					const overlayId =
 						argString(args, "overlay_id") || argString(args, "overlayId");
@@ -3254,7 +3252,7 @@ export function GlobalToolBridge() {
 								overlay_id: overlayId,
 								instruction,
 							},
-							summary: "Delegated Data Studio sub-agent started.",
+							summary: `Delegated Data Studio sub-agent started.`,
 						}),
 					);
 
@@ -3322,14 +3320,14 @@ export function GlobalToolBridge() {
 							status: "error",
 							code: "local_app_discovery_required",
 							message:
-								"A complete list_apps result is required before sealed public research.",
+								`A complete list_apps result is required before sealed public research.`,
 						};
 					if (routingState.sealedResearchUsed)
 						return {
 							status: "error",
 							code: "sealed_research_already_used",
 							message:
-								"The sealed public researcher is one-shot for this run; synthesize its findings and disclose remaining gaps.",
+								`The sealed public researcher is one-shot for this run; synthesize its findings and disclose remaining gaps.`,
 						};
 
 					const owningUserPrompt = sealedSourceUserPrompt(request);
@@ -3338,7 +3336,7 @@ export function GlobalToolBridge() {
 							status: "error",
 							code: "sealed_research_source_missing",
 							message:
-								"The immutable top-level user request is unavailable; sealed public research was not started.",
+								`The immutable top-level user request is unavailable; sealed public research was not started.`,
 						};
 					setSolveRoutingState(scope.runId, {
 						...routingState,
@@ -3409,7 +3407,7 @@ export function GlobalToolBridge() {
 								reasoning_effort: turnSelection.reasoningEffort || undefined,
 								sealed_to_source_request: true,
 							},
-							summary: "Delegated web research started.",
+							summary: `Delegated web research started.`,
 						}),
 					);
 
@@ -3469,7 +3467,7 @@ export function GlobalToolBridge() {
 					if (!goal)
 						return {
 							status: "error",
-							message: "project_scout requires a goal.",
+							message: `project_scout requires a goal.`,
 						};
 					const focus = argString(args, "focus");
 					const scoutAppId =
@@ -3485,15 +3483,15 @@ export function GlobalToolBridge() {
 
 					// The scout's instruction carries the research brief; the scope's own
 					// prompt supplies the plan contract, so this stays declarative.
-					const instructionParts = [`Research goal: ${goal}`];
+					const instructionParts = ["Research goal: {{goal}}"];
 					if (focus) instructionParts.push(`Focus on: ${focus}`);
 					if (scoutAppId)
 						instructionParts.push(
-							`Start from app ${scoutAppId} as the likely foundation.`,
+							"Start from app {{scoutAppId}} as the likely foundation.",
 						);
 					if (scoutTemplateId)
 						instructionParts.push(
-							`Evaluate template ${scoutTemplateId} as the foundation.`,
+							"Evaluate template {{scoutTemplateId}} as the foundation.",
 						);
 					if (candidates.length > 0)
 						instructionParts.push(
@@ -3567,7 +3565,7 @@ export function GlobalToolBridge() {
 								focus: focus || undefined,
 								goal,
 							},
-							summary: "Delegated project scout started.",
+							summary: `Delegated project scout started.`,
 						}),
 					);
 
@@ -3624,7 +3622,7 @@ export function GlobalToolBridge() {
 					if (!instruction)
 						return {
 							status: "error",
-							message: "flowpilot_board requires an instruction.",
+							message: `flowpilot_board requires an instruction.`,
 						};
 					// Read-only mode: the board copilot answers a question about the board and
 					// makes no edits (no FlowScript, no apply, no approval).
@@ -3647,7 +3645,7 @@ export function GlobalToolBridge() {
 					if (!appId)
 						return {
 							status: "error",
-							message: "flowpilot_board requires an app_id.",
+							message: `flowpilot_board requires an app_id.`,
 						};
 					const ownerMessageId = ownerMessageIdForRequest(request);
 					const createdAppId = ownerMessageId
@@ -3733,7 +3731,7 @@ export function GlobalToolBridge() {
 										conversationId: boardConversationId,
 										toolName: "flowpilot_board",
 										scope: callerChosenBoardId
-											? `${appId}\u0000board:${callerChosenBoardId}`
+											? "{{appId}}\u0000board:{{callerChosenBoardId}}"
 											: appId,
 										instruction,
 										...(boardIdempotencyKey
@@ -3808,11 +3806,11 @@ export function GlobalToolBridge() {
 								code: "FLOWPILOT_BOARD_ZERO_PROGRESS_RETRY_EXHAUSTED",
 								flowscript_status: "no_flowscript",
 								message:
-									"The board specialist already made the initial attempt and one materially different retry in this assistant turn without retaining any FlowScript source. A third equivalent run was not dispatched. Report the failure honestly instead of rewording the same request again.",
+									`The board specialist already made the initial attempt and one materially different retry in this assistant turn without retaining any FlowScript source. A third equivalent run was not dispatched. Report the failure honestly instead of rewording the same request again.`,
 							};
 						}
 						flowPilotDebugLog(
-							"[global-tool-bridge] flowpilot_board: loading board",
+							`[global-tool-bridge] flowpilot_board: loading board`,
 							{
 								appId,
 								boardId,
@@ -3889,7 +3887,7 @@ export function GlobalToolBridge() {
 							turnSelection.selectedModelId,
 						);
 						flowPilotDebugLog(
-							"[global-tool-bridge] flowpilot_board: starting nested copilot_chat",
+							`[global-tool-bridge] flowpilot_board: starting nested copilot_chat`,
 							{ modelId, boardId },
 						);
 
@@ -3958,7 +3956,7 @@ export function GlobalToolBridge() {
 								(scopePlan !== undefined && scopePlan.segmentsRemaining === 0);
 							subAcc.steps.set(id, {
 								id,
-								title: "Workflow",
+								title: `Workflow`,
 								status: settled && status === "progress" ? "done" : status,
 								timestamp: Date.now(),
 								detail: {
@@ -4029,11 +4027,11 @@ export function GlobalToolBridge() {
 									flowScriptWorkspaceDiagnostics(candidate).length;
 								subAcc.steps.set(id, {
 									id,
-									title: "FlowScript",
+									title: `FlowScript`,
 									description:
 										diagnostics > 0
-											? `${diagnostics} validation issue${diagnostics === 1 ? "" : "s"} found — repair in progress`
-											: "Validation issues found — repair in progress",
+											? "{{diagnostics}} validation issue{{val}} found — repair in progress"
+											: `Validation issues found — repair in progress`,
 									// A rejected intermediate candidate is not the run's terminal
 									// outcome. Keep one evolving row and settle it only when repaired
 									// or when the run actually ends with this invalid revision.
@@ -4051,7 +4049,7 @@ export function GlobalToolBridge() {
 								if (!existing) return false;
 								subAcc.steps.set(id, {
 									...existing,
-									description: `${validationCandidateAttempts} earlier validation candidate${validationCandidateAttempts === 1 ? "" : "s"} repaired`,
+									description: "{{validationCandidateAttempts}} earlier validation candidate{{val}} repaired",
 									status: "done",
 								});
 								return true;
@@ -4197,9 +4195,7 @@ export function GlobalToolBridge() {
 								: "";
 						const boardInstruction =
 							(readOnly
-								? `${instruction}
-
-Answer the user's question about this board clearly and concisely, grounded in its actual nodes and connections. Do NOT modify the board — make no edits and submit no FlowScript.`
+								? "{{instruction}} Answer the user's question about this board clearly and concisely, grounded in its actual nodes and connections. Do NOT modify the board — make no edits and submit no FlowScript."
 								: `${instruction}
 
 Execute the change NOW in this run. Follow the required lifecycle in order: one focused declaration batch, one plan_board_scope call, then write_flowscript for the host-accepted active segment. Do not stop after analysis and do not merely describe a plan. Under a single-segment plan, success requires the complete workspace to validate and return queued; under a segmented plan, success requires the complete active segment to validate and queue without dropping the rest of the accepted scope. A submitted/failed preview is not success.
@@ -4234,7 +4230,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									read_only: readOnly,
 									selected_node_ids: liveSurface?.selectedNodeIds ?? [],
 								},
-								summary: "Delegated board sub-agent started.",
+								summary: `Delegated board sub-agent started.`,
 							}),
 						);
 						let nestedRunSettled = false;
@@ -4272,7 +4268,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							);
 							flushSubRun();
 							flowPilotDebugLog(
-								"[global-tool-bridge] flowpilot_board: nested copilot_chat finished",
+								`[global-tool-bridge] flowpilot_board: nested copilot_chat finished`,
 								{ commands: response.commands?.length ?? 0, readOnly },
 							);
 							const returnedCommands = response.commands ?? [];
@@ -4291,7 +4287,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									);
 									if (!dismissed) {
 										throw new Error(
-											"The unexpected compiled workflow returned during a read-only run could not be released.",
+											`The unexpected compiled workflow returned during a read-only run could not be released.`,
 										);
 									}
 									flowIrCommit = undefined;
@@ -4313,7 +4309,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										stage: "finished",
 										status: "ok",
 										output: response,
-										summary: "Delegated board explanation finished.",
+										summary: `Delegated board explanation finished.`,
 									}),
 								);
 								nestedRunSettled = true;
@@ -4366,7 +4362,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							) {
 								assertRequestActive(
 									request,
-									"compiled workflow review creation",
+									`compiled workflow review creation`,
 								);
 								const token = flowIrCommit;
 								const job = await backend.boardState.createBoardEditJob(
@@ -4435,7 +4431,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 											if (!persistedReadbackVerified) {
 												persistedReadbackFailed = true;
 												diagnostics = [
-													"PERSISTED_FLOWSCRIPT_MISMATCH: Atomic apply reported success but the persisted board snapshot did not advance.",
+													`PERSISTED_FLOWSCRIPT_MISMATCH: Atomic apply reported success but the persisted board snapshot did not advance.`,
 													...diagnostics,
 												];
 											}
@@ -4450,7 +4446,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										staleSnapshotBlocked = true;
 										diagnostics = [
 											resolvedResult?.message ??
-												"The compiled workflow became stale before apply.",
+												`The compiled workflow became stale before apply.`,
 											...diagnostics,
 										];
 									} else {
@@ -4498,7 +4494,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										command_count: job.review.commandCount,
 										requires_destructive_approval: destructive,
 										message:
-											"The complete workflow compiled successfully and is awaiting review at Apply time. The native job remains available if this chat surface is closed or reloaded.",
+											`The complete workflow compiled successfully and is awaiting review at Apply time. The native job remains available if this chat surface is closed or reloaded.`,
 										...(createdBoard ? { created_board_id: boardId } : {}),
 									};
 								}
@@ -4525,7 +4521,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 														status: "error",
 														code: "IR_ATOMIC_APPLY_UNAVAILABLE",
 														message:
-															"This backend cannot atomically apply retained compiled workflow batches.",
+															`This backend cannot atomically apply retained compiled workflow batches.`,
 														commands: [],
 														board_commands: [],
 														diagnostics: [],
@@ -4575,7 +4571,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										if (!persistedReadbackVerified) {
 											persistedReadbackFailed = true;
 											diagnostics = [
-												"PERSISTED_FLOWSCRIPT_MISMATCH: Atomic apply reported success but the persisted board snapshot did not advance.",
+												`PERSISTED_FLOWSCRIPT_MISMATCH: Atomic apply reported success but the persisted board snapshot did not advance.`,
 												...diagnostics,
 											];
 										}
@@ -4608,7 +4604,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									if (backend.boardState.createBoardEditJob) {
 										appliedCommands = 0;
 										diagnostics = [
-											"This desktop review contains only legacy FlowScript source and has no durable compiled receipt. Nothing was applied; regenerate the review for crash-safe atomic delivery.",
+											`This desktop review contains only legacy FlowScript source and has no durable compiled receipt. Nothing was applied; regenerate the review for crash-safe atomic delivery.`,
 										];
 										return false;
 									}
@@ -4628,7 +4624,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										staleSnapshotBlocked = true;
 										appliedCommands = 0;
 										diagnostics = [
-											"STALE_BOARD_SNAPSHOT: The board changed after this specialist started. Nothing from the stale draft was applied; regenerate from the fresh board state.",
+											`STALE_BOARD_SNAPSHOT: The board changed after this specialist started. Nothing from the stale draft was applied; regenerate from the fresh board state.`,
 										];
 										return false;
 									}
@@ -4738,12 +4734,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 										request,
 										override: {
 											destructive: true,
-											title: "Approve deletion",
-											description: `${
-												diagnostic.length > 200
+											title: `Approve deletion`,
+											description: `${diagnostic.length > 200
 													? `${diagnostic.slice(0, 200)}…`
-													: diagnostic
-											} Re-apply allowing these deletions?`,
+													: diagnostic} Re-apply allowing these deletions?`,
 										},
 									});
 									if (outcome && "approved" in outcome && outcome.approved) {
@@ -4825,7 +4819,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								);
 								if (!dismissed) {
 									diagnostics = [
-										"The compiled workflow was not applied, but its native review reservation could not be released after retries. It will expire automatically.",
+										`The compiled workflow was not applied, but its native review reservation could not be released after retries. It will expire automatically.`,
 										...diagnostics,
 									];
 									void dismissFlowIrCommitWithRetry(
@@ -4844,7 +4838,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									// rebuilding the identical batch. Dismissing here previously
 									// destroyed that retained work and forced full rebuild cycles.
 									flowPilotDebugLog(
-										"[global-tool-bridge] flowpilot_board: keeping retained compiled review for redelivery after request expiry",
+										`[global-tool-bridge] flowpilot_board: keeping retained compiled review for redelivery after request expiry`,
 										{
 											draftId: flowIrCommit.draft_id,
 											revision: flowIrCommit.revision,
@@ -4873,7 +4867,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								);
 							const errorMessage = getErrorMessage(
 								error,
-								"The queued board change failed without a diagnostic.",
+								`The queued board change failed without a diagnostic.`,
 							);
 							const interruptedResult = boardEditInterruptionResult({
 								status: isRequestExpired(request) ? "timeout" : "error",
@@ -4903,7 +4897,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										status: interruptedResult.status,
 										output: interruptedResult,
 										error,
-										summary: "Delegated board sub-agent failed.",
+										summary: `Delegated board sub-agent failed.`,
 									}),
 								);
 							}
@@ -4953,23 +4947,23 @@ Completion contract: build complete helper logic first and add the Event entry l
 								validationCandidateAttempts > 0 &&
 								workspaceStatus !== "validation_errors" &&
 								!applyFailed
-									? ` after repairing ${validationCandidateAttempts} validation candidate${validationCandidateAttempts === 1 ? "" : "s"}`
+									? "after repairing {{validationCandidateAttempts}} validation candidate{{val}}"
 									: "";
 							subAcc.steps.set("flowscript", {
 								id: "flowscript",
-								title: "FlowScript",
+								title: `FlowScript`,
 								description:
 									workspaceStatus === "validation_errors"
 										? `${flowScriptWorkspaceDiagnostics(selectedWorkspace ?? { source }).length || "Unresolved"} validation issue${flowScriptWorkspaceDiagnostics(selectedWorkspace ?? { source }).length === 1 ? "" : "s"} — not applied`
 										: workspaceStatus === "no_changes"
-											? `No changes needed${repairedSuffix}`
+											? "No changes needed{{repairedSuffix}}"
 											: applyFailed
 												? `Not applied — ${diagnostics[0]?.slice(0, 120) ?? "apply failed"}`
 												: partialWorkingSlice
-													? `${appliedCommands} command${appliedCommands === 1 ? "" : "s"} applied as an incomplete testable slice`
+													? "{{appliedCommands}} command{{val}} applied as an incomplete testable slice"
 													: canonicalSourceCorrected && appliedCommands === 0
-														? `Canonical FlowScript anchors repaired${repairedSuffix}`
-														: `${appliedCommands} command${appliedCommands === 1 ? "" : "s"} applied${blockedDeletion ? " (deletions blocked)" : deletionApproved ? " (deletions approved)" : ""}${repairedSuffix}`,
+														? "Canonical FlowScript anchors repaired{{repairedSuffix}}"
+														: "{{appliedCommands}} command{{val}} applied{{val2}}{{repairedSuffix}}",
 								status:
 									workspaceStatus === "validation_errors" || applyFailed
 										? "failed"
@@ -5109,7 +5103,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							? {
 									manual_steps: manualSteps,
 									manual_steps_note:
-										"These functions were committed with the correct interface but no implementation, because they could not be built. Tell the user which ones they are and what logic each one needs.",
+										`These functions were committed with the correct interface but no implementation, because they could not be built. Tell the user which ones they are and what logic each one needs.`,
 								}
 							: {};
 						const boardResultEnvelope = buildWorkflowBoardResultEnvelope({
@@ -5147,14 +5141,14 @@ Completion contract: build complete helper logic first and add the Event entry l
 														),
 												}
 											: {}),
-										note: "A valid, independently runnable partial working slice was applied for testing and iterative extension. The requested application is still incomplete, and this slice was not promoted to an app-level Event.",
+										note: `A valid, independently runnable partial working slice was applied for testing and iterative extension. The requested application is still incomplete, and this slice was not promoted to an app-level Event.`,
 									}
 								: {}),
 							...(createdBoard ? { created_board_id: boardId } : {}),
 							...(noFlowScript
 								? {
 										flowscript_status: "no_flowscript",
-										note: "IMPORTANT: the board copilot ended WITHOUT submitting a FlowScript — the board was NOT modified and contains no new nodes. Do not tell the user the workflow was built. Retry flowpilot_board at most once, and only with a materially different bounded pre-draft strategy: use one focused declaration batch, no more than six ancillary inspections, call plan_board_scope exactly once unless a plan is already retained, then immediately retain its active segment and repair it from diagnostics. If an equivalent zero-progress result already occurred, do not retry by merely rewording or shortening the instruction; stop and tell the user honestly that the edit failed.",
+										note: `IMPORTANT: the board copilot ended WITHOUT submitting a FlowScript — the board was NOT modified and contains no new nodes. Do not tell the user the workflow was built. Retry flowpilot_board at most once, and only with a materially different bounded pre-draft strategy: use one focused declaration batch, no more than six ancillary inspections, call plan_board_scope exactly once unless a plan is already retained, then immediately retain its active segment and repair it from diagnostics. If an equivalent zero-progress result already occurred, do not retry by merely rewording or shortening the instruction; stop and tell the user honestly that the edit failed.`,
 									}
 								: {}),
 							...(workspaceStatus === "validation_errors"
@@ -5188,10 +5182,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 															selectedWorkspace.source,
 															2_000,
 														),
-													note: "A smaller queued smoke-test candidate was blocked before apply. The fuller FlowScript remains retained for in-place repair on the next serialized attempt.",
+													note: `A smaller queued smoke-test candidate was blocked before apply. The fuller FlowScript remains retained for in-place repair on the next serialized attempt.`,
 												}
 											: {
-													note: "The board copilot produced a FlowScript draft with validation errors — nothing was applied. Continue repairing this retained draft instead of replacing it with a test stub.",
+													note: `The board copilot produced a FlowScript draft with validation errors — nothing was applied. Continue repairing this retained draft instead of replacing it with a test stub.`,
 												}),
 									}
 								: {}),
@@ -5204,19 +5198,19 @@ Completion contract: build complete helper logic first and add the Event entry l
 												: "apply_failed",
 										diagnostics: diagnostics.slice(0, 5),
 										note: staleSnapshotBlocked
-											? "The board changed while the specialist was running, so the stale draft was not applied. Retry once; the next run will start from the fresh persisted board."
+											? `The board changed while the specialist was running, so the stale draft was not applied. Retry once; the next run will start from the fresh persisted board.`
 											: persistedReadbackFailed
-												? "Commands were returned, but persisted FlowScript readback did not match the validated workspace. Do not claim success; inspect the diagnostics and retry from the persisted board."
+												? `Commands were returned, but persisted FlowScript readback did not match the validated workspace. Do not claim success; inspect the diagnostics and retry from the persisted board.`
 												: hadReturnedCommands
-													? `The board copilot returned ${returnedCommandCount} validated command${returnedCommandCount === 1 ? "" : "s"}, but they could not be applied. Report this honestly; do not claim the workflow was built.`
-													: "The FlowScript draft could not be applied to the board — report the diagnostics honestly and consider retrying with a clearer instruction.",
+													? "The board copilot returned {{returnedCommandCount}} validated command{{val}}, but they could not be applied. Report this honestly; do not claim the workflow was built."
+													: `The FlowScript draft could not be applied to the board — report the diagnostics honestly and consider retrying with a clearer instruction.`,
 									}
 								: {}),
 							...(deletionApproved ? { deletion_approved: true } : {}),
 							...(blockedDeletion
 								? {
 										blocked_deletion: true,
-										note: "Some edits would delete existing board items and were blocked. The user was asked inline and declined — deletions remain blocked. Do not re-apply them.",
+										note: `Some edits would delete existing board items and were blocked. The user was asked inline and declined — deletions remain blocked. Do not re-apply them.`,
 									}
 								: {}),
 						};
@@ -5252,8 +5246,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 								output: result,
 								summary:
 									resultStatus === "ok"
-										? "Delegated board build finished and was validated."
-										: "Delegated board build finished without a valid complete apply.",
+										? `Delegated board build finished and was validated.`
+										: `Delegated board build finished without a valid complete apply.`,
 							}),
 						);
 						nestedRunSettled = true;
@@ -5278,7 +5272,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 					if (!instruction)
 						return {
 							status: "error",
-							message: "flowpilot_widget requires an instruction.",
+							message: `flowpilot_widget requires an instruction.`,
 						};
 					const requestedWidgetNames = [
 						argString(args, "widget_name"),
@@ -5359,7 +5353,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							return {
 								status: "error",
 								code: "FLOWPILOT_WIDGET_BOARD_ID_REQUIRED",
-								message: `App '${targetAppId}' has ${boards.length} boards. Pass the exact board_id for this page; FlowPilot will not silently attach it to the first board.`,
+								message: "App '{{targetAppId}}' has {{length}} boards. Pass the exact board_id for this page; FlowPilot will not silently attach it to the first board.",
 							};
 						}
 						boardId = boards[0]?.id ?? "";
@@ -5376,7 +5370,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 						} catch (error) {
 							return {
 								status: "error",
-								message: `Failed to read the pages of app '${appId}': ${getErrorMessage(error)}`,
+								message: "Failed to read the pages of app '{{appId}}': {{val}}",
 							};
 						}
 						if (!located.ok)
@@ -5453,7 +5447,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							specialist_scope: "ui_only",
 							board_logic_built_by_this_tool: false,
 							workflow_logic_handoff: "flowpilot_board",
-							note: "This exact app/board/page target was already created earlier in the conversation; its ids are returned instead of creating a duplicate. A different page_id, route, board_id, or idempotency_key is treated as a separate page.",
+							note: `This exact app/board/page target was already created earlier in the conversation; its ids are returned instead of creating a duplicate. A different page_id, route, board_id, or idempotency_key is treated as a separate page.`,
 						};
 					};
 					const widgetCreationIdentity =
@@ -5572,7 +5566,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								selected_component_ids: selectedComponentIds,
 								current_components: currentComponents,
 							},
-							summary: "Delegated UI sub-agent started.",
+							summary: `Delegated UI sub-agent started.`,
 						}),
 					);
 					let widgetRunSettled = false;
@@ -5600,8 +5594,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 								output: scopedResult,
 								summary:
 									status === "ok"
-										? "Delegated UI build finished."
-										: "Delegated UI build did not produce an applicable result.",
+										? `Delegated UI build finished.`
+										: `Delegated UI build did not produce an applicable result.`,
 							}),
 						);
 						widgetRunSettled = true;
@@ -5654,7 +5648,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									stage: "finished",
 									status: "error",
 									error,
-									summary: "Delegated UI sub-agent failed.",
+									summary: `Delegated UI sub-agent failed.`,
 								}),
 							);
 						}
@@ -5673,14 +5667,14 @@ Completion contract: build complete helper logic first and add the Event entry l
 							status: "error",
 							message: response.message,
 							component_count: 0,
-							note: "IMPORTANT: the widget copilot ended WITHOUT generating any UI components — nothing was changed. Do not tell the user the UI was built; retry once with a clearer instruction or tell the user honestly that nothing was generated.",
+							note: `IMPORTANT: the widget copilot ended WITHOUT generating any UI components — nothing was changed. Do not tell the user the UI was built; retry once with a clearer instruction or tell the user honestly that nothing was generated.`,
 						});
 
 					// Close the run with a summary step, like the board case's FlowScript step.
 					subAcc.stepOrder.push("components");
 					subAcc.steps.set("components", {
 						id: "components",
-						title: "UI components",
+						title: `UI components`,
 						description: `${components.length} component${components.length === 1 ? "" : "s"} ${createMode ? "generated" : detachedPage ? "applied to the page" : "ready for review"}`,
 						status: "done",
 						timestamp: Date.now(),
@@ -5726,7 +5720,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									return finishWidgetRun({
 										status: "error",
 										code: "FLOWPILOT_WIDGET_BOARD_ID_REQUIRED",
-										message: `App '${targetAppId}' now has ${currentBoards.length} boards. Pass the exact board_id for this page; no page was persisted.`,
+										message: "App '{{targetAppId}}' now has {{length}} boards. Pass the exact board_id for this page; no page was persisted.",
 									});
 								}
 								boardId = currentBoards[0]?.id ?? createId();
@@ -5770,8 +5764,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 									message:
 										pageBeforeCatalog.boardId &&
 										pageBeforeCatalog.boardId !== boardId
-											? `Page id '${pageId}' already belongs to board '${pageBeforeCatalog.boardId}', not '${boardId}'. Choose a globally unique page_id.`
-											: `Page '${pageId}' already exists. To change it call flowpilot_widget again with mode='edit', app_id, and this page_id; to add a separate page choose a different page_id.`,
+											? "Page id '{{pageId}}' already belongs to board '{{boardId}}', not '{{boardId2}}'. Choose a globally unique page_id."
+											: "Page '{{pageId}}' already exists. To change it call flowpilot_widget again with mode='edit', app_id, and this page_id; to add a separate page choose a different page_id.",
 								});
 							}
 
@@ -5938,8 +5932,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 									code: "FLOWPILOT_WIDGET_PAGE_ALREADY_EXISTS",
 									message:
 										existingPage.boardId && existingPage.boardId !== boardId
-											? `Page id '${pageId}' already belongs to board '${existingPage.boardId}', not '${boardId}'. Choose a globally unique page_id.`
-											: `Page '${pageId}' already exists. To change it call flowpilot_widget again with mode='edit', app_id, and this page_id; to add a separate page choose a different page_id.`,
+											? "Page id '{{pageId}}' already belongs to board '{{boardId}}', not '{{boardId2}}'. Choose a globally unique page_id."
+											: "Page '{{pageId}}' already exists. To change it call flowpilot_widget again with mode='edit', app_id, and this page_id; to add a separate page choose a different page_id.",
 								});
 							}
 							const timestamp = new Date().toISOString();
@@ -6008,7 +6002,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								page: { id: pageId, name: pageName, route },
 								widgets: createdWidgets,
 								...(createdBoard ? { created_board_id: boardId } : {}),
-								note: "Created and applied UI only; no workflow logic was built. If the user's request includes behavior, wiring, data loading, actions, nodes, connections, or events, the next required step is flowpilot_board with this app_id and the returned page route plus widget/action_ids. Do not report the overall build complete until that board specialist succeeds.",
+								note: `Created and applied UI only; no workflow logic was built. If the user's request includes behavior, wiring, data loading, actions, nodes, connections, or events, the next required step is flowpilot_board with this app_id and the returned page route plus widget/action_ids. Do not report the overall build complete until that board specialist succeeds.`,
 							});
 						} catch (error) {
 							return finishWidgetRun({
@@ -6059,7 +6053,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									applied: false,
 									app_id: appId,
 									page: { id: detachedPage.id, name: detachedPage.name },
-									note: "The user opened this page's builder while the UI was being generated, so the components are pending their review in the chat instead of being written directly. Tell the user to review and apply them.",
+									note: `The user opened this page's builder while the UI was being generated, so the components are pending their review in the chat instead of being written directly. Tell the user to review and apply them.`,
 								});
 							}
 							// Re-read under the lock: a parallel run may have saved this page while
@@ -6121,7 +6115,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									? { app_scope_source: "open_builder" }
 									: {}),
 								...(warnings.length > 0 ? { warnings } : {}),
-								note: "Applied DIRECTLY to the saved page — no builder was open, so there is no review card and the user has NOT reviewed this. Name the page you changed when you report back. Components whose ids the copilot reused were replaced and new ones appended; nothing was deleted, and reusable widgets are not extracted in edit mode. No workflow logic was built — behaviour still needs flowpilot_board.",
+								note: `Applied DIRECTLY to the saved page — no builder was open, so there is no review card and the user has NOT reviewed this. Name the page you changed when you report back. Components whose ids the copilot reused were replaced and new ones appended; nothing was deleted, and reusable widgets are not extracted in edit mode. No workflow logic was built — behaviour still needs flowpilot_board.`,
 							});
 						} catch (error) {
 							return finishWidgetRun({
@@ -6153,14 +6147,14 @@ Completion contract: build complete helper logic first and add the Event entry l
 							message: response.message,
 							component_count: components.length,
 							staged: false,
-							note: "IMPORTANT: components were generated but the conversation moved on before they could be staged — they were DISCARDED and there is no review card. Do not tell the user to review anything; offer to regenerate.",
+							note: `IMPORTANT: components were generated but the conversation moved on before they could be staged — they were DISCARDED and there is no review card. Do not tell the user to review anything; offer to regenerate.`,
 						});
 					return finishWidgetRun({
 						status: "ok",
 						message: response.message,
 						component_count: components.length,
 						staged: true,
-						note: "Components are pending user review in the chat — they are NOT applied yet. Tell the user to review and apply them.",
+						note: `Components are pending user review in the chat — they are NOT applied yet. Tell the user to review and apply them.`,
 					});
 				}
 				case "call_app_chat": {
@@ -6170,19 +6164,19 @@ Completion contract: build complete helper logic first and add the Event entry l
 					if (!appId)
 						return {
 							status: "error",
-							message: "call_app_chat requires an app_id.",
+							message: `call_app_chat requires an app_id.`,
 						};
 					if (!message)
 						return {
 							status: "error",
-							message: "call_app_chat requires a message.",
+							message: `call_app_chat requires a message.`,
 						};
 
 					const profileAppIds = await getProfileAppIds();
 					if (!profileAppIds.has(appId))
 						return {
 							status: "error",
-							message: `App '${appId}' is not visible in the current profile.`,
+							message: "App '{{appId}}' is not visible in the current profile.",
 						};
 
 					// Call the specific chat event the agent selected from list_apps metadata
@@ -6202,8 +6196,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 						return {
 							status: "error",
 							message: eventId
-								? `App '${appId}' has no chat event '${eventId}'.`
-								: `App '${appId}' has no chat event.`,
+								? "App '{{appId}}' has no chat event '{{eventId}}'."
+								: "App '{{appId}}' has no chat event.",
 						};
 
 					// Hand the user's attached files to the app chat. The assistant selects which files
@@ -6253,8 +6247,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 										: "forward_file_name_ambiguous",
 								message:
 									matches.length === 0
-										? `Attachment '${requestedName}' does not belong to this tool call's user turn.`
-										: `Attachment name '${requestedName}' matches more than one file in this user turn. Ask the user to rename or reattach the intended file; no file was forwarded.`,
+										? "Attachment '{{requestedName}}' does not belong to this tool call's user turn."
+										: "Attachment name '{{requestedName}}' matches more than one file in this user turn. Ask the user to rename or reattach the intended file; no file was forwarded.",
 							};
 						}
 						const [{ file, index }] = matches;
@@ -6428,7 +6422,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 					return {
 						status: "ok",
 						app_id: appId,
-						response: text || "(the app chat returned no text)",
+						response: text || `(the app chat returned no text)`,
 						forwarded_files:
 							forwardedFileNames.length > 0 ? forwardedFileNames : undefined,
 						attachments:
@@ -6437,7 +6431,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							embeddedWidgetCount > 0 ? embeddedWidgetCount : undefined,
 						note:
 							embeddedWidgetCount > 0
-								? `The app pushed ${embeddedWidgetCount} interactive widget(s) that are already embedded and visible in your reply — do not describe or re-create their content, just reference them.`
+								? "The app pushed {{embeddedWidgetCount}} interactive widget(s) that are already embedded and visible in your reply — do not describe or re-create their content, just reference them."
 								: undefined,
 					};
 				}
@@ -6485,7 +6479,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 						return {
 							requestId: request.requestId,
 							approved: false,
-							error: "User dismissed the question.",
+							error: `User dismissed the question.`,
 						};
 					return {
 						requestId: request.requestId,
@@ -6519,8 +6513,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 							code: "created_app_target_mismatch",
 							created_app_id: createdAppId,
 							requested_app_id: requestedAppId,
-							next_action: `Retry ${request.toolName} with app_id '${createdAppId}'.`,
-							message: `This turn created app '${createdAppId}'. Refusing to mutate older app '${requestedAppId}' after a transient failure. Continue the build on the exact app_id returned by create_app.`,
+							next_action: "Retry {{toolName}} with app_id '{{createdAppId}}'.",
+							message: "This turn created app '{{createdAppId}}'. Refusing to mutate older app '{{requestedAppId}}' after a transient failure. Continue the build on the exact app_id returned by create_app.",
 						},
 					};
 				}
@@ -6547,7 +6541,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 						return {
 							requestId: request.requestId,
 							approved: false,
-							error: "User denied the request.",
+							error: `User denied the request.`,
 						};
 					}
 					if (outcome.remember) approvedKeysRef.current.add(sessionKey);
@@ -6588,8 +6582,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 				started_at_ms: startedAt,
 				arguments_preview: agentDebugPreview(request.arguments),
 				summary: parentRequestId(request)
-					? "Nested frontend tool request received."
-					: "Frontend tool request received.",
+					? `Nested frontend tool request received.`
+					: `Frontend tool request received.`,
 			});
 
 			const deadline = requestDeadline(request);
@@ -6612,7 +6606,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							ended_at_ms: Date.now(),
 							result_preview: agentDebugPreview(lateResult),
 							summary:
-								"The expired request finished later; its response was discarded and guarded side effects were blocked.",
+								`The expired request finished later; its response was discarded and guarded side effects were blocked.`,
 						});
 					}
 					requestExecutionFenceRef.current.settle(executionLease);
@@ -6706,7 +6700,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									output: timeoutResult,
 									error: reason,
 									summary:
-										"Delegated board run reached the frontend deadline; the best candidate was retained.",
+										`Delegated board run reached the frontend deadline; the best candidate was retained.`,
 								}),
 							);
 						}
@@ -6797,16 +6791,16 @@ Completion contract: build complete helper logic first and add the Event entry l
 				ended_at_ms: Date.now(),
 				result_summary:
 					!response.approved || resultDenied
-						? response.error || "Frontend tool was denied."
+						? response.error || `Frontend tool was denied.`
 						: response.error || resultFailed || requestTimedOut
 							? undefined
 							: resultCancelled
-								? "Frontend tool was cancelled."
+								? `Frontend tool was cancelled.`
 								: resultPartial
-									? "Frontend tool completed partially."
+									? `Frontend tool completed partially.`
 									: response.approved
-										? "Frontend tool completed."
-										: "Frontend tool was denied.",
+										? `Frontend tool completed.`
+										: `Frontend tool was denied.`,
 				result_preview: agentDebugPreview(response.result),
 				error: response.approved ? response.error : undefined,
 			});
@@ -6870,7 +6864,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 											status: "error",
 											timestamp_ms: Date.now(),
 											error:
-												"Tauri emitted a frontend tool request without requestId or toolName.",
+												`Tauri emitted a frontend tool request without requestId or toolName.`,
 											arguments_preview: agentDebugPreview(request),
 										});
 									}
@@ -6879,7 +6873,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 											requestId: request.requestId,
 											approved: true,
 											error:
-												"Malformed frontend tool request: missing toolName.",
+												`Malformed frontend tool request: missing toolName.`,
 										};
 										try {
 											await invoke("flowpilot_frontend_tool_result", {
@@ -6955,7 +6949,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								parentRequestId: event.payload.parentRequestId,
 							};
 							recordRequestDebug(synthetic, {
-								id: `frontend:${requestId}:cancellation`,
+								id: "frontend:{{requestId}}:cancellation",
 								kind: "bridge",
 								stage: "backend_cancelled",
 								status: "cancelled",
@@ -6963,12 +6957,12 @@ Completion contract: build complete helper logic first and add the Event entry l
 								ended_at_ms: Date.now(),
 								error:
 									event.payload.reason ??
-									"Backend cancelled the frontend request.",
+									`Backend cancelled the frontend request.`,
 							});
 							cancelRequestDialogs(
 								requestId,
 								event.payload.reason ??
-									"Backend cancelled the frontend request.",
+									`Backend cancelled the frontend request.`,
 							);
 							// Aborting the renderer-side controller releases the board lease, but it does
 							// not stop a Tauri copilot invocation already running underneath it. Cancel the
@@ -7009,7 +7003,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 											: undefined,
 								};
 								recordRequestDebug(synthetic, {
-									id: `frontend:${requestId}:backend-lifecycle`,
+									id: "frontend:{{requestId}}:backend-lifecycle",
 									kind: "bridge",
 									stage:
 										typeof payload.phase === "string"
@@ -7082,7 +7076,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 			for (const requestId of pendingDialogRequestIds) {
 				cancelRequestDialogs(
 					requestId,
-					"Global tool bridge unmounted before the dialog was answered.",
+					`Global tool bridge unmounted before the dialog was answered.`,
 				);
 			}
 			setToolPrompt(null);

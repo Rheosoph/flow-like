@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { FileIcon, FolderIcon } from "lucide-react";
 import { useState } from "react";
 import { Button } from "../../../components/ui/button";
@@ -20,6 +21,7 @@ export function PathbufVariable({
 	variable: IVariable;
 	onChange: (variable: IVariable) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const [fileOrFolder, setFileOrFolder] = useState<string | undefined>(
 		parseUint8ArrayToJson(variable.default_value),
@@ -39,7 +41,7 @@ export function PathbufVariable({
 					}}
 					id="is_folder"
 				/>
-				<Label htmlFor="is_folder">Folder</Label>
+				<Label htmlFor="is_folder">{t('folder', 'Folder')}</Label>
 			</div>
 			<Button
 				variant={"outline"}
@@ -83,13 +85,13 @@ export function PathbufVariable({
 							{fileOrFolder.split("/").pop()}
 						</span>
 					) : (
-						<span>Pick a folder</span>
+						<span>{t('pickAFolder', 'Pick a folder')}</span>
 					))}
 				{!isFolder &&
 					(fileOrFolder && fileOrFolder.length > 0 ? (
 						<span className="text-nowrap truncate">{fileOrFolder}</span>
 					) : (
-						<span>Pick a file</span>
+						<span>{t('pickAFile', 'Pick a file')}</span>
 					))}
 			</Button>
 		</div>

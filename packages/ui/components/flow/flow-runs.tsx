@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	BanIcon,
 	CheckCircle2Icon,
@@ -129,6 +130,7 @@ const FlowRunsComponent = ({
 	onVersionChange: (version?: [number, number, number]) => void;
 	onFocusNode: (nodeId: string) => void;
 }) => {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const {
 		currentMetadata,
@@ -267,12 +269,12 @@ const FlowRunsComponent = ({
 	return (
 		<div className="flex flex-col gap-2 p-4 bg-background grow h-full max-h-full overflow-hidden">
 			<div className="flex flex-row items-center justify-between">
-				<h3>Runs</h3>
+				<h3>{t('runs', 'Runs')}</h3>
 				<div className="flex flex-row items-center gap-1.5">
 					<Button
 						variant={heatmapEnabled ? "default" : "outline"}
 						size={"icon"}
-						title="Activity heatmap — overlay run counts and errors per node"
+						title={t('activityHeatmapOverlayRunCountsAndErrorsPerNode', 'Activity heatmap — overlay run counts and errors per node')}
 						aria-pressed={heatmapEnabled}
 						onClick={() => {
 							const next = !heatmapEnabled;
@@ -301,16 +303,16 @@ const FlowRunsComponent = ({
 					}}
 				>
 					<SelectTrigger className="max-w-45">
-						<SelectValue placeholder="Time Range" />
+						<SelectValue placeholder={t('timeRange', 'Time Range')} />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="last_5_minutes">5 Minutes</SelectItem>
-						<SelectItem value="last_30_minutes">30 Minutes</SelectItem>
-						<SelectItem value="last_1_hour">1 Hour</SelectItem>
-						<SelectItem value="last_5_hours">5 Hours</SelectItem>
-						<SelectItem value="last_24_hours">24 Hours</SelectItem>
-						<SelectItem value="last_30_days">30 Days</SelectItem>
-						<SelectItem value="unlimited">All</SelectItem>
+						<SelectItem value="last_5_minutes">{t('5Minutes', '5 Minutes')}</SelectItem>
+						<SelectItem value="last_30_minutes">{t('30Minutes', '30 Minutes')}</SelectItem>
+						<SelectItem value="last_1_hour">{t('1Hour', '1 Hour')}</SelectItem>
+						<SelectItem value="last_5_hours">{t('5Hours', '5 Hours')}</SelectItem>
+						<SelectItem value="last_24_hours">{t('24Hours', '24 Hours')}</SelectItem>
+						<SelectItem value="last_30_days">{t('30Days', '30 Days')}</SelectItem>
+						<SelectItem value="unlimited">{t('all', 'All')}</SelectItem>
 					</SelectContent>
 				</Select>
 				<Select
@@ -323,10 +325,10 @@ const FlowRunsComponent = ({
 					}}
 				>
 					<SelectTrigger className="max-w-45">
-						<SelectValue placeholder="Nodes" />
+						<SelectValue placeholder={t('nodes', 'Nodes')} />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="all">All</SelectItem>
+						<SelectItem value="all">{t('all', 'All')}</SelectItem>
 						{Object.values(nodes)
 							.filter((node) => node.start)
 							.map((node) => (
@@ -364,26 +366,26 @@ const FlowRunsComponent = ({
 						<SelectValue placeholder="Status" />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="all">All</SelectItem>
-						<SelectItem value="Debug">Success</SelectItem>
-						<SelectItem value="Warn">Warning</SelectItem>
-						<SelectItem value="Error">Error</SelectItem>
-						<SelectItem value="Fatal">Fatal</SelectItem>
+						<SelectItem value="all">{t('all', 'All')}</SelectItem>
+						<SelectItem value="Debug">{t('success', 'Success')}</SelectItem>
+						<SelectItem value="Warn">{t('warning', 'Warning')}</SelectItem>
+						<SelectItem value="Error">{t('error', 'Error')}</SelectItem>
+						<SelectItem value="Fatal">{t('fatal', 'Fatal')}</SelectItem>
 					</SelectContent>
 				</Select>
 			</div>
 			{isLoading && (
 				<div className="flex flex-col items-center justify-center gap-2 py-8 h-full">
 					<Loader2Icon className="w-6 h-6 animate-spin text-muted-foreground" />
-					<p className="text-sm text-muted-foreground">Loading runs...</p>
+					<p className="text-sm text-muted-foreground">{t('loadingRuns', 'Loading runs...')}</p>
 				</div>
 			)}
 			{!isLoading && (!currentLogs || currentLogs.length === 0) && (
 				<EmptyState
 					className="mt-2 h-full"
 					icons={[LogsIcon, ScrollIcon, CheckCircle2Icon]}
-					description="No runs found yet, start an event to see your results here!"
-					title="No Logs"
+					description={t('noRunsFoundYetStartAnEventToSeeYourResultsHere', 'No runs found yet, start an event to see your results here!')}
+					title={t('noLogs', 'No Logs')}
 				/>
 			)}
 			<div className="flex flex-col gap-2 max-h-full overflow-y-auto">
@@ -398,16 +400,16 @@ const FlowRunsComponent = ({
 						<div className="flex flex-col gap-2 items-start justify-center">
 							<div className="flex flex-row gap-2 items-center">
 								{run.is_remote ? (
-									<span title="Remote execution">
+									<span title={t('remoteExecution', 'Remote execution')}>
 										<CloudIcon className="w-3 h-3 text-blue-500" />
 									</span>
 								) : (
-									<span title="Local execution">
+									<span title={t('localExecution', 'Local execution')}>
 										<HardDriveIcon className="w-3 h-3 text-muted-foreground" />
 									</span>
 								)}
 								<small className="leading-none">
-									{nodes[run.node_id]?.friendly_name ?? "Deleted Event"}
+									{nodes[run.node_id]?.friendly_name ?? t('deletedEvent', 'Deleted Event')}
 								</small>
 								<small className="text-muted-foreground">
 									{isCurrentBoardVersion(run.version, version)
@@ -465,7 +467,7 @@ const FlowRunsComponent = ({
 									</Button>
 								</DropdownMenuTrigger>
 								<DropdownMenuContent>
-									<DropdownMenuLabel>Log Actions</DropdownMenuLabel>
+									<DropdownMenuLabel>{t('logActions', 'Log Actions')}</DropdownMenuLabel>
 									<DropdownMenuSeparator />
 									<DropdownMenuItem
 										onClick={() => {
@@ -474,7 +476,7 @@ const FlowRunsComponent = ({
 										className="flex flex-row gap-2 items-center"
 									>
 										<CornerRightUpIcon className="w-4 h-4" />
-										Go to Event
+										{t('goToEvent', 'Go to Event')}
 									</DropdownMenuItem>
 									<DropdownMenuItem
 										onClick={() => {
@@ -488,7 +490,7 @@ const FlowRunsComponent = ({
 										className="flex flex-row gap-2 items-center"
 									>
 										<RefreshCcwIcon className="w-4 h-4" />
-										Re-Run
+										{t('rerun', 'Re-Run')}
 									</DropdownMenuItem>
 								</DropdownMenuContent>
 							</DropdownMenu>

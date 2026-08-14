@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../../../../lib/utils";
@@ -29,6 +30,7 @@ export function ColumnPicker({
 	placeholder,
 	disabled,
 }: ColumnPickerProps) {
+	const { t } = useTranslation("common");
 	const [open, setOpen] = useState(false);
 
 	return (
@@ -41,7 +43,7 @@ export function ColumnPicker({
 					disabled={disabled}
 				>
 					<span className="truncate">
-						{value || placeholder || "Select column..."}
+						{value || placeholder || t('selectColumn2', 'Select column...')}
 					</span>
 					<ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
 				</Button>
@@ -49,12 +51,12 @@ export function ColumnPicker({
 			<PopoverContent className="w-[200px] p-0" align="start">
 				<Command>
 					<CommandInput
-						placeholder="Filter columns..."
+						placeholder={t('filterColumns2', 'Filter columns...')}
 						className="h-8 text-xs"
 					/>
 					<CommandList>
 						<CommandEmpty className="text-xs p-2">
-							No column found.
+							{t('noColumnFound', 'No column found.')}
 						</CommandEmpty>
 						<CommandGroup>
 							{columns.map((col) => (

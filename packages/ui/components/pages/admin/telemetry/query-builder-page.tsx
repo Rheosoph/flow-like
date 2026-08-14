@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowLeft,
@@ -67,6 +68,7 @@ function SavedQueryList({
 	readonly onLoad: (query: ITelemetrySavedQuery) => void;
 	readonly onDelete: (query: ITelemetrySavedQuery) => void;
 }) {
+	const { t } = useTranslation("admin");
 	if (loading) {
 		return (
 			<div className="space-y-1.5">
@@ -120,6 +122,7 @@ function SavedQueryList({
 }
 
 export function AdminTelemetryQueryBuilderPage() {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const auth = useAuth();
 	const queryClient = useQueryClient();
@@ -183,7 +186,7 @@ export function AdminTelemetryQueryBuilderPage() {
 		},
 		onError: (error) => {
 			toast.error(
-				error instanceof Error ? error.message : "Failed to save the query",
+				error instanceof Error ? error.message : t('failedToSaveTheQuery', 'Failed to save the query'),
 			);
 		},
 	});
@@ -203,7 +206,7 @@ export function AdminTelemetryQueryBuilderPage() {
 		},
 		onError: (error) => {
 			toast.error(
-				error instanceof Error ? error.message : "Failed to delete the query",
+				error instanceof Error ? error.message : t('failedToDeleteTheQuery', 'Failed to delete the query'),
 			);
 		},
 	});
@@ -251,11 +254,9 @@ export function AdminTelemetryQueryBuilderPage() {
 					<CardHeader>
 						<CardTitle className="flex items-center justify-center gap-2 text-base">
 							<Lock className="h-4 w-4" />
-							Insufficient permissions
+							{t('insufficientPermissions', 'Insufficient permissions')}
 						</CardTitle>
-						<CardDescription>
-							You need the <b>Admin</b> permission to run telemetry queries.
-						</CardDescription>
+						<CardDescription><Trans i18nKey="youNeedTheBadminbPermissionToRunTelemetryQueries">You need the <b>Admin</b> permission to run telemetry queries.</Trans></CardDescription>
 					</CardHeader>
 				</Card>
 			</main>
@@ -273,29 +274,28 @@ export function AdminTelemetryQueryBuilderPage() {
 						<div>
 							<h1 className="flex items-center gap-2 text-3xl font-bold">
 								<SlidersHorizontal className="h-7 w-7 text-primary" />
-								Query builder
+								{t('queryBuilder', 'Query builder')}
 							</h1>
 							<p className="text-muted-foreground">
-								Compose ad-hoc breakdowns over anonymous telemetry — pick a
-								dataset, a metric and filters from the allowed fields.
+								{`Compose ad-hoc breakdowns over anonymous telemetry — pick a dataset, a metric and filters from the allowed fields.`}
 							</p>
 						</div>
 						<div className="flex flex-wrap items-center gap-2">
 							<Button asChild variant="ghost" size="sm">
 								<Link href="/admin/telemetry">
 									<ArrowLeft className="mr-1 h-3.5 w-3.5" />
-									Telemetry
+									{t('telemetry', 'Telemetry')}
 								</Link>
 							</Button>
 							<Button asChild variant="ghost" size="sm">
 								<Link href="/admin/telemetry/dashboards">
 									<LayoutDashboard className="mr-1 h-3.5 w-3.5" />
-									Dashboards
+									{t('dashboards', 'Dashboards')}
 								</Link>
 							</Button>
 							<Button variant="outline" size="sm" onClick={refresh}>
 								<RefreshCw className="mr-1 h-3.5 w-3.5" />
-								Refresh
+								{t('refresh', 'Refresh')}
 							</Button>
 						</div>
 					</div>
@@ -304,10 +304,9 @@ export function AdminTelemetryQueryBuilderPage() {
 						<div className="space-y-4">
 							<Card>
 								<CardHeader className="pb-3">
-									<CardTitle className="text-base">Query</CardTitle>
+									<CardTitle className="text-base">{t('query', 'Query')}</CardTitle>
 									<CardDescription>
-										Fields are limited to the server allowlist for the selected
-										dataset.
+										{t('fieldsAreLimitedToTheServerAllowlistForTheSelectedDataset', "Fields are limited to the server allowlist for the selected dataset.")}
 									</CardDescription>
 								</CardHeader>
 								<CardContent>
@@ -324,7 +323,7 @@ export function AdminTelemetryQueryBuilderPage() {
 							<Card>
 								<CardHeader className="pb-3">
 									<div className="flex items-center justify-between gap-2">
-										<CardTitle className="text-base">Saved queries</CardTitle>
+										<CardTitle className="text-base">{t('savedQueries', 'Saved queries')}</CardTitle>
 										<Button
 											variant="outline"
 											size="sm"
@@ -335,7 +334,7 @@ export function AdminTelemetryQueryBuilderPage() {
 											}}
 										>
 											<BookmarkPlus className="mr-1 h-3.5 w-3.5" />
-											Save
+											{t('save', 'Save')}
 										</Button>
 									</div>
 								</CardHeader>
@@ -364,7 +363,7 @@ export function AdminTelemetryQueryBuilderPage() {
 									</div>
 									{activeSaved ? (
 										<span className="text-[11px] text-muted-foreground">
-											Saved <RelativeTime value={activeSaved.updatedAt} />
+											{t('saved', 'Saved')} <RelativeTime value={activeSaved.updatedAt} />
 										</span>
 									) : null}
 								</div>
@@ -388,7 +387,7 @@ export function AdminTelemetryQueryBuilderPage() {
 			<Dialog open={saveOpen} onOpenChange={setSaveOpen}>
 				<DialogContent>
 					<DialogHeader>
-						<DialogTitle>Save query</DialogTitle>
+						<DialogTitle>{t('saveQuery', 'Save query')}</DialogTitle>
 						<DialogDescription>
 							{describeTelemetryQuery(draft)}
 						</DialogDescription>
@@ -399,12 +398,12 @@ export function AdminTelemetryQueryBuilderPage() {
 							id="telemetry-save-query-name"
 							value={saveName}
 							onChange={(e) => setSaveName(e.target.value)}
-							placeholder="Crash rate by release"
+							placeholder={t('crashRateByRelease', 'Crash rate by release')}
 						/>
 					</div>
 					<DialogFooter>
 						<Button variant="ghost" onClick={() => setSaveOpen(false)}>
-							Cancel
+							{t('cancel', 'Cancel')}
 						</Button>
 						<Button
 							disabled={saveName.trim().length === 0 || createSaved.isPending}
@@ -415,7 +414,7 @@ export function AdminTelemetryQueryBuilderPage() {
 								})
 							}
 						>
-							Save
+							{t('save', 'Save')}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

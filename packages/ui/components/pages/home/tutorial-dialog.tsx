@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Button, Switch, useDeveloperMode } from "@flow-like/flow-like-ui";
 import { GitHubLogoIcon } from "@radix-ui/react-icons";
 import { AnimatePresence, motion } from "framer-motion";
@@ -464,6 +465,7 @@ const FAN_CARDS = [
 ];
 
 function StageMotif({ stepId }: { stepId: string }) {
+	const { t } = useTranslation("common");
 	if (stepId === "flowpilot") {
 		return (
 			<div className="relative flex items-center justify-center">
@@ -501,9 +503,7 @@ function StageMotif({ stepId }: { stepId: string }) {
 							/>
 							<span className="h-1.5 rounded bg-white/15" />
 							<span className="h-1.5 w-3/5 rounded bg-white/15" />
-							<span className="font-mono text-[8px] text-white/60">
-								★ {c.rating}
-							</span>
+							<span className="font-mono text-[8px] text-white/60">{`★ ${c.rating}`}</span>
 						</div>
 					</div>
 				))}
@@ -560,17 +560,18 @@ function StageMotif({ stepId }: { stepId: string }) {
 			</div>
 			<img
 				src="/app-logo.webp"
-				alt="Flow-Like"
+				alt={t('flowlike', 'Flow-Like')}
 				className="size-24 drop-shadow-[0_8px_30px_rgba(0,0,0,0.5)]"
 			/>
 			<span className="mt-4 font-mono text-[11px] uppercase tracking-[0.24em] text-white/70">
-				visual · local · anywhere
+				{t('visualLocalAnywhere', 'visual · local · anywhere')}
 			</span>
 		</div>
 	);
 }
 
 export function TutorialDialog() {
+	const { t } = useTranslation("common");
 	const [showTutorial, setShowTutorial] = useState(false);
 	const [step, setStep] = useState(0);
 	const [supportsBackdrop, setSupportsBackdrop] = useState(true);
@@ -672,20 +673,15 @@ export function TutorialDialog() {
 			// biome-ignore lint/a11y/useSemanticElements: custom-composited overlay; a native <dialog> cannot host the WebGL stage + framer-motion layout
 			role="dialog"
 			aria-modal="true"
-			aria-label="Getting started with Flow-Like"
+			aria-label={t('gettingStartedWithFlowlike', 'Getting started with Flow-Like')}
 		>
-			<style>{`
-@keyframes fl-onb-drift{0%{transform:translate3d(-3%,-2%,0) scale(1.05)}100%{transform:translate3d(4%,3%,0) scale(1.12)}}
-@keyframes fl-onb-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
-.fl-onb-bob{animation:fl-onb-bob 5s ease-in-out infinite}
-@media (prefers-reduced-motion: reduce){.fl-onb-bob{animation:none}}
-`}</style>
+			<style>{`@keyframes fl-onb-drift{0%{transform:translate3d(-3%,-2%,0) scale(1.05)}100%{transform:translate3d(4%,3%,0) scale(1.12)}} @keyframes fl-onb-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}} .fl-onb-bob{animation:fl-onb-bob 5s ease-in-out infinite} @media (prefers-reduced-motion: reduce){.fl-onb-bob{animation:none}}`}</style>
 
 			{/* Scrim */}
 			<button
 				type="button"
 				tabIndex={-1}
-				aria-label="Close getting started"
+				aria-label={t('closeGettingStarted', 'Close getting started')}
 				onClick={finish}
 				className={`absolute inset-0 ${supportsBackdrop ? "bg-background/80 backdrop-blur-md" : "bg-background/92"}`}
 			/>
@@ -714,7 +710,7 @@ export function TutorialDialog() {
 					<div className="absolute left-6 top-5 z-10 flex items-center gap-2.5">
 						<img src="/app-logo.webp" alt="" className="size-6 rounded-md" />
 						<b className="text-sm font-bold tracking-tight drop-shadow">
-							Flow-Like
+							{t('flowlike', 'Flow-Like')}
 						</b>
 					</div>
 
@@ -734,8 +730,7 @@ export function TutorialDialog() {
 					</div>
 
 					<span className="absolute bottom-5 left-6 z-10 hidden font-mono text-[11px] uppercase tracking-[0.14em] text-white/70 sm:block">
-						Step 0{step + 1} — {active.name}
-					</span>
+						{t('step0', 'Step 0')}{step + 1}{`— ${active.name}`}</span>
 				</aside>
 
 				{/* ── RIGHT: stepper content ── */}
@@ -743,7 +738,7 @@ export function TutorialDialog() {
 					<button
 						type="button"
 						onClick={finish}
-						aria-label="Close"
+						aria-label={t('close', 'Close')}
 						className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
 					>
 						<X className="size-4" />
@@ -759,7 +754,7 @@ export function TutorialDialog() {
 								<button
 									type="button"
 									onClick={() => goTo(i)}
-									aria-label={`Step ${i + 1}: ${s.name}`}
+									aria-label={t('stepValName', 'Step {{val}}: {{name}}', { val: i + 1, name: s.name })}
 									aria-current={i === step ? "step" : undefined}
 									className={`grid size-7 flex-none place-items-center rounded-full border font-mono text-[11px] font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
 										i <= step
@@ -812,10 +807,9 @@ export function TutorialDialog() {
 										<BubbleOrb size={40} bloom={1.5} />
 										<p className="text-[13px] leading-snug text-muted-foreground">
 											<b className="text-foreground">
-												Look to the bottom-right corner.
+												{t('lookToTheBottomrightCorner', 'Look to the bottom-right corner.')}
 											</b>{" "}
-											The shimmering bubble is FlowPilot — click it anytime to
-											start a chat.
+											{t('theShimmeringBubbleIsFlowpilotClickItAnytimeToStartAChat', "The shimmering bubble is FlowPilot — click it anytime to start a chat.")}
 										</p>
 									</div>
 								)}
@@ -853,14 +847,13 @@ export function TutorialDialog() {
 											<Code2 className="size-5" />
 										</span>
 										<span className="flex flex-col leading-tight">
-											<b className="text-sm font-bold">Planning to build?</b>
+											<b className="text-sm font-bold">{t('planningToBuild', 'Planning to build?')}</b>
 											<small className="text-xs text-muted-foreground">
-												Developer mode unhides flows, events, and data tooling.
-												Change it anytime in Settings.
+												{t('developerModeUnhidesFlowsEventsAndDataToolingChangeItAnytimeInSettings', "Developer mode unhides flows, events, and data tooling. Change it anytime in Settings.")}
 											</small>
 										</span>
 										<Switch
-											aria-label="Enable developer mode"
+											aria-label={t('enableDeveloperMode', 'Enable developer mode')}
 											className="ml-auto"
 											checked={developerMode}
 											onCheckedChange={setDeveloperMode}
@@ -880,17 +873,17 @@ export function TutorialDialog() {
 							className="rounded-xl"
 						>
 							<ArrowLeft className="size-4" />
-							Back
+							{t('back', 'Back')}
 						</Button>
 						<Button
 							variant="ghost"
 							onClick={finish}
 							className="rounded-xl text-muted-foreground"
 						>
-							Skip intro
+							{t('skipIntro', 'Skip intro')}
 						</Button>
 						<Button onClick={next} className="ml-auto rounded-xl">
-							{step === total - 1 ? "Start building" : "Next"}
+							{step === total - 1 ? t('startBuilding', 'Start building') : "Next"}
 							<ArrowRight className="size-4" />
 						</Button>
 					</div>

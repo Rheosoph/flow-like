@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMemo } from "react";
 import { cn } from "../../lib";
 
@@ -328,17 +329,18 @@ export function ComponentPreview({
 	className,
 	size = "md",
 }: ComponentPreviewProps) {
+	const { t } = useTranslation("flow");
 	const icon = COMPONENT_ICONS[componentType] || "?";
 	const colors = COMPONENT_COLORS[componentType] || DEFAULT_COLORS;
 
 	const sizeClasses = useMemo(() => {
 		switch (size) {
 			case "sm":
-				return "w-8 h-8 text-sm";
+				return `w-8 h-8 text-sm`;
 			case "lg":
-				return "w-16 h-16 text-2xl";
+				return `w-16 h-16 text-2xl`;
 			default:
-				return "w-12 h-12 text-lg";
+				return `w-12 h-12 text-lg`;
 		}
 	}, [size]);
 

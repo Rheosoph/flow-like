@@ -1,4 +1,5 @@
 "use client";
+import { Trans, useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "../../lib";
 import { AudioPreview } from "./audio-preview";
@@ -153,12 +154,13 @@ export function PdfFrame({
 	className?: string;
 	loading?: "lazy" | "eager";
 }>) {
+	const { t } = useTranslation("common");
 	const { src, state } = usePdfSource(url);
 
 	if (state === "loading") {
 		return (
 			<div className="flex h-full w-full items-center justify-center p-4 text-sm text-muted-foreground">
-				Loading PDF preview...
+				{t('loadingPdfPreview', 'Loading PDF preview...')}
 			</div>
 		);
 	}
@@ -167,13 +169,13 @@ export function PdfFrame({
 		<iframe
 			src={`${src.split("#")[0]}${pdfViewerFragment(page)}`}
 			className={cn("w-full h-full border-0 max-h-full max-w-full", className)}
-			title={`PDF Preview: ${rawFileName(url, filename)}`}
+			title={t('pdfPreviewVal', 'PDF Preview: {{val}}', { val: rawFileName(url, filename) })}
 			loading={loading}
 		>
 			<p>
-				Your browser cannot display the PDF.{" "}
+				{t('yourBrowserCannotDisplayThePdf', 'Your browser cannot display the PDF.')}{" "}
 				<a href={url} target="_blank" rel="noopener noreferrer">
-					Download the PDF
+					{t('downloadThePdf', 'Download the PDF')}
 				</a>{" "}
 				instead.
 			</p>
@@ -196,6 +198,7 @@ export function FilePreviewer({
 	editable?: boolean;
 	onSave?: (content: string) => Promise<void>;
 }>) {
+	const { t } = useTranslation("common");
 	const [content, setContent] = useState<string>("");
 
 	const previewContent = useCallback(async () => {
@@ -214,7 +217,7 @@ export function FilePreviewer({
 
 	if (!canPreview(url, filename)) {
 		return (
-			<div className="text-red-500">File type not supported for preview</div>
+			<div className="text-red-500">{t('fileTypeNotSupportedForPreview', 'File type not supported for preview')}</div>
 		);
 	}
 
@@ -238,16 +241,14 @@ export function FilePreviewer({
 
 	if (isVideo(url, filename)) {
 		return (
-			<video src={url} controls className="w-full h-full object-contain">
-				<track
+			<video src={url} controls className="w-full h-full object-contain"><Trans i18nKey="trackKindcaptionsLabelenglishCaptionsSrclangenSrcDefaultfalseYourBrowserDoesNotSupportTheVideoTag"><track
 					kind="captions"
 					label="English captions"
 					srcLang="en"
 					src=""
 					default={false}
 				/>
-				Your browser does not support the video tag.
-			</video>
+				Your browser does not support the video tag.</Trans></video>
 		);
 	}
 
@@ -275,10 +276,10 @@ export function FilePreviewer({
 		}
 		return (
 			<TextEditor
-				initialContent={`\n\`\`\`${getCodeLanguage(
+				initialContent={`\`\`\`${getCodeLanguage(
 					url,
 					filename,
-				)}\n${content}\n\`\`\`\n`}
+				)} ${content} \`\`\``}
 				isMarkdown={true}
 				editable={false}
 			/>
@@ -302,6 +303,6 @@ export function FilePreviewer({
 	}
 
 	return (
-		<div className="text-red-500">File type not supported for preview</div>
+		<div className="text-red-500">{t('fileTypeNotSupportedForPreview', 'File type not supported for preview')}</div>
 	);
 }
