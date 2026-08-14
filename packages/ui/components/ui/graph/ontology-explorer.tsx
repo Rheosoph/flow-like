@@ -19,6 +19,7 @@ import type {
 	SubgraphResult,
 } from "../../../state/backend-state/graph-state";
 import { Button } from "../button";
+import type { ExpansionOptions } from "./graph-expansion-dialog";
 import { GraphViewer, getNodeRawId } from "./graph-viewer";
 import {
 	OntologyActionDialog,
@@ -327,13 +328,17 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 				setData((prev) => mergeSubgraphData(prev, enriched));
 			} catch (err) {
 				toast.error(
-					t('failedToExpandNeighborsVal', 'Failed to expand neighbors: {{val}}', { val: extractGraphErrorMessage(err) }),
+					t(
+						"failedToExpandNeighborsVal",
+						"Failed to expand neighbors: {{val}}",
+						{ val: extractGraphErrorMessage(err) },
+					),
 				);
 			} finally {
 				setLoading(false);
 			}
 		},
-		[backend.graphState, appId, overlayId, overlay],
+		[backend.graphState, appId, overlayId, overlay, t],
 	);
 
 	const handleExpandChildren = useCallback(
@@ -375,13 +380,15 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 				}
 			} catch (err) {
 				toast.error(
-					t('failedToExpandChildrenVal', 'Failed to expand children: {{val}}', { val: extractGraphErrorMessage(err) }),
+					t("failedToExpandChildrenVal", "Failed to expand children: {{val}}", {
+						val: extractGraphErrorMessage(err),
+					}),
 				);
 			} finally {
 				setLoading(false);
 			}
 		},
-		[backend.graphState, appId, overlayId, overlay],
+		[backend.graphState, appId, overlayId, overlay, t],
 	);
 
 	const handleCollapseChildren = useCallback(
@@ -596,7 +603,10 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 						}),
 					);
 					throw new Error(
-						t('oauthAuthorizationIsRequiredCompleteAuthorizationThenConfirmTheActionAgain', 'OAuth authorization is required. Complete authorization, then confirm the action again.'),
+						t(
+							"oauthAuthorizationIsRequiredCompleteAuthorizationThenConfirmTheActionAgain",
+							"OAuth authorization is required. Complete authorization, then confirm the action again.",
+						),
 					);
 				}
 				payload = { ...payload, oauth_tokens: oauth.tokens };
@@ -610,7 +620,7 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 				onStatus,
 			);
 		},
-		[appId, backend, backend.eventState, backend.graphState, overlayId],
+		[appId, backend, backend.eventState, backend.graphState, overlayId, t],
 	);
 
 	if (error && !overlay) {
@@ -620,7 +630,7 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 				<div className="space-y-2 text-center">
 					<p className="text-sm text-destructive">{error}</p>
 					<Button variant="outline" onClick={retry}>
-						{t('tryAgain', 'Try again')}
+						{t("tryAgain", "Try again")}
 					</Button>
 				</div>
 			</div>
@@ -631,7 +641,7 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 		return (
 			<div className="flex h-full min-h-0 items-center justify-center p-6">
 				<span className="text-sm text-muted-foreground animate-pulse">
-					{t('loadingOntology', 'Loading ontology...')}
+					{t("loadingOntology", "Loading ontology...")}
 				</span>
 			</div>
 		);
@@ -652,7 +662,7 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 						className="h-6 shrink-0 text-xs"
 						onClick={retry}
 					>
-						{t('retry', 'Retry')}
+						{t("retry", "Retry")}
 					</Button>
 				</div>
 			)}

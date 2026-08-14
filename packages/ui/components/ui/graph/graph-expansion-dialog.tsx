@@ -18,7 +18,6 @@ import {
 	DialogTitle,
 } from "../dialog";
 import { Label } from "../label";
-import { ScrollArea } from "../scroll-area";
 import { Slider } from "../slider";
 import { getGraphIcon } from "./icons";
 
@@ -129,8 +128,11 @@ export function GraphExpansionDialog({
 
 	return (
 		<Dialog open={node !== null} onOpenChange={(open) => !open && onClose()}>
-			<DialogContent className="sm:max-w-lg">
-				<DialogHeader>
+			{/* A column with one flexing row: the relationship list is the only part
+			    allowed to grow, so the limit slider and the buttons can never be
+			    pushed off the bottom by an ontology with thirty mappings. */}
+			<DialogContent className="flex max-h-[85vh] flex-col gap-4 sm:max-w-lg">
+				<DialogHeader className="shrink-0">
 					<DialogTitle className="flex items-center gap-2">
 						<Expand className="h-4 w-4" />
 						{t("expandFromName", "Expand from {{name}}", {
@@ -153,52 +155,50 @@ export function GraphExpansionDialog({
 						)}
 					</p>
 				) : (
-					<ScrollArea className="max-h-64">
-						<div className="space-y-1 pr-3">
-							{choices.map((choice) => {
-								const Icon = getGraphIcon(choice.icon);
-								const isSelected = selected.has(choice.label);
-								return (
-									<button
-										type="button"
-										key={`${choice.direction}-${choice.label}`}
-										className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent"
-										onClick={() => toggle(choice.label)}
+					<div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
+						{choices.map((choice) => {
+							const Icon = getGraphIcon(choice.icon);
+							const isSelected = selected.has(choice.label);
+							return (
+								<button
+									type="button"
+									key={`${choice.direction}-${choice.label}`}
+									className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent"
+									onClick={() => toggle(choice.label)}
+								>
+									<Checkbox checked={isSelected} className="shrink-0" />
+									{choice.direction === "outgoing" ? (
+										<ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+									) : (
+										<ArrowLeftRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+									)}
+									<span className="min-w-0 flex-1 truncate font-mono text-xs">
+										{choice.label}
+									</span>
+									<span
+										className="flex w-28 shrink-0 items-center gap-1 text-[10px] text-muted-foreground"
+										title={choice.otherLabel}
 									>
-										<Checkbox checked={isSelected} className="shrink-0" />
-										{choice.direction === "outgoing" ? (
-											<ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-										) : (
-											<ArrowLeftRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-										)}
-										<span className="min-w-0 flex-1 truncate font-mono text-xs">
-											{choice.label}
-										</span>
 										<span
-											className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground"
-											title={choice.otherLabel}
+											className="flex h-3 w-3 shrink-0 items-center justify-center rounded-full"
+											style={{ backgroundColor: choice.color }}
 										>
-											<span
-												className="flex h-3 w-3 items-center justify-center rounded-full"
-												style={{ backgroundColor: choice.color }}
-											>
-												<Icon className="h-2 w-2 text-white" />
-											</span>
-											{choice.otherLabel}
+											<Icon className="h-2 w-2 text-white" />
 										</span>
-										<span className="shrink-0 tabular-nums text-xs text-muted-foreground">
-											{choice.total === undefined
-												? "?"
-												: `${choice.exact ? "" : "≥"}${choice.total.toLocaleString()}`}
-										</span>
-									</button>
-								);
-							})}
-						</div>
-					</ScrollArea>
+										<span className="truncate">{choice.otherLabel}</span>
+									</span>
+									<span className="w-10 shrink-0 text-right tabular-nums text-xs text-muted-foreground">
+										{choice.total === undefined
+											? "—"
+											: `${choice.exact ? "" : "≥"}${choice.total.toLocaleString()}`}
+									</span>
+								</button>
+							);
+						})}
+					</div>
 				)}
 
-				<div className="space-y-2">
+				<div className="shrink-0 space-y-2 border-t pt-3">
 					<div className="flex items-center justify-between">
 						<Label className="text-xs">
 							{t("mostObjectsToAdd", "Most objects to add")}
@@ -221,16 +221,16 @@ export function GraphExpansionDialog({
 									"Select at least one relationship.",
 								)
 							: t(
-									"thisObjectHasAboutCountLinkedAlongTheSelected",
-									"This object has about {{count}} linked objects along the selected relationships.",
+									"thisObjectHasAboutAmountLinkedAlongTheSelected",
+									"This object has about {{amount}} linked objects along the selected relationships.",
 									{
-										count: `${expected.unknown ? "≥" : ""}${expected.known.toLocaleString()}`,
+										amount: `${expected.unknown ? "≥" : ""}${expected.known.toLocaleString()}`,
 									},
 								)}
 					</p>
 				</div>
 
-				<DialogFooter>
+				<DialogFooter className="shrink-0">
 					<Button variant="outline" onClick={onClose}>
 						{t("cancel", "Cancel")}
 					</Button>

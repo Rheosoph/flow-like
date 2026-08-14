@@ -177,7 +177,6 @@
 	"ifMultipleEventsUseTheSameAppIdPathAndMethodOnlyTheMostRecentlyRegisteredEventWillBeTriggeredTheSystemWillLogWarningsIfConflictsOccur": "複数のイベントが同じアプリ ID・パス・メソッドを使用している場合、最後に登録されたイベントのみがトリガーされます。競合が発生した場合、システムは警告をログに記録します。",
 	"ifSetBotWillOnlyRespondInTheseChatsLeaveEmptyToAllowAll": "設定すると、ボットはこれらのチャットにのみ応答します。すべてを許可する場合は空欄のままにしてください。",
 	"imapPassword": "IMAPパスワード",
-	"imgSrcurlStylemaxwidth100HeightAuto": "<img src=\"{{url}}\" style=\"max-width: 100%; height: auto;\" />",
 	"includeThisTokenAs": "このトークンを次として含めてください:",
 	"inspect": "インスペクト",
 	"inspectionCompleteLengthToolsLength2ResourcesLength3Prompts": "検査が完了しました（ツール {{length}} 件、リソース {{length2}} 件、プロンプト {{length3}} 件）",

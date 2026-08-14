@@ -16,13 +16,13 @@ import type {
 import { Popover, PopoverContent, PopoverTrigger } from "../popover";
 import { GraphCanvas } from "./graph-canvas";
 import { buildClusterModel } from "./graph-clusters";
-import { GraphEdgeInspector } from "./graph-edge-inspector";
 import {
 	collapseClusters,
 	collapsedGroupClusterId,
 	isCollapsedGroupId,
 } from "./graph-collapse";
 import { GraphDensityControl } from "./graph-density-control";
+import { GraphEdgeInspector } from "./graph-edge-inspector";
 import {
 	type ExpansionOptions,
 	GraphExpansionDialog,
@@ -40,9 +40,11 @@ const GRAPH_VIEW_LIMIT_OPTIONS = [
 ] as const;
 
 function formatGraphLimitOption(limit: number): string {
-	if (limit >= 1000000) return i18next.t('valmNodes', '{{val}}m nodes', { val: limit / 1000000 });
-	if (limit >= 1000) return i18next.t('valkNodes', '{{val}}k nodes', { val: limit / 1000 });
-	return i18next.t('limitNodes', '{{limit}} nodes', { limit });
+	if (limit >= 1000000)
+		return i18next.t("valmNodes", "{{val}}m nodes", { val: limit / 1000000 });
+	if (limit >= 1000)
+		return i18next.t("valkNodes", "{{val}}k nodes", { val: limit / 1000 });
+	return i18next.t("limitNodes", "{{limit}} nodes", { limit });
 }
 
 function getEffectiveNodeIdColumn(
@@ -249,6 +251,16 @@ export function GraphViewer({
 
 	const viewData = collapsed.data;
 
+	// The layout needs a grouping over what is actually drawn. Reusing the model
+	// built from the full sample would leave every group node unplaced: a synthetic
+	// node belongs to no cluster, so the cluster layout would never move it and it
+	// would keep whatever seed position it was born with.
+	const layoutClusterModel = useMemo(() => {
+		if (collapsedGroups.size === 0) return clusterModel;
+		if (!enableClusterLayout || !viewData) return null;
+		return buildClusterModel(viewData, overlay);
+	}, [collapsedGroups, clusterModel, enableClusterLayout, viewData, overlay]);
+
 	const collapseAllGroups = useCallback(() => {
 		setCollapsedGroups(
 			new Set((clusterModel?.clusters ?? []).map((cluster) => cluster.id)),
@@ -261,9 +273,7 @@ export function GraphViewer({
 	useEffect(() => {
 		if (collapsedGroups.size === 0) return;
 		const live = new Set((clusterModel?.clusters ?? []).map((c) => c.id));
-		const next = new Set(
-			[...collapsedGroups].filter((id) => live.has(id)),
-		);
+		const next = new Set([...collapsedGroups].filter((id) => live.has(id)));
 		if (next.size !== collapsedGroups.size) setCollapsedGroups(next);
 	}, [clusterModel, collapsedGroups]);
 
@@ -340,13 +350,18 @@ export function GraphViewer({
 		const parts = Array.from(populationByLabel.entries())
 			.filter(([label]) => (loadedByLabel.get(label) ?? 0) > 0)
 			.sort((a, b) => b[1] - a[1])
-			.map(
-				([label, total]) =>
-					t('valOfVal2Label', '{{val}} of {{val2}} {{label}}', { val: (loadedByLabel.get(label) ?? 0).toLocaleString(), val2: total.toLocaleString(), label }),
+			.map(([label, total]) =>
+				t("valOfVal2Label", "{{val}} of {{val2}} {{label}}", {
+					val: (loadedByLabel.get(label) ?? 0).toLocaleString(),
+					val2: total.toLocaleString(),
+					label,
+				}),
 			);
 
-		return parts.length > 0 ? t('showingVal', 'Showing {{val}}', { val: parts.join(" · ") }) : null;
-	}, [populationByLabel, data]);
+		return parts.length > 0
+			? t("showingVal", "Showing {{val}}", { val: parts.join(" · ") })
+			: null;
+	}, [populationByLabel, data, t]);
 
 	const nodeMap = useMemo(() => {
 		if (!data) return new Map<string, SubgraphNode>();
@@ -624,7 +639,7 @@ export function GraphViewer({
 			else map.set(edge.target, [edge.source]);
 		}
 		return map;
-	}, [data]);
+	}, [viewData]);
 
 	/**
 	 * Nodes within `focus.depth` hops of the focused one.
@@ -634,7 +649,7 @@ export function GraphViewer({
 	 * graph answers that.
 	 */
 	const focusedNodeIds = useMemo(() => {
-		if (!focus || !data) return undefined;
+		if (!focus || !viewData) return undefined;
 
 		const visible = new Set<string>([focus.nodeId]);
 		let frontier = [focus.nodeId];
@@ -651,7 +666,7 @@ export function GraphViewer({
 			frontier = next;
 		}
 		return visible;
-	}, [focus, data, adjacency]);
+	}, [focus, viewData, adjacency]);
 
 	/**
 	 * Nodes surviving the leaf cutoff — degree is counted over the loaded sample,
@@ -699,7 +714,10 @@ export function GraphViewer({
 		if (!expansionTarget) return [];
 		const loadedByLabel = new Map<string, number>();
 		for (const edge of data?.edges ?? []) {
-			if (edge.source !== expansionTarget.id && edge.target !== expansionTarget.id)
+			if (
+				edge.source !== expansionTarget.id &&
+				edge.target !== expansionTarget.id
+			)
 				continue;
 			loadedByLabel.set(edge.label, (loadedByLabel.get(edge.label) ?? 0) + 1);
 		}
@@ -717,12 +735,15 @@ export function GraphViewer({
 		[selectedNode],
 	);
 
-	// A focus is anchored to one node, so it cannot outlive that node's presence
-	// in the sample — a new query would otherwise blank the stage entirely.
+	// A focus is anchored to one node, so it cannot outlive that node being drawn.
+	// Checked against the collapsed view, not the sample: folding the focused node
+	// into a group removes it from the stage just as surely as a new query does,
+	// and a focus on an undrawn node leaves nothing visible at all.
 	useEffect(() => {
-		if (!focus || !data) return;
-		if (!data.nodes.some((node) => node.id === focus.nodeId)) setFocus(null);
-	}, [focus, data]);
+		if (!focus || !viewData) return;
+		if (!viewData.nodes.some((node) => node.id === focus.nodeId))
+			setFocus(null);
+	}, [focus, viewData]);
 
 	const handleNodeClick = useCallback(
 		(nodeId: string) => {
@@ -776,6 +797,18 @@ export function GraphViewer({
 
 	const handleNodeShiftClick = useCallback(
 		(nodeId: string, label: string) => {
+			// A group stands for members the backend has never heard of, so it can
+			// only be opened locally — expanding it would send a synthetic id.
+			if (isCollapsedGroupId(nodeId)) {
+				const clusterId = collapsedGroupClusterId(nodeId);
+				setCollapsedGroups((prev) => {
+					const next = new Set(prev);
+					next.delete(clusterId);
+					return next;
+				});
+				return;
+			}
+
 			const node = data?.nodes.find((candidate) => candidate.id === nodeId);
 			// Shift+Click opens the guard rather than expanding: this is the gesture
 			// most likely to be aimed at a node with a four-figure fan-out.
@@ -861,7 +894,7 @@ export function GraphViewer({
 			<div className="flex-1 flex flex-col min-w-0 min-h-0">
 				{/* Toolbar */}
 				{showToolbar && (
-					<div className="flex items-center gap-2 p-2 border-b bg-background">
+					<div className="flex min-w-0 items-center gap-2 overflow-hidden border-b bg-background p-2">
 						{showSearch && (
 							<>
 								{/* Live search */}
@@ -871,7 +904,10 @@ export function GraphViewer({
 										type="text"
 										value={searchQuery}
 										onChange={(e) => handleSearch(e.target.value)}
-										placeholder={t('searchLoadedNodesThenFallbackToFullGraph', 'Search loaded nodes, then fallback to full graph...')}
+										placeholder={t(
+											"searchLoadedNodesThenFallbackToFullGraph",
+											"Search loaded nodes, then fallback to full graph...",
+										)}
 										className="w-full h-9 pl-8 pr-8 text-sm rounded-md border bg-transparent focus:outline-none focus:ring-1 focus:ring-ring"
 									/>
 									{searchQuery && (
@@ -887,7 +923,7 @@ export function GraphViewer({
 										<div className="absolute left-0 right-0 top-full z-20 mt-1 rounded-md border bg-popover shadow-lg overflow-hidden">
 											{remoteSearchLoading ? (
 												<div className="px-3 py-2 text-xs text-muted-foreground">
-													{t('searchingFullGraph', 'Searching full graph...')}
+													{t("searchingFullGraph", "Searching full graph...")}
 												</div>
 											) : remoteSearchError ? (
 												<div className="px-3 py-2 text-xs text-destructive">
@@ -913,7 +949,10 @@ export function GraphViewer({
 												</div>
 											) : searchHighlight.size === 0 ? (
 												<div className="px-3 py-2 text-xs text-muted-foreground">
-													{t('noNodesFoundInTheFullGraph', 'No nodes found in the full graph.')}
+													{t(
+														"noNodesFoundInTheFullGraph",
+														"No nodes found in the full graph.",
+													)}
 												</div>
 											) : null}
 										</div>
@@ -928,12 +967,16 @@ export function GraphViewer({
 								)}
 
 								{unloadedRemoteSearchMatches.length > 0 && (
-									<span className="text-xs text-muted-foreground whitespace-nowrap">{t('lengthMoreInGraph', '{{length}} more in graph', { length: unloadedRemoteSearchMatches.length })}</span>
+									<span className="text-xs text-muted-foreground whitespace-nowrap">
+										{t("lengthMoreInGraph", "{{length}} more in graph", {
+											length: unloadedRemoteSearchMatches.length,
+										})}
+									</span>
 								)}
 
 								{hasRemoteSearchQuery && remoteSearchLoading && (
 									<span className="text-xs text-muted-foreground whitespace-nowrap">
-										{t('searchingFullGraph', 'Searching full graph...')}
+										{t("searchingFullGraph", "Searching full graph...")}
 									</span>
 								)}
 
@@ -942,7 +985,7 @@ export function GraphViewer({
 						)}
 
 						{/* Node / edge count */}
-						<span className="text-xs text-muted-foreground whitespace-nowrap">
+						<span className="shrink-0 text-xs text-muted-foreground whitespace-nowrap">
 							{nodeCount.toLocaleString()} nodes · {edgeCount.toLocaleString()}{" "}
 							edges
 						</span>
@@ -950,11 +993,11 @@ export function GraphViewer({
 						{/* Limit selector */}
 						{onLimitChange && (
 							<>
-								<div className="h-5 w-px bg-border" />
+								<div className="h-5 w-px shrink-0 bg-border" />
 								<select
 									value={limit ?? 200}
 									onChange={(e) => onLimitChange(Number(e.target.value))}
-									className="h-8 text-xs rounded-md border bg-transparent px-2 focus:outline-none focus:ring-1 focus:ring-ring"
+									className="h-8 shrink-0 text-xs rounded-md border bg-transparent px-2 focus:outline-none focus:ring-1 focus:ring-ring"
 								>
 									{GRAPH_VIEW_LIMIT_OPTIONS.map((option) => (
 										<option key={option} value={option}>
@@ -965,12 +1008,12 @@ export function GraphViewer({
 							</>
 						)}
 
-						<div className="h-5 w-px bg-border" />
+						<div className="h-5 w-px shrink-0 bg-border" />
 
 						{onRunCypher && (
 							<button
 								type="button"
-								className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded border whitespace-nowrap"
+								className="shrink-0 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded border whitespace-nowrap"
 								onClick={() => setShowQuery(!showQuery)}
 							>
 								{showQuery ? "Hide Query" : "Query"}
@@ -987,7 +1030,7 @@ export function GraphViewer({
 							hiddenLeaves={hiddenLeafCount}
 						/>
 
-						<div className="ml-auto flex items-center gap-2">
+						<div className="ml-auto flex min-w-0 items-center gap-2">
 							{warnings.length > 0 && !warningsDismissed && (
 								<Popover>
 									<PopoverTrigger asChild>
@@ -1003,13 +1046,13 @@ export function GraphViewer({
 									<PopoverContent align="end" className="w-80 p-0">
 										<div className="flex items-center justify-between border-b px-3 py-2">
 											<span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
-												{t('dataWarnings', 'Data warnings')}
+												{t("dataWarnings", "Data warnings")}
 											</span>
 											<button
 												type="button"
 												className="text-muted-foreground hover:text-foreground"
 												onClick={() => setDismissedWarningsKey(warningsKey)}
-												title={t('dismissWarnings', 'Dismiss warnings')}
+												title={t("dismissWarnings", "Dismiss warnings")}
 											>
 												<X className="h-3.5 w-3.5" />
 											</button>
@@ -1029,7 +1072,7 @@ export function GraphViewer({
 							)}
 							{censusSummary && (
 								<span
-									className="text-xs text-muted-foreground truncate"
+									className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
 									title={censusSummary}
 								>
 									{censusSummary}
@@ -1040,7 +1083,7 @@ export function GraphViewer({
 							    complete description of a view that is nothing of the kind. */}
 							{truncated && (
 								<span className="text-xs text-amber-500 whitespace-nowrap">
-									{t('resultTruncated', 'Result truncated')}
+									{t("resultTruncated", "Result truncated")}
 								</span>
 							)}
 							{loading && (
@@ -1080,7 +1123,7 @@ export function GraphViewer({
 						}
 						hiddenLabels={hiddenLabels.size > 0 ? hiddenLabels : undefined}
 						visibleNodeIds={visibleNodeIds}
-						clusters={clusterModel}
+						clusters={layoutClusterModel}
 						onNodeClick={handleNodeClick}
 						onNodeShiftClick={handleNodeShiftClick}
 						onEdgeClick={handleEdgeClick}
@@ -1101,8 +1144,7 @@ export function GraphViewer({
 											"Showing {{count}} of {{total}} objects around {{name}}",
 										count: focusedNodeIds.size,
 										total: nodeCount,
-										name:
-											nodeMap.get(focus.nodeId)?.caption ?? focus.nodeId,
+										name: nodeMap.get(focus.nodeId)?.caption ?? focus.nodeId,
 									})}
 								</span>
 								<button
@@ -1124,17 +1166,17 @@ export function GraphViewer({
 								<div className="flex items-center gap-2 rounded-full border bg-background/90 px-3 py-1.5 text-xs shadow-sm backdrop-blur-sm">
 									<Route className="h-3.5 w-3.5 text-primary" />
 									<span className="whitespace-nowrap">
-										{t('findingPathFrom', 'Finding path from')}{" "}
+										{t("findingPathFrom", "Finding path from")}{" "}
 										<span className="font-medium">
 											{pathSource.caption ?? pathSource.id}
 										</span>{" "}
-										{t('selectATargetNode', '— select a target node')}
+										{t("selectATargetNode", "— select a target node")}
 									</span>
 									<button
 										type="button"
 										className="text-muted-foreground hover:text-foreground"
 										onClick={exitPathMode}
-										title={t('cancelPathFinding', 'Cancel path finding')}
+										title={t("cancelPathFinding", "Cancel path finding")}
 									>
 										<X className="h-3.5 w-3.5" />
 									</button>
@@ -1142,7 +1184,9 @@ export function GraphViewer({
 							) : pathFinding ? (
 								<div className="flex items-center gap-2 rounded-full border bg-background/90 px-3 py-1.5 text-xs shadow-sm backdrop-blur-sm">
 									<Route className="h-3.5 w-3.5 animate-pulse text-primary" />
-									<span className="whitespace-nowrap">{t('findingPath', 'Finding path…')}</span>
+									<span className="whitespace-nowrap">
+										{t("findingPath", "Finding path…")}
+									</span>
 								</div>
 							) : pathOutcome ? (
 								<div
@@ -1159,18 +1203,30 @@ export function GraphViewer({
 										{pathOutcome.error
 											? pathOutcome.error
 											: pathOutcome.found
-												? t('connectedHopsHopvalval2', 'Connected — {{hops}} hop{{val}}{{val2}}', { hops: pathOutcome.hops, val: pathOutcome.hops !== 1 ? "s" : "", val2: pathOutcome.alternatives > 0
-															? ` (${pathOutcome.alternatives} alternative route${
-																	pathOutcome.alternatives !== 1 ? "s" : ""
-																})`
-															: "" })
-												: t('noConnectionWithin4Hops', 'No connection within 4 hops')}
+												? t(
+														"connectedHopsHopvalval2",
+														"Connected — {{hops}} hop{{val}}{{val2}}",
+														{
+															hops: pathOutcome.hops,
+															val: pathOutcome.hops !== 1 ? "s" : "",
+															val2:
+																pathOutcome.alternatives > 0
+																	? ` (${pathOutcome.alternatives} alternative route${
+																			pathOutcome.alternatives !== 1 ? "s" : ""
+																		})`
+																	: "",
+														},
+													)
+												: t(
+														"noConnectionWithin4Hops",
+														"No connection within 4 hops",
+													)}
 									</span>
 									<button
 										type="button"
 										className="hover:opacity-70"
 										onClick={exitPathMode}
-										title={t('clearPath', 'Clear path')}
+										title={t("clearPath", "Clear path")}
 									>
 										<X className="h-3.5 w-3.5" />
 									</button>

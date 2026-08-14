@@ -49,12 +49,13 @@ export function GraphDensityControl({
 							? "border-primary/40 bg-primary/10 text-foreground"
 							: "text-muted-foreground hover:text-foreground"
 					}`}
-					title={t("controlHowMuchOfTheGraphIsDrawn", "Control how much of the graph is drawn")}
+					title={t(
+						"controlHowMuchOfTheGraphIsDrawn",
+						"Control how much of the graph is drawn",
+					)}
 				>
 					<Group className="h-3.5 w-3.5" />
-					{active
-						? t("simplifiedOn", "Simplified")
-						: t("simplify", "Simplify")}
+					{active ? t("simplifiedOn", "Simplified") : t("simplify", "Simplify")}
 				</button>
 			</PopoverTrigger>
 			<PopoverContent align="start" className="w-72 space-y-4">
@@ -63,10 +64,14 @@ export function GraphDensityControl({
 						<div className="flex items-center justify-between">
 							<Label className="text-xs">{t("groups", "Groups")}</Label>
 							<span className="text-[10px] tabular-nums text-muted-foreground">
-								{t("countOfTotalCollapsed", "{{count}} of {{total}} collapsed", {
-									count: collapsedGroups,
-									total: groupCount,
-								})}
+								{t(
+									"countOfTotalCollapsed",
+									"{{count}} of {{total}} collapsed",
+									{
+										count: collapsedGroups,
+										total: groupCount,
+									},
+								)}
 							</span>
 						</div>
 						<div className="flex gap-1.5">
@@ -118,10 +123,7 @@ export function GraphDensityControl({
 					/>
 					<p className="text-[11px] text-muted-foreground">
 						{leafCutoff === 0
-							? t(
-									"everyLoadedObjectIsDrawn",
-									"Every loaded object is drawn.",
-								)
+							? t("everyLoadedObjectIsDrawn", "Every loaded object is drawn.")
 							: t(
 									"hidesObjectsWithCountOrFewerConnectionsInThisView",
 									"Hides objects with {{count}} or fewer connections in this view, leaving the backbone.",

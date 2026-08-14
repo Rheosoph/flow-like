@@ -179,7 +179,6 @@
 	"ifMultipleEventsUseTheSameAppIdPathAndMethodOnlyTheMostRecentlyRegisteredEventWillBeTriggeredTheSystemWillLogWarningsIfConflictsOccur": "",
 	"ifSetBotWillOnlyRespondInTheseChatsLeaveEmptyToAllowAll": "",
 	"imapPassword": "",
-	"imgSrcurlStylemaxwidth100HeightAuto": "",
 	"includeThisTokenAs": "",
 	"inspect": "",
 	"inspectionCompleteLengthToolsLength2ResourcesLength3Prompts": "",

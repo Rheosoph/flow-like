@@ -179,7 +179,6 @@
 	"ifMultipleEventsUseTheSameAppIdPathAndMethodOnlyTheMostRecentlyRegisteredEventWillBeTriggeredTheSystemWillLogWarningsIfConflictsOccur": "Si varios eventos usan el mismo ID de aplicación, ruta y método, solo se activará el evento registrado más recientemente. El sistema registrará advertencias si se producen conflictos.",
 	"ifSetBotWillOnlyRespondInTheseChatsLeaveEmptyToAllowAll": "Si se configura, el bot solo responderá en estos chats. Déjalo vacío para permitir todos.",
 	"imapPassword": "Contraseña IMAP",
-	"imgSrcurlStylemaxwidth100HeightAuto": "<img src=\"{{url}}\" style=\"max-width: 100%; height: auto;\" />",
 	"includeThisTokenAs": "Incluye este token como",
 	"inspect": "Inspeccionar",
 	"inspectionCompleteLengthToolsLength2ResourcesLength3Prompts": "Inspección completa ({{length}} herramientas, {{length2}} recursos, {{length3}} prompts)",

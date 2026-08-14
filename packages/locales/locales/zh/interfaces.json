@@ -177,7 +177,6 @@
 	"ifMultipleEventsUseTheSameAppIdPathAndMethodOnlyTheMostRecentlyRegisteredEventWillBeTriggeredTheSystemWillLogWarningsIfConflictsOccur": "如果多个事件使用相同的应用 ID、路径和方法，则只会触发最近注册的事件。如发生冲突，系统将记录警告。",
 	"ifSetBotWillOnlyRespondInTheseChatsLeaveEmptyToAllowAll": "如果设置，机器人将仅在这些聊天中回复。留空以允许全部。",
 	"imapPassword": "IMAP 密码",
-	"imgSrcurlStylemaxwidth100HeightAuto": "<img src=\"{{url}}\" style=\"max-width: 100%; height: auto;\" />",
 	"includeThisTokenAs": "将此令牌作为",
 	"inspect": "检查",
 	"inspectionCompleteLengthToolsLength2ResourcesLength3Prompts": "检查完成（{{length}} 个工具，{{length2}} 个资源，{{length3}} 个提示）",

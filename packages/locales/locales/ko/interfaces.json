@@ -177,7 +177,6 @@
 	"ifMultipleEventsUseTheSameAppIdPathAndMethodOnlyTheMostRecentlyRegisteredEventWillBeTriggeredTheSystemWillLogWarningsIfConflictsOccur": "여러 이벤트가 동일한 앱 ID, 경로, 메서드를 사용하면 가장 최근에 등록된 이벤트만 실행돼요. 충돌이 발생하면 시스템이 경고를 기록해요.",
 	"ifSetBotWillOnlyRespondInTheseChatsLeaveEmptyToAllowAll": "설정하면 봇이 이 채팅에서만 응답해요. 모두 허용하려면 비워두세요.",
 	"imapPassword": "IMAP 비밀번호",
-	"imgSrcurlStylemaxwidth100HeightAuto": "<img src=\"{{url}}\" style=\"max-width: 100%; height: auto;\" />",
 	"includeThisTokenAs": "이 토큰을 다음과 같이 포함하세요",
 	"inspect": "검사",
 	"inspectionCompleteLengthToolsLength2ResourcesLength3Prompts": "검사 완료(도구 {{length}}개, 리소스 {{length2}}개, 프롬프트 {{length3}}개)",
