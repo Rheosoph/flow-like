@@ -20,6 +20,7 @@ import {
 	cleanupLegacyQueryCacheBlob,
 	createSmartQueryPersister,
 } from "@flow-like/flow-like-ui/lib/query-persister";
+import { I18nProvider } from "@flow-like/locales";
 import { useEffect } from "react";
 import { AppSidebar } from "../components/app-sidebar";
 import { WebAuthProvider } from "../components/auth-provider";
@@ -82,41 +83,43 @@ export function ClientProviders({ children }: { children: React.ReactNode }) {
 			<QueryClientProvider client={queryClient}>
 				<NetworkAwareProvider>
 					<NetworkStatusIndicator />
-					<ThemeProvider
-						attribute="class"
-						defaultTheme="system"
-						enableSystem
-						storageKey="theme"
-						disableTransitionOnChange
-					>
-						<TooltipProvider>
-							<Toaster />
-							<WebProvider>
-								<WebAuthProvider>
-									<ThemeLoader />
-									<OAuthCallbackHandler>
-										<OAuthExecutionProvider>
-											<RuntimeVariablesProviderComponent>
-												<ExecutionServiceProvider>
-													<ExecutionEngineProviderComponent>
-														<SpotlightWrapper>
-															<TelemetryProvider>
-																<AppSidebar>{children}</AppSidebar>
-																<GlobalToolBridge />
-																<GlobalChatOverlay />
-																<FlowPilotBubbleButton />
-																<GlobalUpgradeDialog />
-															</TelemetryProvider>
-														</SpotlightWrapper>
-													</ExecutionEngineProviderComponent>
-												</ExecutionServiceProvider>
-											</RuntimeVariablesProviderComponent>
-										</OAuthExecutionProvider>
-									</OAuthCallbackHandler>
-								</WebAuthProvider>
-							</WebProvider>
-						</TooltipProvider>
-					</ThemeProvider>
+					<I18nProvider>
+						<ThemeProvider
+							attribute="class"
+							defaultTheme="system"
+							enableSystem
+							storageKey="theme"
+							disableTransitionOnChange
+						>
+							<TooltipProvider>
+								<Toaster />
+								<WebProvider>
+									<WebAuthProvider>
+										<ThemeLoader />
+										<OAuthCallbackHandler>
+											<OAuthExecutionProvider>
+												<RuntimeVariablesProviderComponent>
+													<ExecutionServiceProvider>
+														<ExecutionEngineProviderComponent>
+															<SpotlightWrapper>
+																<TelemetryProvider>
+																	<AppSidebar>{children}</AppSidebar>
+																	<GlobalToolBridge />
+																	<GlobalChatOverlay />
+																	<FlowPilotBubbleButton />
+																	<GlobalUpgradeDialog />
+																</TelemetryProvider>
+															</SpotlightWrapper>
+														</ExecutionEngineProviderComponent>
+													</ExecutionServiceProvider>
+												</RuntimeVariablesProviderComponent>
+											</OAuthExecutionProvider>
+										</OAuthCallbackHandler>
+									</WebAuthProvider>
+								</WebProvider>
+							</TooltipProvider>
+						</ThemeProvider>
+					</I18nProvider>
 				</NetworkAwareProvider>
 			</QueryClientProvider>
 		</ReactFlowProvider>

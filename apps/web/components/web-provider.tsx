@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next } from "@flow-like/locales";
 import {
 	type IApiKeyState,
 	type IApiState,
@@ -209,7 +210,7 @@ export class WebBackend implements IBackendState {
 				} else {
 					reject(
 						new Error(
-							`Upload failed with status ${xhr.status}: ${xhr.statusText}`,
+							i18next.t('uploadFailedWithStatusStatusStatustext', 'Upload failed with status {{status}}: {{statusText}}', { status: xhr.status, statusText: xhr.statusText }),
 						),
 					);
 				}

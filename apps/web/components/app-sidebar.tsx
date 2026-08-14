@@ -1,7 +1,6 @@
 "use client";
 import {
 	AnimatedBrainIcon,
-	AnimatedBugIcon,
 	AnimatedDashboardIcon,
 	AnimatedExploreAppsIcon,
 	AnimatedFlowsIcon,
@@ -40,6 +39,7 @@ import {
 	IBitTypes,
 	Input,
 	Label,
+	LanguageSwitcher,
 	MobileHeader,
 	MobileHeaderProvider,
 	Sidebar,
@@ -66,8 +66,8 @@ import {
 	userDisplayName,
 	userInitials,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
-import * as Sentry from "@sentry/nextjs";
 import { motion } from "framer-motion";
 import {
 	BadgeCheck,
@@ -94,77 +94,84 @@ import { fetcher } from "../lib/api";
 import { currentRelativeUrl } from "../lib/return-url";
 import { Shortcuts } from "./shortcuts";
 
-const data = {
-	navMain: [
-		{
-			title: "Home",
-			url: "/",
-			icon: AnimatedHomeIcon,
-			isActive: true,
-			permission: false,
-			items: [],
-		},
-		{
-			title: "FlowPilot",
-			url: "/chat",
-			icon: AnimatedSparklesIcon,
-			isActive: false,
-			permission: false,
-			items: [],
-		},
-		{
-			title: "Explore",
-			url: "/store/explore/apps",
-			icon: AnimatedExploreAppsIcon,
-			isActive: false,
-			permission: false,
-			items: [],
-		},
-		{
-			title: "Explore Models",
-			url: "/settings/ai",
-			icon: AnimatedBrainIcon,
-			isActive: false,
-			permission: false,
-			devOnly: true,
-			items: [],
-		},
-		{
-			title: "My Apps",
-			url: "/library",
-			icon: AnimatedLibraryIcon,
-			isActive: false,
-			permission: false,
-			items: [],
-		},
-		{
-			title: "University",
-			url: "/learn",
-			icon: AnimatedStudyHatIcon,
-			isActive: false,
-			permission: false,
-			items: [
+/** Labels are rebuilt per render so a language switch relabels the sidebar. */
+function useNavData() {
+	const { t } = useTranslation(["common", "settings"]);
+	return useMemo(
+		() => ({
+			navMain: [
 				{
-					title: "Overview",
-					url: "/learn",
+					title: t("home", "Home"),
+					url: "/",
+					icon: AnimatedHomeIcon,
+					isActive: true,
+					permission: false,
+					items: [],
 				},
 				{
-					title: "Documentation",
-					url: "https://docs.flow-like.com",
-					external: true,
+					title: t("flowpilot", "FlowPilot"),
+					url: "/chat",
+					icon: AnimatedSparklesIcon,
+					isActive: false,
+					permission: false,
+					items: [],
+				},
+				{
+					title: t("explore", "Explore"),
+					url: "/store/explore/apps",
+					icon: AnimatedExploreAppsIcon,
+					isActive: false,
+					permission: false,
+					items: [],
+				},
+				{
+					title: t("exploreModels", "Explore Models"),
+					url: "/settings/ai",
+					icon: AnimatedBrainIcon,
+					isActive: false,
+					permission: false,
+					devOnly: true,
+					items: [],
+				},
+				{
+					title: t("myApps", "My Apps"),
+					url: "/library",
+					icon: AnimatedLibraryIcon,
+					isActive: false,
+					permission: false,
+					items: [],
+				},
+				{
+					title: t("university", "University"),
+					url: "/learn",
+					icon: AnimatedStudyHatIcon,
+					isActive: false,
+					permission: false,
+					items: [
+						{
+							title: t("overview", "Overview"),
+							url: "/learn",
+						},
+						{
+							title: t("settings:documentation", "Documentation"),
+							url: "https://docs.flow-like.com",
+							external: true,
+						},
+					],
+				},
+				{
+					title: t("admin", "Admin"),
+					url: "/admin",
+					icon: AnimatedDashboardIcon,
+					permission: true,
+					items: [],
 				},
 			],
-		},
-		{
-			title: "Admin",
-			url: "/admin",
-			icon: AnimatedDashboardIcon,
-			permission: true,
-			items: [],
-		},
-	],
-	navDev: [],
-};
+			navDev: [],
+		}),
+		[t],
+	);
+}
 
 interface IUser {
 	name: string;
@@ -218,11 +225,8 @@ function InnerSidebar() {
 	const [user] = useState<IUser | undefined>();
 	const { open, toggleSidebar } = useSidebar();
 	const { setTheme } = useTheme();
-	const [feedback, setFeedback] = useState({
-		name: "",
-		email: "",
-		message: "",
-	});
+	const { t } = useTranslation(["common", "settings"]);
+	const data = useNavData();
 
 	return (
 		<Sidebar collapsible="icon" side="left">
@@ -236,121 +240,32 @@ function InnerSidebar() {
 			</SidebarContent>
 			<SidebarFooter>
 				<div className="flex flex-col gap-1">
-					<Dialog>
-						<DialogTrigger asChild>
-							<MotionSidebarMenuButton initial="initial" whileHover="hover">
-								<motion.div variants={iconVariants}>
-									<AnimatedBugIcon />
-								</motion.div>
-								<span>Report Bug</span>
-							</MotionSidebarMenuButton>
-						</DialogTrigger>
-						<DialogContent>
-							<DialogHeader>
-								<DialogTitle className="flex flex-row items-center gap-2">
-									<AnimatedBugIcon />
-									{"Bug Report"}
-								</DialogTitle>
-								<DialogDescription>
-									{
-										"Please describe the bug you encountered, Name and Email are optional."
-									}
-								</DialogDescription>
-							</DialogHeader>
-							<div className="grid gap-4 py-4">
-								<div className="grid grid-cols-4 items-center gap-4">
-									<Label htmlFor="name" className="text-right">
-										{"Name (optional)"}
-									</Label>
-									<Input
-										id="name"
-										value={feedback.name}
-										onChange={(e) =>
-											setFeedback({ ...feedback, name: e.target.value })
-										}
-										className="col-span-3"
-									/>
-								</div>
-								<div className="grid grid-cols-4 items-center gap-4">
-									<Label htmlFor="username" className="text-right">
-										{"Email (optional)"}
-									</Label>
-									<Input
-										id="username"
-										value={feedback.email}
-										onChange={(e) =>
-											setFeedback({ ...feedback, email: e.target.value })
-										}
-										className="col-span-3"
-									/>
-								</div>
-								<div className="grid grid-cols-4 items-center gap-4">
-									<Label htmlFor="message" className="text-right">
-										{"Message"}
-									</Label>
-									<Textarea
-										id="message"
-										value={feedback.message}
-										onChange={(e) =>
-											setFeedback({ ...feedback, message: e.target.value })
-										}
-										className="col-span-3"
-									/>
-								</div>
-							</div>
-
-							<DialogFooter>
-								<DialogClose asChild>
-									<Button
-										disabled={feedback.message === ""}
-										onClick={() => {
-											Sentry.captureFeedback(
-												{
-													name:
-														feedback.name === "" ? undefined : feedback.name, // optional
-													email:
-														feedback.email === "" ? undefined : feedback.email, // optional
-													message: feedback.message, // required
-												},
-												{
-													includeReplay: true, // optional
-												},
-											);
-											toast("Feedback sent successfully ❤️");
-											setFeedback({ name: "", email: "", message: "" });
-										}}
-									>
-										Send
-									</Button>
-								</DialogClose>
-							</DialogFooter>
-						</DialogContent>
-					</Dialog>
+					<LanguageSwitcher />
 					<DropdownMenu>
 						<DropdownMenuTrigger asChild>
 							<MotionSidebarMenuButton initial="initial" whileHover="hover">
 								<motion.div variants={iconVariants}>
 									<AnimatedThemeIcon />
 								</motion.div>
-								<span>{"Toggle Theme"}</span>
+								<span>{t("settings:theme.toggle")}</span>
 							</MotionSidebarMenuButton>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="center" side="right">
 							<DropdownMenuItem onClick={() => setTheme("light")}>
-								{"Light"}
+								{t("settings:theme.light")}
 							</DropdownMenuItem>
 							<DropdownMenuItem onClick={() => setTheme("dark")}>
-								{"Dark"}
+								{t("settings:theme.dark")}
 							</DropdownMenuItem>
 							<DropdownMenuItem onClick={() => setTheme("system")}>
-								{"System Default"}
+								{t("settings:theme.system")}
 							</DropdownMenuItem>
 						</DropdownMenuContent>
 					</DropdownMenu>
 
 					<a href="/settings">
 						<MotionSidebarMenuButton
-							tooltip="Settings"
+							tooltip={t("settings", "Settings")}
 							initial="initial"
 							whileHover="hover"
 						>
@@ -358,12 +273,12 @@ function InnerSidebar() {
 								<AnimatedSettingsIcon className="size-4" />
 							</motion.div>
 							<span className="w-full flex flex-row items-center justify-between">
-								Settings
+								{t('settings', 'Settings')}
 							</span>
 						</MotionSidebarMenuButton>
 					</a>
 					<MotionSidebarMenuButton
-						tooltip="Toggle Sidebar"
+						tooltip={t("toggleSidebar", "Toggle Sidebar")}
 						onClick={toggleSidebar}
 						initial="initial"
 						whileHover="hover"
@@ -372,9 +287,9 @@ function InnerSidebar() {
 							<AnimatedSidebarIcon className="size-4" isOpen={open} />
 						</div>
 						<span className="w-full flex flex-row items-center justify-between">
-							Toggle Sidebar{" "}
+							{t('toggleSidebar', 'Toggle Sidebar')}{" "}
 							<span className="ml-auto text-xs tracking-widest text-muted-foreground">
-								⌘B
+								{`⌘B`}
 							</span>
 						</span>
 					</MotionSidebarMenuButton>
@@ -387,6 +302,7 @@ function InnerSidebar() {
 }
 
 function Profiles() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const { isMobile } = useSidebar();
@@ -552,7 +468,7 @@ function Profiles() {
 						sideOffset={4}
 					>
 						<DropdownMenuLabel className="text-xs text-muted-foreground">
-							Profile
+							{t('profile', 'Profile')}
 						</DropdownMenuLabel>
 						{profiles
 							.filter(
@@ -604,15 +520,15 @@ function Profiles() {
 										<Plus className="size-4" />
 									</div>
 									<div className="font-medium text-muted-foreground">
-										New profile
+										{t('newProfile', 'New profile')}
 									</div>
 								</DropdownMenuItem>
 							</DialogTrigger>
 							<DialogContent className="sm:max-w-md">
 								<DialogHeader>
-									<DialogTitle>Create New Profile</DialogTitle>
+									<DialogTitle>{t('createNewProfile', 'Create New Profile')}</DialogTitle>
 									<DialogDescription>
-										Create a new profile to organize your apps and settings.
+										{`Create a new profile to organize your apps and settings.`}
 									</DialogDescription>
 								</DialogHeader>
 								<div className="grid gap-4 py-4">
@@ -622,26 +538,26 @@ function Profiles() {
 											id="new-profile-name"
 											value={newProfileName}
 											onChange={(e) => setNewProfileName(e.target.value)}
-											placeholder="Profile name"
+											placeholder={t('profileName', 'Profile name')}
 											autoFocus
 										/>
 									</div>
 									<div className="space-y-2">
 										<Label htmlFor="new-profile-description">
-											Description (optional)
+											{t('descriptionOptional', 'Description (optional)')}
 										</Label>
 										<Textarea
 											id="new-profile-description"
 											value={newProfileDescription}
 											onChange={(e) => setNewProfileDescription(e.target.value)}
-											placeholder="Short description..."
+											placeholder={t('shortDescription', 'Short description...')}
 											rows={3}
 										/>
 									</div>
 								</div>
 								<DialogFooter>
 									<DialogClose asChild>
-										<Button variant="ghost">Cancel</Button>
+										<Button variant="ghost">{t('cancel', 'Cancel')}</Button>
 									</DialogClose>
 									<Button
 										onClick={handleCreateProfile}
@@ -658,7 +574,7 @@ function Profiles() {
 									<Edit3Icon className="size-4" />
 								</div>
 								<div className="font-medium text-muted-foreground">
-									Edit profile
+									{t('editProfile', 'Edit profile')}
 								</div>
 							</DropdownMenuItem>
 						</a>
@@ -831,6 +747,7 @@ function NavMain({
 	items: INavItem[];
 	devItems: INavItem[];
 }>) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const router = useRouter();
 	const pathname = usePathname();
@@ -841,7 +758,7 @@ function NavMain({
 	return (
 		<>
 			<SidebarGroup>
-				<SidebarGroupLabel>Navigation</SidebarGroupLabel>
+				<SidebarGroupLabel>{t('navigation', 'Navigation')}</SidebarGroupLabel>
 				<SidebarMenu>
 					{items
 						.filter((item) => !item.permission)
@@ -863,7 +780,7 @@ function NavMain({
 			</SidebarGroup>
 			{devItems.length > 0 && (
 				<SidebarGroup>
-					<SidebarGroupLabel>Development</SidebarGroupLabel>
+					<SidebarGroupLabel>{t('development', 'Development')}</SidebarGroupLabel>
 					<SidebarMenu>
 						{devItems.map((item) =>
 							item.items && item.items.length > 0 ? (
@@ -883,7 +800,7 @@ function NavMain({
 			)}
 			{(info.data?.permission ?? 0) > 0 && (
 				<SidebarGroup>
-					<SidebarGroupLabel>Admin Area</SidebarGroupLabel>
+					<SidebarGroupLabel>{t('adminArea', 'Admin Area')}</SidebarGroupLabel>
 					<SidebarMenu>
 						{items
 							.filter(
@@ -951,6 +868,7 @@ export function NavUser({
 }: Readonly<{
 	user?: IUser;
 }>) {
+	const { t } = useTranslation("common");
 	const { isMobile } = useSidebar();
 	const auth = useAuth();
 	const backend = useBackend();
@@ -1059,7 +977,7 @@ export function NavUser({
 											<a href="/subscription">
 												<DropdownMenuItem className="gap-2">
 													<AnimatedSparklesIcon />
-													Upgrade to Pro
+													{t('upgradeToPro', 'Upgrade to Pro')}
 												</DropdownMenuItem>
 											</a>
 										</DropdownMenuGroup>
@@ -1070,7 +988,7 @@ export function NavUser({
 									<a href="/account">
 										<DropdownMenuItem className="gap-2">
 											<BadgeCheck className="size-4" />
-											Account
+											{t('account', 'Account')}
 										</DropdownMenuItem>
 									</a>
 									{profile.data && (
@@ -1092,7 +1010,7 @@ export function NavUser({
 											}}
 										>
 											<CreditCard className="size-4" />
-											Billing
+											{t('billing', 'Billing')}
 										</DropdownMenuItem>
 									)}
 									<a href="/notifications">
@@ -1106,7 +1024,7 @@ export function NavUser({
 													</div>
 												)}
 											</div>
-											Notifications
+											{t('notifications', 'Notifications')}
 										</DropdownMenuItem>
 									</a>
 									{developerMode && (
@@ -1114,13 +1032,13 @@ export function NavUser({
 											<a href="/account/pat">
 												<DropdownMenuItem className="gap-2 p-2">
 													<KeyIcon className="size-4" />
-													Token
+													{t('token', 'Token')}
 												</DropdownMenuItem>
 											</a>
 											<a href="/settings/sinks">
 												<DropdownMenuItem className="gap-2 p-2">
 													<ZapIcon className="size-4" />
-													Active Sinks
+													{t('activeSinks', 'Active Sinks')}
 												</DropdownMenuItem>
 											</a>
 										</>
@@ -1134,7 +1052,7 @@ export function NavUser({
 									}}
 								>
 									<LogOut className="size-4" />
-									Log out
+									{t('logOut', 'Log out')}
 								</DropdownMenuItem>
 							</>
 						)}
@@ -1159,7 +1077,7 @@ export function NavUser({
 								}}
 							>
 								<LogInIcon className="size-4" />
-								Log in
+								{t('logIn', 'Log in')}
 							</DropdownMenuItem>
 						)}
 					</DropdownMenuContent>
@@ -1170,6 +1088,7 @@ export function NavUser({
 }
 
 function Flows() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const router = useRouter();
 	const pathname = usePathname();
@@ -1184,7 +1103,7 @@ function Flows() {
 
 	return (
 		<SidebarGroup>
-			<SidebarGroupLabel>Flows</SidebarGroupLabel>
+			<SidebarGroupLabel>{t('flows', 'Flows')}</SidebarGroupLabel>
 			<SidebarMenu>
 				<Collapsible
 					asChild
@@ -1198,7 +1117,7 @@ function Flows() {
 						<CollapsibleTrigger asChild>
 							<MotionSidebarMenuButton
 								variant={pathname.startsWith("/flow") ? "outline" : "default"}
-								tooltip={"Flows"}
+								tooltip={t("flows", "Flows")}
 								initial="initial"
 								whileHover="hover"
 								onClick={() => {
@@ -1212,7 +1131,7 @@ function Flows() {
 								<motion.div variants={iconVariants}>
 									<AnimatedFlowsIcon />
 								</motion.div>
-								<span>Open Flows</span>
+								<span>{t('openFlows', 'Open Flows')}</span>
 								<ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
 							</MotionSidebarMenuButton>
 						</CollapsibleTrigger>

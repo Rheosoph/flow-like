@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Dialog,
 	DialogContent,
@@ -89,6 +90,7 @@ const TRIGGER_MESSAGES: Record<string, string> = {
  * Query params: mode=consumer|enterprise, reason=project-limit|model-tier|generic.
  */
 function UpgradeDebugContent() {
+	const { t } = useTranslation("common");
 	const searchParams = useSearchParams();
 	const mode =
 		searchParams.get("mode") === "enterprise" ? "enterprise" : "consumer";
@@ -96,17 +98,17 @@ function UpgradeDebugContent() {
 	const triggerMessage = TRIGGER_MESSAGES[reason];
 
 	const headline = useMemo(() => {
-		if (reason === "model-tier") return "Unlock more powerful AI models";
-		if (reason === "generic") return "Unlock the full power of Flow-Like";
-		return "You've outgrown your plan";
+		if (reason === "model-tier") return t('unlockMorePowerfulAiModels', 'Unlock more powerful AI models');
+		if (reason === "generic") return t('unlockTheFullPowerOfFlowlike', 'Unlock the full power of Flow-Like');
+		return t('youveOutgrownYourPlan', 'You\'ve outgrown your plan');
 	}, [reason]);
 
 	const subheadline = useMemo(() => {
 		if (reason === "model-tier")
-			return "This model is part of a higher plan. Upgrade to use it in your flows and chats.";
+			return t('thisModelIsPartOfAHigherPlanUpgradeToUseItInYourFlowsAndChats', 'This model is part of a higher plan. Upgrade to use it in your flows and chats.');
 		if (reason === "generic")
-			return "More projects, premium AI models and faster cloud executions — upgrade in seconds, cancel anytime.";
-		return "Get room for more online projects — your existing work stays exactly where it is.";
+			return t('moreProjectsPremiumAiModelsAndFasterCloudExecutionsUpgradeInSecondsCancelAnytime', 'More projects, premium AI models and faster cloud executions — upgrade in seconds, cancel anytime.');
+		return t('getRoomForMoreOnlineProjectsYourExistingWorkStaysExactlyWhereItIs', 'Get room for more online projects — your existing work stays exactly where it is.');
 	}, [reason]);
 
 	return (
@@ -122,12 +124,12 @@ function UpgradeDebugContent() {
 					<UpgradeDialogBody
 						mode={mode}
 						contact={{
-							name: "Enterprise Sales",
+							name: t('enterpriseSales', 'Enterprise Sales'),
 							email: "enterprise@flow-like.com",
 							url: "https://flow-like.com",
 							message:
 								mode === "enterprise"
-									? "Your workspace is managed by your organization. Reach out to your administrator to unlock more projects, models or capacity."
+									? t('yourWorkspaceIsManagedByYourOrganizationReachOutToYourAdministratorToUnlockMoreProjectsModelsOrCapacity', 'Your workspace is managed by your organization. Reach out to your administrator to unlock more projects, models or capacity.')
 									: undefined,
 						}}
 						headline={headline}

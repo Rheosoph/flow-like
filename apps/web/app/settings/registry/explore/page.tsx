@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -74,6 +75,7 @@ function PackageCard({
 	onSelect?: (id: string) => void;
 	isLoading: boolean;
 }) {
+	const { t } = useTranslation("common");
 	return (
 		<motion.div
 			initial={{ opacity: 0, y: 10 }}
@@ -93,10 +95,10 @@ function PackageCard({
 							{pkg.verified && (
 								<Badge variant="secondary" className="gap-1">
 									<Shield className="h-3 w-3" />
-									Verified
+									{t('verified', 'Verified')}
 								</Badge>
 							)}
-							<Badge variant="outline">v{pkg.latestVersion}</Badge>
+							<Badge variant="outline">{`v${pkg.latestVersion}`}</Badge>
 						</div>
 					</div>
 					<CardDescription className="line-clamp-2">
@@ -123,8 +125,7 @@ function PackageCard({
 						{isInstalled ? (
 							<div className="flex items-center gap-2">
 								<span className="text-xs text-green-600 flex items-center gap-1">
-									<Check className="h-3 w-3" />v{installedVersion}
-								</span>
+									<Check className="h-3 w-3" />{`v${installedVersion}`}</span>
 								<Button
 									size="sm"
 									variant="destructive"
@@ -155,7 +156,7 @@ function PackageCard({
 								) : (
 									<>
 										<Download className="h-4 w-4 mr-1" />
-										Install
+										{t('install', 'Install')}
 									</>
 								)}
 							</Button>
@@ -194,6 +195,7 @@ function PackageCardSkeleton() {
 }
 
 export default function ExplorePackagesPage() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const auth = useAuth();
 	const [isInitialized, setIsInitialized] = useState(false);
@@ -308,7 +310,7 @@ export default function ExplorePackagesPage() {
 			<div className="flex items-center justify-center h-full">
 				<div className="text-center">
 					<Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
-					<p className="text-muted-foreground">Initializing registry...</p>
+					<p className="text-muted-foreground">{t('initializingRegistry', 'Initializing registry...')}</p>
 				</div>
 			</div>
 		);
@@ -347,9 +349,9 @@ export default function ExplorePackagesPage() {
 		<div className="flex flex-col h-full space-y-4">
 			<div className="flex items-center justify-between">
 				<div>
-					<h1 className="text-2xl font-bold">Explore Packages</h1>
+					<h1 className="text-2xl font-bold">{t('explorePackages', 'Explore Packages')}</h1>
 					<p className="text-sm text-muted-foreground">
-						Discover and install WASM node packages from the registry
+						{`Discover and install WASM node packages from the registry`}
 					</p>
 				</div>
 				<Button
@@ -364,7 +366,7 @@ export default function ExplorePackagesPage() {
 					<RefreshCw
 						className={`h-4 w-4 mr-1 ${isLoading ? "animate-spin" : ""}`}
 					/>
-					Refresh
+					{t('refresh', 'Refresh')}
 				</Button>
 			</div>
 
@@ -372,7 +374,7 @@ export default function ExplorePackagesPage() {
 				<div className="relative flex-1 max-w-md">
 					<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
 					<Input
-						placeholder="Search packages..."
+						placeholder={t('searchPackages', 'Search packages...')}
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						onKeyDown={(e) => e.key === "Enter" && fetchPackages()}
@@ -405,9 +407,7 @@ export default function ExplorePackagesPage() {
 			</div>
 
 			{searchResults && (
-				<p className="text-sm text-muted-foreground">
-					{searchResults.totalCount} packages found
-				</p>
+				<p className="text-sm text-muted-foreground">{t('countPackagesFound', { defaultValue_one: '{{count}} package found', defaultValue_other: '{{count}} packages found', count: searchResults.totalCount })}</p>
 			)}
 
 			<div className="flex-1 overflow-y-auto">
@@ -435,9 +435,9 @@ export default function ExplorePackagesPage() {
 				) : (
 					<div className="flex flex-col items-center justify-center py-12 text-center">
 						<Package className="h-12 w-12 text-muted-foreground mb-4" />
-						<p className="text-muted-foreground">No packages found</p>
+						<p className="text-muted-foreground">{t('noPackagesFound', 'No packages found')}</p>
 						<p className="text-sm text-muted-foreground mt-2">
-							Try a different search term or browse all packages
+							{t('tryADifferentSearchTermOrBrowseAllPackages', 'Try a different search term or browse all packages')}
 						</p>
 					</div>
 				)}

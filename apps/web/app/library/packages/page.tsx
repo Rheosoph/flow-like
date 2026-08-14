@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type InstalledPackage,
 	useBackend,
@@ -53,6 +54,7 @@ function InstalledPackageCard({
 	isUpdating: boolean;
 	isUninstalling: boolean;
 }) {
+	const { t } = useTranslation("common");
 	const displayName = pkg.metadata?.name ?? pkg.manifest.name;
 	const displayDesc = pkg.metadata?.description ?? pkg.manifest.description;
 	const icon = pkg.metadata?.icon;
@@ -75,7 +77,7 @@ function InstalledPackageCard({
 					{updateAvailable && (
 						<Badge variant="secondary" className="gap-1">
 							<AlertCircle className="h-3 w-3" />
-							Update
+							{t('update', 'Update')}
 						</Badge>
 					)}
 				</div>
@@ -93,17 +95,17 @@ function InstalledPackageCard({
 				</div>
 				<div className="space-y-1 text-xs text-muted-foreground">
 					<div className="flex items-center gap-2">
-						<span>v{pkg.version}</span>
+						<span>{`v${pkg.version}`}</span>
 						{updateAvailable && (
 							<>
 								<span>→</span>
-								<span className="text-primary">v{updateAvailable}</span>
+								<span className="text-primary">{`v${updateAvailable}`}</span>
 							</>
 						)}
 					</div>
 					<div className="flex items-center gap-1">
 						<span>
-							Installed{" "}
+							{t('installed', 'Installed')}{" "}
 							{formatDistanceToNow(new Date(pkg.installedAt), {
 								addSuffix: true,
 							})}
@@ -114,7 +116,7 @@ function InstalledPackageCard({
 			<CardFooter className="pt-2 gap-2 flex-wrap">
 				<Link href={`/store/packages?id=${pkg.id}`} className="flex-1">
 					<Button variant="outline" className="w-full" size="sm">
-						Details
+						{t('details', 'Details')}
 						<ExternalLink className="ml-2 h-3 w-3" />
 					</Button>
 				</Link>
@@ -130,7 +132,7 @@ function InstalledPackageCard({
 						) : (
 							<RefreshCw className="h-3 w-3" />
 						)}
-						Update
+						{t('update', 'Update')}
 					</Button>
 				)}
 				<Button
@@ -174,6 +176,7 @@ function PackageCardSkeleton() {
 }
 
 export default function InstalledPackagesPage() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const [searchQuery, setSearchQuery] = useState("");
@@ -306,10 +309,10 @@ export default function InstalledPackagesPage() {
 					<div className="space-y-1">
 						<h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
 							<Package className="h-8 w-8" />
-							Installed Packages
+							{t('installedPackages', 'Installed Packages')}
 						</h1>
 						<p className="text-muted-foreground">
-							Manage your installed WASM node packages
+							{t('manageYourInstalledWasmNodePackages', 'Manage your installed WASM node packages')}
 						</p>
 					</div>
 					<div className="flex items-center gap-2">
@@ -324,13 +327,15 @@ export default function InstalledPackagesPage() {
 								) : (
 									<RefreshCw className="h-4 w-4" />
 								)}
-								Update All ({availableUpdates.data?.length})
+								{t("updateAllLength", "Update All ({{length}})", {
+									length: availableUpdates.data?.length ?? 0,
+								})}
 							</Button>
 						)}
 						<Link href="/store/packages">
 							<Button variant="outline" className="gap-2">
 								<Download className="h-4 w-4" />
-								Browse Packages
+								{t('browsePackages', 'Browse Packages')}
 							</Button>
 						</Link>
 					</div>
@@ -340,7 +345,7 @@ export default function InstalledPackagesPage() {
 				<div className="relative max-w-md">
 					<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
 					<Input
-						placeholder="Search installed packages..."
+						placeholder={t('searchInstalledPackages', 'Search installed packages...')}
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						className="pl-10"
@@ -351,13 +356,11 @@ export default function InstalledPackagesPage() {
 				{installedPackages.data && (
 					<div className="flex gap-4 text-sm text-muted-foreground">
 						<span className="flex items-center gap-1">
-							<CheckCircle className="h-4 w-4 text-green-500" />
-							{installedPackages.data.length} installed
-						</span>
+							<CheckCircle className="h-4 w-4 text-green-500" />{t('lengthInstalled', '{{length}} installed', { length: installedPackages.data.length })}</span>
 						{hasUpdates && (
 							<span className="flex items-center gap-1">
 								<AlertCircle className="h-4 w-4 text-yellow-500" />
-								{availableUpdates.data?.length} updates available
+								{availableUpdates.data?.length} {t('updatesAvailable', 'updates available')}
 							</span>
 						)}
 					</div>
@@ -374,18 +377,18 @@ export default function InstalledPackagesPage() {
 					<Card className="p-12 text-center">
 						<Package className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
 						<h3 className="text-lg font-semibold">
-							{searchQuery ? "No matching packages" : "No packages installed"}
+							{searchQuery ? t('noMatchingPackages', 'No matching packages') : t('noPackagesInstalled', 'No packages installed')}
 						</h3>
 						<p className="text-muted-foreground mt-1 mb-4">
 							{searchQuery
-								? "Try a different search term"
-								: "Browse the registry to find and install packages"}
+								? t('tryADifferentSearchTerm', 'Try a different search term')
+								: t('browseTheRegistryToFindAndInstallPackages', 'Browse the registry to find and install packages')}
 						</p>
 						{!searchQuery && (
 							<Link href="/store/packages">
 								<Button>
 									<Download className="mr-2 h-4 w-4" />
-									Browse Packages
+									{t('browsePackages', 'Browse Packages')}
 								</Button>
 							</Link>
 						)}

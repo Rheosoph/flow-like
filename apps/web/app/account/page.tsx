@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import { Button, useBackend, useHub, useInvoke } from "@flow-like/flow-like-ui";
 import { Amplify } from "aws-amplify";
 import {
@@ -50,6 +51,7 @@ class AuthTokenProvider implements TokenProvider {
 }
 
 const AccountPage: React.FC = () => {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const hub = useHub();
 	const auth = useAuth();
@@ -221,14 +223,14 @@ const AccountPage: React.FC = () => {
 		return (
 			<main className="flex flex-row items-center justify-center w-full flex-1 min-h-0 py-12">
 				<div className="text-center p-6 border rounded-lg shadow-lg bg-card">
-					<h3>Please log in to view your profile.</h3>
+					<h3>{t('pleaseLogInToViewYourProfile', 'Please log in to view your profile.')}</h3>
 					<Button
 						onClick={() =>
 							auth.signinRedirect({ url_state: currentRelativeUrl() })
 						}
 						className="mt-4"
 					>
-						Log In
+						{t('logIn', 'Log In')}
 					</Button>
 				</div>
 			</main>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	LoadingScreen,
 	addAppToProfile,
@@ -15,6 +16,7 @@ import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 
 export default function JoinPage() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const auth = useAuth();
 	const router = useRouter();
@@ -62,7 +64,7 @@ export default function JoinPage() {
 	return (
 		<LoadingScreen
 			progress={Math.min(30 + attempt * 10, 95)}
-			message={attempt > 0 ? "Setting up your account..." : undefined}
+			message={attempt > 0 ? t('settingUpYourAccount', 'Setting up your account...') : undefined}
 		/>
 	);
 }
