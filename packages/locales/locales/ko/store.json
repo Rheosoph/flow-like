@@ -94,7 +94,7 @@
 	"documentation": "",
 	"documentation2": "",
 	"documentationScore": "",
-	"downloadCount": "",
+	"downloadCount_one": "",
 	"downloadCount_other": "",
 	"enterUserId": "",
 	"explore": "",
@@ -118,12 +118,10 @@
 	"failedToSendInvitation": "",
 	"failedToSubmitReview": "",
 	"failedToUninstallPackageMessage": "",
-	"failedToUpdateFailedOfTotalPackages": "",
 	"failedToUpdatePackageMessage": "",
 	"failedToUpdatePermission": "",
 	"failedToUploadIcon": "",
 	"failedToUploadThumbnail": "",
-	"ffi": "",
 	"filesystem": "",
 	"fileTooLargeMaximumSizeIsValmb": "",
 	"flagForReview": "",
@@ -365,6 +363,5 @@
 	"writeAReview": "",
 	"yanked": "",
 	"youMightAlsoLike": "",
-	"yours": "",
-	"downloadCount_one": ""
+	"yours": ""
 }

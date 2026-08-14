@@ -1,8 +1,8 @@
 {
-	"appStore": "",
-	"flow": "",
-	"navigation": "",
-	"profiles": "",
-	"settings": "",
-	"vaults": ""
+	"appStore": "应用商店",
+	"flow": "流程",
+	"navigation": "导航",
+	"profiles": "个人资料",
+	"settings": "设置",
+	"vaults": "保险库"
 }
