@@ -106,7 +106,7 @@ function RailSignalRow({
 }>) {
 	const { t } = useTranslation("settings");
 	const className =
-		t('flexWfullItemscenterGap2RoundedmdPx2Py15TextleftTextxsTransitioncolorsHoverbgmuted60', 'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted/60');
+		"flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted/60";
 	const tone =
 		signal.tone === "critical"
 			? "critical"
@@ -533,7 +533,7 @@ export function LaunchPath({
 									<Badge variant="secondary" className="text-[10px]">
 										{aiAct.riskCategory ?? "Assessed"}
 										{aiAct.conformityScore !== null &&
-											`· ${aiAct.conformityScore}/100`}
+											` · ${aiAct.conformityScore}/100`}
 									</Badge>
 								) : (
 									<Badge variant="outline" className="text-[10px]">

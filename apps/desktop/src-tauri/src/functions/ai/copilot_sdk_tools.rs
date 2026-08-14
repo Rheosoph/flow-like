@@ -71,8 +71,9 @@ use flow_like::flow::copilot::public_web::{
 use flow_like::flow::copilot::tool_spec::{
     ARCHIVE_LOOKUP_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL,
     OPEN_URL_TOOL, PlatformToolSpec, cross_board_source_tool_specs, data_studio_tool_specs,
-    find_global_tool_spec, global_assistant_tool_specs, missing_required_args,
-    public_web_tool_specs, resolve_tool_approval, runtime_execution_tool_specs, scout_tool_specs,
+    find_global_tool_spec, global_assistant_tool_specs, interact_app_page_tool_spec,
+    missing_required_args, public_web_tool_specs, resolve_tool_approval,
+    runtime_execution_tool_specs, scout_tool_specs,
 };
 #[cfg(test)]
 use flow_like::flow::copilot::typed_ir_schema_hint;
@@ -748,6 +749,17 @@ pub fn create_board_support_tools(bridge: FrontendToolBridge) -> Vec<(Tool, Tool
             .iter()
             .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None)),
     );
+    // End-to-end verification of UI-driven and chat-driven workflows: drive a live page and
+    // invoke the app's chat event headlessly, observing the runs they start.
+    tools.push(sdk_tool_from_spec(
+        &interact_app_page_tool_spec(),
+        bridge.clone(),
+        None,
+        None,
+    ));
+    if let Some(spec) = find_global_tool_spec("call_app_chat") {
+        tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None, None));
+    }
     // Lets a board specialist fetch the FlowScript a Scout plan referenced, keeping fragment text
     // out of the orchestrator's context.
     tools.extend(
@@ -755,6 +767,29 @@ pub fn create_board_support_tools(bridge: FrontendToolBridge) -> Vec<(Tool, Tool
             .iter()
             .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None)),
     );
+    tools
+}
+
+/// Runtime observation/verification tools for the UI specialist: inspect pages/widgets, drive a
+/// live page end-to-end (interact_app_page), execute the Events its components trigger, invoke the
+/// app's chat, and read run logs. Node-level execution stays with the board specialist.
+pub fn create_frontend_support_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandler)> {
+    let mut tools = vec![create_ui_inspect_tool(bridge.clone())];
+    tools.extend(
+        runtime_execution_tool_specs()
+            .iter()
+            .filter(|spec| spec.name != "execute_node")
+            .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None)),
+    );
+    tools.push(sdk_tool_from_spec(
+        &interact_app_page_tool_spec(),
+        bridge.clone(),
+        None,
+        None,
+    ));
+    if let Some(spec) = find_global_tool_spec("call_app_chat") {
+        tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None, None));
+    }
     tools
 }
 
@@ -3269,6 +3304,8 @@ STYLING TRUTH:
 - Typed style fields (background gradients, border, shadow, exact sizes, transform, filter, backdropFilter, animation, typography, responsiveOverrides) always render — use them for custom values.
 - canvasSettings.customCss (scoped to the surface) covers keyframes, hover/focus, pseudo-elements:
 {"canvasSettings": {"backgroundColor": "bg-background", "customCss": ".animated { animation: fade 1s; } @keyframes fade { from{opacity:0} to{opacity:1} }"}}
+- customCss has no size limit — write a real design system when the page deserves one. It REPLACES
+  the previous stylesheet, so send it complete; omit the field entirely to keep the existing one.
 
 EXAMPLE - Simple card:
 {
@@ -4085,7 +4122,6 @@ const BASE_PROPS: &[&str] = &[
 ];
 const MAX_UI_COMPONENTS: usize = 120;
 const MAX_UI_COMPONENT_ID_CHARS: usize = 120;
-const MAX_UI_CUSTOM_CSS_CHARS: usize = 12_000;
 const MAX_UI_STYLE_STRING_CHARS: usize = 1_000;
 const MAX_UI_ACTIONS: usize = 20;
 /// The action names `ActionHandler.tsx` dispatches. Anything else falls through its `default`
@@ -4685,13 +4721,9 @@ fn validate_canvas_settings(canvas: &Value, errors: &mut Vec<String>) {
         }
         return;
     }
-    if let Some(custom_css) = canvas.get("customCss").and_then(|value| value.as_str())
-        && custom_css.len() > MAX_UI_CUSTOM_CSS_CHARS
-    {
-        errors.push(format!(
-            "canvasSettings.customCss is too large; maximum is {MAX_UI_CUSTOM_CSS_CHARS} bytes"
-        ));
-    }
+    // customCss is deliberately unbounded: a design system for a multi-page app legitimately runs
+    // to tens of kilobytes, and CSS cannot be truncated at an arbitrary boundary without
+    // invalidating the stylesheet (see `validateCanvasSettings` in validateComponents.ts).
     if let Some(background_image) = canvas
         .get("backgroundImage")
         .and_then(|value| value.as_str())

@@ -441,7 +441,7 @@ function AttachmentManifest({
 				<span className="text-[13px] font-medium">{t('lengthAttachments', '{{length}} attachments', { length: files.length })}</span>
 				<span className="truncate font-mono text-[10px] text-muted-foreground">
 					{summariseKinds(files)}
-					{totalSize > 0 ? `· ${humanFileSize(totalSize, true)}` : ""}
+					{totalSize > 0 ? ` · ${humanFileSize(totalSize, true)}` : ""}
 				</span>
 			</span>
 			<ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />

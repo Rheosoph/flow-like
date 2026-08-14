@@ -1,4 +1,7 @@
-import type { SurfaceComponent } from "../../components/a2ui/types";
+import type {
+	CanvasSettings,
+	SurfaceComponent,
+} from "../../components/a2ui/types";
 import type {
 	IBoard,
 	IConnectionMode,
@@ -287,6 +290,12 @@ export interface IBoardState {
 		catalogNodes: INode[] | undefined,
 		selectedNodeIds: string[],
 		currentSurface: SurfaceComponent[] | null,
+		/**
+		 * The surface's persisted canvasSettings, customCss included. The UI specialist can only
+		 * edit an existing stylesheet if it can read it — emit_ui replaces customCss wholesale, so
+		 * without this it overwrites a design system it never saw.
+		 */
+		currentCanvasSettings: CanvasSettings | null,
 		selectedComponentIds: string[],
 		userPrompt: string,
 		history: UnifiedChatMessage[],

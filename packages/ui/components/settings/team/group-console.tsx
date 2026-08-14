@@ -874,7 +874,7 @@ function PublicationRequestPanel({
 				</Badge>
 			</div>
 			<p className="text-xs text-muted-foreground">
-				{t('targetVisibility', 'Target visibility')}{" "}{t('titleSubmitted', "{{title}} · submitted", { title: VISIBILITY_META[fromWireVisibility(request.targetVisibility)].title })}{formatRelativeTime(request.createdAt)}
+				{t('targetVisibility', 'Target visibility')}{" "}{t('titleSubmitted', "{{title}} · submitted ", { title: VISIBILITY_META[fromWireVisibility(request.targetVisibility)].title })}{formatRelativeTime(request.createdAt)}
 			</p>
 			{request.logs.length > 0 && (
 				<ul className="space-y-1.5 border-t pt-2">

@@ -268,7 +268,7 @@ export function WidgetDetail({
 				>
 					<Copy className="h-3 w-3" />
 					{widgetId}
-					{version && `· v${version.join(".")}`}
+					{version && ` · v${version.join(".")}`}
 				</button>
 
 				<div className="flex-1" />

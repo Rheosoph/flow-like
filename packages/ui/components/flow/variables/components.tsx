@@ -63,9 +63,8 @@ export function VariableTypeIndicator({
 	type: IValueType;
 	valueType: IVariableType;
 }>) {
-	const { t } = useTranslation("flow");
 	const color = typeToColor(valueType);
-	const baseStyle = t('w6H6P1FlexItemscenterJustifycenter', 'w-6 h-6 p-1 flex items-center justify-center');
+	const baseStyle = "w-6 h-6 p-1 flex items-center justify-center";
 
 	switch (type) {
 		case IValueType.Normal:

@@ -312,6 +312,7 @@ function WidgetBuilderContent({
 		deleteComponents,
 		widgetRefs,
 		actionContext,
+		canvasSettings,
 		setCanvasSettings,
 	} = useBuilder();
 	const { activeId } = useBuilderDnd();
@@ -364,7 +365,7 @@ function WidgetBuilderContent({
 	const handleApplyComponents = useCallback(
 		(
 			_components?: SurfaceComponent[],
-			canvasSettings?: {
+			appliedCanvasSettings?: {
 				backgroundColor?: string;
 				padding?: string;
 				customCss?: string;
@@ -372,9 +373,13 @@ function WidgetBuilderContent({
 		) => {
 			if (pendingComponents.length === 0) return;
 
-			// Apply canvas settings if provided
-			if (canvasSettings) {
-				setCanvasSettings(canvasSettings);
+			// Merge, never replace: the copilot omits fields it is not changing, and a plain
+			// assignment here dropped the surface's existing customCss whenever it sent back only
+			// a backgroundColor. The detached-page write path (`pageWithAppliedComponents`) has
+			// always merged — these two must agree or the same emit means different things
+			// depending on whether a builder happens to be open.
+			if (appliedCanvasSettings) {
+				setCanvasSettings({ ...canvasSettings, ...appliedCanvasSettings });
 			}
 
 			// Get root component BEFORE adding new components (to avoid stale closure)
@@ -445,6 +450,7 @@ function WidgetBuilderContent({
 			updateComponent,
 			addComponent,
 			setPendingComponents,
+			canvasSettings,
 			setCanvasSettings,
 		],
 	);
@@ -471,6 +477,7 @@ function WidgetBuilderContent({
 			pageId,
 			widgetId: kind === "widget" ? widgetId : undefined,
 			currentComponents,
+			currentCanvasSettings: canvasSettings,
 			selectedComponentIds: selectedIds,
 			captureScreenshot,
 			applyComponents: handleApplyComponents,
@@ -489,6 +496,7 @@ function WidgetBuilderContent({
 		actionContext?.pageId,
 		currentPageId,
 		currentComponents,
+		canvasSettings,
 		selectedIds,
 		captureScreenshot,
 		handleApplyComponents,

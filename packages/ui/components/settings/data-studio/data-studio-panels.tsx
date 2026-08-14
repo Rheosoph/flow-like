@@ -963,7 +963,7 @@ function ObjectViewSheet({
 										<span className="text-foreground">
 											{objectType?.table || "—"}
 										</span>
-										{ontology?.name ? `· ${ontology.name}` : ""}
+										{ontology?.name ? ` · ${ontology.name}` : ""}
 									</span>
 								</div>
 								<CopyChip
@@ -2854,7 +2854,7 @@ function RemoteOntologyUninstallButton({
 			<AlertDialogContent>
 				<AlertDialogHeader>
 					<AlertDialogTitle>{t('uninstallRemoteOntology', 'Uninstall remote ontology?')}</AlertDialogTitle>
-					<AlertDialogDescription>{t('thisRemovesTheInstalledOntologynameContractFromSourcenameExistingBoardNodesThatUseItsGeneratedBindingsWillStopResolvingUntilTheOntologyIsInstalledAgain', "This removes the installed {{ontologyName}} contract from {{sourceName}} . Existing board nodes that use its generated bindings will stop resolving until the ontology is installed again.", { ontologyName, sourceName })}</AlertDialogDescription>
+					<AlertDialogDescription>{t('thisRemovesTheInstalledOntologynameContractFromSourcenameExistingBoardNodesThatUseItsGeneratedBindingsWillStopResolvingUntilTheOntologyIsInstalledAgain', "This removes the installed {{ontologyName}} contract from {{sourceName}}. Existing board nodes that use its generated bindings will stop resolving until the ontology is installed again.", { ontologyName, sourceName })}</AlertDialogDescription>
 				</AlertDialogHeader>
 				<AlertDialogFooter>
 					<AlertDialogCancel>{t('keepInstalled', 'Keep installed')}</AlertDialogCancel>

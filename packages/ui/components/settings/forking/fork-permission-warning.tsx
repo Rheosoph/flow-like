@@ -176,7 +176,7 @@ export function ForkPermissionWarning({
 					{missing.map(({ label, reason }) => (
 						<li key={label}>
 							{label}
-							<span className="text-xs opacity-80">{t('neededForReason', '— needed for {{reason}}', { reason })}</span>
+							<span className="text-xs opacity-80"> — needed for {reason}</span>
 						</li>
 					))}
 				</ul>

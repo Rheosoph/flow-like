@@ -1953,11 +1953,12 @@ function GgufSelectionSection({
 								key={variant.id}
 								value={variant.id}
 								disabled={!variant.complete || variant.split}
-							>{`${variant.label} ·`}{humanFileSize(variant.totalSize)}
+							>
+								{variant.label} · {humanFileSize(variant.totalSize)}
 								{variant.split
-									? t('splitUnsupported', "· split (unsupported)")
+									? " · split (unsupported)"
 									: !variant.complete
-										? t('incomplete', "· incomplete")
+										? " · incomplete"
 										: ""}
 							</option>
 						))}
@@ -1977,7 +1978,8 @@ function GgufSelectionSection({
 								{t('chooseAnMmprojFile', 'Choose an mmproj file')}
 							</option>
 							{imported.projectors.map((projector) => (
-								<option key={projector.path} value={projector.path}>{`${projector.path} ·`}{humanFileSize(projector.size)}
+								<option key={projector.path} value={projector.path}>
+									{projector.path} · {humanFileSize(projector.size)}
 								</option>
 							))}
 						</select>

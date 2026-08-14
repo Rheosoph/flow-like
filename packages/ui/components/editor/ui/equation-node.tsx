@@ -54,7 +54,9 @@ export function EquationElement(props: PlateElementProps<TEquationElement>) {
 					<div
 						className={cn(
 							"group flex cursor-pointer items-center justify-center rounded-sm select-none hover:bg-primary/10 data-[selected=true]:bg-primary/10",
-							t('px2Py1', { defaultValue_zero: 'bg-muted p-3 pr-9', defaultValue_other: 'px-2 py-1', count: props.element.texExpression.length }),
+							props.element.texExpression.length === 0
+								? "bg-muted p-3 pr-9"
+								: "px-2 py-1",
 						)}
 						data-selected={selected}
 						contentEditable={false}

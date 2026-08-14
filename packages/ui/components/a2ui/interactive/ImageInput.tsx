@@ -159,12 +159,12 @@ export function A2UIImageInput({
 			}
 		};
 		window.addEventListener(
-			t('a2uiclearfileinput', 'a2ui:clearFileInput'),
+			"a2ui:clearFileInput",
 			handleClear as EventListener,
 		);
 		return () => {
 			window.removeEventListener(
-				t('a2uiclearfileinput', 'a2ui:clearFileInput'),
+				"a2ui:clearFileInput",
 				handleClear as EventListener,
 			);
 		};

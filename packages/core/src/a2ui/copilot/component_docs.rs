@@ -805,8 +805,12 @@ a settings screen.
 3. `canvasSettings.customCss`: a scoped stylesheet for what the other two cannot do - keyframe
    animations, hover/focus states, pseudo-elements (::before/::after), extra media queries.
    Classes it defines apply only where a component's `className` references them. Never style
-   `:root` in it (it leaks outside this surface). Keep customCss under 12000 chars and any
-   single style string under 1000.
+   `:root` in it (it leaks outside this surface). There is no size limit on customCss - a full
+   design system is expected - but keep any single style string under 1000 chars.
+   When CURRENT CANVAS SETTINGS shows an existing stylesheet, OMIT `customCss` from emit_ui to
+   keep it exactly as-is. Only include it when you are changing it, and then send the COMPLETE
+   stylesheet: the value replaces the previous one, so a fragment silently drops every rule you
+   left out.
 
 ## Theme Colors (default vocabulary - always correct in light AND dark mode)
 

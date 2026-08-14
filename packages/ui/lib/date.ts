@@ -192,6 +192,94 @@ export function parseTemporalValue(value: unknown): Date | null {
 	return null;
 }
 
+/** Trailing words that make a column an instant rather than a measurement. */
+const TEMPORAL_SUFFIXES = new Set([
+	"at",
+	"on",
+	"ts",
+	"time",
+	"timestamp",
+	"datetime",
+	"date",
+	"since",
+	"until",
+	"created",
+	"updated",
+	"modified",
+	"deleted",
+	"expired",
+	"expires",
+	"published",
+	"scheduled",
+]);
+/** Leading words that do the same, for `dateOfBirth` and `time_received`. */
+const TEMPORAL_PREFIXES = new Set([
+	"date",
+	"time",
+	"timestamp",
+	"datetime",
+	"dob",
+]);
+
+function nameSegments(name: string): string[] {
+	return name
+		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+		.split(/[^a-zA-Z0-9]+/)
+		.filter(Boolean)
+		.map((segment) => segment.toLowerCase());
+}
+
+/**
+ * Whether a column name promises an instant.
+ *
+ * Deliberately anchored to the first and last word rather than matching anywhere:
+ * a substring rule turns `duration`, `rating` and `estimate` into timestamps, and
+ * a number rendered as a date is a worse failure than a date rendered as a number.
+ */
+export function looksLikeTemporalName(name: string): boolean {
+	const segments = nameSegments(name);
+	if (segments.length === 0) return false;
+	return (
+		TEMPORAL_SUFFIXES.has(segments[segments.length - 1]) ||
+		TEMPORAL_PREFIXES.has(segments[0])
+	);
+}
+
+/** Calendar window a bare epoch number has to land in to be believed. */
+const MIN_PLAUSIBLE_YEAR = 1990;
+const MAX_PLAUSIBLE_YEAR = 2100;
+
+/**
+ * Reads a value whose column was never *declared* temporal — the common case,
+ * because backends store instants as plain integers (`created_at` as epoch
+ * millis) and the schema then says nothing but `Int64`.
+ *
+ * A number is only believed when the name promises an instant *and* the result
+ * lands in a plausible calendar window; text still goes through the ordinary
+ * parser, where an ISO string speaks for itself.
+ */
+export function inferTemporalValue(name: string, value: unknown): Date | null {
+	if (typeof value === "number" || typeof value === "bigint") {
+		if (!looksLikeTemporalName(name)) return null;
+		const parsed = parseTemporalValue(value);
+		if (!parsed) return null;
+		const year = parsed.getFullYear();
+		return year >= MIN_PLAUSIBLE_YEAR && year <= MAX_PLAUSIBLE_YEAR
+			? parsed
+			: null;
+	}
+	if (value instanceof Date) return parseDateValue(value);
+	if (typeof value !== "string") return null;
+
+	// A bare numeric string is the integer case wearing quotes, and reaches the
+	// string parser as an invalid date rather than as the epoch it holds.
+	const trimmed = value.trim();
+	if (/^-?\d+$/.test(trimmed)) {
+		return inferTemporalValue(name, Number(trimmed));
+	}
+	return parseDateValue(trimmed);
+}
+
 export function parseTimespan(start: IDate, end: IDate) {
 	if (start.nanos_since_epoch > end.nanos_since_epoch) {
 		const old_end = end;

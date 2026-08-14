@@ -28,7 +28,10 @@ import {
 	finishAllProgressToasts,
 	showProgressToast,
 } from "@flow-like/flow-like-ui";
-import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
+import type {
+	CanvasSettings,
+	SurfaceComponent,
+} from "@flow-like/flow-like-ui/components/a2ui/types";
 import { apiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import type {
 	ChatImage,
@@ -816,6 +819,7 @@ export class WebBoardState implements IBoardState {
 		catalogNodes: INode[] | undefined,
 		selectedNodeIds: string[],
 		currentSurface: SurfaceComponent[] | null,
+		currentCanvasSettings: CanvasSettings | null,
 		selectedComponentIds: string[],
 		userPrompt: string,
 		history: UnifiedChatMessage[],
@@ -873,6 +877,7 @@ export class WebBoardState implements IBoardState {
 					board,
 					selected_node_ids: selectedNodeIds,
 					current_surface: currentSurface,
+					current_canvas_settings: currentCanvasSettings,
 					selected_component_ids: selectedComponentIds,
 					user_prompt: userPrompt,
 					raw_user_prompt: rawUserPrompt,

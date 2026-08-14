@@ -142,7 +142,7 @@ impl NodeLogic for GraphNeighborsNode {
         let id_value = flow_like_types::Value::String(node_id);
 
         match store
-            .neighbors(&label, id_value, depth, direction, limit)
+            .neighbors(&label, id_value, depth, direction, limit, None)
             .await
         {
             Ok(result) => {

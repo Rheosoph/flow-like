@@ -1,4 +1,4 @@
-import { Trans, i18n as i18next, useTranslation } from "@flow-like/locales";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	CheckIcon,
 	ChevronLeftIcon,
@@ -769,10 +769,9 @@ function FileItem({
 	handleFileClick,
 	canPreview,
 }: Readonly<FileItemProps>) {
-	const { t } = useTranslation("chat");
 	const previewable = canPreview(file);
 	const cardClasses = cn(
-		t('groupRelativeWfullRoundedlgBorderBorderborder50BglineartorFrombackgroundTomuted10TransitionallDuration200', 'group relative w-full rounded-lg border border-border/50 bg-linear-to-r from-background to-muted/10 transition-all duration-200'),
+		"group relative w-full rounded-lg border border-border/50 bg-linear-to-r from-background to-muted/10 transition-all duration-200",
 		isSelected && "border-primary bg-primary/5",
 		previewable ? "hover:border-primary/50" : "opacity-75",
 	);
@@ -881,7 +880,7 @@ export function FileDialogPreview({ file }: Readonly<FileDialogPreviewProps>) {
 				const newWindow = window.open();
 				if (newWindow) {
 					newWindow.document.write(
-						t('imgSrcurlStylemaxwidth100HeightAuto', '<img src="{{url}}" style="max-width: 100%; height: auto;" />', { url: file.url }),
+						`<img src="${file.url}" style="max-width: 100%; height: auto;" />`,
 					);
 				}
 			} else {
@@ -901,7 +900,7 @@ export function FileDialogPreview({ file }: Readonly<FileDialogPreviewProps>) {
 	const videoClasses = `max-w-full max-h-full rounded-md`;
 	const showTextPreview = isText(file.url) || isCode(file.url);
 	const fallbackClasses =
-		t('flexFlexcolItemscenterJustifycenterGap4HfullP4TextcenterMdp8', 'flex flex-col items-center justify-center gap-4 h-full p-4 text-center md:p-8');
+		"flex flex-col items-center justify-center gap-4 h-full p-4 text-center md:p-8";
 
 	switch (file.type) {
 		case "image":
@@ -913,8 +912,10 @@ export function FileDialogPreview({ file }: Readonly<FileDialogPreviewProps>) {
 		case "video":
 			return (
 				<div className="flex justify-center items-center h-full p-2 md:p-4">
-					<video controls className={videoClasses} poster={file.thumbnailUrl}><Trans i18nKey="sourceSrcfileurlYourBrowserDoesNotSupportTheVideoTag"><source src={file.url} />
-						Your browser does not support the video tag.</Trans></video>
+					<video controls className={videoClasses} poster={file.thumbnailUrl}>
+						<source src={file.url} />
+						Your browser does not support the video tag.
+					</video>
 				</div>
 			);
 		case "audio":
@@ -924,8 +925,10 @@ export function FileDialogPreview({ file }: Readonly<FileDialogPreviewProps>) {
 					<p className="text-base font-medium text-center break-all md:text-lg">
 						{getDisplayFileName(file.name)}
 					</p>
-					<audio controls className="w-full max-w-md"><Trans i18nKey="sourceSrcfileurlYourBrowserDoesNotSupportTheAudioTag"><source src={file.url} />
-						Your browser does not support the audio tag.</Trans></audio>
+					<audio controls className="w-full max-w-md">
+						<source src={file.url} />
+						Your browser does not support the audio tag.
+					</audio>
 				</div>
 			);
 		case "pdf":

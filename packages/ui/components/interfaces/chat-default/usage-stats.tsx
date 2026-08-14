@@ -423,8 +423,8 @@ function StepDetail({
 							{formatTokenCount(stat.stats.usage.total_tokens)} tokens
 						</span>
 						<span className="text-[11px] text-muted-foreground">
-							({formatTokenCount(stat.stats.usage.prompt_tokens)} {`in /`}{" "}
-							{formatTokenCount(stat.stats.usage.completion_tokens)} {t('out', 'out)')}
+							({formatTokenCount(stat.stats.usage.prompt_tokens)} in /{" "}
+							{formatTokenCount(stat.stats.usage.completion_tokens)} out)
 						</span>
 						{stat.stats.usage.cost != null && (
 							<Badge
@@ -619,8 +619,8 @@ export function UsageStats({
 								{formatTokenCount(aggregated.totalTokens)}
 							</span>
 							<span className="opacity-60">
-								({formatTokenCount(aggregated.promptTokens)} {`in /`}{" "}
-								{formatTokenCount(aggregated.completionTokens)} {t('out', 'out)')}
+								({formatTokenCount(aggregated.promptTokens)} in /{" "}
+								{formatTokenCount(aggregated.completionTokens)} out)
 							</span>
 							{aggregated.totalDuration != null && (
 								<>

@@ -982,7 +982,8 @@ export function AnalyticsDashboard() {
 			<div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
 				<div className="space-y-1">
 					<h1 className="text-2xl font-semibold">{t('analytics', 'Analytics')}</h1>
-					<p className="text-sm text-muted-foreground">{t('analyticsscopecopyFor', '{{analyticsScopeCopy}} for', { analyticsScopeCopy })}{dateRangeLabel.toLowerCase()} across{" "}
+					<p className="text-sm text-muted-foreground">
+						{analyticsScopeCopy} for {dateRangeLabel.toLowerCase()} across{" "}
 						{selectedEventLabel}
 					</p>
 				</div>
@@ -1197,7 +1198,8 @@ export function AnalyticsDashboard() {
 							<div>
 								<CardTitle>{t('recentFeedback', 'Recent Feedback')}</CardTitle>
 								<CardDescription>
-									{formatNumber(feedbackTotal)}{t('entriesForSelectedeventlabel', 'entries for {{selectedEventLabel}}', { selectedEventLabel })}</CardDescription>
+									{formatNumber(feedbackTotal)} entries for {selectedEventLabel}
+								</CardDescription>
 							</div>
 							<Select
 								value={feedbackFilter}
@@ -1334,7 +1336,8 @@ export function AnalyticsDashboard() {
 											{t('previous', 'Previous')}
 										</Button>
 										<span className="text-sm text-muted-foreground">
-											{t('page', 'Page')} {feedbackPage + 1}{t('ofFeedbacktotalpages', 'of {{feedbackTotalPages}}', { feedbackTotalPages })}</span>
+											Page {feedbackPage + 1} of {feedbackTotalPages}
+										</span>
 										<Button
 											variant="outline"
 											size="sm"

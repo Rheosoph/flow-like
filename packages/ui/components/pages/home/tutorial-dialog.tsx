@@ -730,7 +730,7 @@ export function TutorialDialog() {
 					</div>
 
 					<span className="absolute bottom-5 left-6 z-10 hidden font-mono text-[11px] uppercase tracking-[0.14em] text-white/70 sm:block">
-						{t('step0', 'Step 0')}{step + 1}{`— ${active.name}`}</span>
+						{t('stepBadge', 'Step 0{{step}} — {{name}}', { step: step + 1, name: active.name })}</span>
 				</aside>
 
 				{/* ── RIGHT: stepper content ── */}

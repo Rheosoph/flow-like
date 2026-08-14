@@ -580,7 +580,12 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 																<AlertDialogTitle>
 																	{t('deleteInviteLink', 'Delete Invite Link')}
 																</AlertDialogTitle>
-																<AlertDialogDescription>{t('areYouSureYouWantToDeleteQuotNameQuotThisActionCannotBeUndoneAndTheLinkWillNoLongerWork', "Are you sure you want to delete \" {{name}} \"? This action cannot be undone and the link will no longer work.", { name: link.name })}</AlertDialogDescription>
+																<AlertDialogDescription>
+																	Are you sure you want to delete &quot;
+																	{link.name}
+																	&quot;? This action cannot be undone and the
+																	link will no longer work.
+																</AlertDialogDescription>
 															</AlertDialogHeader>
 															<AlertDialogFooter>
 																<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>

@@ -1166,7 +1166,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										</p>
 										<p className="text-sm text-muted-foreground">
 											{t("avgRating", "Avg Rating")}
-											{(pkg.ratingCount ?? 0) > 0 && `(${pkg.ratingCount})`}
+											{(pkg.ratingCount ?? 0) > 0 && ` (${pkg.ratingCount})`}
 										</p>
 									</div>
 								</div>

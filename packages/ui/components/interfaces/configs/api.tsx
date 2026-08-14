@@ -156,7 +156,7 @@ export function ApiConfig({
 		switch (lang) {
 			case "curl":
 				return `\`\`\`bash
-curl -X ${method} "${endpoint}"${authHeader ? ` \\\n+  -H "${authHeader}"` : ""}${method !== "GET" ? ' \\\n+  -H "Content-Type: application/json" \\\n+  -d \'{"key": "value"}\'' : ""}
+curl -X ${method} "${endpoint}"${authHeader ? ` \\\n  -H "${authHeader}"` : ""}${method !== "GET" ? ' \\\n  -H "Content-Type: application/json" \\\n  -d \'{"key": "value"}\'' : ""}
 \`\`\``;
 
 			case "python":

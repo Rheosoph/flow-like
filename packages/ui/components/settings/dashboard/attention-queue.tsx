@@ -29,7 +29,6 @@ function SignalChip({
 	signal: AttentionSignal;
 	onOpenPanel: (panel: InspectorPanel) => void;
 }>) {
-	const { t } = useTranslation("settings");
 	const body = (
 		<>
 			<StateDot tone={TONE_DOT[signal.tone]} />
@@ -49,7 +48,7 @@ function SignalChip({
 	);
 
 	const className =
-		t('flexMaxwfullItemscenterGap2RoundedfullBorderBgcardPx3Py1TextxsTextmutedforegroundTransitioncolorsHoverborderprimary40Hovertextforeground', 'flex max-w-full items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground');
+		"flex max-w-full items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground";
 
 	if (signal.href) {
 		return (

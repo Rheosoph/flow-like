@@ -72,7 +72,10 @@ const IconNodeProgram = createNodeCompoundProgram([
 		],
 	}),
 	createNodeImageProgram({
-		padding: 0.3,
+		// The glyph is a type hint, not the subject. Filling most of the disc made
+		// it read as the node itself, which is also what buried the colour that
+		// actually distinguishes one object type from another.
+		padding: 0.42,
 		keepWithinCircle: true,
 	}),
 ]);
@@ -111,6 +114,11 @@ export interface GraphCanvasProps {
 	highlightedNodeIds?: Set<string>;
 	highlightedEdgeIds?: Set<string>;
 	hiddenLabels?: Set<string>;
+	/**
+	 * Restricts the stage to these nodes. Dimming stops paying off once the
+	 * context is large enough to be the problem itself; this removes it instead.
+	 */
+	visibleNodeIds?: Set<string>;
 	/** Groups the nodes into constellations instead of one undifferentiated field. */
 	clusters?: ClusterModel | null;
 	onNodeClick?: (nodeId: string) => void;
@@ -237,7 +245,12 @@ function hubNodeSize(represented: number): number {
 
 /** Nodes a stage seats comfortably before circles start crowding the edges out. */
 const SIZE_FIT_REFERENCE_NODES = 40;
-const MIN_FIT_SIZE_SCALE = 0.34;
+const MIN_FIT_SIZE_SCALE = 0.28;
+/** Stage the size ceiling is reckoned against, in CSS pixels. */
+const REFERENCE_STAGE_AREA = 1200 * 700;
+/** How much of the room a node gets its circle may fill, edge to edge. */
+const MAX_NODE_PITCH_SHARE = 0.3;
+const MIN_RENDERED_NODE_SIZE = 2;
 
 /**
  * Shrinks nodes as the sample grows, because `autoRescale` fits the whole layout
@@ -255,6 +268,19 @@ function fitSizeScale(nodeCount: number): number {
 		MIN_FIT_SIZE_SCALE,
 		Math.sqrt(SIZE_FIT_REFERENCE_NODES / nodeCount),
 	);
+}
+
+/**
+ * Hard ceiling on a rendered node, as a share of the room the sample leaves it.
+ *
+ * Scaling alone cannot promise this: an overlay is free to declare `size: 28`,
+ * and a fraction of a large number is still large. The pitch — how far apart
+ * auto-fit can hold two nodes — is what the reader actually has, so the ceiling
+ * is a share of that and the declared size only matters below it.
+ */
+function maxNodeSize(nodeCount: number): number {
+	const pitch = Math.sqrt(REFERENCE_STAGE_AREA / Math.max(1, nodeCount));
+	return Math.max(MIN_RENDERED_NODE_SIZE, (pitch * MAX_NODE_PITCH_SHARE) / 2);
 }
 
 /**
@@ -277,8 +303,10 @@ function getBaseEdgeAlpha(nodeCount: number): number {
 }
 
 const CONTEXT_DIM_EDGE_SIZE = 0.75;
-const CONTEXT_DIM_EDGE_ALPHA = 0.08;
-const CONTEXT_DIM_NODE_AMOUNT = 0.82;
+const CONTEXT_DIM_EDGE_ALPHA = 0.06;
+const CONTEXT_DIM_NODE_AMOUNT = 0.88;
+/** Dimmed nodes also shrink, so the focus reads as depth and not just as colour. */
+const CONTEXT_DIM_NODE_SCALE = 0.75;
 
 function dimTowardBackground(color: string): string {
 	const theme = getGraphTheme();
@@ -828,6 +856,7 @@ async function buildGraphAsync(
 
 	const density = graph.size / Math.max(1, graph.order);
 	const fitScale = fitSizeScale(graph.order);
+	const sizeCeiling = maxNodeSize(graph.order);
 	const sized = await processInChunks(
 		data.nodes,
 		getNodeChunkSize(nodeCount),
@@ -848,8 +877,11 @@ async function buildGraphAsync(
 						);
 
 			const scaledSize = Math.max(
-				2.5,
-				baseSize * fitScale * (density > 4 ? 0.85 : 1),
+				MIN_RENDERED_NODE_SIZE,
+				Math.min(
+					baseSize * fitScale * (density > 4 ? 0.85 : 1),
+					sizeCeiling,
+				),
 			);
 			graph.setNodeAttribute(node.id, "size", scaledSize);
 		},
@@ -983,6 +1015,7 @@ interface HighlightState {
 	highlightedNodeIds: Set<string> | undefined;
 	highlightedEdgeIds: Set<string> | undefined;
 	hiddenLabels: Set<string> | undefined;
+	visibleNodeIds: Set<string> | undefined;
 	neighborSet: Set<string> | null;
 	connectedEdgeSet: Set<string> | null;
 }
@@ -1330,7 +1363,9 @@ function SigmaControls({
 }: { onResetLayout: () => void; disabled?: boolean }) {
 	const { t } = useTranslation("common");
 	const sigma = useSigma();
-	const buttonClassName = t('h8W8FlexItemscenterJustifycenterRoundedTransitioncolorsVal', 'h-8 w-8 flex items-center justify-center rounded transition-colors {{val}}', { val: disabled ? "cursor-not-allowed opacity-50" : "hover:bg-accent" });
+	const buttonClassName = `h-8 w-8 flex items-center justify-center rounded transition-colors ${
+		disabled ? "cursor-not-allowed opacity-50" : "hover:bg-accent"
+	}`;
 
 	const handleZoomIn = useCallback(() => {
 		const camera = sigma.getCamera();
@@ -1397,6 +1432,7 @@ export function GraphCanvas({
 	highlightedNodeIds,
 	highlightedEdgeIds,
 	hiddenLabels,
+	visibleNodeIds,
 	clusters,
 	onNodeClick,
 	onNodeShiftClick,
@@ -1686,6 +1722,7 @@ export function GraphCanvas({
 		highlightedNodeIds,
 		highlightedEdgeIds,
 		hiddenLabels,
+		visibleNodeIds,
 		neighborSet: null,
 		connectedEdgeSet: null,
 	});
@@ -1696,6 +1733,7 @@ export function GraphCanvas({
 	highlightRef.current.highlightedNodeIds = highlightedNodeIds;
 	highlightRef.current.highlightedEdgeIds = highlightedEdgeIds;
 	highlightRef.current.hiddenLabels = hiddenLabels;
+	highlightRef.current.visibleNodeIds = visibleNodeIds;
 
 	// Recompute neighbor sets when selectedNodeId changes
 	useEffect(() => {
@@ -1712,7 +1750,7 @@ export function GraphCanvas({
 	}, [selectedNodeId, graph]);
 
 	// Force sigma refresh when visibility/highlight props change
-	const sigmaRefreshKey = `${hiddenLabels ? [...hiddenLabels].join(",") : ""}_${highlightedNodeIds ? [...highlightedNodeIds].join(",") : ""}_${highlightedEdgeIds ? [...highlightedEdgeIds].join(",") : ""}_${selectedEdgeKey ?? ""}_${themeTick}`;
+	const sigmaRefreshKey = `${hiddenLabels ? [...hiddenLabels].join(",") : ""}_${highlightedNodeIds ? [...highlightedNodeIds].join(",") : ""}_${highlightedEdgeIds ? [...highlightedEdgeIds].join(",") : ""}_${visibleNodeIds ? `v${visibleNodeIds.size}:${[...visibleNodeIds].join(",")}` : ""}_${selectedEdgeKey ?? ""}_${themeTick}`;
 
 	// Stable reducers — read all dynamic state from ref
 	const nodeReducer = useCallback(
@@ -1730,41 +1768,50 @@ export function GraphCanvas({
 				return res;
 			}
 
-			if (hl.highlightedNodeIds && hl.highlightedNodeIds.size > 0) {
-				if (!hl.highlightedNodeIds.has(node)) {
-					const dim = dimTowardBackground(origColor);
-					res.color = dim;
-					res.borderColor = dim;
-					res.label = "";
-					res.zIndex = 0;
-					return res;
-				}
-				res.zIndex = 2;
+			if (hl.visibleNodeIds && !hl.visibleNodeIds.has(node)) {
+				res.hidden = true;
+				return res;
+			}
+
+			// Dropping back to a plain circle is what makes dimming visible at all:
+			// the icon program draws the white glyph over the disc at full opacity,
+			// so a node whose colour was faded still reads as bright and in focus.
+			const pushToBackground = () => {
+				const dim = dimTowardBackground(origColor);
+				res.color = dim;
+				res.borderColor = dim;
+				res.type = "circle";
+				res.image = undefined;
+				res.label = "";
+				res.zIndex = 0;
+				res.size = ((res.size as number) ?? DEFAULT_NODE_SIZE) *
+					CONTEXT_DIM_NODE_SCALE;
+			};
+
+			const pullToForeground = (zIndex: number) => {
 				res.color = origColor;
 				res.borderColor = origColor;
+				res.zIndex = zIndex;
+			};
+
+			if (hl.highlightedNodeIds && hl.highlightedNodeIds.size > 0) {
+				if (!hl.highlightedNodeIds.has(node)) pushToBackground();
+				else pullToForeground(2);
 				return res;
 			}
 
 			const activeNode = hl.selectedNodeId ?? hl.hoveredNode;
 			if (hl.neighborSet && activeNode) {
 				if (node === activeNode) {
-					res.zIndex = 3;
+					pullToForeground(3);
 					res.highlighted = true;
 					res.forceLabel = true;
-					res.color = origColor;
-					res.borderColor = origColor;
-					const s = (res.size as number) ?? 10;
-					res.size = s * 1.15;
+					res.size = ((res.size as number) ?? DEFAULT_NODE_SIZE) * 1.3;
 				} else if (hl.neighborSet.has(node)) {
-					res.zIndex = 2;
-					res.color = origColor;
-					res.borderColor = origColor;
+					pullToForeground(2);
+					res.forceLabel = true;
 				} else {
-					const dim = dimTowardBackground(origColor);
-					res.color = dim;
-					res.borderColor = dim;
-					res.label = "";
-					res.zIndex = 0;
+					pushToBackground();
 				}
 			}
 			return res;
@@ -1786,7 +1833,9 @@ export function GraphCanvas({
 			if (
 				hl.hiddenLabels?.has(srcLabel) ||
 				hl.hiddenLabels?.has(tgtLabel) ||
-				(storedLabel && hl.hiddenLabels?.has(storedLabel))
+				(storedLabel && hl.hiddenLabels?.has(storedLabel)) ||
+				(hl.visibleNodeIds &&
+					(!hl.visibleNodeIds.has(src) || !hl.visibleNodeIds.has(tgt)))
 			) {
 				res.hidden = true;
 				return res;
@@ -1905,7 +1954,7 @@ export function GraphCanvas({
 					fitSizeScale(nodeCount),
 			labelDensity: isHuge ? 0.07 : isDense ? 0.25 : isLarge ? 0.35 : 0.5,
 			labelGridCellSize: isHuge ? 300 : isDense ? 180 : isLarge ? 140 : 100,
-			labelFont: t('interSystemuiSansserif', 'Inter, system-ui, sans-serif'),
+			labelFont: "Inter, system-ui, sans-serif",
 			labelWeight: "500",
 			defaultDrawNodeLabel: drawNodeLabel,
 			defaultDrawNodeHover: drawNodeHover,

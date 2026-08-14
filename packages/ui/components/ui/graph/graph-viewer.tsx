@@ -1,7 +1,7 @@
 "use client";
 
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
-import { AlertTriangle, Route, Search, X } from "lucide-react";
+import { AlertTriangle, Crosshair, Route, Search, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
 	GraphAnalyticsResult,
@@ -188,6 +188,10 @@ export function GraphViewer({
 	);
 	const latestRemoteSearchRequestRef = useRef(0);
 	const autoExpandedSearchQueryRef = useRef<string | null>(null);
+
+	const [focus, setFocus] = useState<{ nodeId: string; depth: number } | null>(
+		null,
+	);
 
 	const [pathSource, setPathSource] = useState<SubgraphNode | null>(null);
 	const [pathHighlight, setPathHighlight] = useState<Set<string> | null>(null);
@@ -559,6 +563,61 @@ export function GraphViewer({
 		[overlay],
 	);
 
+	/**
+	 * Nodes within `focus.depth` hops of the focused one.
+	 *
+	 * Dimming answers "which of these is related"; on a sample this size the
+	 * question is "can I see anything at all", and only removing the rest of the
+	 * graph answers that.
+	 */
+	const focusedNodeIds = useMemo(() => {
+		if (!focus || !data) return undefined;
+
+		const adjacency = new Map<string, string[]>();
+		for (const edge of data.edges) {
+			const forward = adjacency.get(edge.source);
+			if (forward) forward.push(edge.target);
+			else adjacency.set(edge.source, [edge.target]);
+			const backward = adjacency.get(edge.target);
+			if (backward) backward.push(edge.source);
+			else adjacency.set(edge.target, [edge.source]);
+		}
+
+		const visible = new Set<string>([focus.nodeId]);
+		let frontier = [focus.nodeId];
+		for (let hop = 0; hop < focus.depth; hop += 1) {
+			const next: string[] = [];
+			for (const nodeId of frontier) {
+				for (const neighbor of adjacency.get(nodeId) ?? []) {
+					if (visible.has(neighbor)) continue;
+					visible.add(neighbor);
+					next.push(neighbor);
+				}
+			}
+			if (next.length === 0) break;
+			frontier = next;
+		}
+		return visible;
+	}, [focus, data]);
+
+	const handleFocus = useCallback(
+		(depth: number | null) => {
+			if (depth === null || !selectedNode) {
+				setFocus(null);
+				return;
+			}
+			setFocus({ nodeId: selectedNode.id, depth });
+		},
+		[selectedNode],
+	);
+
+	// A focus is anchored to one node, so it cannot outlive that node's presence
+	// in the sample — a new query would otherwise blank the stage entirely.
+	useEffect(() => {
+		if (!focus || !data) return;
+		if (!data.nodes.some((node) => node.id === focus.nodeId)) setFocus(null);
+	}, [focus, data]);
+
 	const handleNodeClick = useCallback(
 		(nodeId: string) => {
 			const node = data?.nodes.find((n) => n.id === nodeId);
@@ -745,7 +804,9 @@ export function GraphViewer({
 								</div>
 
 								{searchHighlight.size > 0 && (
-									<span className="text-xs text-muted-foreground whitespace-nowrap">{t('sizeLoadedMatch', '{{size}} loaded match', { size: searchHighlight.size })}{searchHighlight.size !== 1 ? "es" : ""}
+									<span className="text-xs text-muted-foreground whitespace-nowrap">
+										{searchHighlight.size} loaded match
+										{searchHighlight.size !== 1 ? "es" : ""}
 									</span>
 								)}
 
@@ -765,7 +826,7 @@ export function GraphViewer({
 
 						{/* Node / edge count */}
 						<span className="text-xs text-muted-foreground whitespace-nowrap">
-							{nodeCount.toLocaleString()} {t('nodes', 'nodes ·')} {edgeCount.toLocaleString()}{" "}
+							{nodeCount.toLocaleString()} nodes · {edgeCount.toLocaleString()}{" "}
 							edges
 						</span>
 
@@ -807,7 +868,9 @@ export function GraphViewer({
 											type="button"
 											className="flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-600 dark:text-amber-400 whitespace-nowrap hover:bg-amber-500/20 transition-colors"
 										>
-											<AlertTriangle className="h-3.5 w-3.5" />{t('lengthDataWarning', '{{length}} data warning', { length: warnings.length })}{warnings.length !== 1 ? "s" : ""}
+											<AlertTriangle className="h-3.5 w-3.5" />
+											{warnings.length} data warning
+											{warnings.length !== 1 ? "s" : ""}
 										</button>
 									</PopoverTrigger>
 									<PopoverContent align="end" className="w-80 p-0">
@@ -889,6 +952,7 @@ export function GraphViewer({
 							pathHighlight ? (pathEdgeHighlight ?? undefined) : undefined
 						}
 						hiddenLabels={hiddenLabels.size > 0 ? hiddenLabels : undefined}
+						visibleNodeIds={focusedNodeIds}
 						clusters={clusterModel}
 						onNodeClick={handleNodeClick}
 						onNodeShiftClick={handleNodeShiftClick}
@@ -896,6 +960,35 @@ export function GraphViewer({
 						onStageClick={handleStageClick}
 						className="absolute inset-0"
 					/>
+
+					{/* Focus banner — the only way back out, so it is always on top */}
+					{focus && focusedNodeIds && (
+						<div className="absolute left-1/2 top-3 z-30 -translate-x-1/2">
+							<div className="flex items-center gap-2 rounded-full border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs shadow-sm backdrop-blur-sm">
+								<Crosshair className="h-3.5 w-3.5 text-primary" />
+								<span className="whitespace-nowrap">
+									{t("showingCountOfTotalObjectsAroundName", {
+										defaultValue_one:
+											"Showing {{count}} of {{total}} objects around {{name}}",
+										defaultValue_other:
+											"Showing {{count}} of {{total}} objects around {{name}}",
+										count: focusedNodeIds.size,
+										total: nodeCount,
+										name:
+											nodeMap.get(focus.nodeId)?.caption ?? focus.nodeId,
+									})}
+								</span>
+								<button
+									type="button"
+									className="text-muted-foreground hover:text-foreground"
+									onClick={() => setFocus(null)}
+									title={t("exitFocus", "Exit focus")}
+								>
+									<X className="h-3.5 w-3.5" />
+								</button>
+							</div>
+						</div>
+					)}
 
 					{/* Path-finding banner + result chip */}
 					{(pathSource || pathOutcome || pathFinding) && (
@@ -992,6 +1085,8 @@ export function GraphViewer({
 									)
 							: undefined
 					}
+					onFocus={handleFocus}
+					focused={focus?.nodeId === selectedNode.id}
 					hasChildren={hasContainmentChildren(selectedNode)}
 					childrenExpanded={expandedChildParents?.has(selectedNode.id) ?? false}
 					onExpandChildren={

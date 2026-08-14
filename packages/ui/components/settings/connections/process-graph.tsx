@@ -1596,7 +1596,7 @@ function CaseWaterfall({
 							style={{ paddingLeft: `${Math.min(run.depth, 6) * 10}px` }}
 						>
 							{nameOf(run.app_id)}
-							{run.event_name ? `· ${run.event_name}` : ""}
+							{run.event_name ? ` · ${run.event_name}` : ""}
 						</span>
 						<div className="relative h-2.5 min-w-0 flex-1 overflow-hidden rounded bg-muted/50">
 							<div

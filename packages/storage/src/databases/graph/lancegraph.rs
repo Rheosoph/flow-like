@@ -545,6 +545,7 @@ impl GraphStore for LanceGraphStore {
         depth: usize,
         direction: TraversalDirection,
         limit: Option<usize>,
+        edge_labels: Option<&[String]>,
     ) -> Result<SubgraphResult> {
         let limit = self.enforce_limit(limit);
         let _permit = self
@@ -557,6 +558,7 @@ impl GraphStore for LanceGraphStore {
             depth.max(1),
             direction,
             limit,
+            edge_labels,
         )
         .await
     }
@@ -578,7 +580,7 @@ impl GraphStore for LanceGraphStore {
             return self.scan_subgraph(limit).await;
         }
 
-        self.expand_subgraph(seeds, depth.max(1), TraversalDirection::Both, limit)
+        self.expand_subgraph(seeds, depth.max(1), TraversalDirection::Both, limit, None)
             .await
     }
 

@@ -561,7 +561,7 @@ export function QueryWorkbench({
 
 	const focusParamForm = useCallback(() => {
 		const el = paramFormRef.current?.querySelector<HTMLElement>(
-			t('inputSelectTextareaButton', 'input, select, textarea, button'),
+			"input, select, textarea, button",
 		);
 		el?.focus();
 		el?.scrollIntoView({ block: "nearest" });
@@ -620,7 +620,7 @@ export function QueryWorkbench({
 								await backend.queryState.createSavedQuery(
 									appId,
 									{
-										name: t('nameCopy2', '{{name}} copy', { name: query.name }),
+										name: `${query.name} copy`,
 										description: query.description,
 										kind: query.kind,
 										surface: query.surface,

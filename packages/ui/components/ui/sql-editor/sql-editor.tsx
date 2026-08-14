@@ -105,7 +105,7 @@ export function SqlEditor({
 				minimap: { enabled: false },
 				fontSize: 13,
 				fontFamily:
-					t('sfMonoUimonospaceSfmonoregularMenloMonacoConsolasLiberationMonoCourierNewMonospace', '\'SF Mono\', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \'Liberation Mono\', \'Courier New\', monospace'),
+					"'SF Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
 				fontLigatures: true,
 				scrollBeyondLastLine: false,
 				automaticLayout: true,

@@ -850,7 +850,11 @@ function PendingRequestCard({
 					<AlertDialogContent>
 						<AlertDialogHeader>
 							<AlertDialogTitle>{t('rejectRequest', 'Reject Request')}</AlertDialogTitle>
-							<AlertDialogDescription>{`Are you sure you want to reject the access request from " ${appLabel}"? The request will be deleted and the app will have to send a new one.`}</AlertDialogDescription>
+							<AlertDialogDescription>
+								Are you sure you want to reject the access request from &quot;
+								{appLabel}&quot;? The request will be deleted and the app will
+								have to send a new one.
+							</AlertDialogDescription>
 						</AlertDialogHeader>
 						<AlertDialogFooter>
 							<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
@@ -960,7 +964,10 @@ function ConnectionRow({
 							<AlertDialogContent>
 								<AlertDialogHeader>
 									<AlertDialogTitle>{removeLabel}</AlertDialogTitle>
-									<AlertDialogDescription>{t('areYouSureYouWantToRemoveTheConnectionWithQuotApplabelquotRemovedescription', "Are you sure you want to remove the connection with \" {{appLabel}}\"? {{removeDescription}}", { appLabel, removeDescription })}</AlertDialogDescription>
+									<AlertDialogDescription>
+										Are you sure you want to remove the connection with &quot;
+										{appLabel}&quot;? {removeDescription}
+									</AlertDialogDescription>
 								</AlertDialogHeader>
 								<AlertDialogFooter>
 									<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>

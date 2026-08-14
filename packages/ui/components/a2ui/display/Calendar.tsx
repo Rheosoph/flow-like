@@ -1671,7 +1671,6 @@ function AllDayRow({
 	movedRef: MovedRef;
 	handlers: EventHandlers;
 }) {
-	const { t } = useTranslation("common");
 	const laneRef = useRef<HTMLDivElement>(null);
 	const dragRef = useRef<{ ev: CalendarEvent; x: number; y: number } | null>(
 		null,
@@ -1787,7 +1786,7 @@ function AllDayRow({
 		return { items: placed, overflow: overflowByCol };
 	}, [events, days]);
 
-	const cols = t('repeatlengthMinmax01fr', 'repeat({{length}}, minmax(0,1fr))', { length: days.length });
+	const cols = `repeat(${days.length}, minmax(0,1fr))`;
 
 	return (
 		<div

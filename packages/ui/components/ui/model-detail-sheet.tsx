@@ -439,7 +439,7 @@ export function ModelDetailSheet({
 								) : (
 									<>
 										<DownloadCloudIcon className="h-4 w-4 mr-2" />
-										{t('download', 'Download (')}{humanFileSize(bitSize.data ?? 0)})
+										Download ({humanFileSize(bitSize.data ?? 0)})
 									</>
 								)}
 							</Button>

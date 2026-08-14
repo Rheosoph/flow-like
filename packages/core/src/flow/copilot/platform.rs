@@ -279,7 +279,8 @@ fn platform_tool_serialization_lane(name: &str, arguments: &Value) -> Option<Str
         // App runtimes are independent across apps, while two calls into one app may share state
         // or trigger conflicting side effects. This makes A/B/C fan-out real without racing one
         // app against itself; an unresolved target falls into one conservative shared lane.
-        "call_app_chat" | "call_app_event" => {
+        // interact_app_page drives runs through a live page and shares the same runtime state.
+        "call_app_chat" | "call_app_event" | "interact_app_page" => {
             return Some(format!("app-runtime:{}", app()));
         }
         "flowpilot_board" if is_editing_flowpilot_board_call(name, arguments) => {

@@ -214,10 +214,8 @@ function SectionHeader({
 	const { t } = useTranslation("common");
 	const resolvedLinkLabel = linkLabel ?? t("viewAll", "View all");
 	const external = isExternalLink(href);
-	const linkClass = t(
-		"grouplinkFlexShrink0ItemscenterGap15RoundedfullBorderBorderborder40Bgcard60Px4Py15TextsmFontmediumTextmutedforegroundTransitionallHoverborderprimary30HovertextforegroundHovershadowsm",
-		"group/link flex shrink-0 items-center gap-1.5 rounded-full border border-border/40 bg-card/60 px-4 py-1.5 text-sm font-medium text-muted-foreground transition-all hover:border-primary/30 hover:text-foreground hover:shadow-sm",
-	);
+	const linkClass =
+		"group/link flex shrink-0 items-center gap-1.5 rounded-full border border-border/40 bg-card/60 px-4 py-1.5 text-sm font-medium text-muted-foreground transition-all hover:border-primary/30 hover:text-foreground hover:shadow-sm";
 	const linkContent = (
 		<>
 			{resolvedLinkLabel}
@@ -466,14 +464,10 @@ function CardLane({
 	ownedIds: Set<string>;
 	router: AppRouterInstance;
 }>) {
-	const { t } = useTranslation("common");
 	const isLarge = swimlane.size === "large";
 	const gridClass = isLarge
-		? t("gridGridcols1Lggridcols2Gap4", "grid grid-cols-1 lg:grid-cols-2 gap-4")
-		: t(
-				"gridGridcols1Mdgridcols2Xlgridcols3Gap4",
-				"grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4",
-			);
+		? "grid grid-cols-1 lg:grid-cols-2 gap-4"
+		: "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4";
 	const variant = isLarge ? "extended" : "small";
 
 	return (
@@ -944,7 +938,6 @@ function StaticCard({
 	item: ISwimlaneItem;
 	size: "large" | "medium" | "small";
 }>) {
-	const { t } = useTranslation("common");
 	const isLarge = size === "large";
 	const cardHeight = isLarge ? "h-[375px]" : "min-h-[210px]";
 	const external = isExternalLink(item.link);
@@ -1011,11 +1004,7 @@ function StaticCard({
 		</>
 	);
 
-	const cardClass = t(
-		"groupRelativeBlockOverflowhiddenRounded2xlBorderBorderborder40Bgcard80ShadowsmTransitionallDuration300Hovertranslatey1Hoverborderprimary30HovershadowxlCardheightWfull",
-		"group relative block overflow-hidden rounded-2xl border border-border/40 bg-card/80 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-xl {{cardHeight}} w-full",
-		{ cardHeight },
-	);
+	const cardClass = `group relative block overflow-hidden rounded-2xl border border-border/40 bg-card/80 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-xl ${cardHeight} w-full`;
 
 	if (!item.link) {
 		return <div className={cardClass}>{body}</div>;

@@ -6,6 +6,8 @@
  * content height and split the result into readable vertical images.
  */
 
+import type { IHelperState } from "../state/backend-state/helper-state";
+
 const INLINE_PAGE_ATTRIBUTE = "data-flowpilot-inline-page";
 const CAPTURE_TARGET_ATTRIBUTE = "data-flowpilot-capture-target";
 export const INLINE_PAGE_REVEAL_EVENT = "flowpilot:inline-page-reveal";
@@ -24,6 +26,82 @@ export interface AppPageSnapshotResult {
 	images: AppPageSnapshot[];
 	complete: boolean;
 	totalHeight: number;
+	/** Set when zero images were produced: why the capture yielded nothing. */
+	failureReason?: string;
+}
+
+export interface UploadedPageSnapshot {
+	url: string;
+	media_type: string;
+}
+
+/**
+ * Uploads capture segments to remote temporary storage so the Rust provider boundary can
+ * download and inline them. Per-image failures are collected instead of silently dropped —
+ * "captured but not uploadable" and "not captured" are different diagnoses.
+ */
+export async function uploadPageSnapshots(
+	backend: { helperState: IHelperState },
+	images: AppPageSnapshot[],
+): Promise<{ uploaded: UploadedPageSnapshot[]; uploadErrors: string[] }> {
+	const uploaded: UploadedPageSnapshot[] = [];
+	const uploadErrors: string[] = [];
+	const results = await Promise.all(
+		images.map(
+			async (
+				image,
+				index,
+			): Promise<UploadedPageSnapshot | { error: string }> => {
+				const extension =
+					image.mediaType === "image/webp"
+						? "webp"
+						: image.mediaType === "image/jpeg"
+							? "jpg"
+							: "png";
+				const file = new File(
+					[image.blob],
+					`flowpilot-page-${index + 1}.${extension}`,
+					{ type: image.mediaType },
+				);
+				try {
+					const temporaryFile = backend.helperState.fileToTemporaryFile
+						? await backend.helperState.fileToTemporaryFile(
+								file,
+								false,
+								undefined,
+								"remote",
+							)
+						: {
+								url: await backend.helperState.fileToUrl(
+									file,
+									false,
+									undefined,
+									"remote",
+								),
+							};
+					if (!/^https?:\/\//i.test(temporaryFile.url)) {
+						throw new Error(
+							"Temporary upload did not return a remotely readable URL.",
+						);
+					}
+					return { url: temporaryFile.url, media_type: image.mediaType };
+				} catch (error) {
+					console.warn(
+						"[AppPageSnapshot] failed to upload page capture",
+						error,
+					);
+					return {
+						error: error instanceof Error ? error.message : String(error),
+					};
+				}
+			},
+		),
+	);
+	for (const result of results) {
+		if ("url" in result) uploaded.push(result);
+		else uploadErrors.push(result.error);
+	}
+	return { uploaded, uploadErrors };
 }
 
 export function inlineAppPageSnapshotAttribute(
@@ -48,18 +126,31 @@ async function waitForRenderedPage(
 	eventId: string | undefined,
 	timeoutMs: number,
 ): Promise<HTMLElement | null> {
-	window.dispatchEvent(
-		new CustomEvent(INLINE_PAGE_REVEAL_EVENT, {
-			detail: { appId, eventId },
-		}),
-	);
 	await nextPaint();
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
+		// Re-dispatched every iteration: the inline card mounts collapsed and expands only on
+		// this event, so a single dispatch fired before React commits the card is lost forever.
+		window.dispatchEvent(
+			new CustomEvent(INLINE_PAGE_REVEAL_EVENT, {
+				detail: { appId, eventId },
+			}),
+		);
 		const root = document.querySelector<HTMLElement>(
 			inlinePageSelector(appId, eventId),
 		);
-		const pageCanvas = root?.querySelector<HTMLElement>("[data-page-id]");
+		let pageCanvas = root?.querySelector<HTMLElement>("[data-page-id]");
+		if (!pageCanvas && eventId) {
+			// No inline card hosts this page — fall back to any live render of the same page
+			// event (e.g. the /use route), which interact_app_page drives directly.
+			const candidates = Array.from(
+				document.querySelectorAll<HTMLElement>("[data-page-id]"),
+			);
+			pageCanvas =
+				candidates.find(
+					(candidate) => candidate.dataset.flowpilotPageEventId === eventId,
+				) ?? null;
+		}
 		if (
 			pageCanvas &&
 			(!eventId || pageCanvas.dataset.flowpilotPageEventId === eventId) &&
@@ -166,7 +257,13 @@ export async function captureInlineAppPageSnapshots(
 	timeoutMs = DEFAULT_RENDER_TIMEOUT_MS,
 ): Promise<AppPageSnapshotResult> {
 	const element = await waitForRenderedPage(appId, eventId, timeoutMs);
-	if (!element) return { images: [], complete: false, totalHeight: 0 };
+	if (!element)
+		return {
+			images: [],
+			complete: false,
+			totalHeight: 0,
+			failureReason: `The embedded page did not finish rendering within ${Math.round(timeoutMs / 1000)}s (its on-load workflow may still be running, or the inline page card is not mounted).`,
+		};
 
 	try {
 		const { default: html2canvas } = await import("html2canvas-pro");
@@ -231,6 +328,11 @@ export async function captureInlineAppPageSnapshots(
 		};
 	} catch (error) {
 		console.warn("[AppPageSnapshot] capture failed:", error);
-		return { images: [], complete: false, totalHeight: 0 };
+		return {
+			images: [],
+			complete: false,
+			totalHeight: 0,
+			failureReason: `Rasterizing the rendered page failed: ${error instanceof Error ? error.message : String(error)}`,
+		};
 	}
 }

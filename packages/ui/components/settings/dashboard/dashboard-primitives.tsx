@@ -126,7 +126,7 @@ export function Sparkline({
 	});
 	const line = `M${points.join(" L")}`;
 	const area = `${line} L100 26 L0 26 Z`;
-	const stroke = tone === "warn" ? "var(--chart-4)" : t('oklch072016150', 'oklch(0.72 0.16 150)');
+	const stroke = tone === "warn" ? "var(--chart-4)" : "oklch(0.72 0.16 150)";
 
 	return (
 		<svg

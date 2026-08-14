@@ -48,7 +48,10 @@ import {
 	showProgressToast,
 } from "@flow-like/flow-like-ui";
 import type { IJwks, IRealtimeAccess } from "@flow-like/flow-like-ui";
-import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
+import type {
+	CanvasSettings,
+	SurfaceComponent,
+} from "@flow-like/flow-like-ui/components/a2ui/types";
 import { ApiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { flowPilotDebugLog } from "@flow-like/flow-like-ui/lib/flowpilot-debug";
@@ -2971,6 +2974,7 @@ export class BoardState implements IBoardState {
 		catalogNodes: INode[] | undefined,
 		selectedNodeIds: string[],
 		currentSurface: SurfaceComponent[] | null,
+		currentCanvasSettings: CanvasSettings | null,
 		selectedComponentIds: string[],
 		userPrompt: string,
 		history: UnifiedChatMessage[],
@@ -3009,6 +3013,7 @@ export class BoardState implements IBoardState {
 			catalogNodes: appPackageCatalogNodes,
 			selectedNodeIds,
 			currentSurface,
+			currentCanvasSettings,
 			selectedComponentIds,
 			userPrompt,
 			history,

@@ -39,7 +39,7 @@ class UndoRedoDB extends Dexie {
 		});
 		this.version(2).stores({
 			stacks: "key",
-			deliveries: i18next.t('keyBoardkeyCreatedat', 'key, boardKey, createdAt'),
+			deliveries: "key, boardKey, createdAt",
 		});
 	}
 }
@@ -109,7 +109,7 @@ export const useUndoRedo = (appId: string, boardId: string) => {
 		deliveryId: string,
 		historyMode: BoardEditReceiptHistoryMode = "append",
 	) => {
-		const deliveryKey = `${key}${deliveryId}`;
+		const deliveryKey = `${key}\u001f${deliveryId}`;
 		await db.transaction("rw", db.stacks, db.deliveries, async () => {
 			if (await db.deliveries.get(deliveryKey)) return;
 			const data = await db.stacks.get(key);

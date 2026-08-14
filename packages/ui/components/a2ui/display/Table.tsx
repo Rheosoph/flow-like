@@ -989,7 +989,8 @@ export function A2UITable({
 							{t('previous', 'Previous')}
 						</Button>
 						<span className="px-2">
-							{t('page', 'Page')} {currentPage + 1}{t('ofTotalpages', 'of {{totalPages}}', { totalPages })}</span>
+							{t('pageOfTotal', 'Page {{page}} of {{total}}', { page: currentPage + 1, total: totalPages })}
+						</span>
 						<Button
 							variant="outline"
 							size="sm"

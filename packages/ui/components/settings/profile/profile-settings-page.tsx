@@ -84,7 +84,7 @@ export function ProfileSettingsPage({
 					.replace(/-([a-z0-9])/gi, (_, c) => c.toUpperCase());
 
 			const extractBlock = (source: string, selector: string) => {
-				const re = new RegExp(`${selector}\s*\{([\s\S]*?)\}`, "m");
+				const re = new RegExp(`${selector}\\s*\\{([\\s\\S]*?)\\}`, "m");
 				const m = source.match(re);
 				return m?.[1] ?? "";
 			};

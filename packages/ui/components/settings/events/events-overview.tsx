@@ -845,7 +845,7 @@ function EventRow({
 						>
 							<AlertTriangleIcon className="mr-1 inline h-3 w-3 align-[-1px]" />
 							<span className="font-medium">{topIssue.title}</span>
-							<span className="opacity-80">{`— ${topIssue.detail}`}</span>
+							<span className="opacity-80">{` — ${topIssue.detail}`}</span>
 						</span>
 					) : (
 						<span className="text-muted-foreground">{event.description}</span>

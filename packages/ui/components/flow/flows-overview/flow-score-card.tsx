@@ -193,7 +193,7 @@ function PageChip({
 		</>
 	);
 	const className = cn(
-		t('inlineflexMinw0Maxw60ItemscenterGap1RoundedBorderPx15Py05Transitioncolors', 'inline-flex min-w-0 max-w-[60%] items-center gap-1 rounded border px-1.5 py-0.5 transition-colors'),
+		"inline-flex min-w-0 max-w-[60%] items-center gap-1 rounded border px-1.5 py-0.5 transition-colors",
 		route && !unavailable
 			? `border-border/60 bg-muted/40 hover:border-border`
 			: `border-dashed border-amber-500/50 bg-amber-500/5`,
@@ -464,7 +464,9 @@ export function FlowScoreCard({
 							</AlertDialogTrigger>
 							<AlertDialogContent>
 								<AlertDialogHeader>
-									<AlertDialogTitle>{t('deleteLdquonamerdquo', 'Delete &ldquo;{{name}}&rdquo;?', { name: row.board.name })}</AlertDialogTitle>
+									<AlertDialogTitle>
+										Delete &ldquo;{row.board.name}&rdquo;?
+									</AlertDialogTitle>
 								<AlertDialogDescription>{t('thisRemovesTheFlowAndCountPagesInsideIt', { defaultValue_one: 'This removes the Flow and the page inside it.', defaultValue_other: 'This removes the Flow and the {{count}} pages inside it.', count: row.pages.length })}{" "}{row.bindings.length > 0
 											? t('countBoundEventsWillStopFiring', { defaultValue_one: 'One event bound to it will stop firing.', defaultValue_other: '{{count}} events bound to it will stop firing.', count: row.bindings.length })
 											: ""}{" "}

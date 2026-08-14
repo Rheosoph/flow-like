@@ -57,6 +57,10 @@ pub struct CopilotChatRequest {
     /// UI context (optional for Board scope)
     #[serde(default)]
     pub current_surface: Option<Vec<SurfaceComponent>>,
+    /// The surface's persisted `canvasSettings`, `customCss` included. Without it the UI
+    /// specialist cannot read the stylesheet it is about to replace.
+    #[serde(default)]
+    pub current_canvas_settings: Option<serde_json::Value>,
     #[serde(default)]
     pub selected_component_ids: Vec<String>,
 
@@ -658,6 +662,7 @@ pub async fn copilot_chat(
                 payload.board.as_ref(),
                 &payload.selected_node_ids,
                 payload.current_surface.as_ref(),
+                payload.current_canvas_settings.as_ref(),
                 &payload.selected_component_ids,
                 payload.user_prompt,
                 payload.raw_user_prompt,
@@ -706,6 +711,7 @@ pub async fn copilot_chat(
                 payload.board.as_ref(),
                 &payload.selected_node_ids,
                 payload.current_surface.as_ref(),
+                payload.current_canvas_settings.as_ref(),
                 &payload.selected_component_ids,
                 payload.user_prompt,
                 payload.raw_user_prompt,

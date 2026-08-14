@@ -1,6 +1,6 @@
 "use client";
 
-import { Trans, useTranslation } from "@flow-like/locales";
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import {
 	CheckCircle2,
@@ -233,11 +233,13 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 						/>
 					</div>
 					<div className="mt-2 grid grid-cols-2 text-[11px] text-muted-foreground">
-						<div className="flex items-center gap-1"><Trans i18nKey="spanClassnameinlineblockH2W2RoundedfullBgemerald500Signed"><span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-							Signed:</Trans>{data?.signed_entries.toLocaleString() ?? "0"}
+						<div className="flex items-center gap-1">
+							<span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+							Signed: {data?.signed_entries.toLocaleString() ?? "0"}
 						</div>
-						<div className="flex items-center gap-1 justify-end"><Trans i18nKey="spanClassnameinlineblockH2W2RoundedfullBgamber500Unsigned"><span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
-							Unsigned:</Trans>{data?.unsigned_entries.toLocaleString() ?? "0"}
+						<div className="flex items-center gap-1 justify-end">
+							<span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
+							Unsigned: {data?.unsigned_entries.toLocaleString() ?? "0"}
 						</div>
 					</div>
 				</div>

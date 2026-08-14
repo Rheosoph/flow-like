@@ -6,6 +6,7 @@ import {
 	ChevronDown,
 	ChevronsDownUp,
 	Copy,
+	Crosshair,
 	Expand,
 	Eye,
 	EyeOff,
@@ -17,6 +18,7 @@ import {
 } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { inferTemporalValue } from "../../../lib/date";
 import type {
 	GraphOverlay,
 	NodeLabelMapping,
@@ -44,6 +46,9 @@ export interface GraphNodeInspectorProps {
 	connections?: ConnectionInfo[];
 	onClose: () => void;
 	onExpand?: (depth: number) => void;
+	/** Restricts the canvas to this object's neighborhood; null leaves focus. */
+	onFocus?: (depth: number | null) => void;
+	focused?: boolean;
 	hasChildren?: boolean;
 	childrenExpanded?: boolean;
 	onExpandChildren?: () => void;
@@ -76,10 +81,21 @@ export type ValueKind =
 
 export { inferValueKind, PropertyValue, FieldFilter, CopyButton };
 
-function inferValueKind(value: unknown): { kind: ValueKind; dims?: number } {
+/**
+ * `propKey` is what makes an epoch integer readable: an ontology property is
+ * untyped by the time it reaches here, so a `created_at` holding 1786353300000
+ * is indistinguishable from a quantity without its name.
+ */
+function inferValueKind(
+	value: unknown,
+	propKey?: string,
+): { kind: ValueKind; dims?: number } {
 	if (value === null || value === undefined) return { kind: "unknown" };
 	if (typeof value === "boolean") return { kind: "boolean" };
-	if (typeof value === "number") return { kind: "number" };
+	if (typeof value === "number" || typeof value === "bigint") {
+		if (propKey && inferTemporalValue(propKey, value)) return { kind: "date" };
+		return { kind: "number" };
+	}
 	if (Array.isArray(value)) {
 		if (
 			value.length > 0 &&
@@ -102,6 +118,7 @@ function inferValueKind(value: unknown): { kind: ValueKind; dims?: number } {
 		) {
 			return { kind: "date" };
 		}
+		if (propKey && inferTemporalValue(propKey, value)) return { kind: "date" };
 		return { kind: "string" };
 	}
 	return { kind: "unknown" };
@@ -190,7 +207,7 @@ function PropertyValue({
 	propKey,
 }: { value: unknown; propKey: string }) {
 	const { t } = useTranslation("common");
-	const { kind, dims } = inferValueKind(value);
+	const { kind, dims } = inferValueKind(value, propKey);
 	const display =
 		typeof value === "object"
 			? JSON.stringify(value, null, 2)
@@ -340,7 +357,7 @@ function PropertyRow({ propKey, value }: { propKey: string; value: unknown }) {
 					{propKey}
 				</p>
 				<span className="text-[9px] text-muted-foreground/60">
-					{inferValueKind(value).kind}
+					{inferValueKind(value, propKey).kind}
 				</span>
 			</div>
 			<PropertyValue value={value} propKey={propKey} />
@@ -354,6 +371,8 @@ export function GraphNodeInspector({
 	connections,
 	onClose,
 	onExpand,
+	onFocus,
+	focused = false,
 	hasChildren,
 	childrenExpanded,
 	onExpandChildren,
@@ -470,8 +489,39 @@ export function GraphNodeInspector({
 					{/* Explore actions */}
 					{(onExpand ||
 						onFindPath ||
+						onFocus ||
 						(hasChildren && (onExpandChildren || onCollapseChildren))) && (
 						<div className="flex flex-wrap gap-1.5">
+							{onFocus && (
+								<Button
+									variant={focused ? "default" : "outline"}
+									size="sm"
+									className="h-7 gap-1.5 text-xs"
+									onClick={() => onFocus(focused ? null : 1)}
+									title={t(
+										"showOnlyThisObjectAndItsNeighbors",
+										"Show only this object and its neighbors",
+									)}
+								>
+									<Crosshair className="h-3.5 w-3.5" />
+									{focused ? t("exitFocus", "Exit focus") : t("focus", "Focus")}
+								</Button>
+							)}
+							{onFocus && focused && (
+								<Button
+									variant="outline"
+									size="sm"
+									className="h-7 gap-1.5 text-xs"
+									onClick={() => onFocus(2)}
+									title={t(
+										"widenTheFocusToTwoHops",
+										"Widen the focus to two hops",
+									)}
+								>
+									<Crosshair className="h-3.5 w-3.5" />
+									{t("2Hops", "2 hops")}
+								</Button>
+							)}
 							{onExpand && (
 								<Button
 									variant="outline"

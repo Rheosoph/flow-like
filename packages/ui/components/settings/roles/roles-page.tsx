@@ -299,14 +299,15 @@ export function RolesPage() {
 				<div className="flex items-center gap-3 px-4 py-2.5 border-t bg-card">
 					<p className="flex-1 text-sm text-muted-foreground">
 						<span className="inline-block w-1.5 h-1.5 rounded-full bg-primary mr-2 align-middle" />
-						{isNewRole ? t('newRole2', "New role") : t('unsavedChangesTo', "Unsaved changes to")}
+						{isNewRole ? t('newRole2', "New role") : t('unsavedChangesTo', "Unsaved changes to")}{" "}
 						<strong className="text-foreground">
 							{draft.name.trim() || "Untitled role"}
 						</strong>
 						{!isNewRole && memberCounts !== undefined && (
 							<>
-								{t('affects', "— affects")}
-								<strong className="text-foreground">{affected}</strong>
+								{" "}
+								{t('affects', "— affects")}{" "}
+								<strong className="text-foreground">{affected}</strong>{" "}
 								{t('members', { defaultValue_one: "member", defaultValue_other: "members", count: affected })}
 							</>
 						)}

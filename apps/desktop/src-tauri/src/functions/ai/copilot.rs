@@ -3067,6 +3067,9 @@ pub async fn copilot_chat(
     selected_node_ids: Option<Vec<String>>,
     // UI context (optional for Board scope)
     current_surface: Option<Vec<SurfaceComponent>>,
+    // The surface's persisted canvasSettings, customCss included. The UI specialist edits an
+    // existing stylesheet only if it can see it.
+    current_canvas_settings: Option<serde_json::Value>,
     selected_component_ids: Option<Vec<String>>,
     // Common parameters
     user_prompt: String,
@@ -3186,6 +3189,7 @@ pub async fn copilot_chat(
                         catalog_nodes,
                         selected_node_ids.as_deref().unwrap_or(&[]),
                         current_surface.as_ref(),
+                        current_canvas_settings.as_ref(),
                         user_prompt,
                         raw_user_prompt,
                         request_identity_prompt,
@@ -3223,6 +3227,7 @@ pub async fn copilot_chat(
                         catalog_nodes,
                         selected_node_ids.as_deref().unwrap_or(&[]),
                         current_surface.as_ref(),
+                        current_canvas_settings.as_ref(),
                         user_prompt,
                         raw_user_prompt,
                         request_identity_prompt,
@@ -3447,6 +3452,7 @@ pub async fn copilot_chat(
         board.as_ref(),
         &selected_node_ids,
         current_surface.as_ref(),
+        current_canvas_settings.as_ref(),
         &selected_component_ids,
         user_prompt,
         Some(raw_user_prompt),
@@ -3954,6 +3960,7 @@ pub async fn global_chat(
                         None,
                         &[],
                         None,
+                        None,
                         user_prompt,
                         source_user_prompt.clone(),
                         source_user_prompt.clone(),
@@ -3993,6 +4000,7 @@ pub async fn global_chat(
                         None,
                         None,
                         &[],
+                        None,
                         None,
                         user_prompt,
                         source_user_prompt.clone(),
@@ -4924,6 +4932,7 @@ async fn external_code_agent_chat_internal(
     catalog_nodes: Option<Vec<Node>>,
     selected_node_ids: &[String],
     current_surface: Option<&Vec<SurfaceComponent>>,
+    current_canvas_settings: Option<&serde_json::Value>,
     user_prompt: String,
     raw_user_prompt: String,
     request_identity_prompt: String,
@@ -4951,6 +4960,7 @@ async fn external_code_agent_chat_internal(
         catalog_nodes,
         selected_node_ids,
         current_surface,
+        current_canvas_settings,
         &history,
         &raw_user_prompt,
         &request_identity_prompt,
@@ -5621,6 +5631,7 @@ async fn copilot_sdk_chat_internal(
     catalog_nodes: Option<Vec<Node>>,
     selected_node_ids: &[String],
     current_surface: Option<&Vec<SurfaceComponent>>,
+    current_canvas_settings: Option<&serde_json::Value>,
     user_prompt: String,
     raw_user_prompt: String,
     request_identity_prompt: String,
@@ -5656,6 +5667,7 @@ async fn copilot_sdk_chat_internal(
         catalog_nodes,
         selected_node_ids,
         current_surface,
+        current_canvas_settings,
         &history,
         &raw_user_prompt,
         &request_identity_prompt,
@@ -7679,6 +7691,10 @@ fn specialist_tool_policy(
             "execute_event",
             "execute_node",
             "query_execution_logs",
+            // End-to-end verification of persisted work: drive a live page's inputs/buttons and
+            // invoke the app's chat event, observing the runs they start.
+            "interact_app_page",
+            "call_app_chat",
             // Lets a board specialist pull the FlowScript a Scout plan pointed it at, instead of
             // that fragment travelling through the orchestrator's context as inlined text.
             "read_flowscript_source",
@@ -7687,6 +7703,16 @@ fn specialist_tool_policy(
 
     if matches!(scope, CopilotScope::Frontend | CopilotScope::Both) {
         names.extend(["emit_ui", "get_component_schema"]);
+        // The UI specialist verifies its own work at runtime: inspect pages, drive the live page
+        // (fill inputs, press buttons), execute the page's Events, talk to the app's chat, and
+        // read run logs. Node-level execution stays board-owned.
+        names.extend([
+            "ui_inspect",
+            "execute_event",
+            "query_execution_logs",
+            "interact_app_page",
+            "call_app_chat",
+        ]);
     }
 
     if matches!(scope, CopilotScope::DataStudio) {
@@ -7775,8 +7801,8 @@ fn build_flowpilot_sdk_tools(
     use super::{
         copilot_sdk_tools::{
             create_board_support_tools, create_board_tools, create_data_studio_tools,
-            create_frontend_tools, create_global_assistant_tools, create_research_tools,
-            create_scout_tools,
+            create_frontend_support_tools, create_frontend_tools, create_global_assistant_tools,
+            create_research_tools, create_scout_tools,
         },
         frontend_tool_bridge::{FrontendToolBridge, GLOBAL_FRONTEND_TOOL_EVENT},
     };
@@ -7841,7 +7867,9 @@ fn build_flowpilot_sdk_tools(
         CopilotScope::Board | CopilotScope::Both => {
             tools.extend(create_board_support_tools(runtime_bridge));
         }
-        CopilotScope::Frontend => {}
+        CopilotScope::Frontend => {
+            tools.extend(create_frontend_support_tools(runtime_bridge));
+        }
         CopilotScope::DataStudio => {
             tools.extend(create_data_studio_tools(runtime_bridge));
         }
@@ -12625,7 +12653,7 @@ fn flowpilot_mcp_server_instructions<'a>(
     }
     match (has_board, has_ui, has_data) {
         (false, true, false) => {
-            "You are the FlowPilot UI specialist. Use only emit_ui/get_component_schema for A2UI pages, widgets, and components. Never author FlowScript, board nodes/connections/Events, database/storage changes, or workflow executions. Hand workflow wiring back to the board specialist. Do not use shell or file-edit tools for FlowPilot artifacts."
+            "You are the FlowPilot UI specialist. Use emit_ui/get_component_schema for A2UI pages, widgets, and components. Never author FlowScript, board nodes/connections/Events, or database/storage changes. For runtime VERIFICATION of persisted work you may drive the live page with interact_app_page (set inputs, trigger buttons, read runs + screenshots), run persisted Events with execute_event, message the app's chat with call_app_chat, and read logs with query_execution_logs — never to author data. Hand workflow wiring back to the board specialist. Do not use shell or file-edit tools for FlowPilot artifacts."
         }
         (true, false, false) => {
             "You are the read-only FlowPilot BOARD specialist. Inspect the current board and its read-only context, then answer. Never edit FlowScript, execute workflows, emit UI, or mutate app data/storage. Do not use shell or file-edit tools for FlowPilot artifacts."
@@ -16036,6 +16064,9 @@ fn build_flowpilot_agent_surface(
     catalog_nodes: Option<Vec<Node>>,
     selected_node_ids: &[String],
     current_surface: Option<&Vec<SurfaceComponent>>,
+    // The surface's persisted canvasSettings, customCss included. Without it the UI specialist
+    // edits a page whose stylesheet it cannot see, and can only replace it blind.
+    current_canvas_settings: Option<&serde_json::Value>,
     history: &[UnifiedChatMessage],
     _original_user_prompt: &str,
     // Immutable end-user request that owns retained drafts and the acceptance contract. For a
@@ -16242,16 +16273,33 @@ fn build_flowpilot_agent_surface(
         system_content.push_str(&manifest_prompt);
     }
 
-    if matches!(scope, CopilotScope::Frontend | CopilotScope::Both)
-        && let Some(components) = current_surface
-        && !components.is_empty()
-    {
-        let components_json =
-            serde_json::to_string_pretty(components).unwrap_or_else(|_| "[]".to_string());
-        system_content.push_str(&format!(
-            "\n\n## CURRENT UI COMPONENTS\nThe user has the following existing UI. You can modify or extend it:\n```json\n{}\n```",
-            components_json
-        ));
+    if matches!(scope, CopilotScope::Frontend | CopilotScope::Both) {
+        if let Some(components) = current_surface
+            && !components.is_empty()
+        {
+            let components_json =
+                serde_json::to_string_pretty(components).unwrap_or_else(|_| "[]".to_string());
+            system_content.push_str(&format!(
+                "\n\n## CURRENT UI COMPONENTS\nThe user has the following existing UI. You can modify or extend it:\n```json\n{}\n```",
+                components_json
+            ));
+        }
+
+        // The stylesheet is shown verbatim, uncapped: editing a design system requires seeing the
+        // classes it already defines, and emit_ui replaces customCss wholesale rather than merging
+        // rule by rule.
+        if let Some(canvas_settings) = current_canvas_settings
+            && canvas_settings
+                .as_object()
+                .is_some_and(|map| !map.is_empty())
+        {
+            let canvas_json =
+                serde_json::to_string_pretty(canvas_settings).unwrap_or_else(|_| "{}".to_string());
+            system_content.push_str(&format!(
+                "\n\n## CURRENT CANVAS SETTINGS\nThis surface's live canvasSettings, customCss included:\n```json\n{}\n```\nReuse the classes this stylesheet already defines instead of inventing parallel ones. OMIT `canvasSettings.customCss` from emit_ui to leave it untouched; include it only to change it, and then send the COMPLETE stylesheet — the value replaces the previous one, so any rule you leave out is deleted.",
+                canvas_json
+            ));
+        }
     }
 
     let mut context_parts = vec![];

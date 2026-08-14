@@ -114,11 +114,11 @@ export function FlowPilotAction({
 		if (!prompt.trim()) return;
 
 		const context = hasSelection
-			? t('modifyTheFollowingSelectedComponentsValUserRequestPrompt', "Modify the following selected component(s): {{val}} User request: {{prompt}}", { val: JSON.stringify(selectedComponents, null, 2), prompt })
+			? `Modify the following selected component(s):\n${JSON.stringify(selectedComponents, null, 2)}\n\nUser request: ${prompt}`
 			: prompt;
 
 		await generate(context);
-	}, [prompt, hasSelection, selectedComponents, generate, t]);
+	}, [prompt, hasSelection, selectedComponents, generate]);
 
 	const handleKeyDown = useCallback(
 		(e: React.KeyboardEvent) => {

@@ -480,7 +480,12 @@ export function TelegramConfig({
 																		{t('configureYourTelegramBotWebhookUsingThisCommand', "Configure your Telegram bot webhook using this command:")}
 																	</p>
 																	<pre className="text-xs bg-muted p-3 rounded-md overflow-x-auto">
-																		{`curl -X POST "https://api.telegram.org/bot${botToken || "<YOUR_BOT_TOKEN>"}/setWebhook" \ -H "Content-Type: application/json" \ -d '{ "url": "${remoteWebhookUrl}", "secret_token": "${webhookSecret || "<YOUR_SECRET>"}" }'`}
+																		{`curl -X POST "https://api.telegram.org/bot${botToken || "<YOUR_BOT_TOKEN>"}/setWebhook" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "url": "${remoteWebhookUrl}",
+    "secret_token": "${webhookSecret || "<YOUR_SECRET>"}"
+  }'`}
 																	</pre>
 																	<Button
 																		type="button"

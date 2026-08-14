@@ -800,10 +800,7 @@ export function SpotlightCard({
 	);
 
 	const cardClass = cn(
-		t(
-			"groupGridHfullGridcols1OverflowhiddenRounded2xlBorderBorderborder60Bgcard80ShadowsmBackdropblursmTransitionallDuration300Hovertranslatey1Hoverborderprimary30HovershadowxlSmgridcols200px_1fr",
-			"group grid h-full grid-cols-1 overflow-hidden rounded-2xl border border-border/60 bg-card/80 shadow-sm backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-xl sm:grid-cols-[200px_1fr]",
-		),
+		"group grid h-full grid-cols-1 overflow-hidden rounded-2xl border border-border/60 bg-card/80 shadow-sm backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-xl sm:grid-cols-[200px_1fr]",
 		className,
 	);
 

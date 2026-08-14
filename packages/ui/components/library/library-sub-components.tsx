@@ -506,7 +506,7 @@ export function SearchResults({
 				<div className="rounded-full bg-muted/30 p-5 mb-5">
 					<Search className="h-7 w-7 text-muted-foreground/40" />
 				</div>
-				<p className="text-sm text-foreground/60 mb-1">{t('nothingFoundForLdquoqueryrdquo', 'Nothing found for &ldquo;{{query}}&rdquo;', { query })}</p>
+				<p className="text-sm text-foreground/60 mb-1">{t('nothingFoundForLdquoqueryrdquo', 'Nothing found for “{{query}}”', { query })}</p>
 				<p className="text-xs text-muted-foreground/60">
 					{t('tryDifferentKeywords', 'Try different keywords')}
 				</p>

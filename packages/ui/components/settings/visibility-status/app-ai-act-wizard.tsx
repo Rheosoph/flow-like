@@ -497,7 +497,7 @@ export function AppAiActWizard({
 					<AlertTitle>
 						{t('assistantNotes', 'Assistant notes')}
 						{suggestMutation.data?.model
-							? `· ${suggestMutation.data.model}`
+							? ` · ${suggestMutation.data.model}`
 							: ""}
 					</AlertTitle>
 					<AlertDescription>
@@ -547,7 +547,7 @@ export function AppAiActWizard({
 							{responsibleName ?? responsibleEmail ?? t('appOwner', 'App owner')}
 						</p>
 						<p className="text-xs text-muted-foreground">
-							{responsibleEmail ? `${responsibleEmail} ·` : ""}
+							{responsibleEmail ? `${responsibleEmail} · ` : ""}
 							{t('automaticallySetToTheAppOwnerEuAiActArt26AndShownToReviewersThisCannotBeChanged', "Automatically set to the app owner (EU AI Act Art. 26) and shown to reviewers. This cannot be changed.")}
 						</p>
 					</div>

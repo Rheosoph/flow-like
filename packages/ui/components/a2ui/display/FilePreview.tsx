@@ -1,6 +1,6 @@
 "use client";
 
-import { Trans, useTranslation } from "@flow-like/locales";
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "../../../lib/utils";
 import { AudioPreview } from "../../ui/audio-preview";
@@ -198,8 +198,10 @@ export function A2UIFilePreview({
 				preload={loading === "eager" ? "auto" : "metadata"}
 				className={cn("w-full h-full", fitClass, resolveStyle(style))}
 				style={resolveInlineStyle(style)}
-			><Trans i18nKey="trackKindcaptionsSrclangenLabelenglishCaptionsYourBrowserDoesNotSupportTheVideoTag"><track kind="captions" srcLang="en" label="English captions" />
-				Your browser does not support the video tag.</Trans></video>
+			>
+				<track kind="captions" srcLang="en" label="English captions" />
+				Your browser does not support the video tag.
+			</video>
 		);
 	}
 

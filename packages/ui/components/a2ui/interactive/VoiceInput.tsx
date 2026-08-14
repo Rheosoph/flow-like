@@ -107,7 +107,7 @@ function voiceCaptureErrorMessage(error: unknown): string {
 		case "NotFoundError":
 			return i18next.t('noMicrophoneWasFoundConnectOrEnableAMicrophoneAndTryAgain', 'No microphone was found. Connect or enable a microphone and try again.');
 		case "NotReadableError":
-		case i18next.t('aborterror', 'AbortError'):
+		case "AbortError":
 			return i18next.t('theMicrophoneIsUnavailableCloseOtherAppsUsingItAndTryAgain', 'The microphone is unavailable. Close other apps using it and try again.');
 		default:
 			return i18next.t('microphoneAccessFailedCheckYourBrowserAndSystemPermissionsThenTryAgain', 'Microphone access failed. Check your browser and system permissions, then try again.');
@@ -525,9 +525,9 @@ export function A2UIVoiceInput({
 				clearRecording(false);
 			}
 		};
-		window.addEventListener(t('a2uiclearfileinput', 'a2ui:clearFileInput'), handleClear);
+		window.addEventListener("a2ui:clearFileInput", handleClear);
 		return () => {
-			window.removeEventListener(t('a2uiclearfileinput', 'a2ui:clearFileInput'), handleClear);
+			window.removeEventListener("a2ui:clearFileInput", handleClear);
 		};
 	}, [surfaceId, componentId, clearRecording]);
 
@@ -719,7 +719,7 @@ export function A2UIVoiceInput({
 								</p>
 								{!display.transcript && (
 									<p className="text-xs text-muted-foreground">
-										{formatDuration(display.duration)} {t('middot', '&middot;')}{" "}
+										{formatDuration(display.duration)} &middot;{" "}
 										{formatFileSize(display.size)}
 									</p>
 								)}

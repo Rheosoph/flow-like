@@ -270,7 +270,8 @@ function LadderControl({
 					onClick={() => setShowAdvanced((open) => !open)}
 					className="text-xs text-muted-foreground hover:text-foreground"
 				>
-					{advancedOpen ? "Hide" : "Advanced"}{t('lengthPermissions', '· {{length}} permissions', { length: raw.length })}</button>
+					{advancedOpen ? "Hide" : "Advanced"} · {raw.length} permissions
+				</button>
 			</div>
 
 			<div className="flex rounded-lg border overflow-hidden bg-muted/40">

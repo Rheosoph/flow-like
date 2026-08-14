@@ -146,7 +146,7 @@ export function OverlayWizard({
 				<DialogHeader>
 					<DialogTitle>{t('createGraphOverlay', 'Create Graph Overlay')}</DialogTitle>
 					<DialogDescription>
-						{t('step', 'Step')} {step + 1}{t('ofLengthCurrentstep', 'of {{length}}: {{currentStep}}', { length: STEPS.length, currentStep })}</DialogDescription>
+						{t('stepOf', 'Step {{step}} of {{total}}: {{currentStep}}', { step: step + 1, total: STEPS.length, currentStep })}</DialogDescription>
 				</DialogHeader>
 
 				{/* Step indicator */}

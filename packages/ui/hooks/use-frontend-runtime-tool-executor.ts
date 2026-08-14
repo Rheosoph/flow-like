@@ -6,6 +6,7 @@ import type { SurfaceComponent } from "../components/a2ui/types";
 import { compactJson, compactLogEvents } from "../components/flowpilot/utils";
 import type { ILog, ILogMetadata, IRunPayload } from "../lib";
 import { ApiResponseError } from "../lib/api-error";
+import { runAppChatMessage } from "../lib/app-chat-run";
 import {
 	getPendingDatabaseSchemas,
 	isExplicitSchemaCreateUnavailable,
@@ -13,6 +14,10 @@ import {
 	retainPendingDatabaseSchema,
 } from "../lib/database-capability-session";
 import { normalizeDatabaseTableIdentifier } from "../lib/database-table-name";
+import {
+	interactWithAppPage,
+	parseInteractActions,
+} from "../lib/interact-app-page";
 import { type IBackendState, useBackend } from "../state/backend-state";
 import type { IBoardState } from "../state/backend-state/board-state";
 import { IIndexType } from "../state/backend-state/db-state";
@@ -94,6 +99,8 @@ export const FRONTEND_RUNTIME_TOOL_NAMES = [
 	"execute_event",
 	"execute_node",
 	"query_execution_logs",
+	"interact_app_page",
+	"call_app_chat",
 	"graph_overlay_tool",
 	"graph_query_tool",
 	"graph_element_tool",
@@ -412,12 +419,17 @@ function collectBoundPaths(components: SurfaceComponent[]): string[] {
 }
 
 function summarizePage(page: IPage) {
+	const customCss = page.canvasSettings?.customCss ?? "";
 	return {
 		page_id: page.id,
 		name: page.name,
 		route: page.route,
 		on_load_event_id: page.onLoadEventId,
 		on_interval_event_id: page.onIntervalEventId,
+		// Size only, never the stylesheet itself — this tool feeds the orchestrator, and the UI
+		// specialist receives the full customCss as its own context. Without this signal the
+		// orchestrator cannot tell a styled page from an unstyled one.
+		custom_css_chars: customCss.length,
 		element_refs: (page.components ?? []).map(
 			(component) => `${page.id}/${component.id}`,
 		),
@@ -1531,12 +1543,9 @@ export function useFrontendRuntimeToolExecutor(
 						"streamState",
 						true,
 					);
-					const skipConsentCheck = getArgBool(
-						args,
-						"skip_consent_check",
-						"skipConsentCheck",
-						false,
-					);
+					// OAuth/RPA consent is a user gate; the model must never skip it, so the
+					// former skip_consent_check argument is deliberately not read here.
+					const skipConsentCheck = false;
 					const payload = buildRunPayload(eventId, args.payload);
 					const logs: unknown[] = [];
 					let runId: string | undefined;
@@ -1582,12 +1591,7 @@ export function useFrontendRuntimeToolExecutor(
 						nodeId,
 						payload: args.payload,
 						streamState: getArgBool(args, "stream_state", "streamState", true),
-						skipConsentCheck: getArgBool(
-							args,
-							"skip_consent_check",
-							"skipConsentCheck",
-							false,
-						),
+						skipConsentCheck: false,
 					});
 				}
 
@@ -1606,6 +1610,37 @@ export function useFrontendRuntimeToolExecutor(
 						filter: getArgString(args, "filter") ?? getArgString(args, "query"),
 						offset: getArgNumber(args, "offset", "offset", 0),
 						limit: getArgNumber(args, "limit", "limit", 100),
+					});
+				}
+
+				case "interact_app_page": {
+					const actions = parseInteractActions(args.actions);
+					if (actions.length === 0)
+						throw new Error(
+							"interact_app_page requires a non-empty actions array of {action: 'set_value'|'trigger', component_id, value?, event?}.",
+						);
+					return interactWithAppPage(backend, {
+						appId: toolAppId,
+						eventId: getArgString(args, "event_id", "eventId"),
+						pageId: getArgString(args, "page_id", "pageId"),
+						actions,
+						captureScreenshots: getArgBool(
+							args,
+							"capture_screenshots",
+							"captureScreenshots",
+							true,
+						),
+					});
+				}
+
+				case "call_app_chat": {
+					const message =
+						getArgString(args, "message") ?? getArgString(args, "prompt");
+					if (!message) throw new Error("call_app_chat requires a message.");
+					return runAppChatMessage(backend, {
+						appId: toolAppId,
+						eventId: getArgString(args, "event_id", "eventId"),
+						message,
 					});
 				}
 

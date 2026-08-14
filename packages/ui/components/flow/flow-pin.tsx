@@ -200,7 +200,9 @@ function FlowPinInnerComponent({
 
 	const pinEditContainerClassName = useMemo(
 		() =>
-			t('flexFlexrowItemscenterGap1Maxw10remVal', 'flex flex-row items-center gap-1 max-w-[10rem] {{val}}', { val: pin.pin_type === "Input" ? "ml-2.5" : "translate-x-[calc(-100%+0.2rem)]" }),
+			`flex flex-row items-center gap-1 max-w-[10rem] ${
+				pin.pin_type === "Input" ? "ml-2.5" : "translate-x-[calc(-100%+0.2rem)]"
+			}`,
 		[pin.pin_type],
 	);
 

@@ -338,7 +338,11 @@ pub fn workflow_authoring_tool_allowed(tool_name: &str) -> bool {
 pub fn workflow_authoring_defers_runtime_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "execute_event" | "execute_node" | "query_execution_logs"
+        "execute_event"
+            | "execute_node"
+            | "query_execution_logs"
+            | "interact_app_page"
+            | "call_app_chat"
     )
 }
 

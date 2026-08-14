@@ -33,6 +33,7 @@ import { useExecutionServiceOptional } from "../../state/execution-service-conte
 import { useRouteDialogSafe } from "./RouteDialogProvider";
 import { resolveEventActions } from "./event-handlers";
 import { useElementStorage } from "./hooks/use-element-storage";
+import { notifyLivePageRun } from "./live-page-registry";
 import {
 	resolveWidgetInstanceEventRoute,
 	useWidgetInstance,
@@ -738,6 +739,20 @@ export function useSetElementValue() {
 }
 
 /**
+ * Access for the FlowPilot live-page bridge: the pieces of ActionContext an agent needs to
+ * read and drive a mounted page (LivePageAgentBridge). Not for component renderers.
+ */
+export function useAgentActionAccess() {
+	const context = useContext(ActionContext);
+	return {
+		surfaceId: context?.surfaceId,
+		components: context?.components,
+		getElementValues: context?.getElementValues,
+		setElementValue: context?.setElementValue,
+	};
+}
+
+/**
  * Hook to access element values and components for building _input_values maps.
  * Used by WidgetActionHandler to collect event-relevant input values.
  */
@@ -1038,7 +1053,7 @@ export function useExecuteAction() {
 							navUrl,
 							"replace:",
 							replace,
-							i18next.t('appid', 'appId:'),
+							"appId:",
 							appId,
 							"currentPath:",
 							pathname,
@@ -1495,16 +1510,39 @@ export function useExecuteAction() {
 								const execFn =
 									executionService?.executeBoard ??
 									backend.boardState.executeBoard;
-								await execFn(
+								let capturedRunId: string | undefined;
+								const runMeta = await execFn(
 									effectiveAppId,
 									effectiveBoardId,
 									payload,
 									false, // streamState
-									undefined, // eventId
+									(id) => {
+										capturedRunId = id;
+									},
 									handleA2UIEvents, // callback for A2UI events
 								);
+								notifyLivePageRun(surfaceId, {
+									status: "ok",
+									runId: runMeta?.run_id ?? capturedRunId,
+									componentId: triggeringComponentId ?? undefined,
+									nodeId,
+									appId: effectiveAppId,
+									boardId: effectiveBoardId,
+									logMeta: runMeta,
+									endedAtMs: Date.now(),
+								});
 							} catch (error) {
 								console.error("Failed to execute workflow event:", error);
+								notifyLivePageRun(surfaceId, {
+									status: "error",
+									componentId: triggeringComponentId ?? undefined,
+									nodeId,
+									appId: effectiveAppId,
+									boardId: effectiveBoardId,
+									errorMessage:
+										error instanceof Error ? error.message : String(error),
+									endedAtMs: Date.now(),
+								});
 								toast.error(i18next.t('workflowExecutionFailed', 'Workflow execution failed'), {
 									description:
 										error instanceof Error
@@ -1560,7 +1598,7 @@ export function useExecuteAction() {
 							console.warn(
 								"[A2UI] widget_event: no binding found for actionId:",
 								actionId,
-								i18next.t('availableBindings', 'available bindings:'),
+								"available bindings:",
 								widgetInstance?.actionBindings,
 							);
 							toast.warning(

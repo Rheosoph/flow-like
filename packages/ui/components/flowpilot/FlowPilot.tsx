@@ -540,6 +540,7 @@ function FlowPilotImpl({
 	initialPrompt,
 	// UI mode props
 	currentComponents = [],
+	currentCanvasSettings,
 	selectedComponentIds = [],
 	onComponentsGenerated,
 	onApplyComponents,
@@ -1312,6 +1313,8 @@ function FlowPilotImpl({
 					case "execute_event":
 					case "execute_node":
 					case "query_execution_logs":
+					case "interact_app_page":
+					case "call_app_chat":
 						result = await executeRuntimeTool(
 							request.toolName,
 							request.arguments,
@@ -3138,6 +3141,7 @@ function FlowPilotImpl({
 					catalogNodes,
 					selectedNodeIds,
 					currentComponents,
+					currentCanvasSettings ?? null,
 					selectedComponentIds,
 					userMsg,
 					chatHistory,
@@ -3565,6 +3569,7 @@ function FlowPilotImpl({
 			selectedReasoningEffort,
 			runContext,
 			currentComponents,
+			currentCanvasSettings,
 			selectedComponentIds,
 			activeAppId,
 			onComponentsGenerated,

@@ -394,7 +394,7 @@ export function FlowsOverviewPage({
 							setBoardCreation={setBoardCreation}
 						/>
 					) : visibleCount === 0 ? (
-						<p className="rounded-xl border border-dashed border-border/60 px-6 py-12 text-center text-sm text-muted-foreground">{t('noFlowMatchesLdquoqueryrdquo', 'No flow matches &ldquo;{{query}}&rdquo;.', { query })}</p>
+						<p className="rounded-xl border border-dashed border-border/60 px-6 py-12 text-center text-sm text-muted-foreground">{t('noFlowMatchesLdquoqueryrdquo', 'No flow matches “{{query}}”.', { query })}</p>
 					) : (
 						BAND_ORDER.map((band) => {
 							const bandRows = bands.get(band) ?? [];

@@ -1,5 +1,5 @@
 "use client";
-import { Trans, useTranslation } from "@flow-like/locales";
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "../../lib";
 import { AudioPreview } from "./audio-preview";
@@ -241,14 +241,16 @@ export function FilePreviewer({
 
 	if (isVideo(url, filename)) {
 		return (
-			<video src={url} controls className="w-full h-full object-contain"><Trans i18nKey="trackKindcaptionsLabelenglishCaptionsSrclangenSrcDefaultfalseYourBrowserDoesNotSupportTheVideoTag"><track
+			<video src={url} controls className="w-full h-full object-contain">
+				<track
 					kind="captions"
 					label="English captions"
 					srcLang="en"
 					src=""
 					default={false}
 				/>
-				Your browser does not support the video tag.</Trans></video>
+				Your browser does not support the video tag.
+			</video>
 		);
 	}
 
@@ -276,10 +278,10 @@ export function FilePreviewer({
 		}
 		return (
 			<TextEditor
-				initialContent={`\`\`\`${getCodeLanguage(
+				initialContent={`\n\`\`\`${getCodeLanguage(
 					url,
 					filename,
-				)} ${content} \`\`\``}
+				)}\n${content}\n\`\`\`\n`}
 				isMarkdown={true}
 				editable={false}
 			/>

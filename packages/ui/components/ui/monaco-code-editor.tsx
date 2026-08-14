@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import Editor, { type Monaco, type OnMount } from "@monaco-editor/react";
 import { Maximize2, Minimize2 } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -54,7 +53,6 @@ export function MonacoCodeEditor({
 	allowFullscreen = false,
 	autoFocus = true,
 }: Readonly<MonacoCodeEditorProps>) {
-	const { t } = useTranslation("common");
 	const [isFullscreen, setIsFullscreen] = useState(false);
 	const { resolvedTheme } = useTheme();
 	const monacoRef = useRef<Monaco | null>(null);
@@ -135,7 +133,7 @@ export function MonacoCodeEditor({
 					minimap: { enabled: showMinimap || isFullscreen },
 					fontSize: isFullscreen ? 14 : 12,
 					fontFamily:
-						t('sfMonoUimonospaceSfmonoregularMenloMonacoConsolasLiberationMonoCourierNewMonospace', '\'SF Mono\', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \'Liberation Mono\', \'Courier New\', monospace'),
+						"'SF Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
 					fontLigatures: true,
 					lineNumbers: showLineNumbers ? "on" : "off",
 					scrollBeyondLastLine: false,

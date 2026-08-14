@@ -45,7 +45,7 @@ export function ExportToolbarButton(props: DropdownMenuProps) {
 						const existingStyle = element.getAttribute("style") || "";
 						element.setAttribute(
 							"style",
-							t('existingstyleFontfamilyApplesystemBlinkmacsystemfontSegoeUiRobotoHelveticaArialSansserifImportant', '{{existingStyle}}; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important', { existingStyle }),
+							`${existingStyle}; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important`,
 						);
 					});
 				}

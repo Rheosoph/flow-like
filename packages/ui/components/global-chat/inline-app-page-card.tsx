@@ -58,7 +58,7 @@ export function InlineAppPageCard({
 	}, [page.appId, page.eventId]);
 
 	const fullViewRoute = `/use?id=${page.appId}${
-		target.eventId ? t('eventideventid', '&eventId={{eventId}}', { eventId: target.eventId }) : ""
+		target.eventId ? `&eventId=${target.eventId}` : ""
 	}`;
 
 	return (
@@ -85,7 +85,7 @@ export function InlineAppPageCard({
 						{page.name}
 					</span>
 					<span className="ml-1 px-1.5 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-semibold uppercase tracking-wide shrink-0">
-						{t('appPage', 'App Page')}
+						{t("appPage", "App Page")}
 					</span>
 					<ChevronDownIcon
 						className={`size-4 text-muted-foreground shrink-0 ml-auto transition-transform ${expanded ? "" : "-rotate-90"}`}
@@ -95,8 +95,8 @@ export function InlineAppPageCard({
 					variant="ghost"
 					size="icon"
 					className="h-7 w-7 rounded-full shrink-0 text-muted-foreground hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-					aria-label={t('openInFullAppView', 'Open in full app view')}
-					title={t('openInFullAppView', 'Open in full app view')}
+					aria-label={t("openInFullAppView", "Open in full app view")}
+					title={t("openInFullAppView", "Open in full app view")}
 					onClick={() => router.push(fullViewRoute)}
 				>
 					<ExternalLinkIcon className="size-3.5" />
@@ -105,7 +105,7 @@ export function InlineAppPageCard({
 					variant="ghost"
 					size="icon"
 					className="h-7 w-7 rounded-full shrink-0 text-muted-foreground hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-					aria-label={t('closeAppPage', 'Close app page')}
+					aria-label={t("closeAppPage", "Close app page")}
 					onClick={() => onClose(page.id)}
 				>
 					<XIcon className="size-3.5" />
@@ -131,7 +131,10 @@ export function InlineAppPageCard({
 									eventConfig={EVENT_CONFIG}
 									notFound={
 										<div className="flex flex-1 items-center justify-center text-sm text-muted-foreground p-6">
-											{t('thisAppPageIsNoLongerAvailable', 'This app page is no longer available.')}
+											{t(
+												"thisAppPageIsNoLongerAvailable",
+												"This app page is no longer available.",
+											)}
 										</div>
 									}
 									appId={page.appId}

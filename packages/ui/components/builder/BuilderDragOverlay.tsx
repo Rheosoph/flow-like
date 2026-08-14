@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import { DragOverlay } from "@dnd-kit/core";
 import { motion } from "framer-motion";
 import { memo } from "react";
@@ -89,14 +88,13 @@ function DragPreview({ data }: { data: DragData }) {
 export const BuilderDragOverlay = memo(function BuilderDragOverlay({
 	className,
 }: DragLayerProps) {
-	const { t } = useTranslation("flow");
 	const { activeData } = useBuilderDnd();
 
 	return (
 		<DragOverlay
 			dropAnimation={{
 				duration: 200,
-				easing: t('cubicbezier01806706122', 'cubic-bezier(0.18, 0.67, 0.6, 1.22)'),
+				easing: "cubic-bezier(0.18, 0.67, 0.6, 1.22)",
 			}}
 			className={cn("z-10000", className)}
 		>

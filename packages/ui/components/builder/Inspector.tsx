@@ -1782,7 +1782,7 @@ function ChartEditor({
 		const newSeries: ChartSeries = {
 			name: t('seriesVal', 'Series {{val}}', { val: series.length + 1 }),
 			type: "line",
-			dataSource: { csv: t('jan10Feb15Mar12Apr18', "Jan,10 Feb,15 Mar,12 Apr,18") },
+			dataSource: { csv: "Jan,10\nFeb,15\nMar,12\nApr,18" },
 			color: CHART_COLORS[series.length % CHART_COLORS.length],
 			mode: "lines+markers",
 		};
@@ -1911,7 +1911,7 @@ function ChartEditor({
 									onChange={(e) =>
 										updateSeries(idx, { dataSource: { csv: e.target.value } })
 									}
-									placeholder={t('jan20Feb14Mar25', "Jan,20 Feb,14 Mar,25")}
+									placeholder="Jan,20&#10;Feb,14&#10;Mar,25"
 									className="h-20 text-xs font-mono resize-none"
 								/>
 							</div>
@@ -2429,11 +2429,11 @@ function NivoChartEditor({
 								onChange={(e) => setCsvInput(e.target.value)}
 								placeholder={
 									chartType === "bar" || chartType === "radar"
-										? t('categoryseries1series2A1020B1525', "category,series1,series2 A,10,20 B,15,25")
+										? "category,series1,series2\nA,10,20\nB,15,25"
 										: chartType === "pie" || chartType === "funnel"
-											? t('labelvalueCategoryA35CategoryB25', "label,value Category A,35 Category B,25")
+											? "label,value\nCategory A,35\nCategory B,25"
 											: chartType === "line"
-												? t('xseries1series2Jan1015Feb2018', "x,series1,series2 Jan,10,15 Feb,20,18")
+												? "x,series1,series2\nJan,10,15\nFeb,20,18"
 												: "header1,header2\nvalue1,value2"
 								}
 								className="h-32 text-xs font-mono resize-none"

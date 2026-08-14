@@ -1,6 +1,6 @@
 "use client";
 
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
+import { i18n as i18next } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef } from "react";
@@ -21,7 +21,15 @@ import {
 	useQueryClient,
 } from "../../index";
 import { addAppToProfile } from "../../lib/add-app-to-profile";
-import { captureInlineAppPageSnapshots } from "../../lib/app-page-snapshot";
+import {
+	captureInlineAppPageSnapshots,
+	uploadPageSnapshots,
+} from "../../lib/app-page-snapshot";
+import {
+	interactWithAppPage,
+	parseInteractActions,
+} from "../../lib/interact-app-page";
+import { findLivePage } from "../a2ui/live-page-registry";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import { getErrorMessage } from "../../lib/error-message";
 import { EVENT_CONFIG, isChatEventType } from "../../lib/event-config";
@@ -718,7 +726,7 @@ function createSubRunStream(options: {
 		record: options.recordDebugEvent,
 	});
 	const subAcc = createStreamAccumulator();
-	const subPrefix = `${SUB_STEP_PREFIX}${parentRequestId}:`;
+	const subPrefix = `${SUB_STEP_PREFIX}${options.parentRequestId}:`;
 	// If the sub-run outlives its owning response (bridge timeout, user moved on), stop publishing
 	// — otherwise stale "↳" steps leak into another reply.
 	const runIsLive = () => options.scope.isLive();
@@ -1243,7 +1251,6 @@ function dialogPromptDebugInput(prompt: GlobalToolPrompt) {
  * `flowpilot_frontend_tool_result` command.
  */
 export function GlobalToolBridge() {
-	const { t } = useTranslation("chat");
 	const router = useRouter();
 	const pathname = usePathname();
 	const backend = useBackend();
@@ -1458,7 +1465,7 @@ export function GlobalToolBridge() {
 			if (!isRequestExpired(request)) return;
 			markRequestExpired(request.requestId);
 			throw new Error(
-				"Frontend tool request '{{requestId}}' expired before {{stage}}; late side effects were blocked.",
+				`Frontend tool request '${request.requestId}' expired before ${stage}; late side effects were blocked.`,
 			);
 		},
 		[isRequestExpired, markRequestExpired],
@@ -1738,7 +1745,7 @@ export function GlobalToolBridge() {
 					.join(", ");
 				const retainedSummaries = job.review.commandSummaries.slice(0, 8);
 				const commandSummary = retainedSummaries.length
-					? `Reviewed changes: ${retainedSummaries.join("; ")}${job.review.commandSummaries.length > retainedSummaries.length
+					? ` Reviewed changes: ${retainedSummaries.join("; ")}${job.review.commandSummaries.length > retainedSummaries.length
 								? "; …"
 								: ""}`
 					: "";
@@ -1776,7 +1783,17 @@ export function GlobalToolBridge() {
 									(destructive
 										? `Approve destructive workflow change`
 										: "Apply compiled workflow"),
-								description: "{{val}}{{val2}}{{commandCount}} exact compiled board command(s) are ready{{val3}}{{commandSummary}}{{val4}}",
+								description: `${job.approval.description ? `${job.approval.description} ` : ""}${
+									job.error
+										? `The previous apply attempt failed: ${job.error} `
+										: ""
+								}${job.review.commandCount} exact compiled board command(s) are ready${
+									commandBreakdown ? `: ${commandBreakdown}` : "."
+								}${commandSummary}${
+									job.review.destructiveEffects.length > 0
+										? ` Destructive effects: ${job.review.destructiveEffects.join("; ")}`
+										: " The live board will be checked again before the atomic apply."
+								}`,
 								destructive,
 							},
 						});
@@ -2105,7 +2122,7 @@ export function GlobalToolBridge() {
 						...(truncated
 							? {
 									truncated: true,
-									note: "Only the first {{MAX_LISTED_APPS}} of {{length}} profile apps are listed (sorted by name). If the user references an app not shown, it may fall past this cap rather than not exist.",
+									note: `Only the first ${MAX_LISTED_APPS} of ${visible.length} profile apps are listed (sorted by name). If the user references an app not shown, it may fall past this cap rather than not exist.`,
 								}
 							: {}),
 						apps: detailed,
@@ -2137,14 +2154,14 @@ export function GlobalToolBridge() {
 					if (!profileAppIds.has(appId))
 						return {
 							status: "error",
-							message: "App '{{appId}}' is not visible in the current profile.",
+							message: `App '${appId}' is not visible in the current profile.`,
 						};
 					const events = await backend.eventState.getEvents(appId);
 					const event = events.find((candidate) => candidate.id === eventId);
 					if (!event)
 						return {
 							status: "error",
-							message: "Event '{{eventId}}' not found in app '{{appId}}'.",
+							message: `Event '${eventId}' not found in app '${appId}'.`,
 						};
 					scope.referenceApp(appId);
 					// The event configuration is the user-readable interface contract (chat
@@ -2258,7 +2275,7 @@ export function GlobalToolBridge() {
 					} catch (error) {
 						return {
 							status: "error",
-							message: "Could not read app '{{appId}}': {{val}}",
+							message: `Could not read app '${appId}': ${getErrorMessage(error)}`,
 						};
 					}
 
@@ -2317,7 +2334,7 @@ export function GlobalToolBridge() {
 					} catch (error) {
 						return {
 							status: "error",
-							message: "Could not get access to '{{appId}}': {{val}}",
+							message: `Could not get access to '${appId}': ${getErrorMessage(error)}`,
 						};
 					}
 				}
@@ -2347,7 +2364,7 @@ export function GlobalToolBridge() {
 					if (!profileAppIds.has(appId))
 						return {
 							status: "error",
-							message: "App '{{appId}}' is not visible in the current profile.",
+							message: `App '${appId}' is not visible in the current profile.`,
 						};
 					const eventId =
 						argString(args, "event_id") || argString(args, "eventId");
@@ -2363,7 +2380,7 @@ export function GlobalToolBridge() {
 					if (!chatEvent)
 						return {
 							status: "error",
-							message: "App '{{appId}}' has no chat event.",
+							message: `App '${appId}' has no chat event.`,
 						};
 					addInlineAppChat({
 						appId,
@@ -2388,7 +2405,7 @@ export function GlobalToolBridge() {
 					if (!profileAppIds.has(appId))
 						return {
 							status: "error",
-							message: "App '{{appId}}' is not visible in the current profile.",
+							message: `App '${appId}' is not visible in the current profile.`,
 						};
 					const eventId =
 						argString(args, "event_id") || argString(args, "eventId");
@@ -2400,7 +2417,7 @@ export function GlobalToolBridge() {
 						relist_required: true,
 						inventory_stale: true,
 						available_page_events: [],
-						message: "Could not refresh app '{{appId}}' Event metadata{{val}}, so page availability cannot be established. Do not guess an Event id or route; refresh list_apps once if the goal still requires this interface.",
+						message: `Could not refresh app '${appId}' Event metadata${target ? ` to verify Event '${target}'` : ""}, so page availability cannot be established. Do not guess an Event id or route; refresh list_apps once if the goal still requires this interface.`,
 					});
 					// Exact ids use the freshness-reconciled single-Event read. The injected
 					// resolver keeps it authoritative even if a later bulk snapshot drifts.
@@ -2425,15 +2442,15 @@ export function GlobalToolBridge() {
 						const message = (() => {
 							switch (resolution.code) {
 								case "event_not_found":
-									return "Event '{{eventId}}' no longer exists in app '{{appId}}', or the supplied id is neither an Event id nor a uniquely mapped page id.";
+									return `Event '${eventId}' no longer exists in app '${appId}', or the supplied id is neither an Event id nor a uniquely mapped page id.`;
 								case "event_inactive":
-									return "Event '{{eventId}}' is currently inactive and cannot be opened.";
+									return `Event '${eventId}' is currently inactive and cannot be opened.`;
 								case "event_interface_changed":
-									return "Event '{{eventId}}' is currently '{{actual_kind}}', not an embeddable page. Its current interface state supersedes the earlier inventory.";
+									return `Event '${eventId}' is currently '${resolution.actual_kind}', not an embeddable page. Its current interface state supersedes the earlier inventory.`;
 								case "page_target_missing":
-									return "Event '{{eventId}}' is marked as a page but has no persisted page target, so it cannot be embedded.";
+									return `Event '${eventId}' is marked as a page but has no persisted page target, so it cannot be embedded.`;
 								case "no_page_event":
-									return "App '{{appId}}' currently has no active embeddable page Event.";
+									return `App '${appId}' currently has no active embeddable page Event.`;
 							}
 						})();
 						return {
@@ -2446,7 +2463,7 @@ export function GlobalToolBridge() {
 							actual_kind: resolution.actual_kind,
 							correct_consumer_tool: correctConsumer,
 							available_page_events: availablePageEvents,
-							message: "{{message}} Do not guess another Event id or route, and do not use navigate_view as a substitute for embedding or page evidence.{{val}}",
+							message: `${message} Do not guess another Event id or route, and do not use navigate_view as a substitute for embedding or page evidence.${resolution.relist_required ? " Refresh list_apps once if the original goal still requires this interface." : ""}`,
 						};
 					}
 					const pageEvent = resolution.event;
@@ -2462,61 +2479,18 @@ export function GlobalToolBridge() {
 						pageEvent.id,
 					);
 					assertRequestActive(request, "app page screenshot capture");
-					const uploadedSnapshots = (
-						await Promise.all(
-							snapshot.images.map(async (image, index) => {
-								const extension =
-									image.mediaType === "image/webp"
-										? "webp"
-										: image.mediaType === "image/jpeg"
-											? "jpg"
-											: "png";
-								const file = new File(
-									[image.blob],
-									`flowpilot-page-${index + 1}.${extension}`,
-									{ type: image.mediaType },
-								);
-								try {
-									const temporaryFile = backend.helperState.fileToTemporaryFile
-										? await backend.helperState.fileToTemporaryFile(
-												file,
-												false,
-												undefined,
-												"remote",
-											)
-										: {
-												url: await backend.helperState.fileToUrl(
-													file,
-													false,
-													undefined,
-													"remote",
-												),
-											};
-									if (!/^https?:\/\//i.test(temporaryFile.url)) {
-										throw new Error(
-											`Temporary upload did not return a remotely readable URL.`,
-										);
-									}
-									return {
-										url: temporaryFile.url,
-										media_type: image.mediaType,
-									};
-								} catch (error) {
-									console.warn(
-										"[global-tool-bridge] failed to upload app page capture",
-										error,
-									);
-									return null;
-								}
-							}),
-						)
-					).filter((image): image is { url: string; media_type: string } =>
-						Boolean(image),
-					);
+					const { uploaded: uploadedSnapshots, uploadErrors } =
+						await uploadPageSnapshots(backend, snapshot.images);
 					assertRequestActive(request, "app page screenshot upload");
 					const screenshotCount = uploadedSnapshots.length;
 					const screenshotComplete =
 						snapshot.complete && screenshotCount === snapshot.images.length;
+					const failureDetail =
+						screenshotCount > 0
+							? undefined
+							: snapshot.images.length > 0
+								? `its rendered content was captured but the ${snapshot.images.length} capture(s) could not be uploaded for attachment (${uploadErrors[0] ?? "unknown upload error"})`
+								: `its rendered content could not be captured${snapshot.failureReason ? ` (${snapshot.failureReason})` : ""}`;
 					return {
 						status: "ok",
 						event_id: pageEvent.id,
@@ -2529,14 +2503,79 @@ export function GlobalToolBridge() {
 							: {}),
 						message:
 							screenshotCount > 0
-								? "Embedded the page '{{name}}' inline and attached {{screenshotCount}} visual capture{{val}} of its rendered content for inspection."
-								: `Embedded the page '${pageEvent.name}' inline, but its rendered content could not be captured. Do not claim to have read the page visually.`,
+								? `Embedded the page '${pageEvent.name}' inline and attached ${screenshotCount} visual capture${screenshotCount === 1 ? "" : "s"} of its rendered content for inspection.`
+								: `Embedded the page '${pageEvent.name}' inline, but ${failureDetail}. Do not claim to have read the page visually.`,
 						screenshot_count: screenshotCount,
 						screenshot_complete: screenshotComplete,
+						...(uploadErrors.length > 0
+							? { upload_errors: uploadErrors.slice(0, 3) }
+							: {}),
 						...(screenshotCount > 0
 							? { _flowpilot_image_urls: uploadedSnapshots }
 							: {}),
 					};
+				}
+				case "interact_app_page": {
+					const appId =
+						argString(args, "app_id") ||
+						argString(args, "appId") ||
+						request.context?.appId ||
+						request.context?.app_id;
+					if (!appId)
+						return {
+							status: "error",
+							message: `interact_app_page requires an app_id.`,
+						};
+					const profileAppIds = await getProfileAppIds();
+					if (!profileAppIds.has(appId))
+						return {
+							status: "error",
+							message: `App '${appId}' is not visible in the current profile.`,
+						};
+					const eventId =
+						argString(args, "event_id") || argString(args, "eventId");
+					const pageId = argString(args, "page_id") || argString(args, "pageId");
+					const actions = parseInteractActions(args.actions);
+					if (actions.length === 0)
+						return {
+							status: "error",
+							message:
+								"interact_app_page requires a non-empty actions array of {action: 'set_value'|'trigger', component_id, value?, event?}.",
+						};
+					// Without a live instance of the target page there is nothing to drive — embed
+					// it inline first through the same card open_app_page uses.
+					if (eventId && !findLivePage(appId, { eventId })) {
+						const lookup = await resolveOpenAppPageRequest(
+							eventId,
+							(targetEventId) =>
+								backend.eventState.getEvent(appId, targetEventId),
+							() => backend.eventState.getEvents(appId, true),
+						);
+						if (
+							lookup.status !== "inventory_unavailable" &&
+							lookup.resolution.ok
+						) {
+							const pageEvent = lookup.resolution.event;
+							useGlobalChatStore.getState().addInlineAppPage({
+								appId,
+								eventId: pageEvent.id,
+								name: pageEvent.name || appId,
+							});
+							showConversation();
+						}
+					}
+					assertRequestActive(request, "app page interaction");
+					scope.referenceApp(appId);
+					return await interactWithAppPage(backend, {
+						appId,
+						eventId,
+						pageId,
+						actions,
+						captureScreenshots:
+							typeof args.capture_screenshots === "boolean"
+								? args.capture_screenshots
+								: true,
+					});
 				}
 				case "call_app_event": {
 					const appId = argString(args, "app_id") || argString(args, "appId");
@@ -2551,24 +2590,24 @@ export function GlobalToolBridge() {
 					if (!profileAppIds.has(appId))
 						return {
 							status: "error",
-							message: "App '{{appId}}' is not visible in the current profile.",
+							message: `App '${appId}' is not visible in the current profile.`,
 						};
 					const events = await backend.eventState.getEvents(appId);
 					const event = events.find((candidate) => candidate.id === eventId);
 					if (!event)
 						return {
 							status: "error",
-							message: "Event '{{eventId}}' not found in app '{{appId}}'.",
+							message: `Event '${eventId}' not found in app '${appId}'.`,
 						};
 					if (!event.active)
 						return {
 							status: "error",
-							message: "Event '{{eventId}}' in app '{{appId}}' is not active.",
+							message: `Event '${eventId}' in app '${appId}' is not active.`,
 						};
 					if (isChatEventType(event.event_type))
 						return {
 							status: "error",
-							message: "Event '{{eventId}}' is a chat interface — use call_app_chat instead.",
+							message: `Event '${eventId}' is a chat interface — use call_app_chat instead.`,
 						};
 
 					const payload =
@@ -2620,7 +2659,7 @@ export function GlobalToolBridge() {
 						? {
 								conversationId: creationConversationId,
 								toolName: "create_app",
-								instruction: "{{name}} {{description}}",
+								instruction: `${name}\n${description}`,
 								...(idempotencyKey ? { idempotencyKey } : {}),
 							}
 						: undefined;
@@ -2743,7 +2782,7 @@ export function GlobalToolBridge() {
 						} catch (error) {
 							return {
 								status: "error",
-								message: "Cannot update event '{{eventId}}': {{val}}",
+								message: `Cannot update event '${eventId}': ${error instanceof Error ? error.message : String(error)}`,
 							};
 						}
 					}
@@ -2799,13 +2838,13 @@ export function GlobalToolBridge() {
 						if (!entryNodeName || !entryConfig) {
 							return {
 								status: "error",
-								message: "Node '{{eventNodeId}}' is not a supported Event entry. Use flowpilot_board to create eventsSimple(), eventsGeneric(payload: Struct, fieldName: string, ...), or eventsChat(...), then pass the returned event_nodes id.",
+								message: `Node '${eventNodeId}' is not a supported Event entry. Use flowpilot_board to create eventsSimple(), eventsGeneric(payload: Struct, fieldName: string, ...), or eventsChat(...), then pass the returned event_nodes id.`,
 							};
 						}
 						if (!isRunnableWorkflowEventEntry(eventBoard, eventNodeId)) {
 							return {
 								status: "error",
-								message: "Node '{{eventNodeId}}' is an empty or unconnected Event entry. Build and connect the board logic first, then use the exact runnable event_nodes id returned by flowpilot_board. No Event was registered.",
+								message: `Node '${eventNodeId}' is an empty or unconnected Event entry. Build and connect the board logic first, then use the exact runnable event_nodes id returned by flowpilot_board. No Event was registered.`,
 							};
 						}
 					}
@@ -2821,7 +2860,7 @@ export function GlobalToolBridge() {
 					if (entryConfig && !entryConfig.eventTypes.includes(eventType)) {
 						return {
 							status: "error",
-							message: "Event type '{{eventType}}' is incompatible with {{entryNodeName}}. Supported types: {{val}}. Cron setup requires an events_simple entry.",
+							message: `Event type '${eventType}' is incompatible with ${entryNodeName}. Supported types: ${entryConfig.eventTypes.join(", ")}. Cron setup requires an events_simple entry.`,
 						};
 					}
 
@@ -3052,7 +3091,7 @@ export function GlobalToolBridge() {
 						return {
 							status: "error",
 							code: "FLOWPILOT_PAGE_BOARD_MISMATCH",
-							message: "Page '{{pageId}}' belongs to board '{{boardId}}', not '{{boardId2}}'. No lifecycle event was changed.",
+							message: `Page '${pageId}' belongs to board '${page.boardId}', not '${boardId}'. No lifecycle event was changed.`,
 						};
 					}
 					// The persisted page owns this choice. A caller-supplied board is only a scope
@@ -3084,7 +3123,7 @@ export function GlobalToolBridge() {
 							return {
 								status: "error",
 								code: "FLOWPILOT_PAGE_BOARD_CHANGED",
-								message: "Page '{{pageId}}' ownership changed from board '{{pageBoardId}}' to '{{val}}' while lifecycle wiring waited. Retry against the current page.",
+								message: `Page '${pageId}' ownership changed from board '${pageBoardId}' to '${page.boardId ?? "none"}' while lifecycle wiring waited. Retry against the current page.`,
 							};
 						}
 						const configuredEntryIds = [
@@ -3117,7 +3156,7 @@ export function GlobalToolBridge() {
 								) {
 									return {
 										status: "error",
-										message: "{{field}} '{{nodeId}}' is not a connected events_simple entry on board '{{pageBoardId}}'. Build and connect the board logic first; the page was not changed.",
+										message: `${field} '${nodeId}' is not a connected events_simple entry on board '${pageBoardId}'. Build and connect the board logic first; the page was not changed.`,
 									};
 								}
 							}
@@ -3263,6 +3302,7 @@ export function GlobalToolBridge() {
 							undefined /* catalog */,
 							[] /* selectedNodeIds */,
 							null /* currentSurface */,
+							null /* currentCanvasSettings */,
 							[] /* selectedComponentIds */,
 							instruction,
 							[] /* history */,
@@ -3418,6 +3458,7 @@ export function GlobalToolBridge() {
 							undefined /* catalog */,
 							[] /* selectedNodeIds */,
 							null /* currentSurface */,
+							null /* currentCanvasSettings */,
 							[] /* selectedComponentIds */,
 							instruction,
 							[] /* history */,
@@ -3483,15 +3524,15 @@ export function GlobalToolBridge() {
 
 					// The scout's instruction carries the research brief; the scope's own
 					// prompt supplies the plan contract, so this stays declarative.
-					const instructionParts = ["Research goal: {{goal}}"];
+					const instructionParts = [`Research goal: ${goal}`];
 					if (focus) instructionParts.push(`Focus on: ${focus}`);
 					if (scoutAppId)
 						instructionParts.push(
-							"Start from app {{scoutAppId}} as the likely foundation.",
+							`Start from app ${scoutAppId} as the likely foundation.`,
 						);
 					if (scoutTemplateId)
 						instructionParts.push(
-							"Evaluate template {{scoutTemplateId}} as the foundation.",
+							`Evaluate template ${scoutTemplateId} as the foundation.`,
 						);
 					if (candidates.length > 0)
 						instructionParts.push(
@@ -3576,6 +3617,7 @@ export function GlobalToolBridge() {
 							undefined /* catalog */,
 							[] /* selectedNodeIds */,
 							null /* currentSurface */,
+							null /* currentCanvasSettings */,
 							[] /* selectedComponentIds */,
 							instruction,
 							[] /* history */,
@@ -3731,7 +3773,7 @@ export function GlobalToolBridge() {
 										conversationId: boardConversationId,
 										toolName: "flowpilot_board",
 										scope: callerChosenBoardId
-											? "{{appId}}\u0000board:{{callerChosenBoardId}}"
+											? `${appId}\u0000board:${callerChosenBoardId}`
 											: appId,
 										instruction,
 										...(boardIdempotencyKey
@@ -4030,7 +4072,7 @@ export function GlobalToolBridge() {
 									title: `FlowScript`,
 									description:
 										diagnostics > 0
-											? "{{diagnostics}} validation issue{{val}} found — repair in progress"
+											? `${diagnostics} validation issue${diagnostics === 1 ? "" : "s"} found — repair in progress`
 											: `Validation issues found — repair in progress`,
 									// A rejected intermediate candidate is not the run's terminal
 									// outcome. Keep one evolving row and settle it only when repaired
@@ -4049,7 +4091,7 @@ export function GlobalToolBridge() {
 								if (!existing) return false;
 								subAcc.steps.set(id, {
 									...existing,
-									description: "{{validationCandidateAttempts}} earlier validation candidate{{val}} repaired",
+									description: `${validationCandidateAttempts} earlier validation candidate${validationCandidateAttempts === 1 ? "" : "s"} repaired`,
 									status: "done",
 								});
 								return true;
@@ -4195,7 +4237,9 @@ export function GlobalToolBridge() {
 								: "";
 						const boardInstruction =
 							(readOnly
-								? "{{instruction}} Answer the user's question about this board clearly and concisely, grounded in its actual nodes and connections. Do NOT modify the board — make no edits and submit no FlowScript."
+								? `${instruction}
+
+Answer the user's question about this board clearly and concisely, grounded in its actual nodes and connections. Do NOT modify the board — make no edits and submit no FlowScript.`
 								: `${instruction}
 
 Execute the change NOW in this run. Follow the required lifecycle in order: one focused declaration batch, one plan_board_scope call, then write_flowscript for the host-accepted active segment. Do not stop after analysis and do not merely describe a plan. Under a single-segment plan, success requires the complete workspace to validate and return queued; under a segmented plan, success requires the complete active segment to validate and queue without dropping the rest of the accepted scope. A submitted/failed preview is not success.
@@ -4240,6 +4284,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								board,
 								catalog,
 								liveSurface?.selectedNodeIds ?? [],
+								null,
 								null,
 								[],
 								boardInstruction,
@@ -4947,7 +4992,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								validationCandidateAttempts > 0 &&
 								workspaceStatus !== "validation_errors" &&
 								!applyFailed
-									? "after repairing {{validationCandidateAttempts}} validation candidate{{val}}"
+									? ` after repairing ${validationCandidateAttempts} validation candidate${validationCandidateAttempts === 1 ? "" : "s"}`
 									: "";
 							subAcc.steps.set("flowscript", {
 								id: "flowscript",
@@ -4956,14 +5001,14 @@ Completion contract: build complete helper logic first and add the Event entry l
 									workspaceStatus === "validation_errors"
 										? `${flowScriptWorkspaceDiagnostics(selectedWorkspace ?? { source }).length || "Unresolved"} validation issue${flowScriptWorkspaceDiagnostics(selectedWorkspace ?? { source }).length === 1 ? "" : "s"} — not applied`
 										: workspaceStatus === "no_changes"
-											? "No changes needed{{repairedSuffix}}"
+											? `No changes needed${repairedSuffix}`
 											: applyFailed
 												? `Not applied — ${diagnostics[0]?.slice(0, 120) ?? "apply failed"}`
 												: partialWorkingSlice
-													? "{{appliedCommands}} command{{val}} applied as an incomplete testable slice"
+													? `${appliedCommands} command${appliedCommands === 1 ? "" : "s"} applied as an incomplete testable slice`
 													: canonicalSourceCorrected && appliedCommands === 0
-														? "Canonical FlowScript anchors repaired{{repairedSuffix}}"
-														: "{{appliedCommands}} command{{val}} applied{{val2}}{{repairedSuffix}}",
+														? `Canonical FlowScript anchors repaired${repairedSuffix}`
+														: `${appliedCommands} command${appliedCommands === 1 ? "" : "s"} applied${blockedDeletion ? " (deletions blocked)" : deletionApproved ? " (deletions approved)" : ""}${repairedSuffix}`,
 								status:
 									workspaceStatus === "validation_errors" || applyFailed
 										? "failed"
@@ -5202,7 +5247,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 											: persistedReadbackFailed
 												? `Commands were returned, but persisted FlowScript readback did not match the validated workspace. Do not claim success; inspect the diagnostics and retry from the persisted board.`
 												: hadReturnedCommands
-													? "The board copilot returned {{returnedCommandCount}} validated command{{val}}, but they could not be applied. Report this honestly; do not claim the workflow was built."
+													? `The board copilot returned ${returnedCommandCount} validated command${returnedCommandCount === 1 ? "" : "s"}, but they could not be applied. Report this honestly; do not claim the workflow was built.`
 													: `The FlowScript draft could not be applied to the board — report the diagnostics honestly and consider retrying with a clearer instruction.`,
 									}
 								: {}),
@@ -5353,7 +5398,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							return {
 								status: "error",
 								code: "FLOWPILOT_WIDGET_BOARD_ID_REQUIRED",
-								message: "App '{{targetAppId}}' has {{length}} boards. Pass the exact board_id for this page; FlowPilot will not silently attach it to the first board.",
+								message: `App '${targetAppId}' has ${boards.length} boards. Pass the exact board_id for this page; FlowPilot will not silently attach it to the first board.`,
 							};
 						}
 						boardId = boards[0]?.id ?? "";
@@ -5370,7 +5415,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 						} catch (error) {
 							return {
 								status: "error",
-								message: "Failed to read the pages of app '{{appId}}': {{val}}",
+								message: `Failed to read the pages of app '${appId}': ${getErrorMessage(error)}`,
 							};
 						}
 						if (!located.ok)
@@ -5396,6 +5441,13 @@ Completion contract: build complete helper logic first and add the Event entry l
 					// from the saved page when there is not.
 					const currentComponents =
 						editSurface?.currentComponents ?? detachedPage?.components ?? [];
+					// Same "before" rule for the stylesheet: the open canvas wins over the saved
+					// page. Without it the specialist writes customCss blind and silently replaces
+					// the design system the page already had.
+					const currentCanvasSettings =
+						editSurface?.currentCanvasSettings ??
+						detachedPage?.canvasSettings ??
+						null;
 					const selectedComponentIds = editSurface?.selectedComponentIds ?? [];
 					const widgetConversationId = conversationScopeId(request);
 					const widgetCreationIdentityForBoard = (targetBoardId: string) =>
@@ -5565,6 +5617,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 								detached_page_id: detachedPage?.id,
 								selected_component_ids: selectedComponentIds,
 								current_components: currentComponents,
+								has_current_custom_css: Boolean(
+									currentCanvasSettings?.customCss,
+								),
 							},
 							summary: `Delegated UI sub-agent started.`,
 						}),
@@ -5611,6 +5666,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							undefined,
 							[],
 							currentComponents,
+							currentCanvasSettings,
 							selectedComponentIds,
 							instruction,
 							[],
@@ -5720,7 +5776,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									return finishWidgetRun({
 										status: "error",
 										code: "FLOWPILOT_WIDGET_BOARD_ID_REQUIRED",
-										message: "App '{{targetAppId}}' now has {{length}} boards. Pass the exact board_id for this page; no page was persisted.",
+										message: `App '${targetAppId}' now has ${currentBoards.length} boards. Pass the exact board_id for this page; no page was persisted.`,
 									});
 								}
 								boardId = currentBoards[0]?.id ?? createId();
@@ -5764,8 +5820,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 									message:
 										pageBeforeCatalog.boardId &&
 										pageBeforeCatalog.boardId !== boardId
-											? "Page id '{{pageId}}' already belongs to board '{{boardId}}', not '{{boardId2}}'. Choose a globally unique page_id."
-											: "Page '{{pageId}}' already exists. To change it call flowpilot_widget again with mode='edit', app_id, and this page_id; to add a separate page choose a different page_id.",
+											? `Page id '${pageId}' already belongs to board '${pageBeforeCatalog.boardId}', not '${boardId}'. Choose a globally unique page_id.`
+											: `Page '${pageId}' already exists. To change it call flowpilot_widget again with mode='edit', app_id, and this page_id; to add a separate page choose a different page_id.`,
 								});
 							}
 
@@ -5932,8 +5988,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 									code: "FLOWPILOT_WIDGET_PAGE_ALREADY_EXISTS",
 									message:
 										existingPage.boardId && existingPage.boardId !== boardId
-											? "Page id '{{pageId}}' already belongs to board '{{boardId}}', not '{{boardId2}}'. Choose a globally unique page_id."
-											: "Page '{{pageId}}' already exists. To change it call flowpilot_widget again with mode='edit', app_id, and this page_id; to add a separate page choose a different page_id.",
+											? `Page id '${pageId}' already belongs to board '${existingPage.boardId}', not '${boardId}'. Choose a globally unique page_id.`
+											: `Page '${pageId}' already exists. To change it call flowpilot_widget again with mode='edit', app_id, and this page_id; to add a separate page choose a different page_id.`,
 								});
 							}
 							const timestamp = new Date().toISOString();
@@ -6176,7 +6232,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 					if (!profileAppIds.has(appId))
 						return {
 							status: "error",
-							message: "App '{{appId}}' is not visible in the current profile.",
+							message: `App '${appId}' is not visible in the current profile.`,
 						};
 
 					// Call the specific chat event the agent selected from list_apps metadata
@@ -6196,8 +6252,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 						return {
 							status: "error",
 							message: eventId
-								? "App '{{appId}}' has no chat event '{{eventId}}'."
-								: "App '{{appId}}' has no chat event.",
+								? `App '${appId}' has no chat event '${eventId}'.`
+								: `App '${appId}' has no chat event.`,
 						};
 
 					// Hand the user's attached files to the app chat. The assistant selects which files
@@ -6247,8 +6303,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 										: "forward_file_name_ambiguous",
 								message:
 									matches.length === 0
-										? "Attachment '{{requestedName}}' does not belong to this tool call's user turn."
-										: "Attachment name '{{requestedName}}' matches more than one file in this user turn. Ask the user to rename or reattach the intended file; no file was forwarded.",
+										? `Attachment '${requestedName}' does not belong to this tool call's user turn.`
+										: `Attachment name '${requestedName}' matches more than one file in this user turn. Ask the user to rename or reattach the intended file; no file was forwarded.`,
 							};
 						}
 						const [{ file, index }] = matches;
@@ -6431,7 +6487,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							embeddedWidgetCount > 0 ? embeddedWidgetCount : undefined,
 						note:
 							embeddedWidgetCount > 0
-								? "The app pushed {{embeddedWidgetCount}} interactive widget(s) that are already embedded and visible in your reply — do not describe or re-create their content, just reference them."
+								? `The app pushed ${embeddedWidgetCount} interactive widget(s) that are already embedded and visible in your reply — do not describe or re-create their content, just reference them.`
 								: undefined,
 					};
 				}
@@ -6513,8 +6569,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 							code: "created_app_target_mismatch",
 							created_app_id: createdAppId,
 							requested_app_id: requestedAppId,
-							next_action: "Retry {{toolName}} with app_id '{{createdAppId}}'.",
-							message: "This turn created app '{{createdAppId}}'. Refusing to mutate older app '{{requestedAppId}}' after a transient failure. Continue the build on the exact app_id returned by create_app.",
+							next_action: `Retry ${request.toolName} with app_id '${createdAppId}'.`,
+							message: `This turn created app '${createdAppId}'. Refusing to mutate older app '${requestedAppId}' after a transient failure. Continue the build on the exact app_id returned by create_app.`,
 						},
 					};
 				}
@@ -6949,7 +7005,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								parentRequestId: event.payload.parentRequestId,
 							};
 							recordRequestDebug(synthetic, {
-								id: "frontend:{{requestId}}:cancellation",
+								id: `frontend:${requestId}:cancellation`,
 								kind: "bridge",
 								stage: "backend_cancelled",
 								status: "cancelled",
@@ -7003,7 +7059,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 											: undefined,
 								};
 								recordRequestDebug(synthetic, {
-									id: "frontend:{{requestId}}:backend-lifecycle",
+									id: `frontend:${requestId}:backend-lifecycle`,
 									kind: "bridge",
 									stage:
 										typeof payload.phase === "string"

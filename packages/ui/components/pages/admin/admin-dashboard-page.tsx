@@ -1337,7 +1337,8 @@ function TopModelsChart({
 									className="rounded-md border px-3 py-2"
 								>
 									<div className="truncate font-medium">{model.fullName}</div>
-									<div className="text-muted-foreground">{`${model.kind} -`}{formatCount(model.tokens)} tokens -{" "}
+									<div className="text-muted-foreground">
+										{model.kind} - {formatCount(model.tokens)} tokens -{" "}
 										{formatCost(model.cost)}
 									</div>
 								</div>
@@ -1697,9 +1698,9 @@ function UsageOperations({
 									{item.modelId ?? item.kind}
 								</div>
 								<div className="truncate text-xs text-muted-foreground">
-									{item.provider ?? "provider"}{`- ${item.status} -`}{" "}
+									{item.provider ?? "provider"} - {item.status} -{" "}
 									{item.appId ?? t('noApp', 'no app')}
-									{item.technicalUserId ? t('keyTechnicaluserid', '- key {{technicalUserId}}', { technicalUserId: item.technicalUserId }) : ""}
+									{item.technicalUserId ? t('keyTechnicaluserid', ' - key {{technicalUserId}}', { technicalUserId: item.technicalUserId }) : ""}
 								</div>
 							</div>
 							<div className="text-right">
@@ -1745,7 +1746,8 @@ function UsageOperations({
 									<AlertTriangle className="h-4 w-4 text-amber-500" />
 									<span className="truncate">{alert.message}</span>
 								</div>
-								<div className="truncate text-xs text-muted-foreground">{`${alert.severity} -`}{alert.period ?? "period"} -{" "}
+								<div className="truncate text-xs text-muted-foreground">
+									{alert.severity} - {alert.period ?? "period"} -{" "}
 									{alert.appId ?? t('noApp', 'no app')}
 								</div>
 							</div>
@@ -1974,7 +1976,7 @@ function UsageOverviewSection({
 									<div className="truncate font-medium">{model.modelId}</div>
 									<div className="truncate text-xs text-muted-foreground">
 										{model.kind}
-										{model.provider ? `- ${model.provider}` : ""}
+										{model.provider ? ` - ${model.provider}` : ""}
 									</div>
 								</div>
 								<div className="text-right">

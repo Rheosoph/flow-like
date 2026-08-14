@@ -238,7 +238,7 @@ function buildSearchDocuments(board: IBoard | undefined): SearchResult[] {
 			description: layer.comment ?? "Layer",
 			matchedField: "layer",
 			matchedValue: layer.name,
-			searchText: i18next.t('nameValLayer', '{{name}} {{val}} layer', { name: layer.name, val: layer.comment || "" }),
+			searchText: `${layer.name} ${layer.comment || ""} layer`,
 		});
 
 		// Process nodes inside the layer
@@ -273,7 +273,7 @@ function buildSearchDocuments(board: IBoard | undefined): SearchResult[] {
 			matchedValue: variable.name,
 			category: variable.category ?? undefined,
 			dataType: variable.data_type,
-			searchText: i18next.t('nameValData_typeVal2Variable', '{{name}} {{val}} {{data_type}} {{val2}} variable', { name: variable.name, val: variable.description || "", data_type: variable.data_type, val2: decodedValue || "" }),
+			searchText: `${variable.name} ${variable.description || ""} ${variable.data_type} ${decodedValue || ""} variable`,
 		});
 	}
 
@@ -492,7 +492,7 @@ const SearchResultItem = memo(
 					{result.type === "variable" && result.dataType && (
 						<span className="text-xs text-muted-foreground truncate">
 							{result.dataType}
-							{result.description && `- ${result.description}`}
+							{result.description && ` - ${result.description}`}
 						</span>
 					)}
 					{result.category && (

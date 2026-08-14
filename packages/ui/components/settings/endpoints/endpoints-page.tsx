@@ -492,14 +492,57 @@ export function EndpointsPage() {
 							<CodeBlock language="bash" code="npm install @flow-like/sdk" />
 							<CodeBlock
 								language="typescript"
-								code={`import { FlowLikeClient } from "@flow-like/sdk"; const client = new FlowLikeClient({ baseUrl: "${baseUrl}", // Authenticate with a Personal Access Token (format: pat_{id}.{secret}) pat: "<your-pat-token>", // Or use a Technical User API Key (format: flk_{app_id}.{key_id}.{secret}) // apiKey: "<your-api-key>", }); const appId = "${appId}"; // Trigger an event (returns AsyncIterable<SSEChunk>) for await (const chunk of client.triggerEvent(appId, "event-id", { key: "value" })) { console.log(chunk); } // Upload a file const uploaded = await client.uploadFile(appId, file); // Query a database table const rows = await client.queryTable(appId, "table-name", { filter: "column = 'value'", });`}
+								code={`import { FlowLikeClient } from "@flow-like/sdk";
+
+const client = new FlowLikeClient({
+  baseUrl: "${baseUrl}",
+  // Authenticate with a Personal Access Token (format: pat_{id}.{secret})
+  pat: "<your-pat-token>",
+  // Or use a Technical User API Key (format: flk_{app_id}.{key_id}.{secret})
+  // apiKey: "<your-api-key>",
+});
+
+const appId = "${appId}";
+
+// Trigger an event (returns AsyncIterable<SSEChunk>)
+for await (const chunk of client.triggerEvent(appId, "event-id", { key: "value" })) {
+  console.log(chunk);
+}
+
+// Upload a file
+const uploaded = await client.uploadFile(appId, file);
+
+// Query a database table
+const rows = await client.queryTable(appId, "table-name", {
+  filter: "column = 'value'",
+});`}
 							/>
 						</TabsContent>
 						<TabsContent value="python" className="space-y-3 mt-3">
 							<CodeBlock language="bash" code="pip install flow-like" />
 							<CodeBlock
 								language="python"
-								code={t('fromFlow_likeImportFlowlikeclientClientFlowlikeclientBase_urlbaseurlAuthenticateWithAPersonalAccessTokenFormatPat_idsecretPatyourpattokenOrUseATechnicalUserApiKeyFormatFlk_app_idkey_idsecretApi_keyyourapikeyApp_idAppidTriggerAnEventReturnsIteratorsseeventForEventInClienttrigger_eventapp_idEventidKeyValuePrinteventUploadAFileUploadedClientupload_fileapp_idFileQueryADatabaseTableRowsClientquery_tableapp_idTablenameFilterColumnValue', "from flow_like import FlowLikeClient client = FlowLikeClient( base_url=\"{{baseUrl}}\", # Authenticate with a Personal Access Token (format: pat_{id}.{secret}) pat=\"<your-pat-token>\", # Or use a Technical User API Key (format: flk_{app_id}.{key_id}.{secret}) # api_key=\"<your-api-key>\", ) app_id = \"{{appId}}\" # Trigger an event (returns Iterator[SSEEvent]) for event in client.trigger_event(app_id, \"event-id\", {\"key\": \"value\"}): print(event) # Upload a file uploaded = client.upload_file(app_id, file) # Query a database table rows = client.query_table(app_id, \"table-name\", {\"filter\": \"column = 'value'\"})", { baseUrl, appId })}
+								code={`from flow_like import FlowLikeClient
+
+client = FlowLikeClient(
+    base_url="${baseUrl}",
+    # Authenticate with a Personal Access Token (format: pat_{id}.{secret})
+    pat="<your-pat-token>",
+    # Or use a Technical User API Key (format: flk_{app_id}.{key_id}.{secret})
+    # api_key="<your-api-key>",
+)
+
+app_id = "${appId}"
+
+# Trigger an event (returns Iterator[SSEEvent])
+for event in client.trigger_event(app_id, "event-id", {"key": "value"}):
+    print(event)
+
+# Upload a file
+uploaded = client.upload_file(app_id, file)
+
+# Query a database table
+rows = client.query_table(app_id, "table-name", {"filter": "column = 'value'"})`}
 							/>
 						</TabsContent>
 					</Tabs>
@@ -537,7 +580,7 @@ export function EndpointsPage() {
 								</p>
 								<CodeBlock
 									language="http"
-									code={t('authorizationPat_idsecret', 'Authorization: pat_{id}.{secret}')}
+									code={"Authorization: pat_{id}.{secret}"}
 								/>
 							</CardContent>
 						</Card>

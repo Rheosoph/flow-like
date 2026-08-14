@@ -1,6 +1,5 @@
 "use client";
 
-import { i18n as i18next } from "@flow-like/locales";
 import type { LucideIcon } from "lucide-react";
 import { SearchIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -297,7 +296,7 @@ export function teamRowClass(
 ): string {
 	const { attention = false, muted = false, align = "center" } = options;
 	return cn(
-		i18next.t('grouprowFlexGap3RoundedxlBorderBgcardPx3Py25Transitioncolors', 'group/row flex gap-3 rounded-xl border bg-card px-3 py-2.5 transition-colors'),
+		"group/row flex gap-3 rounded-xl border bg-card px-3 py-2.5 transition-colors",
 		align === "center" ? "items-center" : "items-start",
 		attention
 			? `border-primary/40 bg-primary/5 hover:border-primary hover:bg-primary/10`

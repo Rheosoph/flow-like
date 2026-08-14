@@ -895,7 +895,7 @@ function CompassButton({ onClick }: { onClick: () => void }) {
 		const updateRotation = () => {
 			const bearing = map.getBearing();
 			const pitch = map.getPitch();
-			compass.style.transform = t('rotatexpitchdegRotatezvaldeg', 'rotateX({{pitch}}deg) rotateZ({{val}}deg)', { pitch, val: -bearing });
+			compass.style.transform = `rotateX(${pitch}deg) rotateZ(${-bearing}deg)`;
 		};
 
 		map.on("rotate", updateRotation);

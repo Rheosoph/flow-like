@@ -82,10 +82,10 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 							{report.outcome}
 						</span>
 						<span className="text-muted-foreground">
-							{durationLabel(report.duration_ms)}{`· ${report.events.length}`}{" "}
+							{durationLabel(report.duration_ms)} · {report.events.length}{" "}
 							events
 							{report.truncation?.events_dropped
-								? `· ${report.truncation.events_dropped} omitted`
+								? ` · ${report.truncation.events_dropped} omitted`
 								: ""}
 						</span>
 						{open ? (

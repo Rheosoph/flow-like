@@ -467,7 +467,7 @@ function RiskBadge({
 			</TooltipTrigger>
 			<TooltipContent className="max-w-xs">
 				<p className="text-xs font-medium">
-					{meta.article !== "—" ? `${meta.article} —` : ""}
+					{meta.article !== "—" ? `${meta.article} — ` : ""}
 					{meta.label}
 				</p>
 				<p className="text-xs text-muted-foreground">{meta.description}</p>
@@ -1503,7 +1503,7 @@ function EditAssessmentDialog({
 								</p>
 								<p className="text-xs text-muted-foreground">
 									{data.assessment?.responsibleEmail
-										? `${data.assessment.responsibleEmail} ·`
+										? `${data.assessment.responsibleEmail} · `
 										: ""}
 									{t('hardlinkedToTheAppOwnerArt26CannotBeReassigned', 'Hard-linked to the app owner (Art. 26) — cannot be reassigned.')}
 								</p>
@@ -2437,7 +2437,7 @@ function RegistryTab({
 	const userEditedInitialFormRef = useRef(false);
 	const initialSelectionKey =
 		initialProvider && initialModelId
-			? `${initialProvider} ${initialModelId}`
+			? `${initialProvider}\u0000${initialModelId}`
 			: "";
 
 	useEffect(() => {

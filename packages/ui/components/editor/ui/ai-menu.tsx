@@ -1,6 +1,6 @@
 "use client";
 
-import { Trans, i18n as i18next, useTranslation } from "@flow-like/locales";
+import { Trans, useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import {
@@ -232,8 +232,11 @@ const aiChatItems = {
 			void editor.getApi(AIChatPlugin).aiChat.submit({
 				mode: "insert",
 				prompt: isEmpty
-					? `<Document> {editor} </Document> Start writing a new paragraph AFTER <Document> ONLY ONE SENTENCE`
-					: i18next.t('continueWritingAfterBlockOnlyOneSentenceDontRepeatTheText', 'Continue writing AFTER <Block> ONLY ONE SENTENCE. DONT REPEAT THE TEXT.'),
+					? `<Document>
+{editor}
+</Document>
+Start writing a new paragraph AFTER <Document> ONLY ONE SENTENCE`
+					: "Continue writing AFTER <Block> ONLY ONE SENTENCE. DONT REPEAT THE TEXT.",
 			});
 		},
 	},
@@ -343,7 +346,7 @@ const aiChatItems = {
 		onSelect: ({ editor }) => {
 			void editor.getApi(AIChatPlugin).aiChat.submit({
 				prompt: "Simplify the language",
-				system: i18next.t('youAreAHelpfulAssistantThatSimplifiesLanguage', 'You are a helpful assistant that simplifies language.'),
+				system: "You are a helpful assistant that simplifies language.",
 			});
 		},
 	},

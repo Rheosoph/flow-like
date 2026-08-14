@@ -624,7 +624,9 @@ export function PlanSteps({
 						>
 							<History className="size-3.5 shrink-0" />
 							<span className="flex-1">
-								{showOlderSteps ? "Hide" : "Show"}{t('countEarlierSteps', { defaultValue_one: "{{count}} earlier step", defaultValue_other: "{{count}} earlier steps", count: olderSteps.length })}</span>
+								{showOlderSteps ? t('hide', 'Hide') : t('show', 'Show')}{" "}
+								{t('countEarlierSteps', { defaultValue_one: "{{count}} earlier step", defaultValue_other: "{{count}} earlier steps", count: olderSteps.length })}
+							</span>
 							<ChevronDown
 								className={cn(
 									"size-3.5 transition-transform",

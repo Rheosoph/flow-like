@@ -1151,7 +1151,7 @@ function PackageWidgetItem({ packageWidget }: PackageWidgetItemProps) {
 			)}
 			title={
 				widget.description
-					? `${widget.description} ${packageId}@${packageVersion}`
+					? `${widget.description}\n${packageId}@${packageVersion}`
 					: `${packageId}@${packageVersion}`
 			}
 		>

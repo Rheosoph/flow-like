@@ -324,7 +324,7 @@ export function BitCard({
 								<div className="flex items-center gap-2">
 									<DownloadCloudIcon className="h-6 w-6 text-primary animate-pulse" />
 									<p className="text-sm text-muted-foreground">
-										{Math.round(progress)}{t('downloaded', '% Downloaded')}
+										{Math.round(progress)}% Downloaded
 									</p>
 								</div>
 							</div>
@@ -360,7 +360,7 @@ export function BitCard({
 								) : (
 									<>
 										<DownloadCloudIcon className="h-4 w-4" />
-										{t('download', 'Download (')}{humanFileSize(bitSize.data ?? 0)})
+										Download ({humanFileSize(bitSize.data ?? 0)})
 									</>
 								)}
 							</DropdownMenuItem>
@@ -533,10 +533,9 @@ export function BitTypeIcon({
 	type,
 	className,
 }: Readonly<{ type: IBitTypes; className?: string }>): JSX.Element | null {
-	const { t } = useTranslation("common");
 	const combinedClass =
-		`min-h-4 min-w-4 h-4 w-4 text-foreground` +
-		(className ? `${className}` : "");
+		"min-h-4 min-w-4 h-4 w-4 text-foreground" +
+		(className ? ` ${className}` : "");
 
 	switch (type) {
 		case IBitTypes.Llm:

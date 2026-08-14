@@ -245,7 +245,7 @@ function FunctionItem({
 	});
 
 	const style = transform
-		? { transform: t('translate3dxpxYpx0', 'translate3d({{x}}px, {{y}}px, 0)', { x: transform.x, y: transform.y }) }
+		? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
 		: undefined;
 
 	const inputCount = Object.values(layer.pins).filter(

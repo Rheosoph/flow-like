@@ -428,6 +428,17 @@ fn call_app_event_message(args: &Value) -> String {
     }
 }
 
+fn interact_app_page_message(args: &Value) -> String {
+    let app_id = spec_arg_str(args, "app_id", "appId");
+    if app_id.is_empty() {
+        "FlowPilot wants to use an app page (fill inputs / press buttons) and run the workflows behind it.".to_string()
+    } else {
+        format!(
+            "FlowPilot wants to use a page of app '{app_id}' (fill inputs / press buttons) and run the workflows behind it."
+        )
+    }
+}
+
 fn execute_event_message(args: &Value) -> String {
     let event_id = spec_arg_str(args, "event_id", "eventId");
     if event_id.is_empty() {
@@ -659,6 +670,59 @@ pub fn find_runtime_execution_tool_spec(name: &str) -> Option<PlatformToolSpec> 
         .find(|spec| spec.name == name)
 }
 
+/// Drive a LIVE rendered app page the way a user would: set input values, fire component events
+/// (button clicks etc.), await the workflow runs they start, and observe the outcome. One spec is
+/// shared by the global orchestrator and the board/widget specialists; scoped sessions may omit
+/// `app_id` (the host default applies).
+pub fn interact_app_page_tool_spec() -> PlatformToolSpec {
+    PlatformToolSpec {
+        name: "interact_app_page",
+        description: r#"USE a live rendered app page like a user: set input values and trigger component events
+(e.g. a button's `click`), then observe what happened. Each trigger executes the workflows wired to
+that component through the page's real action pipeline and awaits them. The result reports every
+applied action, the workflow runs your triggers started (`runs[]` with run ids and error status —
+follow up with query_execution_logs for full logs), the page's post-run element state, and fresh
+ordered screenshots of the rendered page as image attachments. In the global assistant the page is
+embedded inline first when it is not already visible; in a board/widget session the target page must
+already be rendered (open page preview or /use view). Use ui_inspect or the returned `elements` to
+learn component ids and their `configured_events`. This is the end-to-end verification tool for
+UI-driven workflows: fill the inputs, press the button, then check runs, logs, and screenshots
+before claiming the app works."#,
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "app_id": { "type": "string", "description": "App id. Optional inside a board/widget session (defaults to the current app)." },
+                    "event_id": { "type": "string", "description": "Page Event id (kind \"page\" in list_apps) identifying which page to drive. Optional when page_id is given or only one page is live." },
+                    "page_id": { "type": "string", "description": "Page id, when targeting a live page without knowing its Event id. Optional." },
+                    "actions": {
+                        "type": "array",
+                        "description": "Ordered interactions, applied one after another.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "action": { "type": "string", "enum": ["set_value", "trigger"], "description": "set_value writes an input component's value; trigger fires a component event and awaits the workflows it starts." },
+                                "component_id": { "type": "string", "description": "Component id on the page (from ui_inspect or a previous interact_app_page result)." },
+                                "value": { "description": "New value for set_value (string, number, boolean, or JSON)." },
+                                "event": { "type": "string", "description": "Component event name for trigger (default \"click\")." }
+                            },
+                            "required": ["action", "component_id"]
+                        }
+                    },
+                    "capture_screenshots": { "type": "boolean", "description": "Attach screenshots of the page after the interactions (default true)." }
+                },
+                "required": ["actions"]
+            })
+        },
+        approval: ToolApprovalSpec::Execute {
+            title: "Approve app page interaction",
+            message: interact_app_page_message,
+            timing: ToolApprovalTiming::BeforeExecution,
+        },
+        timeout_secs: 600,
+    }
+}
+
 fn global_runtime_verification_tool_specs() -> Vec<PlatformToolSpec> {
     vec![
         PlatformToolSpec {
@@ -770,6 +834,7 @@ older inventory: do not guess another Event or route; relist at most once only w
             approval: ToolApprovalSpec::None,
             timeout_secs: 120,
         },
+        interact_app_page_tool_spec(),
         PlatformToolSpec {
             name: "call_app_event",
             description: r#"Execute a headless event/interface of a Flow-Like app (kind "headless" in `list_apps`:

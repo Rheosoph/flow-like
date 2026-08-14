@@ -215,7 +215,8 @@ export function CrashReportDialog({
 
 						{!reportingEnabled && (
 							<p className="text-sm text-muted-foreground">
-								{t('crashAmpErrorReportsAreTurnedOffSoNothingCanBeSentYouCanEnableThemUnderSettingsRsaquoPrivacy', "Crash & error reports are turned off, so nothing can be sent. You can enable them under Settings &rsaquo; Privacy.")}
+								Crash &amp; error reports are turned off, so nothing can be
+								sent. You can enable them under Settings &rsaquo; Privacy.
 							</p>
 						)}
 					</div>

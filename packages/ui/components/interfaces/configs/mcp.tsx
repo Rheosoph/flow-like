@@ -396,7 +396,7 @@ async function openMcpInspectorSession(
 				protocolVersion: MCP_INSPECTOR_PROTOCOL_VERSION,
 				capabilities: {},
 				clientInfo: {
-					name: i18next.t('flowLikeConfigInspector', 'Flow Like Config Inspector'),
+					name: "Flow Like Config Inspector",
 					version: "1.0.0",
 				},
 			},

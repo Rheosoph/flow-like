@@ -455,7 +455,7 @@ function AttachmentsDisplay({
 				const newWindow = window.open();
 				if (newWindow) {
 					newWindow.document.write(
-						t('imgSrcurlStylemaxwidth100HeightAuto', '<img src="{{url}}" style="max-width: 100%; height: auto;" />', { url }),
+						`<img src="${url}" style="max-width: 100%; height: auto;" />`,
 					);
 				}
 			} else {

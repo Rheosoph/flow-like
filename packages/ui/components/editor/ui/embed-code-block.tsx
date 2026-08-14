@@ -841,7 +841,7 @@ function useOgMetadata(url: string): { data: OgData | null; loading: boolean } {
 					const res = await tauriFetch(url, {
 						method: "GET",
 						headers: {
-							"User-Agent": i18next.t('mozilla50CompatibleFlowlikebot10', 'Mozilla/5.0 (compatible; FlowLikeBot/1.0)'),
+							"User-Agent": "Mozilla/5.0 (compatible; FlowLikeBot/1.0)",
 							Accept: "text/html",
 						},
 					});

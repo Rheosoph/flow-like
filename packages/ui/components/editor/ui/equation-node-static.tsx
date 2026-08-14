@@ -105,7 +105,9 @@ export function EquationElementStatic(
 			<div
 				className={cn(
 					"group flex items-center justify-center rounded-sm select-none hover:bg-primary/10 data-[selected=true]:bg-primary/10",
-					t('px2Py1', { defaultValue_zero: 'bg-muted p-3 pr-9', defaultValue_other: 'px-2 py-1', count: element.texExpression.length }),
+					element.texExpression.length === 0
+						? "bg-muted p-3 pr-9"
+						: "px-2 py-1",
 				)}
 			>
 				{element.texExpression.length > 0 ? (

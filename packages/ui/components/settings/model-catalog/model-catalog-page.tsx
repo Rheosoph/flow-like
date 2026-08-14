@@ -855,7 +855,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 							<span className="text-[15px] font-semibold tracking-tight">
 								{t('models', 'Models')}
 							</span>
-							<span className="text-[11.5px] text-muted-foreground">{t('lengthAvailableMiddot', '{{length}} available &middot;', { length: hostableBits.length })}{" "}{t('lengthInYourProfile', '{{length}} in your profile', { length: profileGlyphModels.length })}</span>
+							<span className="text-[11.5px] text-muted-foreground">{t('lengthAvailableMiddot', '{{length}} available ·', { length: hostableBits.length })}{" "}{t('lengthInYourProfile', '{{length}} in your profile', { length: profileGlyphModels.length })}</span>
 						</span>
 					</div>
 

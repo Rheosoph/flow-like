@@ -464,7 +464,7 @@ export function FlowScriptPanel({
 							minimap: { enabled: true },
 							fontSize: 12,
 							fontFamily:
-								t('sfMonoUimonospaceSfmonoregularMenloMonacoConsolasLiberationMonoCourierNewMonospace', '\'SF Mono\', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \'Liberation Mono\', \'Courier New\', monospace'),
+								"'SF Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
 							fontLigatures: true,
 							scrollBeyondLastLine: false,
 							automaticLayout: true,

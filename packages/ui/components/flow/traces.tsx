@@ -112,9 +112,9 @@ export function Traces({
 
 		if (logFilter.size > 0 && logFilter.size < 5) {
 			parts.push(
-				t('log_levelInVal', 'log_level IN ({{val}})', { val: Array.from(logFilter)
+				`log_level IN (${Array.from(logFilter)
 					.map((level) => logLevelToNumber(level))
-					.join(", ") }),
+					.join(", ")})`,
 			);
 		}
 
@@ -145,7 +145,7 @@ export function Traces({
 			if (index === 0) {
 				query += `(${part})`;
 			} else {
-				query += t('andPart', 'AND ({{part}})', { part });
+				query += ` AND (${part})`;
 			}
 		});
 		setQuery(query);

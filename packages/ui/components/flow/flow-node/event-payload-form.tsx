@@ -744,7 +744,7 @@ export function EventPayloadForm({
 												style={{ backgroundColor: typeToColor(pin.data_type) }}
 											/>
 											{{ friendly_name: pin.friendly_name }} ({{ data_type: pin.data_type }}</Trans>{pin.value_type !== IValueType.Normal &&
-												`- ${pin.value_type}`}
+												` - ${pin.value_type}`}
 											)
 										</li>
 									))}

@@ -832,7 +832,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 												cell.includes("![") || cell.includes("](");
 											const isLongText =
 												cell.length > 100 && !hasMarkdownContent;
-											const cellKey = `${colIdx} ${cell}`;
+											const cellKey = `${colIdx}\u0000${cell}`;
 											// Cells that already show everything need no toggle
 											const isToggleable =
 												!hasMarkdownContent && !isLongText && !wrapCells;
@@ -864,7 +864,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 															title={
 																showsFullText
 																	? t('clickToCollapse', 'Click to collapse')
-																	: t('cellClickToExpand', "{{cell}} Click to expand", { cell })
+																	: t('cellClickToExpand', "{{cell}}\n\nClick to expand", { cell })
 															}
 															className={cn(
 																"block w-full cursor-pointer text-left",

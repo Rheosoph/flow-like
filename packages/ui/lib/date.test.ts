@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
 	formatAbsoluteDateTime,
 	formatRelativeTime,
+	inferTemporalValue,
+	looksLikeTemporalName,
 	parseTemporalValue,
 } from "./date";
 
@@ -77,5 +79,74 @@ describe("parseTemporalValue", () => {
 		expect(parseTemporalValue(Number.NaN)).toBeNull();
 		expect(parseTemporalValue(true)).toBeNull();
 		expect(parseTemporalValue(null)).toBeNull();
+	});
+});
+
+describe("looksLikeTemporalName", () => {
+	test("accepts names whose first or last word promises an instant", () => {
+		for (const name of [
+			"created_at",
+			"updated_at",
+			"createdAt",
+			"deleted_on",
+			"event_time",
+			"order_date",
+			"timestamp",
+			"dateOfBirth",
+			"time_received",
+			"last_updated",
+			"valid_until",
+		]) {
+			expect(looksLikeTemporalName(name)).toBe(true);
+		}
+	});
+
+	test("rejects measurements that merely contain a temporal substring", () => {
+		for (const name of [
+			"total_amount",
+			"duration",
+			"rating",
+			"estimate",
+			"quantity_on_hand",
+			"latitude",
+			"update_count",
+			"minimum_stock",
+		]) {
+			expect(looksLikeTemporalName(name)).toBe(false);
+		}
+	});
+});
+
+describe("inferTemporalValue", () => {
+	test("reads an epoch integer when the column name promises one", () => {
+		expect(
+			inferTemporalValue("created_at", 1_786_353_300_000)?.getFullYear(),
+		).toBe(2026);
+		expect(
+			inferTemporalValue("updatedAt", 1_786_532_400_000)?.getFullYear(),
+		).toBe(2026);
+	});
+
+	test("leaves numbers alone when the name says nothing", () => {
+		expect(inferTemporalValue("total_amount", 1_786_353_300_000)).toBeNull();
+		expect(inferTemporalValue("subtotal_amount", 12_450)).toBeNull();
+	});
+
+	test("refuses a promising name when the number is not a plausible date", () => {
+		expect(inferTemporalValue("created_at", 3)).toBeNull();
+		expect(inferTemporalValue("updated_at", -8_000_000_000_000)).toBeNull();
+	});
+
+	test("still reads ISO text from a column with any name", () => {
+		expect(
+			inferTemporalValue("notes", "2026-08-14T10:30:00Z")?.getUTCFullYear(),
+		).toBe(2026);
+	});
+
+	test("treats a quoted integer as the integer case", () => {
+		expect(
+			inferTemporalValue("created_at", "1786353300000")?.getFullYear(),
+		).toBe(2026);
+		expect(inferTemporalValue("subtotal_amount", "12450")).toBeNull();
 	});
 });

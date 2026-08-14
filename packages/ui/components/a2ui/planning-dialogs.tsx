@@ -100,7 +100,7 @@ export const PLANNING_COLORS = [
 
 /** Soft translucent fill from an accent color that works in both themes. */
 export function planningTint(color: string, percent = 22): string {
-	return i18next.t('colormixinSrgbColorPercentTransparent', 'color-mix(in srgb, {{color}} {{percent}}%, transparent)', { color, percent });
+	return `color-mix(in srgb, ${color} ${percent}%, transparent)`;
 }
 
 function ColorField({

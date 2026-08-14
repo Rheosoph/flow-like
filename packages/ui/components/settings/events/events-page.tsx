@@ -435,7 +435,7 @@ export default function EventsPage({
 			}
 			let additionalParams = "";
 			if (event?.id) {
-				additionalParams = t('eventidid', '&eventId={{id}}', { id: event.id });
+				additionalParams = `&eventId=${event.id}`;
 			}
 
 			router.push(`${basePath}?id=${id}${additionalParams}`);

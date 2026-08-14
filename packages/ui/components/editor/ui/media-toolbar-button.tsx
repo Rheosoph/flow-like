@@ -131,7 +131,10 @@ export function MediaToolbarButton({
 						alignOffset={-32}
 					>
 						<DropdownMenuGroup>
-							<DropdownMenuItem onSelect={() => openFilePicker()}>{`${currentConfig.icon} Upload from computer`}</DropdownMenuItem>
+							<DropdownMenuItem onSelect={() => openFilePicker()}>
+								{currentConfig.icon}
+								Upload from computer
+							</DropdownMenuItem>
 							<DropdownMenuItem onSelect={() => setDialogOpen(true)}>
 								<LinkIcon />
 								{t('insertViaUrl', 'Insert via URL')}

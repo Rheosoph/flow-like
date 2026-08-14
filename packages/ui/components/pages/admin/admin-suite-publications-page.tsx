@@ -425,9 +425,8 @@ function VisibilityTransition({
 	request: SuitePublicationRequest;
 	size: "sm" | "lg";
 }) {
-	const { t } = useTranslation("admin");
 	const badgeClass =
-		size === "lg" ? t('capitalizeTextsmPx3Py1', 'capitalize text-sm px-3 py-1') : "capitalize text-[10px]";
+		size === "lg" ? "capitalize text-sm px-3 py-1" : "capitalize text-[10px]";
 	return (
 		<div className="flex items-center gap-1.5 text-xs">
 			{size === "lg" ? (

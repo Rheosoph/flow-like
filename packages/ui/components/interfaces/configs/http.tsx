@@ -53,7 +53,7 @@ function getCloudflareInstallCommand(
 		case "windows":
 			return `winget install --id Cloudflare.cloudflared`;
 		case "linux":
-			return `curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb sudo dpkg -i cloudflared.deb`;
+			return "curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb\nsudo dpkg -i cloudflared.deb";
 		default:
 			return `brew install cloudflare/cloudflare/cloudflared`;
 	}
@@ -66,7 +66,7 @@ function getNgrokInstallCommand(
 		case "windows":
 			return `choco install ngrok`;
 		case "linux":
-			return `curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list sudo apt update && sudo apt install ngrok`;
+			return 'curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null\necho "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list\nsudo apt update && sudo apt install ngrok';
 		default:
 			return `brew install ngrok`;
 	}
@@ -144,7 +144,7 @@ export function HttpConfig({
 	}: { url: string; withAuth: boolean }) => (
 		<pre className="mt-2 overflow-x-auto text-xs bg-muted p-3 rounded-md">
 			{withAuth
-				? `curl -X ${method} "${url}" \ -H "Authorization: Bearer ${authToken}"`
+				? `curl -X ${method} "${url}" \\\n  -H "Authorization: Bearer ${authToken}"`
 				: `curl -X ${method} "${url}"`}
 		</pre>
 	);

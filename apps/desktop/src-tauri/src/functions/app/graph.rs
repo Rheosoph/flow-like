@@ -1490,6 +1490,9 @@ pub struct NeighborsPayload {
     pub depth: Option<usize>,
     pub direction: Option<String>,
     pub limit: Option<usize>,
+    /// Relationship labels to follow. Omit or leave empty to follow all of them.
+    #[serde(default, alias = "edge_labels")]
+    pub edge_labels: Option<Vec<String>>,
 }
 
 #[tauri::command(async)]
@@ -1519,6 +1522,7 @@ pub async fn graph_neighbors(
             payload.depth.unwrap_or(1),
             direction,
             payload.limit,
+            payload.edge_labels.as_deref(),
         )
         .await?;
     serde_json::to_value(result).map_err(|e| e.into())

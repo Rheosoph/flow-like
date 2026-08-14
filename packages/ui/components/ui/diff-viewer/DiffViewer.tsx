@@ -446,10 +446,10 @@ export function DiffViewer({
 	const gridTemplate =
 		mode === "unified"
 			? showLineNumbers
-				? t('minmax25remmaxcontentMinmax25remmaxcontentMinmax125remmaxcontentCodecol', 'minmax(2.5rem,max-content) minmax(2.5rem,max-content) minmax(1.25rem,max-content) {{codeCol}}', { codeCol })
-				: t('minmax125remmaxcontentCodecol', 'minmax(1.25rem,max-content) {{codeCol}}', { codeCol })
+				? `minmax(2.5rem,max-content) minmax(2.5rem,max-content) minmax(1.25rem,max-content) ${codeCol}`
+				: `minmax(1.25rem,max-content) ${codeCol}`
 			: showLineNumbers
-				? t('minmax275remmaxcontentCodecolMinmax275remmaxcontentCodecol2', 'minmax(2.75rem,max-content) {{codeCol}} minmax(2.75rem,max-content) {{codeCol2}}', { codeCol, codeCol2: codeCol })
+				? `minmax(2.75rem,max-content) ${codeCol} minmax(2.75rem,max-content) ${codeCol}`
 				: `${codeCol} ${codeCol}`;
 
 	const body = (() => {

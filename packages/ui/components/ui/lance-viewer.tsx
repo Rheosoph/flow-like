@@ -57,6 +57,7 @@ import { cn } from "../../lib";
 import {
 	formatAbsoluteDateTime,
 	formatRelativeTime,
+	inferTemporalValue,
 	parseTemporalValue,
 } from "../../lib/date";
 import type { IIndexConfig } from "../../state/backend-state/db-state";
@@ -519,8 +520,8 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 		: lastCount < pageSize;
 
 	const containerCls = cn(
-		t('flexHfullWfullFlexcolGap3', 'flex h-full w-full flex-col gap-3'),
-		fullscreen && t('fixedInset0Z60BgbackgroundP4', 'fixed inset-0 z-[60] bg-background p-4'),
+		"flex h-full w-full flex-col gap-3",
+		fullscreen && "fixed inset-0 z-[60] bg-background p-4",
 		className,
 	);
 
@@ -1120,6 +1121,11 @@ const Cell: React.FC<{
 					</Button>
 				);
 			case "number":
+				// Backends store instants as plain integers, so an Int64 column named
+				// `created_at` arrives here as a number and would read as a quantity.
+				if (inferTemporalValue(field.name, value)) {
+					return <DateCell value={value} onClick={openDialog} />;
+				}
 				return (
 					<Button
 						variant="ghost"
@@ -1303,6 +1309,9 @@ const CellViewDialog: React.FC<{
 					</div>
 				);
 			case "number":
+				if (inferTemporalValue(field.name, value)) {
+					return <DateDetail value={value} />;
+				}
 				return <code className="text-sm">{String(value)}</code>;
 			case "date":
 				return <DateDetail value={value} />;
@@ -1729,7 +1738,8 @@ const SchemaDialog: React.FC<{
 														<div className="font-medium text-sm truncate">
 															{idx.name}
 														</div>
-														<div className="text-xs text-muted-foreground truncate">{t('index_typeOn', '{{index_type}} on', { index_type: idx.index_type })}{idx.columns.join(", ")}
+														<div className="text-xs text-muted-foreground truncate">
+															{idx.index_type} on {idx.columns.join(", ")}
 														</div>
 													</div>
 													{onDropIndex && (

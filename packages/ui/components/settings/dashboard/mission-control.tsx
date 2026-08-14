@@ -423,7 +423,7 @@ export function MissionControl({
 											<Badge variant="secondary" className="text-[10px]">
 												{aiAct.riskCategory ?? "Assessed"}
 												{aiAct.conformityScore !== null &&
-													`· ${aiAct.conformityScore}`}
+													` · ${aiAct.conformityScore}`}
 											</Badge>
 										) : (
 											<Badge variant="outline" className="text-[10px]">

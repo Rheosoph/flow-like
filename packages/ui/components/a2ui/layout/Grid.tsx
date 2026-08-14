@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import { Fragment } from "react";
 import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
@@ -14,7 +13,6 @@ export function A2UIGrid({
 	style,
 	renderChild,
 }: ComponentProps<GridComponent>) {
-	const { t } = useTranslation("common");
 	const { resolve } = useData();
 
 	const columns = component.columns
@@ -49,13 +47,13 @@ export function A2UIGrid({
 	};
 
 	if (typeof columns === "number") {
-		gridStyle.gridTemplateColumns = t('repeatcolumnsMinmax01fr', 'repeat({{columns}}, minmax(0, 1fr))', { columns });
+		gridStyle.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
 	} else if (columns) {
 		gridStyle.gridTemplateColumns = columns;
 	}
 
 	if (typeof rows === "number") {
-		gridStyle.gridTemplateRows = t('repeatrowsMinmax01fr', 'repeat({{rows}}, minmax(0, 1fr))', { rows });
+		gridStyle.gridTemplateRows = `repeat(${rows}, minmax(0, 1fr))`;
 	} else if (rows) {
 		gridStyle.gridTemplateRows = rows;
 	}

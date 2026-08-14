@@ -333,11 +333,7 @@ export function LibraryPage({
 
 			const meta = {
 				name: projectName,
-				description: t(
-					"codingProjectProjectname",
-					"Coding project: {{projectName}}",
-					{ projectName },
-				),
+				description: `Coding project: ${projectName}`,
 				tags: ["coding", "development"],
 				use_case: "Development",
 				created_at: nowSystemTime(),

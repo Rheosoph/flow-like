@@ -56,7 +56,7 @@ export function EventAttentionStrip({
 						</span>
 						<span className="min-w-0 flex-1">
 							<span className="font-semibold">{issue.title}</span>
-							<span className="text-muted-foreground">{`— ${issue.detail}`}</span>
+							<span className="text-muted-foreground">{` — ${issue.detail}`}</span>
 						</span>
 						{target && (
 							<Button

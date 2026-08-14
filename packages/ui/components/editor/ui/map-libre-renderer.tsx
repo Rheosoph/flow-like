@@ -1,6 +1,5 @@
 "use client";
 
-import { i18n as i18next } from "@flow-like/locales";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useTheme } from "next-themes";
@@ -35,7 +34,7 @@ function buildStyle(isDark: boolean): maplibregl.StyleSpecification {
 						],
 						tileSize: 256,
 						attribution:
-							i18next.t('copyAHrefhttpswwwopenstreetmaporgcopyrightosmaCopyAHrefhttpscartocomcartoa', '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>'),
+							'&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
 					},
 				},
 				layers: [
@@ -60,7 +59,7 @@ function buildStyle(isDark: boolean): maplibregl.StyleSpecification {
 						],
 						tileSize: 256,
 						attribution:
-							i18next.t('copyAHrefhttpswwwopenstreetmaporgcopyrightosmaCopyAHrefhttpscartocomcartoa', '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>'),
+							'&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
 					},
 				},
 				layers: [

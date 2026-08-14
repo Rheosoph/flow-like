@@ -165,9 +165,9 @@ export function A2UIFileInput({
 			}
 		};
 
-		window.addEventListener(t('a2uiclearfileinput', 'a2ui:clearFileInput'), handleClearFileInput);
+		window.addEventListener("a2ui:clearFileInput", handleClearFileInput);
 		return () => {
-			window.removeEventListener(t('a2uiclearfileinput', 'a2ui:clearFileInput'), handleClearFileInput);
+			window.removeEventListener("a2ui:clearFileInput", handleClearFileInput);
 		};
 	}, [surfaceId, componentId, clearFiles]);
 

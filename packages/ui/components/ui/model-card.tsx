@@ -693,7 +693,7 @@ function ModelCardDropdown({
 					) : (
 						<>
 							<DownloadCloudIcon className="h-4 w-4 mr-2" />
-							{t('download', 'Download (')}{humanFileSize(bitSize)})
+							{t('downloadWithSize', 'Download ({{size}})', { size: humanFileSize(bitSize) })}
 						</>
 					)}
 				</DropdownMenuItem>

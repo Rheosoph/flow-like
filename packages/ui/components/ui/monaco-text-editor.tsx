@@ -1,6 +1,6 @@
 "use client";
 
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
+import { i18n as i18next } from "@flow-like/locales";
 import Editor, { type Monaco } from "@monaco-editor/react";
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -34,7 +34,6 @@ export function MonacoTextEditor({
 	placeholder?: string;
 	height?: string;
 }>) {
-	const { t } = useTranslation("common");
 	const [isMonacoReady, setIsMonacoReady] = useState(false);
 	const { resolvedTheme } = useTheme();
 	const monacoRef = useRef<Monaco | null>(null);
@@ -79,7 +78,7 @@ export function MonacoTextEditor({
 					minimap: { enabled: false },
 					fontSize: 14,
 					fontFamily:
-						t('sfMonoUimonospaceSfmonoregularMenloMonacoConsolasLiberationMonoCourierNewMonospace', '\'SF Mono\', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \'Liberation Mono\', \'Courier New\', monospace'),
+						"'SF Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
 					fontLigatures: true,
 					lineNumbers: "off",
 					scrollBeyondLastLine: false,

@@ -3775,7 +3775,7 @@ export function FlowBoard({
 									<DragOverlay
 										dropAnimation={{
 											duration: 500,
-											easing: t('cubicbezier01806706122', 'cubic-bezier(0.18, 0.67, 0.6, 1.22)'),
+											easing: "cubic-bezier(0.18, 0.67, 0.6, 1.22)",
 										}}
 									>
 										{active?.data?.current?.type === "function-layer" ? (

@@ -60,7 +60,7 @@ export function GraphQueryPanel({
 					value={query}
 					onChange={(e) => setQuery(e.target.value)}
 					onKeyDown={handleKeyDown}
-					placeholder={t('matchNpersonrmReturnNRMLimit100', 'MATCH (n:Person)-[r]->(m) RETURN n, r, m LIMIT 100')}
+					placeholder="MATCH (n:Person)-[r]->(m) RETURN n, r, m LIMIT 100"
 					className="w-full min-h-[80px] max-h-[200px] rounded-md border bg-muted/50 px-3 py-2 text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-ring"
 					spellCheck={false}
 				/>
