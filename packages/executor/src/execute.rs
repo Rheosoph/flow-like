@@ -1136,6 +1136,66 @@ fn lease_progress_update(
     }
 }
 
+/// Best-effort terminal `Failed` for a queued run whose broker message is
+/// being dead-lettered without a successful terminal callback.
+///
+/// The strict-lease contract only accepts a terminal update from the current
+/// delivery owner, so this claims the lease with a fresh token first and then
+/// persists `Failed` through the lease-protected path. A run that is already
+/// terminal is treated as settled. When another delivery still holds a live
+/// lease the run is left to its owner and an error is returned; callers must
+/// treat any error as non-fatal.
+pub async fn report_queue_failure(
+    executor_jwt: &str,
+    job_id: &str,
+    error: &str,
+    config: &ExecutorConfig,
+) -> Result<(), ExecutorError> {
+    let claims = verify_jwt_async(executor_jwt).await?;
+    let progress_url = format!(
+        "{}/api/v1/execution/progress",
+        claims.callback_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::new();
+    let lease = QueueLeaseContext {
+        job_id: job_id.to_string(),
+        token: create_id(),
+    };
+
+    let acknowledgement = send_progress(
+        &progress_url,
+        executor_jwt,
+        &lease_progress_update(&lease, config.strict_lease_duration_ms()),
+        config,
+        &client,
+    )
+    .await?;
+    match interpret_start_acknowledgement(&acknowledgement)? {
+        StartAcknowledgement::Execute => {}
+        StartAcknowledgement::AlreadyTerminal(_) => return Ok(()),
+        StartAcknowledgement::Busy { .. } => {
+            return Err(ExecutorError::Callback(
+                "another delivery holds the execution lease; leaving the run to its owner"
+                    .to_string(),
+            ));
+        }
+    }
+
+    let update = ProgressUpdateRequest {
+        progress: None,
+        current_step: None,
+        status: Some("failed".to_string()),
+        output_len: None,
+        error: Some(error.to_string()),
+        job_id: Some(lease.job_id.clone()),
+        lease_token: Some(lease.token.clone()),
+        lease_duration_ms: None,
+    };
+    let acknowledgement =
+        send_progress(&progress_url, executor_jwt, &update, config, &client).await?;
+    ensure_terminal_acknowledgement(&acknowledgement, &ExecutionStatus::Failed)
+}
+
 async fn maintain_queue_lease(
     callback_url: &str,
     executor_jwt: &str,

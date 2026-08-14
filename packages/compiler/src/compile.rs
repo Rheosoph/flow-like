@@ -13,8 +13,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
 
-const MAX_SIGNED_URL_BYTES: usize = 120 * 1024 * 1024;
-const MAX_CALLBACK_ERROR_BYTES: usize = 2 * 1024 * 1024;
+const MAX_SIGNED_URL_BYTES: usize = 8 * 1024;
+// Must stay well below the callback endpoint's request body limit or an
+// oversized error can never deliver its terminal callback.
+const MAX_CALLBACK_ERROR_BYTES: usize = 2 * 1024;
 const STORAGE_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub async fn compile(
@@ -22,7 +24,9 @@ pub async fn compile(
     config: &CompilerConfig,
 ) -> Result<CompilationResult, CompilerError> {
     let claims = verify_jwt_async(&job.compiler_jwt).await?;
-    validate_job_envelope(&job, &claims, config)?;
+    if let Err(error) = validate_job_envelope(&job, &claims, config) {
+        return Err(envelope_failure(&job, &claims, error, config).await);
+    }
 
     info!(
         job_id = %job.job_id,
@@ -618,6 +622,35 @@ fn is_retryable(error: &CompilerError) -> bool {
     )
 }
 
+/// Envelope rejections are deterministic, so without a terminal callback the
+/// package would stay pinned in "compiling" while the message poisons. The
+/// callback only goes to a callback URL that passed validation itself, and it
+/// carries the verified claim identifiers, never the untrusted job fields.
+async fn envelope_failure(
+    job: &CompilationJob,
+    claims: &CompilerClaims,
+    error: CompilerError,
+    config: &CompilerConfig,
+) -> CompilerError {
+    if is_retryable(&error) || validate_callback_url(&claims.callback_url).is_err() {
+        return error;
+    }
+
+    let result = CompilationResult {
+        job_id: claims.job_id.clone(),
+        package_id: claims.package_id.clone(),
+        version: claims.version.clone(),
+        status: CompilationStatus::Failed,
+        compiled_platforms: Vec::new(),
+        error: Some(bounded_terminal_error(&error)),
+        nodes: None,
+    };
+    match send_callback(&claims.callback_url, &job.compiler_jwt, &result, config).await {
+        Ok(()) => error,
+        Err(callback_error) => callback_error,
+    }
+}
+
 fn bounded_terminal_error(error: &CompilerError) -> String {
     let mut message = error.to_string();
     if message.len() > MAX_CALLBACK_ERROR_BYTES {
@@ -960,6 +993,66 @@ mod tests {
         )));
         assert!(is_retryable(&CompilerError::Download("flaky".to_string())));
         assert!(is_retryable(&CompilerError::Upload("flaky".to_string())));
+    }
+
+    async fn callback_capture_server() -> (String, tokio::sync::mpsc::Receiver<CompilationResult>) {
+        let (tx, rx) = tokio::sync::mpsc::channel::<CompilationResult>(1);
+        let app = axum::Router::new().route(
+            "/api/v1/registry/compilation-callback",
+            axum::routing::post(move |axum::Json(result): axum::Json<CompilationResult>| {
+                let tx = tx.clone();
+                async move {
+                    let _ = tx.send(result).await;
+                    "ok"
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/api/v1/registry/compilation-callback",
+            listener.local_addr().unwrap()
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (url, rx)
+    }
+
+    #[tokio::test]
+    async fn envelope_failure_sends_a_failed_callback_to_a_validated_url() {
+        let (url, mut rx) = callback_capture_server().await;
+
+        let mut job = azure_job();
+        job.wasm_hash = "not-hex".to_string();
+        let mut claims = claims_for(&job);
+        claims.callback_url = url;
+
+        let config = azure_config();
+        let error = validate_job_envelope(&job, &claims, &config).unwrap_err();
+        let returned = envelope_failure(&job, &claims, error, &config).await;
+        assert!(matches!(returned, CompilerError::InvalidJob(_)));
+
+        let delivered = rx.recv().await.unwrap();
+        assert_eq!(delivered.status, CompilationStatus::Failed);
+        assert_eq!(delivered.job_id, claims.job_id);
+        assert_eq!(delivered.package_id, claims.package_id);
+        assert!(delivered.compiled_platforms.is_empty());
+        assert!(delivered.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn envelope_failure_with_an_invalid_callback_url_sends_nothing() {
+        let mut job = azure_job();
+        job.wasm_hash = "not-hex".to_string();
+        let mut claims = claims_for(&job);
+        // Public cleartext callback hosts never pass validation.
+        claims.callback_url =
+            "http://callback.example/api/v1/registry/compilation-callback".to_string();
+
+        let config = azure_config();
+        let error = validate_job_envelope(&job, &claims, &config).unwrap_err();
+        let returned = envelope_failure(&job, &claims, error, &config).await;
+        assert!(matches!(returned, CompilerError::InvalidJob(_)));
     }
 
     #[test]

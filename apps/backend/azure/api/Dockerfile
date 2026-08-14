@@ -15,8 +15,10 @@ ENV CARGO_BUILD_JOBS=2
 ENV RUSTFLAGS="--cfg tokio_unstable"
 
 # The API embeds reviewed deployment metadata and OpenID JWKS at compile time.
-# Supply that input as a BuildKit secret so ignored local configs never have to
-# enter the Docker context or persist in an image layer.
+# Supply that input as a BuildKit secret so it never enters the Docker context.
+# The copy placed at /app/flow-like.config.json (over the tracked public
+# default) is removed in this same RUN so it never persists in a builder layer
+# or a pushed build cache.
 RUN --mount=type=secret,id=flow_like_config,required=true,target=/tmp/flow-like.azure.config.json \
     --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
     --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git \
@@ -25,7 +27,9 @@ RUN --mount=type=secret,id=flow_like_config,required=true,target=/tmp/flow-like.
     && grep -Eq '"provider"[[:space:]]*:[[:space:]]*"azure"' /tmp/flow-like.azure.config.json \
     && cp /tmp/flow-like.azure.config.json /app/flow-like.config.json \
     && cargo build --locked --release --package azure-api \
-    && cp /app/target/release/azure-api /tmp/azure-api
+    && strip -s /app/target/release/azure-api \
+    && cp /app/target/release/azure-api /tmp/azure-api \
+    && rm /app/flow-like.config.json
 
 FROM debian:bookworm-slim AS runtime
 

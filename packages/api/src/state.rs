@@ -1416,11 +1416,11 @@ fn validate_jwk_for_header(jwk: &Jwk, kid: &str, header_algorithm: Algorithm) ->
         bail!("OpenID JWK is not designated for signature verification");
     }
 
-    let key_algorithm = jwk
-        .common
-        .key_algorithm
-        .ok_or_else(|| flow_like_types::anyhow!("OpenID JWK is missing alg"))?;
-    if jwk_algorithm(key_algorithm)? != header_algorithm {
+    // Entra ID JWKS omit `alg`; the header algorithm is still bound by the
+    // allowlist above and the key-type match below.
+    if let Some(key_algorithm) = jwk.common.key_algorithm
+        && jwk_algorithm(key_algorithm)? != header_algorithm
+    {
         bail!("OpenID JWK alg does not match the token header");
     }
     let compatible_key_type = matches!(
@@ -1928,6 +1928,21 @@ mod tests {
         }))
         .unwrap();
         assert!(validate_jwk_for_header(&encryption_key, "key-1", Algorithm::RS256).is_err());
+    }
+
+    #[test]
+    fn openid_jwk_without_alg_accepts_compatible_header_algorithms_only() {
+        let entra_key: Jwk = serde_json::from_value(serde_json::json!({
+            "kty": "RSA",
+            "use": "sig",
+            "kid": "entra-key",
+            "n": "sXchvX3L7MdCKMImnlUiVDXQ4x_8OmtkPL3MyT9c6nr8YjC-rf1W_gKVVdQVrWjQxw",
+            "e": "AQAB"
+        }))
+        .expect("valid test JWK");
+        assert!(validate_jwk_for_header(&entra_key, "entra-key", Algorithm::RS256).is_ok());
+        assert!(validate_jwk_for_header(&entra_key, "entra-key", Algorithm::ES256).is_err());
+        assert!(validate_jwk_for_header(&entra_key, "entra-key", Algorithm::HS256).is_err());
     }
 
     #[test]

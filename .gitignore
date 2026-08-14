@@ -12,6 +12,10 @@ lerna-debug.log*
 /.cargo/config.toml
 
 api.config.json
+# Deployment-specific Azure build config (BuildKit secret input). Note the
+# tracked repo-root flow-like.config.json is the committed public default that
+# builds require; ignore rules cannot and must not cover it.
+flow-like.azure.config.json
 
 node_modules
 dist

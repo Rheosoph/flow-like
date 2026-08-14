@@ -108,6 +108,41 @@ compiler:
   tolerations: []
   affinity: {}
 
+# Realtime Signaling Configuration (collaboration WebSockets)
+# Verifies realtime JWTs with BACKEND_PUB/BACKEND_KID from the jwt secret, so
+# the API's BACKEND_KEY signer must belong to the same keypair.
+signaling:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: k3d-flow-like.localhost:5000/flow-like-k8s-signaling
+    tag: latest
+    pullPolicy: Never
+  service:
+    port: 4444
+  # Exact origins allowed to open realtime WebSocket connections (max 20).
+  # Must include your web app origin (e.g. https://app.flow-like.example.com)
+  # in addition to the Tauri desktop origins below.
+  allowedOrigins:
+    - tauri://localhost
+    - http://tauri.localhost
+    - https://tauri.localhost
+  # Fan-out between replicas: local (default; single replica, no Redis) or
+  # redis (required when replicaCount > 1; uses the chart's Redis).
+  fanoutMode: local
+  # signalChannel: "signal:publish" # Redis pub/sub channel when fanoutMode=redis
+  # maxConnectionsPerSub: 16 # concurrent WebSocket connections per user
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "25m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # Executor Configuration (for Kubernetes Jobs)
 executor:
   image:
@@ -405,7 +440,7 @@ ingress:
       paths:
         - path: /
           pathType: Prefix
-          # service: api (default) or web
+          # service: api (default), web, or signaling
   tls: []
 
 # Network Policies

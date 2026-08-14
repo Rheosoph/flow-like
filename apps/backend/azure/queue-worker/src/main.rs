@@ -14,7 +14,8 @@ use azure_storage_queue::models::{
 use azure_storage_queue::{QueueClient, QueueServiceClient};
 use flow_like_compiler::{CompilerConfig, CompilerError, compile};
 use flow_like_executor::{
-    ExecutionRequest, ExecutorConfig, ExecutorError, ResolveError, resolve_payload_from_str,
+    ExecutionRequest, ExecutorConfig, ExecutorError, MAX_REMOTE_PAYLOAD_BYTES, ResolveError,
+    fetch_bounded, report_queue_failure, resolve_payload_from_str,
 };
 use flow_like_types::dispatch::{CompilationJob, CompilationJobRef};
 use serde::Deserialize;
@@ -388,6 +389,10 @@ async fn poison_message(
     reason: &str,
     config: &Config,
 ) -> Result<ProcessDirective, WorkerError> {
+    // Dead-lettering alone would leave the run record non-terminal until it
+    // expires; pollers would watch a forever-Running execution.
+    fail_poisoned_execution_run(message, reason, config).await;
+
     let original = message.message_text.clone().unwrap_or_default();
     let truncated = truncate_on_char_boundary(&original, MAX_POISON_BODY_BYTES);
     // Queue Storage messages carry no user-settable properties, so the failure
@@ -449,6 +454,46 @@ async fn poison_message(
         "queue_message_poisoned"
     );
     Ok(ProcessDirective::Continue)
+}
+
+/// Best-effort terminal `Failed` for the run carried by an execution message
+/// that is about to be dead-lettered.
+///
+/// The identity material (executor JWT, signed broker job ID) is re-derived
+/// from the message body, so this covers every poison path whose payload is
+/// still readable; unreadable or unfetchable payloads are skipped. A failure
+/// here must never block the poison move.
+async fn fail_poisoned_execution_run(message: &ReceivedMessage, reason: &str, config: &Config) {
+    if config.workload != Workload::Execution {
+        return;
+    }
+    let Ok(prepared) = prepare(message, Workload::Execution) else {
+        return;
+    };
+    let payload = match resolve_payload_from_str(&prepared.payload).await {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "cannot resolve poisoned execution payload; run record stays non-terminal"
+            );
+            return;
+        }
+    };
+    if let Err(error) = report_queue_failure(
+        &payload.executor_jwt,
+        &payload.job_id,
+        &format!("queue delivery dead-lettered: {reason}"),
+        &ExecutorConfig::from_env(),
+    )
+    .await
+    {
+        tracing::warn!(
+            error = %error,
+            job_id = %payload.job_id,
+            "failed to persist terminal Failed status for poisoned execution"
+        );
+    }
 }
 
 fn truncate_on_char_boundary(value: &str, limit: usize) -> &str {
@@ -569,18 +614,11 @@ async fn resolve_compilation_job(json: &str) -> Result<CompilationJob, ProcessOu
     };
 
     tracing::info!("fetching staged compilation job");
-    let response = flow_like_types::reqwest::get(&remote_url)
+    let body = fetch_bounded(&remote_url, MAX_REMOTE_PAYLOAD_BYTES)
         .await
         .map_err(|_| ProcessOutcome::Retryable("compilation_payload_fetch_failed"))?;
-    if !response.status().is_success() {
-        return Err(ProcessOutcome::Retryable(
-            "compilation_payload_fetch_failed",
-        ));
-    }
 
-    response
-        .json::<CompilationJob>()
-        .await
+    serde_json::from_slice::<CompilationJob>(&body)
         .map_err(|_| ProcessOutcome::Permanent("invalid_compilation_payload"))
 }
 
@@ -695,12 +733,28 @@ impl Config {
                 "AZURE_QUEUE_RENEWAL_INTERVAL_SECS must be less than half of AZURE_QUEUE_VISIBILITY_TIMEOUT_SECS",
             ));
         }
-        let process_timeout = Duration::from_secs(parse_u64(
+        // The process deadline wraps lease acquisition, store setup, event
+        // flushing and the terminal ack around the executor's own run timeout,
+        // so it must fire strictly after that timeout or a long run is killed
+        // mid-flight, re-run, and poisoned without a terminal status.
+        let executor_timeout_secs = std::env::var("EXECUTOR_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(3_600);
+        let process_timeout_default = executor_timeout_secs.saturating_add(600);
+        let process_timeout_secs = parse_u64(
             "AZURE_QUEUE_PROCESS_TIMEOUT_SECS",
-            3_600,
+            process_timeout_default,
             30,
-            7_200,
-        )?);
+            process_timeout_default.max(7_200),
+        )?;
+        if process_timeout_secs <= executor_timeout_secs {
+            return Err(WorkerError::message(
+                "invalid_process_timeout",
+                "AZURE_QUEUE_PROCESS_TIMEOUT_SECS must exceed the executor run timeout (EXECUTOR_TIMEOUT_SECS, default 3600)",
+            ));
+        }
+        let process_timeout = Duration::from_secs(process_timeout_secs);
 
         let poll_min_interval_secs = parse_u64("AZURE_QUEUE_POLL_MIN_INTERVAL_SECS", 1, 1, 60)?;
         let poll_max_interval_secs = parse_u64("AZURE_QUEUE_POLL_MAX_INTERVAL_SECS", 30, 1, 300)?;
@@ -723,7 +777,11 @@ impl Config {
             // Queue Storage has no broker delivery cap, so the limit is
             // enforced here from DequeueCount before any work starts.
             max_dequeue_count: parse_u64("AZURE_QUEUE_MAX_DEQUEUE_COUNT", 3, 1, 100)? as i64,
-            batch_size: parse_u64("AZURE_QUEUE_BATCH_SIZE", 1, 1, 32)? as i32,
+            // A batch greater than 1 would leave waiting messages unrenewed on
+            // their initial visibility: they redeliver elsewhere and their
+            // stale receipts later tear down the connection loop. The knob
+            // refuses unsafe values until waiting-message renewal exists.
+            batch_size: parse_u64("AZURE_QUEUE_BATCH_SIZE", 1, 1, 1)? as i32,
             poll_min_interval: Duration::from_secs(poll_min_interval_secs),
             poll_max_interval: Duration::from_secs(poll_max_interval_secs),
         })

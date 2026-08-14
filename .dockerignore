@@ -25,6 +25,11 @@ node_modules/
 **/*.pem
 api.config.json
 **/api.config.json
+# Deployment-specific Azure config enters builds only as a BuildKit secret,
+# never via the context. The tracked flow-like.config.json public default must
+# stay in the context - builds read it.
+flow-like.azure.config.json
+**/flow-like.azure.config.json
 .cargo/config
 .cargo/config.toml
 **/.cargo/config

@@ -870,19 +870,18 @@ pub async fn jwt_middleware(
         if let Some(cached) = state.auth_cache.get(&cache_key) {
             match cached {
                 CachedAuth::OpenID { sub, exp } => {
-                    if !cached_openid_is_current(exp, chrono::Utc::now().timestamp()) {
-                        state.auth_cache.invalidate(&cache_key);
-                        request
-                            .extensions_mut()
-                            .insert::<AppUser>(AppUser::Unauthorized);
+                    if cached_openid_is_current(exp, chrono::Utc::now().timestamp()) {
+                        let user = AppUser::OpenID(OpenIDUser {
+                            sub,
+                            access_token: token.to_string(),
+                        });
+                        request.extensions_mut().insert::<AppUser>(user);
                         return Ok(next.run(request).await);
                     }
-                    let user = AppUser::OpenID(OpenIDUser {
-                        sub,
-                        access_token: token.to_string(),
-                    });
-                    request.extensions_mut().insert::<AppUser>(user);
-                    return Ok(next.run(request).await);
+                    // Expired cache entry: fall through to fresh validation,
+                    // which honors the configured leeway and re-inserts on
+                    // success.
+                    state.auth_cache.invalidate(&cache_key);
                 }
                 CachedAuth::Executor {
                     sub,

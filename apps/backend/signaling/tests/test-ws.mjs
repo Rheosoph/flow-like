@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import WebSocket from "ws";
 
-const ws = new WebSocket("ws://localhost:4444");
+const ws = new WebSocket(process.env.WS_ENDPOINT || "ws://localhost:4444");
 
 ws.on("open", () => {
 	console.log("✓ Connected to signaling server");

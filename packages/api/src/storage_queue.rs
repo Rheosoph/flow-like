@@ -183,8 +183,8 @@ pub(crate) async fn send_json<T: Serialize>(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("unavailable")
         .to_string();
-    let body = response.text().await.unwrap_or_default();
-    let body = &body[..body.len().min(MAX_ERROR_BODY_BYTES)];
+    let body = response.bytes().await.unwrap_or_default();
+    let body = String::from_utf8_lossy(&body[..body.len().min(MAX_ERROR_BODY_BYTES)]);
     Err(format!(
         "Azure Queue Storage rejected the message with HTTP {status} (request {request_id}): {body}"
     ))

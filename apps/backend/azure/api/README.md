@@ -6,9 +6,13 @@ not accept a PostgreSQL password or `DATABASE_URL`.
 ## Secure image build
 
 The API embeds reviewed, non-secret identity metadata and JWKS at compile time.
-Pass the Azure configuration through a BuildKit secret; ignored local config
-files are excluded from the build context and must never be passed with a build
-argument:
+Pass the Azure configuration through a BuildKit secret and never with a build
+argument. A local `flow-like.azure.config.json` is gitignored and dockerignored,
+so it stays out of version control and the build context. The tracked repo-root
+`flow-like.config.json` is the committed public default that builds require; it
+does enter the context, the builder overwrites it with the secret for the
+duration of the build `RUN`, and the same `RUN` removes the copy so the supplied
+configuration never persists in an image layer:
 
 ```sh
 docker buildx build \
