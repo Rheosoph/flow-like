@@ -695,7 +695,8 @@ pub fn global_assistant_tool_specs(memory_enabled: bool) -> Vec<PlatformToolSpec
         PlatformToolSpec {
             name: "list_apps",
             description: r#"List the apps visible in the user's CURRENT profile, with the callable interfaces each
-one exposes. Every callable event carries its Event `id`, `kind`, and one exact `consumer_tool`:
+one exposes. For DIRECT/COMPLEX app use, treat these active Events as primary before direct data
+access. Every callable event carries its Event `id`, `kind`, and one exact `consumer_tool`:
 "chat" → `call_app_chat` (`open_app_chat` when the user should take over), "page" →
 `open_app_page` (embed the app's UI inline), "headless"
 (simple/REST/MCP/…) → `call_app_event`. A page may also expose `page_id` and `route`; neither is its
@@ -1091,16 +1092,23 @@ Omit event_id to create; pass it to update. Side-effecting; asks for approval."#
             name: "data_studio_agent",
             description: r#"The data specialist for creating, inspecting, updating, querying, or dropping app databases/tables; SQL and Cypher; ontologies/overlays; graph queries/elements; analytics; ontology actions; and data visualizations. It does not edit workflow boards or UI.
 
-Give one complete question/change with the exact app and optional overlay from context. It returns its answer plus material query/action/chart evidence. Read-only inspection needs no approval; nested destructive/mutating operations ask separately and report their effects. If optional data setup is unavailable or declined during a larger build, disclose it but continue independent board work; do not retry in a loop."#,
+For DIRECT/COMPLEX app use, configured active Events are primary and this is the raw-data fallback. Outside BUILD, call it only after `list_apps` completed in an earlier assistant round and the user explicitly requested raw schema/table/ontology/SQL/DataFusion work, no suitable Event exists, or a successfully called Event explicitly lacks the required operation or fidelity. Never put it in the same wave as `list_apps`, and never bypass a failed, declined, timed-out, or approval-blocked suitable Event.
+
+Give one complete question/change with the exact app and optional overlay from context, plus the exact `routing_reason`. It returns its answer plus material query/action/chart evidence. Read-only inspection needs no approval; nested destructive/mutating operations ask separately and report their effects. If optional data setup is unavailable or declined during a larger build, disclose it but continue independent board work; do not retry in a loop."#,
             schema: || {
                 json!({
                     "type": "object",
                     "properties": {
                         "instruction": { "type": "string", "description": "Complete natural-language instruction or question about the app's data (databases, ontologies, queries, analytics, actions, visualizations)." },
                         "app_id": { "type": "string", "description": "Target app id (from list_apps or the currently open Data Studio page). Defaults to the open Data Studio app when omitted." },
-                        "overlay_id": { "type": "string", "description": "Target ontology/overlay id to start from. Defaults to the overlay selected on the open Data Studio page when omitted." }
+                        "overlay_id": { "type": "string", "description": "Target ontology/overlay id to start from. Defaults to the overlay selected on the open Data Studio page when omitted." },
+                        "routing_reason": {
+                            "type": "string",
+                            "enum": ["build", "explicit_raw_data", "no_suitable_event", "event_insufficient"],
+                            "description": "Why direct data access is allowed: BUILD data work; the user explicitly requested raw data/SQL/DataFusion; a complete list_apps inventory had no suitable Event; or a successfully called Event explicitly could not provide the required operation/fidelity."
+                        }
                     },
-                    "required": ["instruction"]
+                    "required": ["instruction", "routing_reason"]
                 })
             },
             approval: ToolApprovalSpec::None,
@@ -2037,7 +2045,11 @@ mod tests {
         );
 
         let open_page = find_global_tool_spec("open_app_page").expect("open_app_page spec");
-        assert!(open_page.description.contains("structured failure supersedes"));
+        assert!(
+            open_page
+                .description
+                .contains("structured failure supersedes")
+        );
         assert!(open_page.description.contains("older inventory"));
         assert!(open_page.description.contains("relist at most once"));
         let open_page_schema = (open_page.schema)();
@@ -2046,6 +2058,42 @@ mod tests {
             .expect("event_id description");
         assert!(event_id.contains("Exact Event id"));
         assert!(event_id.contains("never `page_id`/`default_page_id`"));
+    }
+
+    #[test]
+    fn direct_data_tool_requires_an_event_first_routing_reason() {
+        let inventory = find_global_tool_spec("list_apps").expect("list_apps spec");
+        assert!(inventory.description.contains("active Event"));
+        assert!(inventory.description.contains("exact `consumer_tool`"));
+
+        let data = find_global_tool_spec("data_studio_agent").expect("data studio spec");
+        assert!(
+            data.description
+                .contains("configured active Events are primary")
+        );
+        assert!(data.description.contains("raw-data fallback"));
+        assert!(
+            data.description
+                .contains("completed in an earlier assistant round")
+        );
+        assert!(data.description.contains("never bypass a failed, declined"));
+
+        let schema = (data.schema)();
+        assert_eq!(
+            schema["properties"]["routing_reason"]["enum"],
+            json!([
+                "build",
+                "explicit_raw_data",
+                "no_suitable_event",
+                "event_insufficient"
+            ])
+        );
+        assert!(
+            schema["required"]
+                .as_array()
+                .expect("required fields")
+                .contains(&json!("routing_reason"))
+        );
     }
 
     #[test]

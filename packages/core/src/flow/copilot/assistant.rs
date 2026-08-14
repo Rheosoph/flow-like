@@ -39,7 +39,7 @@ pub struct GlobalOpenBoardContext {
 
 /// The Data Studio page the user currently has open, forwarded by the frontend so the global
 /// assistant knows which app's data "this data / this database / this ontology" refers to and can
-/// route data questions to `data_studio_agent` (with the right app/overlay) without asking.
+/// preserve the right app/overlay while applying the shared Event-first routing policy.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct GlobalDataStudioContext {
     pub app_id: String,
@@ -110,7 +110,7 @@ Classify each work item as DIRECT (straightforward use of existing apps/evidence
 These ownership boundaries are strict:
 - `flowpilot_board`: all board/workflow logic, FlowScript, nodes, connections, entry points, debugging, and board explanations.
 - `flowpilot_widget`: pages, widgets, and components only; never workflow logic.
-- `data_studio_agent`: app databases, ontologies, queries, analytics, actions, and data visualizations.
+- `data_studio_agent`: direct/raw app databases, ontologies, queries, analytics, actions, and data visualizations after routing selects the data path. Configured Events remain the primary DIRECT/COMPLEX app interface.
 - `project_scout`: read-only prior-art and foundation planning for BUILD only.
 
 Never author specialist-owned artifacts yourself or ask one specialist to perform another's work. Resolve "this board/data/page" from supplied open-context IDs without asking again. Use exact context or tool-returned IDs; never invent state or silently switch to a similarly named app.
@@ -119,17 +119,19 @@ Ask only for a genuinely blocking choice; otherwise use safe defaults or explici
 
 Default to DIRECT. Do not create a dependency plan for an ordinary one-call, one-app, or simple two-app task; call the needed tools directly. Activate COMPLEX SOLVE only when the request is reasonably likely to require at least three distinct apps/interfaces, or is intrinsically complex because it has dependent stages, source reconciliation, branching actions/approvals, or explicit verification and recovery. A long prompt, calling `list_apps`, or two independent calls is not by itself complex. If direct execution later reveals this threshold, escalate then; otherwise stay DIRECT. Stop when the acceptance contract is met; do not spend calls on redundant confirmation."#;
 
-const TASK_ROUTING_PLAYBOOK: &str = r#"## EXISTING APPS AND PUBLIC RESEARCH: LOCAL FIRST
+const TASK_ROUTING_PLAYBOOK: &str = r#"## EXISTING APPS, EVENTS, DATA, AND PUBLIC RESEARCH: LOCAL FIRST
 
 Local apps are the first choice, including installed research/search apps.
+In DIRECT and COMPLEX SOLVE, an app's active configured Events are its primary supported interface. This includes chat and page Events plus headless simple/quick-action, REST/API, and MCP Events. Direct database, SQL, DataFusion, table, and ontology access is a fallback, not a shortcut around an Event.
 
 1. When a work item needs an app, private content, an action, or current external information, begin with `list_apps`. Match by capability and active interface metadata, not only exact name. A request to ask, tell, or check with a named person/agent normally names an app; if no unique app matches, ask which app and never reinterpret the name as a web query.
-2. Prefer a suitable local app over FlowPilot's public-web fallback. Route using the chosen tool's interface contract. Inspect an interface before sending a structured payload when its shape is not already known. For a page, pass its Event `id` as `event_id`; never substitute its `page_id`.
-3. Use the sealed fallback only when a complete local inventory contains no suitable app/interface for that public-research work item, or after local research candidates were tried in best-fit order until one answered or no useful, nonredundant candidate remained. `complete: false`, truncation, or event-read errors are not proof of absence. A declined local call is a stop, not permission to bypass it through public web. Never put `research_agent` in the same call wave as a local app/content/action tool. The fallback is always rebound to the immutable source request and receives no app inventory/results, root memory, or attached files. It must extract only safe public factual subquestions and never query or repeat secrets, credentials, or private identifiers present in a mixed request. Any public query that must be derived from private output instead requires a new explicit sanitized user request.
-4. DIRECT work may call one or two clearly needed apps without producing a plan. Calls that are obviously independent may run together; wait when one result supplies another call's input, and keep calls to the same stateful app ordered when they may conflict.
-5. Interpret and synthesize app results. Name contributing apps, preserve material caveats, and refer to returned UI/files instead of pretending to reproduce them. For page content, answer only from successfully returned screenshots; disclose incomplete capture.
+2. For DIRECT/COMPLEX app use, choose the best matching active Event and invoke its exact `consumer_tool`. Inspect the interface first when its payload shape is unknown. For a page, pass its Event `id` as `event_id`; never substitute its `page_id`.
+3. Use `data_studio_agent` directly only for BUILD data work, an explicit raw schema/table/ontology/SQL/DataFusion request, when a complete inventory has no suitable Event, or when a successfully called Event explicitly cannot provide the required operation or fidelity. Outside BUILD, `list_apps` must finish in an earlier assistant round; never put it and `data_studio_agent` in the same wave. A failed, declined, timed-out, or approval-blocked suitable Event is a stop, not permission to bypass it through raw data. State the applicable `routing_reason` in the data call.
+4. Prefer a suitable local app over FlowPilot's public-web fallback. Use the sealed fallback only when a complete local inventory contains no suitable app/interface for that public-research work item, or after local research candidates were tried in best-fit order until one answered or no useful, nonredundant candidate remained. `complete: false`, truncation, or event-read errors are not proof of absence. A declined local call is a stop, not permission to bypass it through public web. Never put `research_agent` in the same call wave as a local app/content/action tool. The fallback is always rebound to the immutable source request and receives no app inventory/results, root memory, or attached files. It must extract only safe public factual subquestions and never query or repeat secrets, credentials, or private identifiers present in a mixed request. Any public query that must be derived from private output instead requires a new explicit sanitized user request.
+5. DIRECT work may call one or two clearly needed apps without producing a plan. Calls that are obviously independent may run together; wait when one result supplies another call's input, and keep calls to the same stateful app ordered when they may conflict.
+6. Interpret and synthesize app results. Name contributing apps, preserve material caveats, and refer to returned UI/files instead of pretending to reproduce them. For page content, answer only from successfully returned screenshots; disclose incomplete capture.
    Preserve Data Studio's returned renderable chart/query/step-log blocks exactly so the client can display its evidence.
-6. Always set `call_app_chat.forward_files` explicitly: exact relevant attachment names, or `[]` for none. Never forward unrelated attachments.
+7. Always set `call_app_chat.forward_files` explicitly: exact relevant attachment names, or `[]` for none. Never forward unrelated attachments.
 
 An interface tool's structured result supersedes earlier inventory. Never guess a sibling Event ID or route after a failure. Refresh `list_apps` at most once and only when the result says `relist_required`; `navigate_view` changes the user's view and is never a substitute for embedding a page or obtaining screenshot evidence.
 
@@ -256,9 +258,8 @@ pub fn open_board_section(board: &GlobalOpenBoardContext) -> String {
     lines.join("\n")
 }
 
-/// Render the open-Data-Studio section injected into the assistant context. Kept separate so the
-/// wording (which the model relies on to route data questions to `data_studio_agent`) lives in one
-/// place.
+/// Render the open-Data-Studio section injected into the assistant context. It resolves deictic
+/// references without overriding the shared Event-first routing policy.
 pub fn data_studio_section(context: &GlobalDataStudioContext) -> String {
     let app_id = context.app_id.trim();
     if app_id.is_empty() {
@@ -273,7 +274,7 @@ pub fn data_studio_section(context: &GlobalDataStudioContext) -> String {
 
     let mut lines = vec![
         "## CURRENTLY OPEN DATA STUDIO".to_string(),
-        "The user has this app's Data Studio open and visible on screen right now. When they say \"this data\", \"this database\", \"this ontology\", \"this overlay\", or ask to query/analyze/visualize/edit it, they mean THIS app — route the request to data_studio_agent with this app_id (and overlay_id) and never ask which app.".to_string(),
+        "The user has this app's Data Studio open and visible on screen right now. When they say \"this data\", \"this database\", \"this ontology\", or \"this overlay\", they mean THIS app; use these IDs and never ask which app. This context identifies the target but does not override Event-first routing for DIRECT/COMPLEX app use.".to_string(),
         format!("- App: \"{app_label}\" (app_id: {app_id})"),
     ];
     let overlay_id = context
@@ -315,7 +316,7 @@ pub fn data_studio_section(context: &GlobalDataStudioContext) -> String {
         None => String::new(),
     };
     lines.push(format!(
-        "To answer or act on this data, call data_studio_agent with app_id=\"{app_id}\"{overlay_arg}. Do not query or visualize the data yourself."
+        "For an allowed raw-data fallback or BUILD data work, call data_studio_agent with app_id=\"{app_id}\"{overlay_arg}; otherwise use the best matching configured Event. Do not query or visualize the data yourself."
     ));
     lines.join("\n")
 }
@@ -514,6 +515,15 @@ mod tests {
         assert!(discovery < fallback);
         assert!(prompt.contains("Local apps are the first choice"));
         assert!(prompt.contains("including installed research/search apps"));
+        assert!(prompt.contains("active configured Events are its primary supported interface"));
+        assert!(prompt.contains("REST/API, and MCP Events"));
+        assert!(prompt.contains("fallback, not a shortcut around an Event"));
+        assert!(prompt.contains("best matching active Event"));
+        assert!(prompt.contains("`list_apps` must finish in an earlier assistant round"));
+        assert!(prompt.contains("never put it and `data_studio_agent` in the same wave"));
+        assert!(prompt.contains("successfully called Event explicitly cannot provide"));
+        assert!(prompt.contains("approval-blocked suitable Event is a stop"));
+        assert!(prompt.contains("State the applicable `routing_reason`"));
         assert!(prompt.contains("no suitable app/interface"));
         assert!(prompt.contains("local research candidates were tried in best-fit order"));
         assert!(prompt.contains("no useful, nonredundant candidate remained"));
@@ -536,6 +546,25 @@ mod tests {
         assert!(prompt.contains("material failures or evidence gaps"));
         assert!(prompt.contains("Never claim completion until a terminal tool result proves it"));
         assert!(prompt.contains("never repeat a successful mutation"));
+    }
+
+    #[test]
+    fn open_data_studio_context_does_not_override_event_first_routing() {
+        let section = data_studio_section(&GlobalDataStudioContext {
+            app_id: "sales-app".to_string(),
+            app_name: Some("Sales".to_string()),
+            overlay_id: Some("crm".to_string()),
+            overlay_name: Some("CRM".to_string()),
+            selected_table: Some("customers".to_string()),
+            overlay_names: vec!["CRM".to_string()],
+        });
+
+        assert!(section.contains("app_id: sales-app"));
+        assert!(section.contains("overlay_id: crm"));
+        assert!(section.contains("does not override Event-first routing"));
+        assert!(section.contains("allowed raw-data fallback or BUILD data work"));
+        assert!(section.contains("otherwise use the best matching configured Event"));
+        assert!(!section.contains("route the request to data_studio_agent"));
     }
 
     #[test]
