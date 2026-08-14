@@ -13,6 +13,7 @@ import {
 	Filter,
 	ListTree,
 	Route,
+	SlidersHorizontal,
 	Workflow,
 	X,
 } from "lucide-react";
@@ -46,6 +47,8 @@ export interface GraphNodeInspectorProps {
 	connections?: ConnectionInfo[];
 	onClose: () => void;
 	onExpand?: (depth: number) => void;
+	/** Opens the expansion guard, where relationships and a ceiling are chosen. */
+	onGuidedExpand?: () => void;
 	/** Restricts the canvas to this object's neighborhood; null leaves focus. */
 	onFocus?: (depth: number | null) => void;
 	focused?: boolean;
@@ -371,8 +374,9 @@ export function GraphNodeInspector({
 	connections,
 	onClose,
 	onExpand,
-	onFocus,
+	onGuidedExpand,
 	focused = false,
+	onFocus,
 	hasChildren,
 	childrenExpanded,
 	onExpandChildren,
@@ -543,6 +547,21 @@ export function GraphNodeInspector({
 									title={t('expandNeighborsUpTo2HopsAway', 'Expand neighbors up to 2 hops away')}
 								>
 									<Expand className="h-3.5 w-3.5" />{t('2Hops', '2 hops')}
+								</Button>
+							)}
+							{onGuidedExpand && (
+								<Button
+									variant="outline"
+									size="sm"
+									className="h-7 gap-1.5 text-xs"
+									onClick={onGuidedExpand}
+									title={t(
+										"chooseRelationshipsAndALimitBeforeExpanding",
+										"Choose relationships and a limit before expanding",
+									)}
+								>
+									<SlidersHorizontal className="h-3.5 w-3.5" />
+									{t("expandWith", "Expand with…")}
 								</Button>
 							)}
 							{hasChildren && onExpandChildren && !childrenExpanded && (

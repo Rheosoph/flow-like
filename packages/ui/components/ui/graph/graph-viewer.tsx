@@ -17,6 +17,17 @@ import { Popover, PopoverContent, PopoverTrigger } from "../popover";
 import { GraphCanvas } from "./graph-canvas";
 import { buildClusterModel } from "./graph-clusters";
 import { GraphEdgeInspector } from "./graph-edge-inspector";
+import {
+	collapseClusters,
+	collapsedGroupClusterId,
+	isCollapsedGroupId,
+} from "./graph-collapse";
+import { GraphDensityControl } from "./graph-density-control";
+import {
+	type ExpansionOptions,
+	GraphExpansionDialog,
+	buildExpansionChoices,
+} from "./graph-expansion-dialog";
 import { GraphLegend, type LegendEntry } from "./graph-legend";
 import {
 	type ConnectionInfo,
@@ -95,6 +106,7 @@ export interface GraphViewerProps {
 		rawId?: unknown,
 		seedNode?: SubgraphNode,
 		depth?: number,
+		options?: ExpansionOptions,
 	) => void;
 	onExpandChildren?: (nodeId: string, label: string, rawId?: unknown) => void;
 	onCollapseChildren?: (nodeId: string) => void;
@@ -192,6 +204,14 @@ export function GraphViewer({
 	const [focus, setFocus] = useState<{ nodeId: string; depth: number } | null>(
 		null,
 	);
+	const [expansionTarget, setExpansionTarget] = useState<SubgraphNode | null>(
+		null,
+	);
+	/** Degree at or below which a node is dropped as a leaf; 0 keeps everything. */
+	const [leafCutoff, setLeafCutoff] = useState(0);
+	const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+		new Set(),
+	);
 
 	const [pathSource, setPathSource] = useState<SubgraphNode | null>(null);
 	const [pathHighlight, setPathHighlight] = useState<Set<string> | null>(null);
@@ -211,11 +231,41 @@ export function GraphViewer({
 	const nodeCount = data?.nodes.length ?? 0;
 	const edgeCount = data?.edges.length ?? 0;
 
+	// Grouping is computed over the loaded sample, never over the collapsed view:
+	// collapsing must not change which groups exist, or opening one would land the
+	// reader in a differently-grouped graph than the one they collapsed.
 	const clusterModel = useMemo(
 		() =>
 			enableClusterLayout && data ? buildClusterModel(data, overlay) : null,
 		[enableClusterLayout, data, overlay],
 	);
+
+	const collapsed = useMemo(() => {
+		if (!data || !clusterModel || collapsedGroups.size === 0) {
+			return { data, hiddenNodeCount: 0 };
+		}
+		return collapseClusters(data, clusterModel, collapsedGroups);
+	}, [data, clusterModel, collapsedGroups]);
+
+	const viewData = collapsed.data;
+
+	const collapseAllGroups = useCallback(() => {
+		setCollapsedGroups(
+			new Set((clusterModel?.clusters ?? []).map((cluster) => cluster.id)),
+		);
+	}, [clusterModel]);
+
+	const expandAllGroups = useCallback(() => setCollapsedGroups(new Set()), []);
+
+	// A group id that no longer exists would keep a phantom collapsed forever.
+	useEffect(() => {
+		if (collapsedGroups.size === 0) return;
+		const live = new Set((clusterModel?.clusters ?? []).map((c) => c.id));
+		const next = new Set(
+			[...collapsedGroups].filter((id) => live.has(id)),
+		);
+		if (next.size !== collapsedGroups.size) setCollapsedGroups(next);
+	}, [clusterModel, collapsedGroups]);
 
 	// Only node_count and label_counts describe the whole population; every other
 	// analytics field is measured over a bounded edge snapshot and would read as a
@@ -563,6 +613,19 @@ export function GraphViewer({
 		[overlay],
 	);
 
+	const adjacency = useMemo(() => {
+		const map = new Map<string, string[]>();
+		for (const edge of viewData?.edges ?? []) {
+			const forward = map.get(edge.source);
+			if (forward) forward.push(edge.target);
+			else map.set(edge.source, [edge.target]);
+			const backward = map.get(edge.target);
+			if (backward) backward.push(edge.source);
+			else map.set(edge.target, [edge.source]);
+		}
+		return map;
+	}, [data]);
+
 	/**
 	 * Nodes within `focus.depth` hops of the focused one.
 	 *
@@ -572,16 +635,6 @@ export function GraphViewer({
 	 */
 	const focusedNodeIds = useMemo(() => {
 		if (!focus || !data) return undefined;
-
-		const adjacency = new Map<string, string[]>();
-		for (const edge of data.edges) {
-			const forward = adjacency.get(edge.source);
-			if (forward) forward.push(edge.target);
-			else adjacency.set(edge.source, [edge.target]);
-			const backward = adjacency.get(edge.target);
-			if (backward) backward.push(edge.source);
-			else adjacency.set(edge.target, [edge.source]);
-		}
 
 		const visible = new Set<string>([focus.nodeId]);
 		let frontier = [focus.nodeId];
@@ -598,7 +651,60 @@ export function GraphViewer({
 			frontier = next;
 		}
 		return visible;
-	}, [focus, data]);
+	}, [focus, data, adjacency]);
+
+	/**
+	 * Nodes surviving the leaf cutoff — degree is counted over the loaded sample,
+	 * which is the only degree the reader can see and therefore the only one the
+	 * control can honestly claim to filter on.
+	 */
+	const nonLeafNodeIds = useMemo(() => {
+		if (leafCutoff <= 0 || !viewData) return undefined;
+		const kept = new Set<string>();
+		for (const node of viewData.nodes) {
+			// A collapsed group is never a leaf: it stands for members whose degree
+			// the reader cannot see, so hiding it would hide what it represents.
+			if (
+				isCollapsedGroupId(node.id) ||
+				(adjacency.get(node.id)?.length ?? 0) > leafCutoff
+			) {
+				kept.add(node.id);
+			}
+		}
+		return kept;
+	}, [leafCutoff, viewData, adjacency]);
+
+	const hiddenLeafCount = useMemo(
+		() =>
+			nonLeafNodeIds
+				? Math.max(0, (viewData?.nodes.length ?? 0) - nonLeafNodeIds.size)
+				: 0,
+		[nonLeafNodeIds, viewData],
+	);
+
+	/** Both filters restrict, so the canvas sees their intersection. */
+	const visibleNodeIds = useMemo(() => {
+		if (!focusedNodeIds) return nonLeafNodeIds;
+		if (!nonLeafNodeIds) return focusedNodeIds;
+		const both = new Set<string>();
+		for (const id of focusedNodeIds) {
+			// The focused node itself always survives, or the view it anchors would
+			// vanish the moment the cutoff passed its own degree.
+			if (id === focus?.nodeId || nonLeafNodeIds.has(id)) both.add(id);
+		}
+		return both;
+	}, [focusedNodeIds, nonLeafNodeIds, focus]);
+
+	const expansionChoices = useMemo(() => {
+		if (!expansionTarget) return [];
+		const loadedByLabel = new Map<string, number>();
+		for (const edge of data?.edges ?? []) {
+			if (edge.source !== expansionTarget.id && edge.target !== expansionTarget.id)
+				continue;
+			loadedByLabel.set(edge.label, (loadedByLabel.get(edge.label) ?? 0) + 1);
+		}
+		return buildExpansionChoices(expansionTarget, overlay, loadedByLabel);
+	}, [expansionTarget, overlay, data]);
 
 	const handleFocus = useCallback(
 		(depth: number | null) => {
@@ -620,6 +726,18 @@ export function GraphViewer({
 
 	const handleNodeClick = useCallback(
 		(nodeId: string) => {
+			// A group is an affordance, not an object: clicking it opens it rather
+			// than offering properties that belong to nobody.
+			if (isCollapsedGroupId(nodeId)) {
+				const clusterId = collapsedGroupClusterId(nodeId);
+				setCollapsedGroups((prev) => {
+					const next = new Set(prev);
+					next.delete(clusterId);
+					return next;
+				});
+				return;
+			}
+
 			const node = data?.nodes.find((n) => n.id === nodeId);
 			if (!node) return;
 			if (pathSource && node.id !== pathSource.id) {
@@ -659,13 +777,12 @@ export function GraphViewer({
 	const handleNodeShiftClick = useCallback(
 		(nodeId: string, label: string) => {
 			const node = data?.nodes.find((candidate) => candidate.id === nodeId);
-			onExpandNode?.(
-				nodeId,
-				label,
-				node ? getNodeRawId(node, overlay) : undefined,
-			);
+			// Shift+Click opens the guard rather than expanding: this is the gesture
+			// most likely to be aimed at a node with a four-figure fan-out.
+			if (node) setExpansionTarget(node);
+			else onExpandNode?.(nodeId, label, undefined);
 		},
-		[data, onExpandNode, overlay],
+		[data, onExpandNode],
 	);
 
 	const handleConnectionClick = useCallback(
@@ -860,6 +977,16 @@ export function GraphViewer({
 							</button>
 						)}
 
+						<GraphDensityControl
+							collapsedGroups={collapsedGroups.size}
+							groupCount={clusterModel?.clusters.length ?? 0}
+							onCollapseAll={collapseAllGroups}
+							onExpandAll={expandAllGroups}
+							leafCutoff={leafCutoff}
+							onLeafCutoffChange={setLeafCutoff}
+							hiddenLeaves={hiddenLeafCount}
+						/>
+
 						<div className="ml-auto flex items-center gap-2">
 							{warnings.length > 0 && !warningsDismissed && (
 								<Popover>
@@ -940,7 +1067,7 @@ export function GraphViewer({
 				{/* Canvas — zoom/fit/reset controls are rendered inside SigmaContainer */}
 				<div className="flex-1 relative min-h-0">
 					<GraphCanvas
-						data={data}
+						data={viewData}
 						loading={loading}
 						selectedNodeId={selectedNode?.id}
 						selectedEdgeKey={selectedEdgeKey}
@@ -952,7 +1079,7 @@ export function GraphViewer({
 							pathHighlight ? (pathEdgeHighlight ?? undefined) : undefined
 						}
 						hiddenLabels={hiddenLabels.size > 0 ? hiddenLabels : undefined}
-						visibleNodeIds={focusedNodeIds}
+						visibleNodeIds={visibleNodeIds}
 						clusters={clusterModel}
 						onNodeClick={handleNodeClick}
 						onNodeShiftClick={handleNodeShiftClick}
@@ -1085,6 +1212,9 @@ export function GraphViewer({
 									)
 							: undefined
 					}
+					onGuidedExpand={
+						onExpandNode ? () => setExpansionTarget(selectedNode) : undefined
+					}
 					onFocus={handleFocus}
 					focused={focus?.nodeId === selectedNode.id}
 					hasChildren={hasContainmentChildren(selectedNode)}
@@ -1121,6 +1251,25 @@ export function GraphViewer({
 					}}
 				/>
 			)}
+
+			<GraphExpansionDialog
+				node={expansionTarget}
+				overlay={overlay}
+				choices={expansionChoices}
+				maxLimit={limit ?? GRAPH_VIEW_LIMIT_OPTIONS[3]}
+				onClose={() => setExpansionTarget(null)}
+				onExpand={(options) => {
+					if (!expansionTarget) return;
+					onExpandNode?.(
+						expansionTarget.id,
+						expansionTarget.label,
+						getNodeRawId(expansionTarget, overlay),
+						undefined,
+						1,
+						options,
+					);
+				}}
+			/>
 		</div>
 	);
 }

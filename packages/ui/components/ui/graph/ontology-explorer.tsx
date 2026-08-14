@@ -286,6 +286,7 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 			rawId?: unknown,
 			seedNode?: SubgraphNode,
 			depth?: number,
+			options?: ExpansionOptions,
 		) => {
 			if (!overlay) return;
 
@@ -315,8 +316,12 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 					label,
 					node_id: resolvedId,
 					depth: resolvedDepth,
-					direction: "both",
-					limit: GRAPH_NODE_EXPANSION_LIMIT,
+					direction: options?.direction ?? "both",
+					limit: Math.min(
+						options?.limit ?? GRAPH_NODE_EXPANSION_LIMIT,
+						GRAPH_NODE_EXPANSION_LIMIT,
+					),
+					edge_labels: options?.edgeLabels,
 				});
 				const enriched = enrichSubgraphWithStyles(result, overlay);
 				setData((prev) => mergeSubgraphData(prev, enriched));
