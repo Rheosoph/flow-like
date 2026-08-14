@@ -5,7 +5,7 @@
 	"scripts": {
 		"dev": "astro dev",
 		"start": "astro dev",
-		"build": "astro build",
+		"build": "astro build && node ./scripts/agent-markdown/generate.mjs",
 		"deploy": "bun run build && bunx wrangler pages deploy dist",
 		"deploy:force": "bun run build && bunx wrangler pages deploy dist --branch main",
 		"preview": "astro preview",
@@ -23,5 +23,8 @@
 		"sharp": "^0.34.3",
 		"tailwind-merge": "^3.3.1",
 		"tailwindcss": "^4.1.12"
+	},
+	"devDependencies": {
+		"cheerio": "^1.0.0"
 	}
 }

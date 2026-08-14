@@ -1,8 +1,8 @@
 {
-	"appStore": "",
-	"flow": "",
-	"navigation": "",
-	"profiles": "",
-	"settings": "",
-	"vaults": ""
+	"appStore": "Tienda de aplicaciones",
+	"flow": "Flujo",
+	"navigation": "Navegación",
+	"profiles": "Perfiles",
+	"settings": "Ajustes",
+	"vaults": "Bóvedas"
 }

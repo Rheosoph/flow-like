@@ -47,6 +47,32 @@ All commands are run from the repository root using [mise](https://mise.jdx.dev)
 | `mise run build:docs`     | Build your production site to `./dist/`          |
 | `mise run deploy:docs`    | Deploy docs                                      |
 
+## 🤖 Markdown for agents
+
+Every page answers `Accept: text/markdown` with a Markdown representation; HTML
+stays the default for browsers. Appending `.md` to any page URL works too
+(`/apps/pages.md`), which is handy for humans checking what an agent sees.
+
+| Piece | File |
+| :--- | :--- |
+| HTML → Markdown conversion | `scripts/agent-markdown/html-to-markdown.mjs` |
+| Build step writing the twins | `scripts/agent-markdown/generate.mjs` |
+| Accept-header negotiation | `functions/_middleware.ts` |
+
+`astro build` writes `<page>.md` next to every `<page>.html`, and the Cloudflare
+Pages Function serves that twin when the request asks for Markdown. Responses
+carry `Content-Type: text/markdown; charset=utf-8`, an `x-markdown-tokens`
+estimate, `Vary: Accept`, and a canonical `Link` header.
+
+`scripts/agent-markdown/html-to-markdown.mjs` is mirrored in `apps/website` —
+keep both copies in sync.
+
+```sh
+bun run build
+bunx wrangler pages dev --port 8799
+curl -sD- -o- http://127.0.0.1:8799/dev/rust/ -H 'Accept: text/markdown' | head
+```
+
 ## 👀 Want to learn more?
 
 Check out [Starlight’s docs](https://starlight.astro.build/), read [the Astro documentation](https://docs.astro.build), or jump into the [Astro Discord server](https://astro.build/chat).
