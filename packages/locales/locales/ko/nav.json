@@ -1,8 +1,8 @@
 {
-	"appStore": "",
-	"flow": "",
-	"navigation": "",
-	"profiles": "",
-	"settings": "",
-	"vaults": ""
+	"appStore": "앱 스토어",
+	"flow": "플로우",
+	"navigation": "내비게이션",
+	"profiles": "프로필",
+	"settings": "설정",
+	"vaults": "볼트"
 }
