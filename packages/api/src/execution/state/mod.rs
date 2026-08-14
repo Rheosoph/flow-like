@@ -4,6 +4,7 @@
 //! - **PostgreSQL**: Via Prisma/SeaORM - reliable, supports complex queries
 //! - **Redis**: Fast, with native TTL support - good for high-throughput
 //! - **DynamoDB**: Serverless, with TTL + FlowLikeStore for large payloads - good for AWS
+//! - **Cosmos DB**: Serverless, native TTL + Blob offload - good for Azure
 //! - **Object Storage**: S3/R2/GCS - for large payloads and archival
 //!
 //! ## Backend Selection
@@ -27,7 +28,7 @@
 //!
 //! ```bash
 //! # Select backend
-//! EXECUTION_STATE_BACKEND=dynamodb  # postgres, redis, dynamodb, s3
+//! EXECUTION_STATE_BACKEND=dynamodb  # postgres, redis, dynamodb, cosmos, s3
 //!
 //! # PostgreSQL (default, requires manual TTL cleanup)
 //! DATABASE_URL=postgres://...
@@ -40,6 +41,13 @@
 //! DYNAMODB_TABLE_PREFIX=flowlike-  # optional
 //! # Reuses cdn_bucket (FlowLikeStore) from AppState for large payloads
 //! # Fallback: CDN_BUCKET_NAME env var when AppState not available
+//!
+//! # Azure Cosmos DB for NoSQL (Entra ID only; no account keys)
+//! COSMOS_ENDPOINT=https://<account>.documents.azure.com
+//! COSMOS_DATABASE=flowlike
+//! COSMOS_RUNS_CONTAINER=execution-runs
+//! COSMOS_EVENTS_CONTAINER=execution-events
+//! COSMOS_AUTH_MODE=managed_identity
 //!
 //! # Object Storage (for large payloads)
 //! EXECUTION_PAYLOAD_BUCKET=flow-like-execution-payloads
@@ -60,6 +68,9 @@ mod redis;
 #[cfg(feature = "dynamodb")]
 mod dynamodb;
 
+#[cfg(feature = "cosmos")]
+mod cosmos;
+
 #[cfg(feature = "s3")]
 mod object_storage;
 
@@ -72,6 +83,9 @@ pub use redis::RedisStateStore;
 #[cfg(feature = "dynamodb")]
 pub use dynamodb::DynamoDbStateStore;
 
+#[cfg(feature = "cosmos")]
+pub use cosmos::CosmosStateStore;
+
 #[cfg(feature = "s3")]
 pub use object_storage::ObjectStorageStateStore;
 
@@ -80,7 +94,7 @@ use std::sync::Arc;
 #[cfg(feature = "aws")]
 use aws_config::SdkConfig;
 
-#[cfg(any(feature = "dynamodb", feature = "s3"))]
+#[cfg(any(feature = "dynamodb", feature = "cosmos", feature = "s3"))]
 use flow_like_storage::files::store::FlowLikeStore;
 
 /// Backend type for execution state storage
@@ -92,6 +106,8 @@ pub enum StateBackend {
     Redis,
     #[cfg(feature = "dynamodb")]
     DynamoDB,
+    #[cfg(feature = "cosmos")]
+    Cosmos,
     #[cfg(feature = "s3")]
     ObjectStorage,
 }
@@ -107,6 +123,8 @@ impl StateBackend {
             "redis" => Self::Redis,
             #[cfg(feature = "dynamodb")]
             "dynamodb" | "dynamo" => Self::DynamoDB,
+            #[cfg(feature = "cosmos")]
+            "cosmos" | "cosmosdb" => Self::Cosmos,
             #[cfg(feature = "s3")]
             "s3" | "object_storage" | "objectstorage" => Self::ObjectStorage,
             _ => Self::Postgres,
@@ -120,7 +138,7 @@ pub struct StateStoreConfig {
     pub db: Option<Arc<sea_orm::DatabaseConnection>>,
     #[cfg(feature = "aws")]
     pub aws_config: Option<Arc<SdkConfig>>,
-    #[cfg(feature = "dynamodb")]
+    #[cfg(any(feature = "dynamodb", feature = "cosmos"))]
     pub content_store: Option<Arc<FlowLikeStore>>,
     #[cfg(feature = "s3")]
     pub meta_store: Option<Arc<FlowLikeStore>>,
@@ -138,7 +156,7 @@ impl StateStoreConfig {
         self
     }
 
-    #[cfg(feature = "dynamodb")]
+    #[cfg(any(feature = "dynamodb", feature = "cosmos"))]
     pub fn with_content_store(mut self, store: Arc<FlowLikeStore>) -> Self {
         self.content_store = Some(store);
         self
@@ -187,6 +205,12 @@ pub async fn create_state_store(
                 }
             }
         }
+
+        #[cfg(feature = "cosmos")]
+        StateBackend::Cosmos => Ok(Arc::new(CosmosStateStore::from_env(
+            config.content_store,
+            config.db,
+        )?)),
 
         #[cfg(feature = "s3")]
         StateBackend::ObjectStorage => match config.meta_store {

@@ -22,6 +22,7 @@
 //! - **LambdaStream**: AWS Lambda SDK streaming invocation (returns streaming response)
 //! - **KubernetesJob**: Native K8s Job creation for isolated executions
 //! - **Sqs**: AWS SQS queue for batch processing with Lambda consumer
+//! - **AzureQueue**: Azure Queue Storage queue with managed-identity workers
 //! - **SqsEventBridge**: SQS → EventBridge Pipe → ECS RunTask (payload staged to storage)
 //! - **Kafka**: Apache Kafka queue for high-throughput batch processing
 //! - **Redis**: Redis queue for Docker Compose / Kubernetes async dispatch
@@ -130,6 +131,8 @@ pub enum ExecutionBackend {
     KubernetesJob,
     /// AWS SQS queue for batch processing (Lambda consumer with callback)
     Sqs,
+    /// Azure Queue Storage queue for batch processing (managed identity only)
+    AzureQueue,
     /// Apache Kafka for high-throughput batch processing
     Kafka,
     /// Redis queue for Docker Compose / Kubernetes async dispatch
@@ -159,6 +162,7 @@ impl ExecutionBackend {
             "lambda_stream" | "lambda_streaming" => Self::LambdaStream,
             "kubernetes_job" | "k8s_job" | "isolated" => Self::KubernetesJob,
             "sqs" | "aws_sqs" => Self::Sqs,
+            "azure_queue" | "azure_storage_queue" | "queue_storage" => Self::AzureQueue,
             "kafka" => Self::Kafka,
             "redis" | "redis_queue" => Self::Redis,
             "sqs_event_bridge" | "sqs_ecs" | "ecs" => Self::SqsEventBridge,
@@ -173,7 +177,7 @@ impl ExecutionBackend {
     pub fn is_queue(&self) -> bool {
         matches!(
             self,
-            Self::Sqs | Self::SqsEventBridge | Self::Kafka | Self::Redis
+            Self::Sqs | Self::AzureQueue | Self::SqsEventBridge | Self::Kafka | Self::Redis
         )
     }
 }
@@ -197,6 +201,10 @@ pub struct DispatchConfig {
     pub k8s_executor_image: String,
     /// SQS queue URL (for Sqs backend)
     pub sqs_queue_url: Option<String>,
+    /// Storage account hosting the work queues (for AzureQueue backend)
+    pub queue_account_name: Option<String>,
+    /// Azure Queue Storage execution queue name
+    pub queue_name: Option<String>,
     /// SQS queue URL for EventBridge Pipe → ECS dispatch
     pub sqs_event_bridge_queue_url: Option<String>,
     /// Kafka bootstrap servers (comma-separated)
@@ -229,6 +237,8 @@ impl DispatchConfig {
             k8s_executor_image: std::env::var("K8S_EXECUTOR_IMAGE")
                 .unwrap_or_else(|_| "flow-like-executor:latest".into()),
             sqs_queue_url: std::env::var("SQS_EXECUTION_QUEUE_URL").ok(),
+            queue_account_name: std::env::var("AZURE_QUEUE_STORAGE_ACCOUNT_NAME").ok(),
+            queue_name: std::env::var("AZURE_QUEUE_EXECUTION").ok(),
             sqs_event_bridge_queue_url: std::env::var("SQS_EVENT_BRIDGE_EXECUTION_QUEUE_URL").ok(),
             kafka_brokers: std::env::var("KAFKA_BROKERS").ok(),
             kafka_topic: std::env::var("KAFKA_EXECUTION_TOPIC").ok(),
@@ -304,6 +314,8 @@ pub enum DispatchError {
     Kubernetes(String),
     #[error("SQS error: {0}")]
     Sqs(String),
+    #[error("Azure Queue Storage error: {0}")]
+    AzureQueue(String),
     #[error("Kafka error: {0}")]
     Kafka(String),
     #[error("Redis error: {0}")]
@@ -458,6 +470,7 @@ impl Dispatcher {
             )),
             ExecutionBackend::KubernetesJob => self.dispatch_k8s_job(&job_id, &request).await,
             ExecutionBackend::Sqs => self.dispatch_sqs(&job_id, &request).await,
+            ExecutionBackend::AzureQueue => self.dispatch_azure_queue(&job_id, &request).await,
             ExecutionBackend::SqsEventBridge => {
                 self.dispatch_sqs_event_bridge(&job_id, &request).await
             }
@@ -773,6 +786,115 @@ impl Dispatcher {
             status: "queued".into(),
             backend: "sqs".into(),
         })
+    }
+
+    /// Dispatch via Azure Queue Storage using only the API's user-assigned
+    /// managed identity. Queue Storage mints its own message ID and offers no
+    /// duplicate detection, so the job ID travels inside the message envelope.
+    ///
+    /// Payloads at or above `CLAIM_CHECK_THRESHOLD_BYTES` are staged to Blob
+    /// Storage and sent as a compact `DispatchPayloadRef::Remote` reference;
+    /// smaller payloads keep the direct single-hop inline path.
+    #[cfg(feature = "storage-queue")]
+    async fn dispatch_azure_queue(
+        &self,
+        job_id: &str,
+        request: &DispatchRequest,
+    ) -> Result<DispatchResponse, DispatchError> {
+        use crate::storage_queue::WORKLOAD_EXECUTION;
+
+        let account_name = self.config.queue_account_name.as_deref().ok_or_else(|| {
+            DispatchError::Configuration("AZURE_QUEUE_STORAGE_ACCOUNT_NAME not configured".into())
+        })?;
+        let queue_name = self.config.queue_name.as_deref().ok_or_else(|| {
+            DispatchError::Configuration("AZURE_QUEUE_EXECUTION not configured".into())
+        })?;
+
+        let body = build_executor_payload(job_id, request);
+        let payload_bytes =
+            serde_json::to_vec(&body).map_err(|e| DispatchError::Serialization(e.to_string()))?;
+
+        if crate::storage_queue::requires_claim_check(
+            payload_bytes.len(),
+            job_id,
+            &request.app_id,
+            WORKLOAD_EXECUTION,
+        ) {
+            let staging = self.staging_bucket.as_ref().ok_or_else(|| {
+                DispatchError::Configuration(
+                    "Staging bucket not configured for AzureQueue backend".into(),
+                )
+            })?;
+
+            let staging_path = StorePath::from(format!("tmp/execution/{}.json", job_id));
+            staging
+                .put(&staging_path, payload_bytes)
+                .await
+                .map_err(|e| {
+                    DispatchError::AzureQueue(format!("Failed to stage payload: {}", e))
+                })?;
+
+            // Deliberately outlives the queue's message TTL — see
+            // `CLAIM_CHECK_URL_TTL` for the margin it carries.
+            let presigned_url = staging
+                .sign(
+                    "GET",
+                    &staging_path,
+                    crate::storage_queue::CLAIM_CHECK_URL_TTL,
+                )
+                .await
+                .map_err(|e| {
+                    DispatchError::AzureQueue(format!("Failed to sign staging URL: {}", e))
+                })?;
+
+            let reference = flow_like_types::dispatch::DispatchPayloadRef::Remote {
+                remote_url: presigned_url.to_string(),
+            };
+            crate::storage_queue::send_json(
+                account_name,
+                queue_name,
+                job_id,
+                &request.app_id,
+                WORKLOAD_EXECUTION,
+                &reference,
+            )
+            .await
+            .map_err(DispatchError::AzureQueue)?;
+
+            tracing::info!(
+                job_id = %job_id,
+                staging_path = %staging_path,
+                "Dispatched execution via Azure Queue Storage (staged to Blob Storage)"
+            );
+        } else {
+            crate::storage_queue::send_json(
+                account_name,
+                queue_name,
+                job_id,
+                &request.app_id,
+                WORKLOAD_EXECUTION,
+                &body,
+            )
+            .await
+            .map_err(DispatchError::AzureQueue)?;
+        }
+
+        Ok(DispatchResponse {
+            job_id: job_id.to_string(),
+            status: "queued".into(),
+            backend: "azure_queue".into(),
+        })
+    }
+
+    #[cfg(not(feature = "storage-queue"))]
+    async fn dispatch_azure_queue(
+        &self,
+        _job_id: &str,
+        _request: &DispatchRequest,
+    ) -> Result<DispatchResponse, DispatchError> {
+        Err(DispatchError::Configuration(
+            "Azure Queue Storage dispatch requires the 'storage-queue' feature".into(),
+        ))
     }
 
     #[cfg(not(feature = "sqs"))]

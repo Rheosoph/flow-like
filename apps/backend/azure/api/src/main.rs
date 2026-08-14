@@ -1,0 +1,270 @@
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+use axum::{Router, routing::get};
+use flow_like_api::cache::sweeper::{CacheSweeperConfig, spawn_cache_sweeper};
+use flow_like_api::execution::{RunSweeperConfig, spawn_run_sweeper};
+use flow_like_api::telemetry::{
+    TelemetryAlertConfig, TelemetryRollupConfig, TelemetrySweeperConfig,
+    spawn_telemetry_alert_evaluator, spawn_telemetry_rollup, spawn_telemetry_sweeper,
+};
+use flow_like_api::{construct_router_with_cors, state::State};
+use flow_like_catalog::get_catalog;
+use flow_like_secrets::{ExposeSecret, SecretRef};
+use std::{future::IntoFuture, sync::Arc};
+
+mod config;
+mod health;
+mod postgres;
+mod storage;
+
+const REQUIRED_SECRETS: &[(&str, usize)] = &[
+    ("BACKEND_KEY", 64),
+    ("BACKEND_PUB", 64),
+    ("BACKEND_KID", 8),
+    ("SINK_SECRET", 32),
+    ("SINK_TOKEN_ENCRYPTION_KEY", 32),
+    ("MAINTENANCE_TOKEN", 32),
+];
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    metrics_endpoint::init_telemetry();
+
+    let config = config::Config::from_env()?;
+    let postgres_config = postgres::ManagedIdentityPostgresConfig::from_env(
+        config.managed_identity_client_id.as_deref(),
+    )?;
+    tracing::info!(
+        storage_account = %config.storage_account_name,
+        postgres_host = %postgres_config.host,
+        postgres_database = %postgres_config.database,
+        content_container = %config.content_container,
+        meta_container = %config.meta_container,
+        cdn_container = %config.cdn_container,
+        log_container = %config.log_container,
+        cors_origin_count = config.cors_origin_count(),
+        user_assigned_identity = config.managed_identity_client_id.is_some(),
+        "starting Flow-Like Azure API"
+    );
+
+    let managed_database = postgres::connect(&postgres_config).await?;
+    tracing::info!(
+        token_lifetime_seconds = managed_database.lifecycle.remaining_seconds(),
+        tls_mode = "verify-full",
+        "connected to Azure PostgreSQL with managed identity"
+    );
+
+    let catalog = get_catalog();
+    let cdn_store = storage::create_cdn_store(&config)?;
+    let state = Arc::new(
+        State::new_with_database(
+            Arc::new(catalog),
+            Arc::new(cdn_store),
+            Some(config.secret_store_config()),
+            managed_database.connection.clone(),
+        )
+        .await,
+    );
+
+    validate_security_prerequisites(&state).await?;
+
+    let _run_sweeper = spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
+    let _cache_sweeper = state
+        .cache_store
+        .clone()
+        .and_then(|store| spawn_cache_sweeper(store, CacheSweeperConfig::from_env()));
+    let _telemetry_rollup = spawn_telemetry_rollup(
+        Arc::new(state.db.clone()),
+        TelemetryRollupConfig::from_env(),
+    );
+    let _telemetry_sweeper = spawn_telemetry_sweeper(
+        Arc::new(state.db.clone()),
+        TelemetrySweeperConfig::from_env(),
+    );
+    let _telemetry_alerts =
+        spawn_telemetry_alert_evaluator(state.clone(), TelemetryAlertConfig::from_env());
+
+    let health = health::HealthState::new(state.db.clone());
+    let app = Router::new()
+        .merge(construct_router_with_cors(state, config.cors_layer()))
+        .merge(health::routes(health.clone()));
+    let metrics_app = Router::new().route("/metrics", get(metrics_endpoint::handler));
+
+    let api_address = format!("0.0.0.0:{}", config.port);
+    let metrics_address = format!("0.0.0.0:{}", config.metrics_port);
+    let api_listener = tokio::net::TcpListener::bind(&api_address).await?;
+    let metrics_listener = tokio::net::TcpListener::bind(&metrics_address).await?;
+
+    tracing::info!(address = %api_address, "Azure API is listening");
+    tracing::info!(address = %metrics_address, "Prometheus metrics are listening");
+
+    let (shutdown_sender, mut shutdown_receiver) = tokio::sync::watch::channel(false);
+    let lifecycle_controller = managed_database.lifecycle.clone();
+    let health_controller = health.clone();
+    tokio::spawn(async move {
+        lifecycle_controller.wait_until_drain().await;
+        health_controller.begin_database_token_drain();
+        tracing::warn!(
+            token_lifetime_seconds = lifecycle_controller.remaining_seconds(),
+            drain_seconds = postgres::READINESS_DRAIN_SECONDS,
+            "database access token entered its safety window; readiness is now closed"
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(
+            postgres::READINESS_DRAIN_SECONDS,
+        ))
+        .await;
+        let _ = shutdown_sender.send(true);
+    });
+
+    let api_server = axum::serve(api_listener, app)
+        .with_graceful_shutdown(async move {
+            while !*shutdown_receiver.borrow() {
+                if shutdown_receiver.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+        .into_future();
+    let metrics_server = axum::serve(metrics_listener, metrics_app).into_future();
+    let hard_stop = managed_database.lifecycle.wait_until_hard_stop();
+    tokio::pin!(api_server, metrics_server, hard_stop);
+
+    tokio::select! {
+        result = &mut api_server => result?,
+        result = &mut metrics_server => result?,
+        _ = &mut hard_stop => {
+            tracing::error!(
+                graceful_shutdown_seconds = postgres::GRACEFUL_SHUTDOWN_SECONDS,
+                "forcing workload rotation before the database access token expires"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+async fn validate_security_prerequisites(state: &State) -> Result<(), StartupError> {
+    for (name, minimum_length) in REQUIRED_SECRETS {
+        let secret = state
+            .secrets
+            .get_secret_string(&SecretRef::new(*name))
+            .await
+            .map_err(|error| {
+                StartupError(format!(
+                    "required Key Vault secret {name} could not be resolved: {error}"
+                ))
+            })?;
+        let value = secret.expose_secret();
+
+        if value.trim().is_empty() || value.as_bytes().len() < *minimum_length {
+            return Err(StartupError(format!(
+                "required Key Vault secret {name} must contain at least {minimum_length} bytes"
+            )));
+        }
+    }
+
+    if !flow_like_api::execution::is_jwt_configured() {
+        return Err(StartupError(
+            "BACKEND_KEY and BACKEND_PUB did not initialize a backend JWT keypair".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct StartupError(String);
+
+impl std::fmt::Display for StartupError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for StartupError {}
+
+mod metrics_endpoint {
+    use axum::response::IntoResponse;
+    use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_otlp::WithExportConfig;
+    use opentelemetry_sdk::{runtime, trace::TracerProvider};
+    use std::sync::OnceLock;
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+    static PROMETHEUS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
+
+    pub fn init_telemetry() {
+        let format_layer = tracing_subscriber::fmt::layer();
+        let env_filter = flow_like_api::warn_env_filter();
+
+        if let Some(tracer) = init_tracing() {
+            tracing_subscriber::registry()
+                .with(format_layer)
+                .with(env_filter)
+                .with(tracing_opentelemetry::layer().with_tracer(tracer))
+                .init();
+        } else {
+            tracing_subscriber::registry()
+                .with(format_layer)
+                .with(env_filter)
+                .init();
+        }
+
+        init_metrics();
+    }
+
+    fn init_tracing() -> Option<opentelemetry_sdk::trace::Tracer> {
+        let endpoint = match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
+            Ok(endpoint) if !endpoint.trim().is_empty() => endpoint,
+            _ if std::env::var("AZURE_REQUIRE_OTEL")
+                .is_ok_and(|value| value.eq_ignore_ascii_case("true")) =>
+            {
+                panic!("AZURE_REQUIRE_OTEL=true requires OTEL_EXPORTER_OTLP_ENDPOINT")
+            }
+            _ => return None,
+        };
+        let exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
+            .with_endpoint(endpoint)
+            .build()
+            .unwrap_or_else(|error| panic!("required OTLP exporter could not initialize: {error}"));
+        let provider = TracerProvider::builder()
+            .with_batch_exporter(exporter, runtime::Tokio)
+            .build();
+        let tracer = provider.tracer("flow-like-azure-api");
+        opentelemetry::global::set_tracer_provider(provider);
+        Some(tracer)
+    }
+
+    fn init_metrics() {
+        let handle = PrometheusBuilder::new()
+            .set_buckets_for_metric(
+                Matcher::Full("http_request_duration_seconds".to_string()),
+                &[
+                    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+                ],
+            )
+            .expect("Prometheus histogram buckets must be valid")
+            .install_recorder()
+            .expect("Prometheus recorder must initialize once");
+
+        PROMETHEUS_HANDLE
+            .set(handle)
+            .expect("Prometheus recorder must initialize once");
+        metrics::describe_counter!("http_requests_total", "Total number of HTTP requests");
+        metrics::describe_histogram!(
+            "http_request_duration_seconds",
+            "HTTP request duration in seconds"
+        );
+        metrics::describe_gauge!("api_active_connections", "Number of active connections");
+    }
+
+    pub async fn handler() -> impl IntoResponse {
+        PROMETHEUS_HANDLE
+            .get()
+            .expect("Prometheus recorder must be initialized")
+            .render()
+    }
+}

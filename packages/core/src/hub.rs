@@ -11,12 +11,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-#[derive(Clone, Debug, Serialize, JsonSchema, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, JsonSchema, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MailProviderType {
     Ses,
     Sendgrid,
     Smtp,
+    #[serde(rename = "azure_communication_services", alias = "acs_email")]
+    AzureCommunicationServices,
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema, Deserialize)]
@@ -386,8 +388,14 @@ pub struct CognitoConfig {
 
 #[derive(Clone, Debug, Serialize, JsonSchema, Deserialize)]
 pub struct OpenIdConfig {
+    /// Exact token issuer (`iss`) accepted by the API. When omitted for an
+    /// existing deployment, `authority` remains the compatibility fallback.
+    pub issuer: Option<String>,
     pub authority: Option<String>,
     pub client_id: Option<String>,
+    /// Exact token audience accepted by the API. Defaults to `client_id`,
+    /// which is the correct target for OIDC ID tokens and Cognito tokens.
+    pub audience: Option<String>,
     pub redirect_uri: Option<String>,
     pub post_logout_redirect_uri: Option<String>,
     pub response_type: Option<String>,

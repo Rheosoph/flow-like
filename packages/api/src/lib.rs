@@ -28,6 +28,8 @@ mod routes;
 pub mod alerting;
 pub mod audit;
 pub mod cache;
+#[cfg(feature = "cosmos")]
+mod cosmos;
 pub mod credentials;
 mod db_backfills;
 pub mod error;
@@ -37,6 +39,8 @@ pub mod publication;
 pub mod push_notifications;
 pub mod state;
 pub mod storage_config;
+#[cfg(feature = "storage-queue")]
+mod storage_queue;
 pub mod telemetry;
 pub mod usage_accounting;
 pub mod usage_limits;
@@ -75,6 +79,15 @@ pub fn warn_env_filter() -> EnvFilter {
 }
 
 pub fn construct_router(state: Arc<State>) -> Router {
+    construct_router_with_cors(state, CorsLayer::permissive())
+}
+
+/// Construct the API router with an explicit CORS policy.
+///
+/// Deployment-specific entry points must use this function when a permissive
+/// policy is not acceptable. Keeping CORS inside every nested route layer
+/// prevents an inner wildcard response from bypassing a stricter outer layer.
+pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router {
     if state.platform_config.audit.enabled && !audit::sign::is_signing_configured() {
         if state.platform_config.audit.require_signing {
             panic!(
@@ -125,7 +138,7 @@ pub fn construct_router(state: Arc<State>) -> Router {
             error_reporting_middleware,
         ))
         .layer(from_fn_with_state(state.clone(), jwt_middleware))
-        .layer(CorsLayer::permissive())
+        .layer(cors.clone())
         .layer(
             ServiceBuilder::new()
                 // .layer(TimeoutLayer::new(Duration::from_secs(15 * 60)))
@@ -147,7 +160,7 @@ pub fn construct_router(state: Arc<State>) -> Router {
             state.clone(),
             error_reporting_middleware,
         ))
-        .layer(CorsLayer::permissive())
+        .layer(cors.clone())
         .layer(RequestDecompressionLayer::new())
         .layer(CompressionLayer::new().compress_when(
             DefaultPredicate::new().and(NotForContentType::new("text/event-stream")),
@@ -161,17 +174,17 @@ pub fn construct_router(state: Arc<State>) -> Router {
         .layer(inbound_layers);
 
     Router::new()
-        .merge(openapi_routes())
+        .merge(openapi_routes(cors))
         .nest("/r", inbound_rest)
         .nest("/m", inbound_mcp)
         .nest("/api/v1", router)
 }
 
-fn openapi_routes() -> Router {
+fn openapi_routes(cors: CorsLayer) -> Router {
     Router::from(
         SwaggerUi::new("/swagger-ui").url("/api-doc/openapi.json", openapi::ApiDoc::openapi()),
     )
-    .layer(CorsLayer::permissive())
+    .layer(cors)
 }
 
 #[tracing::instrument(name = "GET /", skip(state))]

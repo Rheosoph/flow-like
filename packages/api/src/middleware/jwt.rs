@@ -27,7 +27,7 @@ use sea_orm::{
 use serde::de::{self, Unexpected};
 use serde::{Deserialize, Deserializer};
 
-use crate::state::{AppState, CachedAuth};
+use crate::state::{AppState, CachedAuth, cached_openid_is_current};
 
 /// Client IP address extracted from the request for audit trail purposes.
 /// Checks X-Forwarded-For, X-Real-Ip, then falls back to the peer address.
@@ -869,7 +869,14 @@ pub async fn jwt_middleware(
         // Check cache first
         if let Some(cached) = state.auth_cache.get(&cache_key) {
             match cached {
-                CachedAuth::OpenID { sub } => {
+                CachedAuth::OpenID { sub, exp } => {
+                    if !cached_openid_is_current(exp, chrono::Utc::now().timestamp()) {
+                        state.auth_cache.invalidate(&cache_key);
+                        request
+                            .extensions_mut()
+                            .insert::<AppUser>(AppUser::Unauthorized);
+                        return Ok(next.run(request).await);
+                    }
                     let user = AppUser::OpenID(OpenIDUser {
                         sub,
                         access_token: token.to_string(),
@@ -931,13 +938,14 @@ pub async fn jwt_middleware(
         }
 
         // Cache miss - validate token
-        let claims = state.validate_token(token);
-        if let Ok(claims) = claims {
-            if let Some(sub) = claims.get("sub").and_then(|sub| sub.as_str()) {
+        let validated = state.validate_token(token).await;
+        if let Ok(validated) = validated {
+            if let Some(sub) = validated.claims.get("sub").and_then(|sub| sub.as_str()) {
                 state.auth_cache.insert(
                     cache_key,
                     CachedAuth::OpenID {
                         sub: sub.to_string(),
+                        exp: validated.expires_at,
                     },
                 );
 

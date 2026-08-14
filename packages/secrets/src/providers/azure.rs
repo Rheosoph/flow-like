@@ -50,7 +50,12 @@ impl AzureKeyVaultProvider {
     }
 
     fn secret_names(&self, reference: &SecretRef) -> Vec<String> {
-        candidate_names(&self.config.prefix, &reference.key, "-")
+        candidate_names(
+            &self.config.prefix,
+            &reference.key,
+            "-",
+            self.config.fallback_to_unprefixed,
+        )
     }
 }
 
@@ -156,9 +161,15 @@ impl SecretProvider for AzureKeyVaultProvider {
     }
 }
 
-fn candidate_names(prefix: &Option<String>, key: &str, separator: &str) -> Vec<String> {
+fn candidate_names(
+    prefix: &Option<String>,
+    key: &str,
+    separator: &str,
+    fallback_to_unprefixed: bool,
+) -> Vec<String> {
     let normalized_key = normalize_key(key, separator);
     let mut candidates = Vec::with_capacity(2);
+    let mut has_prefixed_candidate = false;
 
     if let Some(prefix) = prefix
         && !prefix.is_empty()
@@ -166,32 +177,49 @@ fn candidate_names(prefix: &Option<String>, key: &str, separator: &str) -> Vec<S
         let prefixed = join_prefix(prefix, &normalized_key, separator);
         if prefixed != normalized_key {
             candidates.push(prefixed);
+            has_prefixed_candidate = true;
         }
     }
 
-    candidates.push(normalized_key);
+    if fallback_to_unprefixed || !has_prefixed_candidate {
+        candidates.push(normalized_key);
+    }
     candidates
 }
 
 fn normalize_key(key: &str, separator: &str) -> String {
-    if separator != "/" && key.contains('/') {
-        return key.trim_matches('/').replace('/', separator);
+    if separator != "/" {
+        // Key Vault secret names only accept alphanumeric characters and
+        // hyphens. Flow-Like uses env-style names such as DATABASE_URL, so
+        // normalize both path and underscore separators before lookup.
+        return key
+            .trim_matches('/')
+            .replace('/', separator)
+            .replace('_', separator);
     }
 
     key.to_string()
 }
 
 fn join_prefix(prefix: &str, key: &str, separator: &str) -> String {
-    if separator != "/" && (prefix.contains('/') || key.contains('/')) {
-        let normalized_prefix = prefix.trim_matches('/').replace('/', separator);
-        let normalized_key = key.trim_matches('/').replace('/', separator);
+    if separator != "/" {
+        let normalized_prefix = prefix
+            .trim_matches('/')
+            .replace('/', separator)
+            .replace('_', separator);
+        let normalized_key = key
+            .trim_matches('/')
+            .replace('/', separator)
+            .replace('_', separator);
+        let normalized_prefix = normalized_prefix.trim_end_matches(separator);
+        let normalized_key = normalized_key.trim_start_matches(separator);
 
         if normalized_prefix.is_empty() {
-            return normalized_key;
+            return normalized_key.to_string();
         }
 
         if normalized_key.is_empty() {
-            return normalized_prefix;
+            return normalized_prefix.to_string();
         }
 
         return format!("{normalized_prefix}{separator}{normalized_key}");
@@ -212,7 +240,7 @@ mod tests {
     #[test]
     fn applies_prefix_to_secret_name() {
         assert_eq!(
-            candidate_names(&Some("flow-like".to_string()), "db-password", "-"),
+            candidate_names(&Some("flow-like".to_string()), "db-password", "-", true),
             vec![
                 "flow-like-db-password".to_string(),
                 "db-password".to_string(),
@@ -223,7 +251,7 @@ mod tests {
     #[test]
     fn avoids_duplicate_separator() {
         assert_eq!(
-            candidate_names(&Some("flow-like-".to_string()), "-db-password", "-"),
+            candidate_names(&Some("flow-like-".to_string()), "-db-password", "-", true,),
             vec![
                 "flow-like-db-password".to_string(),
                 "-db-password".to_string(),
@@ -234,10 +262,15 @@ mod tests {
     #[test]
     fn normalizes_path_style_prefix() {
         assert_eq!(
-            candidate_names(&Some("/flow-like/dev/".to_string()), "SECRET_NAME", "-"),
+            candidate_names(
+                &Some("/flow-like/dev/".to_string()),
+                "SECRET_NAME",
+                "-",
+                true,
+            ),
             vec![
-                "flow-like-dev-SECRET_NAME".to_string(),
-                "SECRET_NAME".to_string(),
+                "flow-like-dev-SECRET-NAME".to_string(),
+                "SECRET-NAME".to_string(),
             ]
         );
     }
@@ -245,16 +278,29 @@ mod tests {
     #[test]
     fn skips_duplicate_candidate_when_prefix_is_empty() {
         assert_eq!(
-            candidate_names(&Some(String::new()), "SECRET_NAME", "-"),
-            vec!["SECRET_NAME".to_string()]
+            candidate_names(&Some(String::new()), "SECRET_NAME", "-", true),
+            vec!["SECRET-NAME".to_string()]
         );
     }
 
     #[test]
     fn normalizes_unprefixed_path_style_keys() {
         assert_eq!(
-            candidate_names(&None, "/flow-like/dev/SECRET_NAME", "-"),
-            vec!["flow-like-dev-SECRET_NAME".to_string()]
+            candidate_names(&None, "/flow-like/dev/SECRET_NAME", "-", true),
+            vec!["flow-like-dev-SECRET-NAME".to_string()]
+        );
+    }
+
+    #[test]
+    fn can_disable_unprefixed_fallback() {
+        assert_eq!(
+            candidate_names(
+                &Some("/flow-like/dev/".to_string()),
+                "SECRET_NAME",
+                "-",
+                false,
+            ),
+            vec!["flow-like-dev-SECRET-NAME".to_string()]
         );
     }
 }

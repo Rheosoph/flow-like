@@ -135,6 +135,24 @@ pub enum StateStoreError {
     Connection(String),
     #[error("Configuration error: {0}")]
     Configuration(String),
+    #[error("Execution lease conflict: {0}")]
+    LeaseConflict(String),
+}
+
+/// Atomic result of claiming a queued run for one broker delivery.
+#[derive(Clone, Debug)]
+pub enum RunLeaseClaim {
+    Acquired {
+        run: ExecutionRunRecord,
+        expires_at: i64,
+    },
+    Busy {
+        run: ExecutionRunRecord,
+        expires_at: i64,
+    },
+    Terminal {
+        run: ExecutionRunRecord,
+    },
 }
 
 /// Trait for execution state storage backends
@@ -169,6 +187,49 @@ pub trait ExecutionStateStore: Send + Sync + Debug {
         run_id: &str,
         input: UpdateRunInput,
     ) -> Result<ExecutionRunRecord, StateStoreError>;
+
+    /// Atomically bind a queued run to `job_id` and grant or renew ownership
+    /// for one delivery token. Backends without a conditional-write lease
+    /// implementation fail closed.
+    async fn claim_run_lease(
+        &self,
+        _run_id: &str,
+        _app_id: &str,
+        _job_id: &str,
+        _lease_token: &str,
+        _lease_duration_ms: i64,
+    ) -> Result<RunLeaseClaim, StateStoreError> {
+        Err(StateStoreError::Configuration(
+            "execution leases are not supported by this state backend".to_string(),
+        ))
+    }
+
+    /// Persist terminal state only while the caller still owns the run lease.
+    async fn update_run_with_lease(
+        &self,
+        _run_id: &str,
+        _app_id: &str,
+        _job_id: &str,
+        _lease_token: &str,
+        _input: UpdateRunInput,
+    ) -> Result<ExecutionRunRecord, StateStoreError> {
+        Err(StateStoreError::Configuration(
+            "execution leases are not supported by this state backend".to_string(),
+        ))
+    }
+
+    /// Verify that a callback is from the current, unexpired delivery owner.
+    async fn validate_run_lease(
+        &self,
+        _run_id: &str,
+        _app_id: &str,
+        _job_id: &str,
+        _lease_token: &str,
+    ) -> Result<(), StateStoreError> {
+        Err(StateStoreError::Configuration(
+            "execution leases are not supported by this state backend".to_string(),
+        ))
+    }
 
     /// List runs for an app (with pagination)
     async fn list_runs_for_app(

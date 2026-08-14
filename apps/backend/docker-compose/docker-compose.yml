@@ -401,8 +401,13 @@ services:
       - "${SIGNALING_PORT:-4444}:4444"
     environment:
       PORT: 4444
+      NODE_ENV: ${SIGNALING_NODE_ENV:-production}
       REDIS_URL: redis://redis:6379
       SIGNAL_CHANNEL: ${SIGNAL_CHANNEL:-signal:publish}
+      BACKEND_PUB: ${BACKEND_PUB:-}
+      BACKEND_KID: ${BACKEND_KID:-}
+      REALTIME_ALLOWED_ORIGINS: ${REALTIME_ALLOWED_ORIGINS:-}
+      REALTIME_ALLOW_INSECURE_LOCAL_DEV: ${REALTIME_ALLOW_INSECURE_LOCAL_DEV:-false}
     depends_on:
       redis:
         condition: service_healthy

@@ -19,8 +19,24 @@ node_modules/
 .env.*
 **/.env
 **/.env.*
+*.local
+**/*.local
+*.pem
+**/*.pem
+api.config.json
+**/api.config.json
+.cargo/config
+.cargo/config.toml
+**/.cargo/config
+**/.cargo/config.toml
 **/values-secrets.yaml
 **/values-secret*.yaml
+**/values-secrets.yml
+**/values-secret*.yml
+.claude/settings.local.json
+**/.claude/settings.local.json
+.claude/CLAUDE.local.md
+**/.claude/CLAUDE.local.md
 
 # Large files and caches
 *.log

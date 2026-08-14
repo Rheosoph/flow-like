@@ -10,6 +10,7 @@
 //! - **Http**: POST to a compiler worker URL (K8s pool, Docker Compose, Lambda URL)
 //! - **LambdaInvoke**: AWS Lambda SDK async invocation (fire-and-forget)
 //! - **Sqs**: AWS SQS queue with Lambda or ECS consumer
+//! - **AzureQueue**: Azure Queue Storage queue with managed-identity workers
 //! - **Kafka**: Kafka REST Proxy for high-throughput
 //! - **Redis**: Redis LPUSH/BRPOP queue (Docker Compose / K8s async)
 //! - **KubernetesJob**: Spawn a dedicated K8s Job per compilation
@@ -19,7 +20,10 @@ use crate::routes::registry::server::all_known_targets;
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::create_id;
-use flow_like_types::dispatch::{CompilationJob, CompilationJobRef, CompilationTarget};
+use flow_like_types::dispatch::{
+    CompilationJob, CompilationJobRef, CompilationStorageProvider, CompilationTarget,
+    compilation_job_payload_hash,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,6 +41,8 @@ pub enum CompilationBackend {
     LambdaInvoke,
     /// AWS SQS queue for batch compilation
     Sqs,
+    /// Azure Queue Storage queue for batch compilation
+    AzureQueue,
     /// Apache Kafka via REST Proxy
     Kafka,
     /// Redis LPUSH/BRPOP queue
@@ -87,6 +93,7 @@ impl CompilationBackend {
             "http" | "url" => Self::Http,
             "lambda_invoke" | "lambda" | "lambda_sdk" => Self::LambdaInvoke,
             "sqs" | "aws_sqs" => Self::Sqs,
+            "azure_queue" | "azure_storage_queue" | "queue_storage" => Self::AzureQueue,
             "kafka" => Self::Kafka,
             "redis" | "redis_queue" => Self::Redis,
             "kubernetes_job" | "k8s_job" | "k8s" => Self::KubernetesJob,
@@ -99,7 +106,10 @@ impl CompilationBackend {
     }
 
     pub fn is_queue(&self) -> bool {
-        matches!(self, Self::Sqs | Self::Kafka | Self::Redis)
+        matches!(
+            self,
+            Self::Sqs | Self::AzureQueue | Self::Kafka | Self::Redis
+        )
     }
 
     pub fn is_external(&self) -> bool {
@@ -117,6 +127,10 @@ pub struct CompilationDispatchConfig {
     pub lambda_function_name: Option<String>,
     /// SQS queue URL (for Sqs backend)
     pub sqs_queue_url: Option<String>,
+    /// Storage account hosting the work queues (for AzureQueue backend)
+    pub queue_account_name: Option<String>,
+    /// Azure Queue Storage compilation queue name
+    pub queue_name: Option<String>,
     /// Kafka bootstrap servers / REST proxy URL
     pub kafka_brokers: Option<String>,
     /// Kafka topic name
@@ -146,6 +160,8 @@ impl CompilationDispatchConfig {
             compiler_url: std::env::var("COMPILER_URL").ok(),
             lambda_function_name: std::env::var("LAMBDA_COMPILER_FUNCTION").ok(),
             sqs_queue_url: std::env::var("SQS_COMPILATION_QUEUE_URL").ok(),
+            queue_account_name: std::env::var("AZURE_QUEUE_STORAGE_ACCOUNT_NAME").ok(),
+            queue_name: std::env::var("AZURE_QUEUE_COMPILATION").ok(),
             kafka_brokers: std::env::var("KAFKA_BROKERS").ok(),
             kafka_topic: std::env::var("KAFKA_COMPILATION_TOPIC").ok(),
             redis_url: std::env::var("REDIS_URL").ok(),
@@ -178,6 +194,8 @@ pub enum CompilationDispatchError {
     Lambda(String),
     #[error("SQS error: {0}")]
     Sqs(String),
+    #[error("Azure Queue Storage error: {0}")]
+    AzureQueue(String),
     #[error("Kafka error: {0}")]
     Kafka(String),
     #[error("Redis error: {0}")]
@@ -286,6 +304,7 @@ impl CompilationDispatcher {
             CompilationBackend::Http => self.dispatch_http(job).await,
             CompilationBackend::LambdaInvoke => self.dispatch_lambda_invoke(job).await,
             CompilationBackend::Sqs => self.dispatch_sqs(job).await,
+            CompilationBackend::AzureQueue => self.dispatch_azure_queue(job).await,
             CompilationBackend::Kafka => self.dispatch_kafka(job).await,
             CompilationBackend::Redis => self.dispatch_redis(job).await,
             CompilationBackend::KubernetesJob => self.dispatch_k8s_job(job).await,
@@ -446,6 +465,114 @@ impl CompilationDispatcher {
             status: "queued".into(),
             backend: "sqs".into(),
         })
+    }
+
+    // ── Azure Queue Storage ───────────────────────────────────────────────
+
+    #[cfg(feature = "storage-queue")]
+    async fn dispatch_azure_queue(
+        &self,
+        job: &CompilationJob,
+    ) -> Result<CompilationDispatchResponse, CompilationDispatchError> {
+        use crate::storage_queue::WORKLOAD_COMPILATION;
+
+        let account_name = self.config.queue_account_name.as_deref().ok_or_else(|| {
+            CompilationDispatchError::Configuration(
+                "AZURE_QUEUE_STORAGE_ACCOUNT_NAME not configured".into(),
+            )
+        })?;
+        let queue_name = self.config.queue_name.as_deref().ok_or_else(|| {
+            CompilationDispatchError::Configuration("AZURE_QUEUE_COMPILATION not configured".into())
+        })?;
+
+        // Jobs below the shared claim-check threshold keep the single-hop inline
+        // path — `CompilationJobRef` is untagged, so an inline job is
+        // byte-identical inside the envelope to today's message. Larger jobs are
+        // staged to object storage and replaced by a remote reference instead of
+        // being rejected.
+        let payload_bytes = serde_json::to_vec(job)
+            .map_err(|e| CompilationDispatchError::Serialization(e.to_string()))?;
+        let payload_len = payload_bytes.len();
+
+        if crate::storage_queue::requires_claim_check(
+            payload_len,
+            &job.job_id,
+            &job.package_id,
+            WORKLOAD_COMPILATION,
+        ) {
+            let staging_path = Path::from(format!("tmp/compilation/{}.json", job.job_id));
+            self.content_bucket
+                .put(&staging_path, payload_bytes)
+                .await
+                .map_err(|e| {
+                    CompilationDispatchError::AzureQueue(format!(
+                        "Failed to stage compilation payload: {e}"
+                    ))
+                })?;
+
+            // Deliberately outlives the queue's message TTL — see
+            // `CLAIM_CHECK_URL_TTL` for the margin it carries.
+            let presigned_url = self
+                .content_bucket
+                .sign(
+                    "GET",
+                    &staging_path,
+                    crate::storage_queue::CLAIM_CHECK_URL_TTL,
+                )
+                .await
+                .map_err(|e| {
+                    CompilationDispatchError::AzureQueue(format!("Failed to sign staging URL: {e}"))
+                })?;
+
+            let reference = CompilationJobRef::Remote {
+                remote_url: presigned_url.to_string(),
+            };
+
+            crate::storage_queue::send_json(
+                account_name,
+                queue_name,
+                &job.job_id,
+                &job.package_id,
+                WORKLOAD_COMPILATION,
+                &reference,
+            )
+            .await
+            .map_err(CompilationDispatchError::AzureQueue)?;
+
+            tracing::info!(
+                job_id = %job.job_id,
+                staging_path = %staging_path,
+                payload_bytes = payload_len,
+                "Dispatched compilation via Azure Queue Storage (staged to Blob Storage)"
+            );
+        } else {
+            crate::storage_queue::send_json(
+                account_name,
+                queue_name,
+                &job.job_id,
+                &job.package_id,
+                WORKLOAD_COMPILATION,
+                job,
+            )
+            .await
+            .map_err(CompilationDispatchError::AzureQueue)?;
+        }
+
+        Ok(CompilationDispatchResponse {
+            job_id: job.job_id.clone(),
+            status: "queued".into(),
+            backend: "azure_queue".into(),
+        })
+    }
+
+    #[cfg(not(feature = "storage-queue"))]
+    async fn dispatch_azure_queue(
+        &self,
+        _job: &CompilationJob,
+    ) -> Result<CompilationDispatchResponse, CompilationDispatchError> {
+        Err(CompilationDispatchError::Configuration(
+            "Azure Queue Storage dispatch requires the 'storage-queue' feature".into(),
+        ))
     }
 
     #[cfg(not(feature = "sqs"))]
@@ -665,21 +792,8 @@ pub async fn build_compilation_job(
     meta_bucket: &Arc<FlowLikeStore>,
 ) -> Result<CompilationJob, CompilationDispatchError> {
     let job_id = create_id();
-
-    let callback_url = format!(
-        "{}/api/v1/registry/compilation-callback",
-        config.api_base_url.trim_end_matches('/')
-    );
-
-    let compiler_jwt = jwt::sign(CompilerJwtParams {
-        sub: sub.clone(),
-        job_id: job_id.clone(),
-        package_id: params.package_id.clone(),
-        version: params.version.clone(),
-        callback_url,
-        ttl_seconds: None,
-    })
-    .map_err(|e| CompilationDispatchError::Jwt(format!("Failed to sign compiler JWT: {e}")))?;
+    let wasm_download_provider = compilation_storage_provider(content_bucket)?;
+    let upload_provider = compilation_storage_provider(meta_bucket)?;
 
     let wasm_download_url = content_bucket
         .sign(
@@ -733,16 +847,71 @@ pub async fn build_compilation_job(
             cross_triple: t.cross_triple.clone(),
             cwasm_upload_url,
             checksum_upload_url,
+            upload_provider,
         });
     }
 
-    Ok(CompilationJob {
+    let mut job = CompilationJob {
         job_id,
         package_id: params.package_id,
         version: params.version,
         wasm_download_url,
+        wasm_download_provider,
         wasm_hash: params.wasm_hash,
         targets,
-        compiler_jwt,
+        compiler_jwt: String::new(),
+    };
+    let payload_hash = compilation_job_payload_hash(&job).map_err(|error| {
+        CompilationDispatchError::Serialization(format!(
+            "Failed to bind compilation job payload: {error}"
+        ))
+    })?;
+    let callback_url = format!(
+        "{}/api/v1/registry/compilation-callback",
+        config.api_base_url.trim_end_matches('/')
+    );
+    job.compiler_jwt = jwt::sign(CompilerJwtParams {
+        sub,
+        job_id: job.job_id.clone(),
+        package_id: job.package_id.clone(),
+        version: job.version.clone(),
+        payload_hash,
+        callback_url,
+        ttl_seconds: None,
     })
+    .map_err(|e| CompilationDispatchError::Jwt(format!("Failed to sign compiler JWT: {e}")))?;
+
+    Ok(job)
+}
+
+/// Declares which signing scheme authenticated the presigned URLs in a job.
+///
+/// The provider describes *how the URL was signed*, not where it points — the
+/// worker must never infer it from the (untrusted) URL, so this mapping stays
+/// keyed on the configured store.
+///
+/// Note that every S3-compatible endpoint (Cloudflare R2, self-hosted MinIO,
+/// Ceph, …) is configured as `FlowLikeStore::AWS` and is therefore stamped
+/// `AwsS3`, which makes the compiler hold its URLs to the AWS public-S3 host
+/// rules. Such deployments must allowlist their endpoint host on the compiler
+/// worker via `COMPILER_ALLOWED_STORAGE_HOSTS`, otherwise every job is rejected
+/// as an untrusted storage host.
+fn compilation_storage_provider(
+    store: &FlowLikeStore,
+) -> Result<CompilationStorageProvider, CompilationDispatchError> {
+    match store {
+        FlowLikeStore::AWS(_) => Ok(CompilationStorageProvider::AwsS3),
+        FlowLikeStore::Azure(_) => Ok(CompilationStorageProvider::AzureBlob),
+        FlowLikeStore::Google(_) => Ok(CompilationStorageProvider::GoogleCloudStorage),
+        other => {
+            let kind = match other {
+                FlowLikeStore::Local(_) => "local filesystem",
+                FlowLikeStore::Memory(_) => "in-memory",
+                _ => "configured",
+            };
+            Err(CompilationDispatchError::Configuration(format!(
+                "External compilation is enabled (COMPILATION_BACKEND is not `inline`), but the {kind} store cannot issue presigned URLs. Configure S3-compatible storage (AWS S3, Cloudflare R2, MinIO — all use the AWS store), Azure Blob, or Google Cloud Storage, or set COMPILATION_BACKEND=inline to compile in-process."
+            )))
+        }
+    }
 }

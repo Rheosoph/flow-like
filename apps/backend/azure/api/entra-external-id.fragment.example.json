@@ -1,0 +1,29 @@
+{
+  "authentication": {
+    "variant": "openid",
+    "openid": {
+      "authority": "https://example.ciamlogin.com/example-tenant-id/v2.0",
+      "client_id": "00000000-0000-0000-0000-000000000000",
+      "issuer": "https://example.ciamlogin.com/example-tenant-id/v2.0",
+      "audience": "00000000-0000-0000-0000-000000000000",
+      "redirect_uri": "https://dev.example.com/callback",
+      "post_logout_redirect_uri": "https://dev.example.com/logout",
+      "response_type": "code",
+      "scope": "openid profile email offline_access",
+      "jwks_url": "https://example.ciamlogin.com/example-tenant-id/discovery/v2.0/keys",
+      "discovery_url": "https://example.ciamlogin.com/example-tenant-id/v2.0/.well-known/openid-configuration",
+      "user_info_url": null,
+      "cognito": null,
+      "proxy": {
+        "enabled": false,
+        "authorize": null,
+        "token": null,
+        "userinfo": null,
+        "revoke": null
+      }
+    }
+  },
+  "environment": "production",
+  "provider": "azure",
+  "secure": true
+}

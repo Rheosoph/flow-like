@@ -12,6 +12,7 @@
 //! | PostgreSQL | Medium | Swept | Default; no extra infrastructure |
 //! | Redis | Low | Native | High-throughput, already deployed in cluster |
 //! | DynamoDB | Low | Native | Serverless, AWS-native |
+//! | Cosmos DB | Low | Native | Serverless, Azure-native |
 //!
 //! ## Recommended Configuration
 //!
@@ -26,7 +27,7 @@
 //!
 //! ```bash
 //! # Select backend
-//! CACHE_BACKEND=redis            # postgres (default), redis, dynamodb
+//! CACHE_BACKEND=redis            # postgres (default), redis, dynamodb, cosmos
 //!
 //! # PostgreSQL (default; expiry handled by the cache sweeper)
 //! DATABASE_URL=postgres://...
@@ -36,6 +37,12 @@
 //!
 //! # DynamoDB (table AppCache, TTL attribute `expires_at`)
 //! DYNAMODB_TABLE_PREFIX=flowlike-  # optional, shared with the execution state store
+//!
+//! # Azure Cosmos DB for NoSQL (Entra ID only; no account keys)
+//! COSMOS_ENDPOINT=https://<account>.documents.azure.com
+//! COSMOS_DATABASE=flowlike       # optional; defaults to flowlike
+//! COSMOS_CACHE_CONTAINER=cache   # optional; defaults to cache
+//! COSMOS_AUTH_MODE=managed_identity
 //!
 //! # Limits, enforced identically for every backend
 //! CACHE_MAX_KEY_BYTES=512
@@ -58,6 +65,9 @@ mod redis;
 #[cfg(feature = "dynamodb")]
 mod dynamodb;
 
+#[cfg(feature = "cosmos")]
+mod cosmos;
+
 pub use postgres::PostgresCacheStore;
 pub use types::*;
 
@@ -66,6 +76,9 @@ pub use redis::RedisCacheStore;
 
 #[cfg(feature = "dynamodb")]
 pub use dynamodb::DynamoDbCacheStore;
+
+#[cfg(feature = "cosmos")]
+pub use cosmos::CosmosCacheStore;
 
 use std::sync::Arc;
 
@@ -81,6 +94,8 @@ pub enum CacheBackend {
     Redis,
     #[cfg(feature = "dynamodb")]
     DynamoDB,
+    #[cfg(feature = "cosmos")]
+    Cosmos,
 }
 
 impl CacheBackend {
@@ -91,6 +106,8 @@ impl CacheBackend {
             "redis" => Self::Redis,
             #[cfg(feature = "dynamodb")]
             "dynamodb" | "dynamo" => Self::DynamoDB,
+            #[cfg(feature = "cosmos")]
+            "cosmos" | "cosmosdb" => Self::Cosmos,
             "" | "postgres" | "postgresql" => Self::Postgres,
             other => {
                 // A typo, or a backend whose Cargo feature is off for this deployment
@@ -153,6 +170,9 @@ pub async fn create_cache_store(
             Some(aws_cfg) => Ok(Arc::new(DynamoDbCacheStore::new(&aws_cfg))),
             None => Ok(Arc::new(DynamoDbCacheStore::from_env().await?)),
         },
+
+        #[cfg(feature = "cosmos")]
+        CacheBackend::Cosmos => Ok(Arc::new(CosmosCacheStore::from_env()?)),
     }
 }
 

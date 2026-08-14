@@ -24,7 +24,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 /// Cached prepared registry - initialized once on first access.
 /// Contains the static catalog nodes only; WASM nodes are overlaid per-request.
@@ -226,6 +226,8 @@ pub(crate) async fn resolve_board(
 /// API-compatible event input format
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ApiEventInput {
+    id: Option<String>,
+    sequence: Option<i32>,
     event_type: String,
     payload: serde_json::Value,
 }
@@ -234,6 +236,10 @@ struct ApiEventInput {
 #[derive(Debug, Clone, Serialize)]
 struct PushEventsRequest {
     events: Vec<ApiEventInput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    job_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lease_token: Option<String>,
 }
 
 /// API-compatible progress update request
@@ -249,6 +255,38 @@ struct ProgressUpdateRequest {
     output_len: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    job_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lease_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lease_duration_ms: Option<i64>,
+}
+
+/// API acknowledgement returned only after the execution state store has
+/// accepted the progress update (or confirmed that the run is already
+/// terminal). Queue consumers use this as their settlement barrier.
+#[derive(Clone, Debug, Deserialize)]
+struct ProgressUpdateResponse {
+    accepted: bool,
+    status: String,
+    #[serde(default)]
+    lease_acquired: Option<bool>,
+    #[serde(default)]
+    lease_expires_at: Option<i64>,
+}
+
+#[derive(Clone, Debug)]
+struct QueueLeaseContext {
+    job_id: String,
+    token: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum StartAcknowledgement {
+    Execute,
+    Busy { expires_at: i64 },
+    AlreadyTerminal(ExecutionStatus),
 }
 
 /// Execute a flow with batched callback reporting
@@ -260,6 +298,73 @@ pub async fn execute(
 
     // Verify JWT and extract claims
     let claims = verify_jwt_async(&request.executor_jwt).await?;
+    if claims.app_id != request.app_id || claims.board_id != request.board_id {
+        return Err(ExecutorError::InvalidRequest(
+            "executor JWT claims do not match the queued request".to_string(),
+        ));
+    }
+
+    // Strict queue mode first acquires one conditional Cosmos lease. A live
+    // owner serializes deliveries; an expired owner can be taken over; and a
+    // terminal run is an idempotent broker redelivery that must not execute.
+    let queue_lease = if config.terminal_status_ack_required() {
+        if request.job_id.is_empty() {
+            return Err(ExecutorError::InvalidRequest(
+                "strict queue execution requires a broker job ID".to_string(),
+            ));
+        }
+        let lease = QueueLeaseContext {
+            job_id: request.job_id.clone(),
+            token: create_id(),
+        };
+        let progress_url = format!(
+            "{}/api/v1/execution/progress",
+            claims.callback_url.trim_end_matches('/')
+        );
+        let client = reqwest::Client::new();
+        loop {
+            let start_update = lease_progress_update(&lease, config.strict_lease_duration_ms());
+            let acknowledgement = send_progress(
+                &progress_url,
+                &request.executor_jwt,
+                &start_update,
+                &config,
+                &client,
+            )
+            .await?;
+
+            match interpret_start_acknowledgement(&acknowledgement)? {
+                StartAcknowledgement::Execute => break,
+                StartAcknowledgement::Busy { expires_at } => {
+                    let now = chrono::Utc::now().timestamp_millis();
+                    let wait_ms = expires_at.saturating_sub(now).clamp(250, 30_000) as u64;
+                    tracing::info!(
+                        run_id = %claims.run_id,
+                        wait_ms,
+                        "another delivery owns the execution lease; waiting to retry claim"
+                    );
+                    tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+                }
+                StartAcknowledgement::AlreadyTerminal(status) => {
+                    tracing::info!(
+                        run_id = %claims.run_id,
+                        acknowledged_status = %acknowledgement.status,
+                        "execution delivery was already terminal; skipping duplicate workflow execution"
+                    );
+                    return Ok(ExecutionResult {
+                        run_id: claims.run_id,
+                        status,
+                        output: None,
+                        error: None,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    });
+                }
+            }
+        }
+        Some(lease)
+    } else {
+        None
+    };
 
     // Create stores from credentials
     let content_store = request
@@ -286,12 +391,25 @@ pub async fn execute(
 
     // Start callback batcher for sending events to API
     let executor_jwt = request.executor_jwt.clone();
-    let callback_handle = tokio::spawn(run_callback_batcher(
-        event_rx,
-        claims.clone(),
-        executor_jwt.clone(),
-        config.clone(),
-    ));
+    let (callback_failure_tx, mut callback_failure_rx) = watch::channel::<Option<String>>(None);
+    let callback_claims = claims.clone();
+    let callback_jwt = executor_jwt.clone();
+    let callback_config = config.clone();
+    let callback_lease = queue_lease.clone();
+    let callback_handle = tokio::spawn(async move {
+        let result = run_callback_batcher(
+            event_rx,
+            callback_claims,
+            callback_jwt,
+            callback_config,
+            callback_lease,
+        )
+        .await;
+        if let Err(error) = &result {
+            let _ = callback_failure_tx.send(Some(error.to_string()));
+        }
+        result
+    });
 
     // Build FlowLike state
     let mut flow_config = FlowLikeConfig::with_default_store(content_store);
@@ -434,7 +552,7 @@ pub async fn execute(
                 for intercom_event in events {
                     let seq_num = seq.fetch_add(1, Ordering::SeqCst);
                     let exec_event = ExecutionEvent {
-                        id: create_id(),
+                        id: execution_event_id(&run_id, seq_num),
                         run_id: run_id.clone(),
                         sequence: seq_num,
                         event_type: string_to_event_type(&intercom_event.event_type),
@@ -497,11 +615,52 @@ pub async fn execute(
         run.set_user_context(user_context);
     }
 
-    // Execute with timeout
-    let execution_result = tokio::time::timeout(config.execution_timeout(), async {
+    // Execute with timeout while continuously renewing the independent Cosmos
+    // ownership lease. Losing that lease cancels the run before another
+    // delivery is allowed to take over.
+    let mut execution_future = Box::pin(tokio::time::timeout(config.execution_timeout(), async {
         run.execute(state.clone()).await
-    })
-    .await;
+    }));
+    let mut lease_failure = None;
+    let execution_result = if let Some(lease) = queue_lease.as_ref() {
+        let mut renewal = Box::pin(maintain_queue_lease(
+            &claims.callback_url,
+            &executor_jwt,
+            lease,
+            &config,
+        ));
+        tokio::select! {
+            result = &mut execution_future => Some(result),
+            error = &mut renewal => {
+                lease_failure = Some(error);
+                None
+            }
+            changed = callback_failure_rx.changed() => {
+                let detail = match changed {
+                    Ok(()) => callback_failure_rx
+                        .borrow()
+                        .clone()
+                        .unwrap_or_else(|| "strict callback task stopped unexpectedly".to_string()),
+                    Err(_) => "strict callback task stopped unexpectedly".to_string(),
+                };
+                lease_failure = Some(ExecutorError::Callback(detail));
+                None
+            }
+        }
+    } else {
+        Some(execution_future.as_mut().await)
+    };
+
+    if let Some(error) = lease_failure {
+        drop(execution_future);
+        callback_handle.abort();
+        drop(run);
+        drop(intercom_handler);
+        drop(event_tx);
+        return Err(error);
+    }
+    let execution_result = execution_result.expect("execution result exists without lease failure");
+    drop(execution_future);
 
     // Flush any remaining buffered intercom events
     if let Err(e) = intercom_handler.flush().await {
@@ -551,7 +710,9 @@ pub async fn execute(
                         }
                     }
                 } else {
-                    tracing::warn!("No log database builder configured in state - run metadata will not be persisted");
+                    tracing::warn!(
+                        "No log database builder configured in state - run metadata will not be persisted"
+                    );
                 }
             } else {
                 tracing::warn!(
@@ -606,7 +767,43 @@ pub async fn execute(
     drop(intercom_handler);
     drop(event_tx);
 
-    let _ = callback_handle.await;
+    match callback_handle.await {
+        Ok(result) if queue_lease.is_some() => result?,
+        Ok(_) => {}
+        Err(error) if queue_lease.is_some() => {
+            return Err(ExecutorError::Callback(format!(
+                "callback task failed: {error}"
+            )));
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "Callback task stopped unexpectedly");
+        }
+    }
+
+    // The last event upload may consume most of the previous lease window.
+    // Renew once immediately before the terminal conditional write so a slow
+    // callback cannot turn a successful workflow into an expired-owner race.
+    if let Some(lease) = queue_lease.as_ref() {
+        let renewal = send_progress(
+            &format!(
+                "{}/api/v1/execution/progress",
+                claims.callback_url.trim_end_matches('/')
+            ),
+            &executor_jwt,
+            &lease_progress_update(lease, config.strict_lease_duration_ms()),
+            &config,
+            &reqwest::Client::new(),
+        )
+        .await?;
+        if !matches!(
+            interpret_start_acknowledgement(&renewal)?,
+            StartAcknowledgement::Execute
+        ) {
+            return Err(ExecutorError::Callback(
+                "execution lease was not renewed before terminal acknowledgement".to_string(),
+            ));
+        }
+    }
 
     // Send final progress update
     let progress_update = ProgressUpdateRequest {
@@ -615,6 +812,9 @@ pub async fn execute(
         status: Some(format!("{:?}", status).to_lowercase()),
         output_len: None,
         error: error.clone(),
+        job_id: queue_lease.as_ref().map(|lease| lease.job_id.clone()),
+        lease_token: queue_lease.as_ref().map(|lease| lease.token.clone()),
+        lease_duration_ms: None,
     };
 
     let progress_url = format!(
@@ -622,7 +822,7 @@ pub async fn execute(
         claims.callback_url.trim_end_matches('/')
     );
     let http_client = reqwest::Client::new();
-    let _ = send_progress(
+    let progress_result = send_progress(
         &progress_url,
         &executor_jwt,
         &progress_update,
@@ -630,6 +830,20 @@ pub async fn execute(
         &http_client,
     )
     .await;
+
+    if config.terminal_status_ack_required() {
+        let acknowledgement = progress_result?;
+        ensure_terminal_acknowledgement(&acknowledgement, &status)?;
+        if !acknowledgement.accepted {
+            tracing::info!(
+                run_id = %claims.run_id,
+                acknowledged_status = %acknowledgement.status,
+                "terminal status was already persisted by an earlier delivery"
+            );
+        }
+    } else if let Err(error) = progress_result {
+        tracing::warn!(error = %error, "Failed to send final progress update");
+    }
 
     Ok(ExecutionResult {
         run_id: claims.run_id,
@@ -662,7 +876,7 @@ fn send_event(
 ) {
     let seq = sequence.fetch_add(1, Ordering::SeqCst);
     let event = ExecutionEvent {
-        id: create_id(),
+        id: execution_event_id(run_id, seq),
         run_id: run_id.to_string(),
         sequence: seq,
         event_type,
@@ -672,65 +886,102 @@ fn send_event(
     let _ = tx.send(event);
 }
 
+fn execution_event_id(run_id: &str, sequence: i32) -> String {
+    let digest = blake3::hash(format!("{run_id}:{sequence}").as_bytes());
+    format!("evt-{}", digest.to_hex())
+}
+
 async fn run_callback_batcher(
     mut event_rx: mpsc::UnboundedReceiver<ExecutionEvent>,
     claims: ExecutorClaims,
     executor_jwt: String,
     config: ExecutorConfig,
-) {
+    queue_lease: Option<QueueLeaseContext>,
+) -> Result<(), ExecutorError> {
     let events_url = format!(
         "{}/api/v1/execution/events",
         claims.callback_url.trim_end_matches('/')
     );
     let client = reqwest::Client::new();
     let mut batch = Vec::new();
+    // Multiple producers can reserve an AtomicI32 value and reach the channel
+    // in the opposite order. Strict mode assigns the durable sequence at the
+    // single consumer instead, guaranteeing contiguous, ordered callbacks.
+    let mut strict_next_sequence = 0_i32;
+    let send_threshold = if queue_lease.is_some() {
+        config.max_batch_size.clamp(1, 1_000)
+    } else {
+        config.max_batch_size.max(1)
+    };
     let mut interval = tokio::time::interval(config.batch_interval());
 
     loop {
         tokio::select! {
             _ = interval.tick() => {
                 if !batch.is_empty() {
-                    let events = std::mem::take(&mut batch);
-                    if let Err(e) = send_events_to_api(
+                    if let Err(error) = send_events_to_api(
                         &events_url,
                         &executor_jwt,
-                        events,
+                        &batch,
                         &config,
                         &client,
+                        queue_lease.as_ref(),
                     ).await {
-                        tracing::warn!(error = %e, "Failed to send events batch");
+                        if queue_lease.is_some() {
+                            return Err(error);
+                        }
+                        tracing::warn!(error = %error, "Failed to send events batch");
                     }
+                    batch.clear();
                 }
             }
             event = event_rx.recv() => {
                 match event {
-                    Some(e) => {
+                    Some(mut e) => {
+                        if queue_lease.is_some() {
+                            e.sequence = strict_next_sequence;
+                            e.id = execution_event_id(&e.run_id, strict_next_sequence);
+                            strict_next_sequence = strict_next_sequence.checked_add(1).ok_or_else(|| {
+                                ExecutorError::Callback(
+                                    "execution event sequence exceeded i32 capacity".to_string(),
+                                )
+                            })?;
+                        }
                         batch.push(e);
-                        if batch.len() >= config.max_batch_size {
-                            let events = std::mem::take(&mut batch);
-                            if let Err(e) = send_events_to_api(
+                        if batch.len() >= send_threshold {
+                            if let Err(error) = send_events_to_api(
                                 &events_url,
                                 &executor_jwt,
-                                events,
+                                &batch,
                                 &config,
                                 &client,
+                                queue_lease.as_ref(),
                             ).await {
-                                tracing::warn!(error = %e, "Failed to send events batch");
+                                if queue_lease.is_some() {
+                                    return Err(error);
+                                }
+                                tracing::warn!(error = %error, "Failed to send events batch");
                             }
+                            batch.clear();
                         }
                     }
                     None => {
                         if !batch.is_empty() {
-                            let events = std::mem::take(&mut batch);
-                            let _ = send_events_to_api(
+                            if let Err(error) = send_events_to_api(
                                 &events_url,
                                 &executor_jwt,
-                                events,
+                                &batch,
                                 &config,
                                 &client,
-                            ).await;
+                                queue_lease.as_ref(),
+                            ).await {
+                                if queue_lease.is_some() {
+                                    return Err(error);
+                                }
+                                tracing::warn!(error = %error, "Failed to send final events batch");
+                            }
                         }
-                        break;
+                        return Ok(());
                     }
                 }
             }
@@ -754,19 +1005,26 @@ fn event_type_to_string(event_type: &EventType) -> String {
 async fn send_events_to_api(
     url: &str,
     jwt: &str,
-    events: Vec<ExecutionEvent>,
+    events: &[ExecutionEvent],
     config: &ExecutorConfig,
     client: &reqwest::Client,
+    queue_lease: Option<&QueueLeaseContext>,
 ) -> Result<(), ExecutorError> {
     let api_events: Vec<ApiEventInput> = events
-        .into_iter()
+        .iter()
         .map(|e| ApiEventInput {
+            id: queue_lease.map(|_| e.id.clone()),
+            sequence: queue_lease.map(|_| e.sequence),
             event_type: event_type_to_string(&e.event_type),
-            payload: e.payload,
+            payload: e.payload.clone(),
         })
         .collect();
 
-    let request = PushEventsRequest { events: api_events };
+    let request = PushEventsRequest {
+        events: api_events,
+        job_id: queue_lease.map(|lease| lease.job_id.clone()),
+        lease_token: queue_lease.map(|lease| lease.token.clone()),
+    };
 
     for attempt in 0..=config.callback_retries {
         let result = client
@@ -807,7 +1065,7 @@ async fn send_progress(
     progress: &ProgressUpdateRequest,
     config: &ExecutorConfig,
     client: &reqwest::Client,
-) -> Result<(), ExecutorError> {
+) -> Result<ProgressUpdateResponse, ExecutorError> {
     for attempt in 0..=config.callback_retries {
         let result = client
             .post(url)
@@ -819,7 +1077,14 @@ async fn send_progress(
             .await;
 
         match result {
-            Ok(response) if response.status().is_success() => return Ok(()),
+            Ok(response) if response.status().is_success() => {
+                match response.json::<ProgressUpdateResponse>().await {
+                    Ok(acknowledgement) => return Ok(acknowledgement),
+                    Err(error) => {
+                        tracing::warn!(attempt, error = %error, "Progress callback returned an invalid acknowledgement");
+                    }
+                }
+            }
             Ok(response) => {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
@@ -839,4 +1104,197 @@ async fn send_progress(
         "Failed after {} retries",
         config.callback_retries
     )))
+}
+
+fn parse_acknowledged_status(status: &str) -> Option<ExecutionStatus> {
+    if status.eq_ignore_ascii_case("running") || status.eq_ignore_ascii_case("pending") {
+        Some(ExecutionStatus::Running)
+    } else if status.eq_ignore_ascii_case("completed") {
+        Some(ExecutionStatus::Completed)
+    } else if status.eq_ignore_ascii_case("failed") || status.eq_ignore_ascii_case("timeout") {
+        Some(ExecutionStatus::Failed)
+    } else if status.eq_ignore_ascii_case("cancelled") {
+        Some(ExecutionStatus::Cancelled)
+    } else {
+        None
+    }
+}
+
+fn lease_progress_update(
+    lease: &QueueLeaseContext,
+    lease_duration_ms: i64,
+) -> ProgressUpdateRequest {
+    ProgressUpdateRequest {
+        progress: None,
+        current_step: None,
+        status: Some("running".to_string()),
+        output_len: None,
+        error: None,
+        job_id: Some(lease.job_id.clone()),
+        lease_token: Some(lease.token.clone()),
+        lease_duration_ms: Some(lease_duration_ms),
+    }
+}
+
+async fn maintain_queue_lease(
+    callback_url: &str,
+    executor_jwt: &str,
+    lease: &QueueLeaseContext,
+    config: &ExecutorConfig,
+) -> ExecutorError {
+    let progress_url = format!(
+        "{}/api/v1/execution/progress",
+        callback_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::new();
+    loop {
+        tokio::time::sleep(config.strict_lease_renewal()).await;
+        let update = lease_progress_update(lease, config.strict_lease_duration_ms());
+        let acknowledgement =
+            match send_progress(&progress_url, executor_jwt, &update, config, &client).await {
+                Ok(acknowledgement) => acknowledgement,
+                Err(error) => return error,
+            };
+        match interpret_start_acknowledgement(&acknowledgement) {
+            Ok(StartAcknowledgement::Execute) => {
+                tracing::debug!("renewed strict queue execution lease");
+            }
+            Ok(StartAcknowledgement::Busy { .. }) => {
+                return ExecutorError::Callback(
+                    "execution lease ownership was lost during renewal".to_string(),
+                );
+            }
+            Ok(StartAcknowledgement::AlreadyTerminal(_)) => {
+                return ExecutorError::Callback(
+                    "execution became terminal before the owning delivery completed".to_string(),
+                );
+            }
+            Err(error) => return error,
+        }
+    }
+}
+
+fn interpret_start_acknowledgement(
+    acknowledgement: &ProgressUpdateResponse,
+) -> Result<StartAcknowledgement, ExecutorError> {
+    match parse_acknowledged_status(&acknowledgement.status) {
+        Some(ExecutionStatus::Running)
+            if acknowledgement.accepted && acknowledgement.lease_acquired == Some(true) =>
+        {
+            Ok(StartAcknowledgement::Execute)
+        }
+        Some(ExecutionStatus::Running)
+            if !acknowledgement.accepted
+                && acknowledgement.lease_acquired == Some(false)
+                && acknowledgement.lease_expires_at.is_some() =>
+        {
+            Ok(StartAcknowledgement::Busy {
+                expires_at: acknowledgement.lease_expires_at.unwrap(),
+            })
+        }
+        Some(
+            status @ (ExecutionStatus::Completed
+            | ExecutionStatus::Failed
+            | ExecutionStatus::Cancelled),
+        ) => Ok(StartAcknowledgement::AlreadyTerminal(status)),
+        _ => Err(ExecutorError::Callback(
+            "API did not acknowledge a runnable or terminal execution state".to_string(),
+        )),
+    }
+}
+
+fn ensure_terminal_acknowledgement(
+    acknowledgement: &ProgressUpdateResponse,
+    expected: &ExecutionStatus,
+) -> Result<(), ExecutorError> {
+    let acknowledged = parse_acknowledged_status(&acknowledgement.status).ok_or_else(|| {
+        ExecutorError::Callback("API returned an unknown execution status".to_string())
+    })?;
+
+    if matches!(acknowledged, ExecutionStatus::Running) {
+        return Err(ExecutorError::Callback(
+            "API did not persist a terminal execution status".to_string(),
+        ));
+    }
+
+    // If this request performed the update, the persisted status must be the
+    // status it submitted. `accepted = false` means an earlier retry already
+    // committed a terminal status; any terminal value is then sufficient to
+    // make broker settlement safe without replaying side effects.
+    if acknowledgement.accepted && &acknowledged != expected {
+        return Err(ExecutorError::Callback(
+            "API acknowledged a different terminal execution status".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod callback_acknowledgement_tests {
+    use super::*;
+
+    fn acknowledgement(accepted: bool, status: &str) -> ProgressUpdateResponse {
+        ProgressUpdateResponse {
+            accepted,
+            status: status.to_string(),
+            lease_acquired: Some(accepted),
+            lease_expires_at: None,
+        }
+    }
+
+    #[test]
+    fn start_acknowledgement_executes_only_for_an_accepted_running_state() {
+        assert_eq!(
+            interpret_start_acknowledgement(&acknowledgement(true, "Running")).unwrap(),
+            StartAcknowledgement::Execute
+        );
+        assert!(interpret_start_acknowledgement(&acknowledgement(false, "Running")).is_err());
+    }
+
+    #[test]
+    fn start_acknowledgement_waits_for_a_live_competing_lease() {
+        let mut ack = acknowledgement(false, "Running");
+        ack.lease_expires_at = Some(42_000);
+        assert_eq!(
+            interpret_start_acknowledgement(&ack).unwrap(),
+            StartAcknowledgement::Busy { expires_at: 42_000 }
+        );
+    }
+
+    #[test]
+    fn start_acknowledgement_skips_a_previously_terminal_delivery() {
+        assert_eq!(
+            interpret_start_acknowledgement(&acknowledgement(false, "Completed")).unwrap(),
+            StartAcknowledgement::AlreadyTerminal(ExecutionStatus::Completed)
+        );
+        assert_eq!(
+            interpret_start_acknowledgement(&acknowledgement(false, "Timeout")).unwrap(),
+            StartAcknowledgement::AlreadyTerminal(ExecutionStatus::Failed)
+        );
+    }
+
+    #[test]
+    fn terminal_acknowledgement_requires_persisted_terminal_state() {
+        assert!(ensure_terminal_acknowledgement(
+            &acknowledgement(true, "Completed"),
+            &ExecutionStatus::Completed,
+        )
+        .is_ok());
+        assert!(ensure_terminal_acknowledgement(
+            &acknowledgement(true, "Running"),
+            &ExecutionStatus::Completed,
+        )
+        .is_err());
+        assert!(ensure_terminal_acknowledgement(
+            &acknowledgement(true, "Failed"),
+            &ExecutionStatus::Completed,
+        )
+        .is_err());
+        assert!(ensure_terminal_acknowledgement(
+            &acknowledgement(false, "Failed"),
+            &ExecutionStatus::Completed,
+        )
+        .is_ok());
+    }
 }

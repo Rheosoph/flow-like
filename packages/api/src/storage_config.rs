@@ -115,7 +115,7 @@ impl S3Config {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AzureConfig {
     pub account: String,
-    pub access_key: String,
+    pub access_key: Option<String>,
 }
 
 impl AzureConfig {
@@ -124,15 +124,25 @@ impl AzureConfig {
             account: std::env::var("AZURE_STORAGE_ACCOUNT_NAME")
                 .map_err(|_| flow_like_types::anyhow!("AZURE_STORAGE_ACCOUNT_NAME not set"))?,
             access_key: std::env::var("AZURE_STORAGE_ACCOUNT_KEY")
-                .map_err(|_| flow_like_types::anyhow!("AZURE_STORAGE_ACCOUNT_KEY not set"))?,
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
         })
     }
 
     pub fn build_store(&self, container: &str) -> Result<FlowLikeStore> {
-        let store = MicrosoftAzureBuilder::new()
-            .with_account(&self.account)
-            .with_container_name(container)
-            .with_config(AzureConfigKey::AccessKey, &self.access_key)
+        let mut builder = if self.access_key.is_some() {
+            MicrosoftAzureBuilder::new()
+        } else {
+            MicrosoftAzureBuilder::from_env()
+        }
+        .with_account(&self.account)
+        .with_container_name(container);
+
+        if let Some(access_key) = &self.access_key {
+            builder = builder.with_config(AzureConfigKey::AccessKey, access_key);
+        }
+
+        let store = builder
             .build()
             .map_err(|e| flow_like_types::anyhow!("Failed to build Azure store: {}", e))?;
         Ok(FlowLikeStore::Azure(Arc::new(store)))

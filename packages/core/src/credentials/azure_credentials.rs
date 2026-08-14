@@ -115,13 +115,24 @@ impl SharedCredentialsTrait for AzureSharedCredentials {
 
         let account = self.account_name.clone();
         let container = container.clone();
-        let account_key = self.account_key.clone();
-        let sas_token = sas_token.clone();
+        let account_key = self
+            .account_key
+            .clone()
+            .filter(|value| !value.trim().is_empty());
+        let sas_token = sas_token.clone().filter(|value| !value.trim().is_empty());
 
         let store = tokio::task::spawn_blocking(move || {
-            let builder = MicrosoftAzureBuilder::new()
-                .with_account(account)
-                .with_container_name(container);
+            // `from_env` is required for Azure Container Apps/App Service managed
+            // identity because it carries IDENTITY_ENDPOINT and AZURE_CLIENT_ID
+            // into object_store's MSI credential provider. Keep scoped SAS and
+            // legacy account-key credentials isolated from ambient auth settings.
+            let builder = if account_key.is_none() && sas_token.is_none() {
+                MicrosoftAzureBuilder::from_env()
+            } else {
+                MicrosoftAzureBuilder::new()
+            }
+            .with_account(account)
+            .with_container_name(container);
 
             // Use account key for master credentials, SAS for scoped credentials
             if let Some(key) = account_key {
@@ -130,10 +141,7 @@ impl SharedCredentialsTrait for AzureSharedCredentials {
                 let sas_pairs = Self::parse_sas_token(&sas);
                 builder.with_sas_authorization(sas_pairs).build()
             } else {
-                Err(object_store::Error::Generic {
-                    store: "MicrosoftAzure",
-                    source: "No account key or SAS token provided".into(),
-                })
+                builder.build()
             }
         })
         .await
@@ -206,12 +214,16 @@ fn make_azure_builder(
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder + Send + Sync + 'static {
     move |path| {
         let url = format!("az://{}/{}", container, path);
-        lancedb::connect(&url)
-            .storage_option(
-                "azure_storage_account_name".to_string(),
-                account_name.clone(),
-            )
-            .storage_option("azure_storage_sas_token".to_string(), sas_token.clone())
+        let builder = lancedb::connect(&url).storage_option(
+            "azure_storage_account_name".to_string(),
+            account_name.clone(),
+        );
+
+        if sas_token.trim().is_empty() {
+            builder
+        } else {
+            builder.storage_option("azure_storage_sas_token".to_string(), sas_token.clone())
+        }
     }
 }
 

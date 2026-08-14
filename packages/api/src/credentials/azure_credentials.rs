@@ -3,6 +3,14 @@ use super::RuntimeCredentialsTrait;
 use crate::credentials::CredentialsAccess;
 use crate::state::{AppState, State};
 #[cfg(feature = "azure")]
+use azure_core::credentials::TokenCredential;
+#[cfg(feature = "azure")]
+use azure_identity::{ManagedIdentityCredential, ManagedIdentityCredentialOptions, UserAssignedId};
+#[cfg(feature = "azure")]
+use azure_storage_common::models::UserDelegationKey;
+#[cfg(feature = "azure")]
+use azure_storage_sas::{SasBuilder, SasProtocol};
+#[cfg(feature = "azure")]
 use flow_like::credentials::{SharedCredentials, azure_credentials::AzureSharedCredentials};
 use flow_like::{
     flow_like_storage::lancedb::{connect, connection::ConnectBuilder},
@@ -12,7 +20,33 @@ use flow_like::{
 use flow_like_storage::object_store;
 use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+#[cfg(feature = "azure")]
+const STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
+#[cfg(feature = "azure")]
+const USER_DELEGATION_API_VERSION: &str = "2023-11-03";
+#[cfg(feature = "azure")]
+const USER_DELEGATION_KEY_LIFETIME_HOURS: i64 = 6;
+#[cfg(feature = "azure")]
+const SCOPED_SAS_LIFETIME_MINUTES: i64 = 60;
+
+#[cfg(feature = "azure")]
+#[derive(Clone)]
+enum AzureDirectorySasIssuer {
+    UserDelegation(AzureUserDelegationSasIssuer),
+    SharedKey(String),
+}
+
+#[cfg(feature = "azure")]
+#[derive(Clone)]
+struct AzureUserDelegationSasIssuer {
+    key: UserDelegationKey,
+}
+
+#[cfg(feature = "azure")]
+static USER_DELEGATION_KEYS: OnceLock<moka::sync::Cache<String, AzureUserDelegationSasIssuer>> =
+    OnceLock::new();
 
 #[cfg(feature = "azure")]
 #[derive(Clone, Serialize, Deserialize)]
@@ -133,11 +167,29 @@ impl AzureRuntimeCredentials {
             content_container: self.content_container.clone(),
             logs_container: self.logs_container.clone(),
             account_name: self.account_name.clone(),
-            account_key: std::env::var("AZURE_STORAGE_ACCOUNT_KEY").ok(),
+            account_key: self.account_key.clone(),
             expiration: None,
             content_path_prefix: None,
             user_content_path_prefix: None,
         }
+    }
+
+    async fn directory_sas_issuer(&self) -> Result<AzureDirectorySasIssuer> {
+        if let Some(account_key) = self
+            .account_key
+            .clone()
+            .or_else(|| std::env::var("AZURE_STORAGE_ACCOUNT_KEY").ok())
+            .filter(|value| !value.trim().is_empty())
+        {
+            // Retained for existing non-Azure-target deployments. The dedicated
+            // Azure API rejects account keys at startup, so its only reachable
+            // path is Microsoft Entra user delegation below.
+            return Ok(AzureDirectorySasIssuer::SharedKey(account_key));
+        }
+
+        Ok(AzureDirectorySasIssuer::UserDelegation(
+            AzureUserDelegationSasIssuer::from_env(&self.account_name).await?,
+        ))
     }
 
     #[tracing::instrument(
@@ -158,17 +210,9 @@ impl AzureRuntimeCredentials {
         crate::credentials::validate_path_component(sub, "sub")?;
         crate::credentials::validate_path_component(app_id, "app_id")?;
 
-        let account_key = self
-            .account_key
-            .clone()
-            .or_else(|| std::env::var("AZURE_STORAGE_ACCOUNT_KEY").ok())
-            .ok_or_else(|| {
-                flow_like_types::anyhow!("AZURE_STORAGE_ACCOUNT_KEY environment variable not set")
-            })?;
-
-        let expiry = chrono::Utc::now() + chrono::Duration::hours(1);
+        let expiry = chrono::Utc::now() + chrono::Duration::minutes(SCOPED_SAS_LIFETIME_MINUTES);
         let expiry_str = expiry.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        let start = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let issuer = self.directory_sas_issuer().await?;
 
         // Determine which containers and paths need SAS tokens based on access mode
         let (
@@ -187,18 +231,16 @@ impl AzureRuntimeCredentials {
                     &self.meta_container,
                     &format!("apps/{}", app_id),
                     "rwdl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 let content_sas = generate_directory_sas(
                     &self.account_name,
                     &self.content_container,
                     &format!("apps/{}", app_id),
                     "rwdl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 (
                     Some(meta_sas),
@@ -217,18 +259,16 @@ impl AzureRuntimeCredentials {
                     &self.meta_container,
                     &format!("apps/{}", app_id),
                     "rl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 let content_sas = generate_directory_sas(
                     &self.account_name,
                     &self.content_container,
                     &format!("apps/{}", app_id),
                     "rl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 (
                     Some(meta_sas),
@@ -250,9 +290,8 @@ impl AzureRuntimeCredentials {
                     &self.content_container,
                     &format!("apps/{}", app_id),
                     "rl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 (
                     None,
@@ -276,9 +315,8 @@ impl AzureRuntimeCredentials {
                     &self.content_container,
                     &format!("apps/{}", app_id),
                     "rwdl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 (
                     None,
@@ -301,9 +339,8 @@ impl AzureRuntimeCredentials {
                     &self.content_container,
                     &format!("apps/{}/storage/db", app_id),
                     "rl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 (
                     None,
@@ -320,9 +357,8 @@ impl AzureRuntimeCredentials {
                     &self.content_container,
                     &format!("apps/{}/storage/db", app_id),
                     "rwdl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 (
                     None,
@@ -339,9 +375,8 @@ impl AzureRuntimeCredentials {
                     &self.content_container,
                     &format!("users/{}/apps/{}", sub, app_id),
                     "rwdl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 (
                     None,
@@ -358,9 +393,8 @@ impl AzureRuntimeCredentials {
                     &self.content_container,
                     &format!("users/{}/apps/{}", sub, app_id),
                     "rl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 (
                     None,
@@ -378,18 +412,16 @@ impl AzureRuntimeCredentials {
                     &self.content_container,
                     &format!("users/{}/apps/{}", sub, app_id),
                     "rwdl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 let logs_sas = generate_directory_sas(
                     &self.account_name,
                     &self.logs_container,
                     &format!("runs/{}", app_id),
                     "rwdl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 (
                     None,
@@ -407,27 +439,24 @@ impl AzureRuntimeCredentials {
                     &self.content_container,
                     &format!("apps/{}", app_id),
                     "rl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 let user_content_sas = generate_directory_sas(
                     &self.account_name,
                     &self.content_container,
                     &format!("users/{}/apps/{}", sub, app_id),
                     "rl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 let logs_sas = generate_directory_sas(
                     &self.account_name,
                     &self.logs_container,
                     &format!("runs/{}", app_id),
                     "rl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 (
                     None,
@@ -445,27 +474,24 @@ impl AzureRuntimeCredentials {
                     &self.content_container,
                     &format!("apps/{}", app_id),
                     "rwdl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 let user_content_sas = generate_directory_sas(
                     &self.account_name,
                     &self.content_container,
                     &format!("users/{}/apps/{}", sub, app_id),
                     "rwdl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 let logs_sas = generate_directory_sas(
                     &self.account_name,
                     &self.logs_container,
                     &format!("runs/{}", app_id),
                     "rwdl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 (
                     None,
@@ -482,36 +508,32 @@ impl AzureRuntimeCredentials {
                     &self.meta_container,
                     &format!("apps/{}", app_id),
                     "rl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 let app_content_sas = generate_directory_sas(
                     &self.account_name,
                     &self.content_container,
                     &format!("apps/{}", app_id),
                     "rwdl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 let user_content_sas = generate_directory_sas(
                     &self.account_name,
                     &self.content_container,
                     &format!("users/{}/apps/{}", sub, app_id),
                     "rwdl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 let logs_sas = generate_directory_sas(
                     &self.account_name,
                     &self.logs_container,
                     &format!("runs/{}", app_id),
                     "rwdl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 (
                     Some(meta_sas),
@@ -529,9 +551,8 @@ impl AzureRuntimeCredentials {
                     &self.logs_container,
                     &format!("runs/{}", app_id),
                     "rl",
-                    &start,
                     &expiry_str,
-                    &account_key,
+                    &issuer,
                 )?;
                 (None, None, None, Some(logs_sas), None, None)
             }
@@ -575,6 +596,7 @@ impl AzureRuntimeCredentials {
             .ok_or_else(|| {
                 flow_like_types::anyhow!("AZURE_STORAGE_ACCOUNT_KEY environment variable not set")
             })?;
+        let issuer = AzureDirectorySasIssuer::SharedKey(account_key);
 
         let permissions = match mode {
             CredentialsAccess::EditApp => "racwdl",
@@ -592,9 +614,8 @@ impl AzureRuntimeCredentials {
             CredentialsAccess::ReadLogs => "rl",
         };
 
-        let expiry = chrono::Utc::now() + chrono::Duration::hours(1);
+        let expiry = chrono::Utc::now() + chrono::Duration::minutes(SCOPED_SAS_LIFETIME_MINUTES);
         let expiry_str = expiry.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        let start = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
         // Determine the app/user content paths based on access mode
         // EditApp/ReadApp/ReadAppContent/EditAppContent: apps/{app_id}
@@ -630,9 +651,8 @@ impl AzureRuntimeCredentials {
                 &self.content_container,
                 dir,
                 permissions,
-                &start,
                 &expiry_str,
-                &account_key,
+                &issuer,
             )?)
         } else {
             None
@@ -644,9 +664,8 @@ impl AzureRuntimeCredentials {
                 &self.content_container,
                 dir,
                 permissions,
-                &start,
                 &expiry_str,
-                &account_key,
+                &issuer,
             )?)
         } else {
             None
@@ -659,9 +678,8 @@ impl AzureRuntimeCredentials {
                 &self.meta_container,
                 &format!("apps/{}", app_id),
                 "rl",
-                &start,
                 &expiry_str,
-                &account_key,
+                &issuer,
             )?),
             _ => None,
         };
@@ -672,9 +690,8 @@ impl AzureRuntimeCredentials {
                 &self.logs_container,
                 &format!("runs/{}", app_id),
                 "racwdl",
-                &start,
                 &expiry_str,
-                &account_key,
+                &issuer,
             )?)
         } else {
             None
@@ -777,8 +794,161 @@ mod sas_tests {
     }
 }
 
-/// Generate a Directory SAS token (requires HNS/Data Lake Storage Gen2)
-/// This provides path-level security - access is restricted to the specified directory and its contents.
+#[cfg(feature = "azure")]
+impl AzureUserDelegationSasIssuer {
+    async fn from_env(account_name: &str) -> Result<Self> {
+        let client_id = std::env::var("AZURE_CLIENT_ID")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        let cache_key = format!(
+            "{}|{}",
+            account_name,
+            client_id.as_deref().unwrap_or("system")
+        );
+        let cache = USER_DELEGATION_KEYS.get_or_init(|| {
+            moka::sync::Cache::builder()
+                .max_capacity(32)
+                .time_to_live(std::time::Duration::from_secs(5 * 60 * 60))
+                .build()
+        });
+        if let Some(issuer) = cache.get(&cache_key) {
+            return Ok(issuer);
+        }
+
+        let user_assigned_id = client_id.map(UserAssignedId::ClientId);
+        let credential = ManagedIdentityCredential::new(Some(ManagedIdentityCredentialOptions {
+            user_assigned_id,
+            ..Default::default()
+        }))
+        .map_err(|error| anyhow!("failed to initialize Azure managed identity: {error}"))?;
+        let token = credential
+            .get_token(&[STORAGE_SCOPE], None)
+            .await
+            .map_err(|error| anyhow!("failed to acquire Azure Storage identity token: {error}"))?;
+
+        let start = chrono::Utc::now() - chrono::Duration::minutes(5);
+        let expiry =
+            chrono::Utc::now() + chrono::Duration::hours(USER_DELEGATION_KEY_LIFETIME_HOURS);
+        let start_rfc3339 = start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let expiry_rfc3339 = expiry.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let request_body = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?><KeyInfo><Start>{start_rfc3339}</Start><Expiry>{expiry_rfc3339}</Expiry></KeyInfo>"
+        );
+        let endpoint = format!(
+            "https://{account_name}.blob.core.windows.net/?restype=service&comp=userdelegationkey"
+        );
+        let response = reqwest::Client::builder()
+            .https_only(true)
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|error| anyhow!("failed to construct Azure Storage client: {error}"))?
+            .post(endpoint)
+            .bearer_auth(token.token.secret())
+            .header("x-ms-version", USER_DELEGATION_API_VERSION)
+            .header(
+                "x-ms-date",
+                chrono::Utc::now()
+                    .format("%a, %d %b %Y %H:%M:%S GMT")
+                    .to_string(),
+            )
+            .header(reqwest::header::CONTENT_TYPE, "application/xml")
+            .body(request_body)
+            .send()
+            .await
+            .map_err(|error| anyhow!("Azure user delegation key request failed: {error}"))?;
+
+        let status = response.status();
+        let request_id = response
+            .headers()
+            .get("x-ms-request-id")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("unavailable")
+            .to_string();
+        if !status.is_success() {
+            return Err(anyhow!(
+                "Azure user delegation key request returned HTTP {status} (request {request_id})"
+            ));
+        }
+        let response_body = response
+            .text()
+            .await
+            .map_err(|error| anyhow!("failed to read Azure user delegation key: {error}"))?;
+        let key: UserDelegationKey = quick_xml::de::from_str(&response_body)
+            .map_err(|error| anyhow!("invalid Azure user delegation key response: {error}"))?;
+        SasBuilder::new(
+            account_name,
+            &key,
+            time::OffsetDateTime::now_utc() + time::Duration::minutes(1),
+        )
+        .map_err(|error| anyhow!("Azure returned an incomplete user delegation key: {error}"))?;
+
+        let issuer = Self { key };
+        cache.insert(cache_key, issuer.clone());
+        Ok(issuer)
+    }
+}
+
+/// Generates an HTTPS-only directory SAS for an HNS/ADLS Gen2 path.
+/// The secure Azure API reaches this through a Microsoft Entra user delegation
+/// key; shared-key signing remains only for backward-compatible callers that
+/// explicitly supplied a legacy account key.
+#[cfg(feature = "azure")]
+fn generate_directory_sas(
+    account_name: &str,
+    container: &str,
+    directory: &str,
+    permissions: &str,
+    expiry: &str,
+    issuer: &AzureDirectorySasIssuer,
+) -> Result<String> {
+    match issuer {
+        AzureDirectorySasIssuer::UserDelegation(issuer) => {
+            let expiry =
+                time::OffsetDateTime::parse(expiry, &time::format_description::well_known::Rfc3339)
+                    .map_err(|error| anyhow!("invalid scoped SAS expiry: {error}"))?;
+            let start = time::OffsetDateTime::now_utc() - time::Duration::minutes(5);
+            let mut builder = SasBuilder::new(account_name, &issuer.key, expiry)
+                .map_err(|error| anyhow!("failed to initialize user delegation SAS: {error}"))?
+                .directory(container, directory.trim_matches('/'))
+                .start(start)
+                .protocol(SasProtocol::Https);
+
+            for permission in permissions.chars() {
+                builder = match permission {
+                    'r' => builder.read(),
+                    'a' => builder.add(),
+                    'c' => builder.create(),
+                    'w' => builder.write(),
+                    'd' => builder.delete(),
+                    'l' => builder.list(),
+                    other => {
+                        return Err(anyhow!(
+                            "unsupported Azure directory SAS permission: {other}"
+                        ));
+                    }
+                };
+            }
+            Ok(builder.build())
+        }
+        AzureDirectorySasIssuer::SharedKey(account_key) => {
+            let start = (chrono::Utc::now() - chrono::Duration::minutes(5))
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string();
+            generate_shared_key_directory_sas(
+                account_name,
+                container,
+                directory,
+                permissions,
+                &start,
+                expiry,
+                account_key,
+            )
+        }
+    }
+}
+
+/// Legacy account-key Directory SAS signer retained for existing deployments.
 ///
 /// String-to-sign format for Service SAS (version 2020-12-06):
 /// - signedPermissions
@@ -794,7 +964,7 @@ mod sas_tests {
 /// - signedEncryptionScope (empty)
 /// - rscc, rscd, rsce, rscl, rsct (all empty - response headers)
 #[cfg(feature = "azure")]
-fn generate_directory_sas(
+fn generate_shared_key_directory_sas(
     account_name: &str,
     container: &str,
     directory: &str,
@@ -985,12 +1155,16 @@ fn make_azure_builder(
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder {
     move |path| {
         let url = format!("az://{}/{}", container, path);
-        connect(&url)
-            .storage_option(
-                "azure_storage_account_name".to_string(),
-                account_name.clone(),
-            )
-            .storage_option("azure_storage_sas_token".to_string(), sas_token.clone())
+        let builder = connect(&url).storage_option(
+            "azure_storage_account_name".to_string(),
+            account_name.clone(),
+        );
+
+        if sas_token.trim().is_empty() {
+            builder
+        } else {
+            builder.storage_option("azure_storage_sas_token".to_string(), sas_token.clone())
+        }
     }
 }
 

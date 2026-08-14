@@ -53,6 +53,7 @@ async fn caches_secret_after_first_read() {
 
     let config = SecretStoreConfig {
         global_prefix: None,
+        allow_env_override: true,
         cache_ttl: std::time::Duration::from_secs(30),
         negative_cache_ttl: std::time::Duration::from_secs(1),
         max_cache_entries: 128,
@@ -131,6 +132,7 @@ async fn lazy_provider_initialization_does_not_fail_unrelated_lookup() {
 
     let config = SecretStoreConfig {
         global_prefix: None,
+        allow_env_override: true,
         cache_ttl: std::time::Duration::from_secs(60),
         negative_cache_ttl: std::time::Duration::from_secs(5),
         max_cache_entries: 128,
@@ -169,6 +171,7 @@ async fn fallback_order_uses_first_matching_provider() {
 
     let config = SecretStoreConfig {
         global_prefix: None,
+        allow_env_override: true,
         cache_ttl: std::time::Duration::from_secs(60),
         negative_cache_ttl: std::time::Duration::from_secs(5),
         max_cache_entries: 128,

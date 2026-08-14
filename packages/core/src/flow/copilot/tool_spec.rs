@@ -2037,7 +2037,11 @@ mod tests {
         );
 
         let open_page = find_global_tool_spec("open_app_page").expect("open_app_page spec");
-        assert!(open_page.description.contains("structured failure supersedes"));
+        assert!(
+            open_page
+                .description
+                .contains("structured failure supersedes")
+        );
         assert!(open_page.description.contains("older inventory"));
         assert!(open_page.description.contains("relist at most once"));
         let open_page_schema = (open_page.schema)();

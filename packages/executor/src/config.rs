@@ -19,6 +19,14 @@ pub struct ExecutorConfig {
     /// Execution timeout (seconds)
     #[serde(default = "default_execution_timeout_secs")]
     pub execution_timeout_secs: u64,
+    /// Require the API to durably acknowledge terminal run status before the
+    /// executor reports success to a queue consumer.
+    ///
+    /// This is deliberately not environment-configurable: queue runtimes that
+    /// rely on the guarantee must opt in in code so a deployment setting
+    /// cannot accidentally weaken message settlement semantics.
+    #[serde(default)]
+    terminal_status_ack_required: bool,
 }
 
 fn default_batch_interval_ms() -> u64 {
@@ -37,6 +45,9 @@ fn default_execution_timeout_secs() -> u64 {
     3600
 }
 
+const STRICT_LEASE_DURATION_MS: i64 = 300_000;
+const STRICT_LEASE_RENEWAL_MS: u64 = 60_000;
+
 impl Default for ExecutorConfig {
     fn default() -> Self {
         Self {
@@ -45,6 +56,7 @@ impl Default for ExecutorConfig {
             callback_timeout_ms: default_callback_timeout_ms(),
             callback_retries: default_callback_retries(),
             execution_timeout_secs: default_execution_timeout_secs(),
+            terminal_status_ack_required: false,
         }
     }
 }
@@ -72,7 +84,30 @@ impl ExecutorConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_else(default_execution_timeout_secs),
+            terminal_status_ack_required: false,
         }
+    }
+
+    /// Opt into queue-safe callback semantics.
+    ///
+    /// Before starting work, the executor verifies that the run is still
+    /// non-terminal. After work, it only returns success once the API confirms
+    /// that a terminal status is persisted.
+    pub fn with_required_terminal_status_ack(mut self) -> Self {
+        self.terminal_status_ack_required = true;
+        self
+    }
+
+    pub(crate) fn terminal_status_ack_required(&self) -> bool {
+        self.terminal_status_ack_required
+    }
+
+    pub(crate) fn strict_lease_duration_ms(&self) -> i64 {
+        STRICT_LEASE_DURATION_MS
+    }
+
+    pub(crate) fn strict_lease_renewal(&self) -> Duration {
+        Duration::from_millis(STRICT_LEASE_RENEWAL_MS)
     }
 
     pub fn batch_interval(&self) -> Duration {
