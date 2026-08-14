@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	Card,
@@ -29,6 +30,7 @@ export function ForkAppButton({
 	localApp,
 	appName,
 }: Readonly<ForkAppButtonProps>) {
+	const { t } = useTranslation("common");
 	const applyBundle = useApplyForkBundle();
 	const { forkOfflineAppOnline, isForking } = useOfflineToOnlineFork();
 	if (localApp.visibility === IAppVisibility.Offline) {
@@ -38,11 +40,10 @@ export function ForkAppButton({
 					<div className="space-y-1">
 						<CardTitle className="flex items-center gap-2">
 							<GitForkIcon className="w-4 h-4" />
-							Create an online copy
+							{t('createAnOnlineCopy', 'Create an online copy')}
 						</CardTitle>
 						<CardDescription>
-							Upload a fresh, secret-stripped copy of this local app to your
-							account. The local app remains unchanged.
+							{t('uploadAFreshSecretstrippedCopyOfThisLocalAppToYourAccountTheLocalAppRemainsUnchanged', "Upload a fresh, secret-stripped copy of this local app to your account. The local app remains unchanged.")}
 						</CardDescription>
 					</div>
 				</CardHeader>
@@ -57,7 +58,7 @@ export function ForkAppButton({
 						) : (
 							<GitForkIcon className="w-4 h-4" />
 						)}
-						Create online copy
+						{t('createOnlineCopy', 'Create online copy')}
 					</Button>
 				</CardContent>
 			</Card>

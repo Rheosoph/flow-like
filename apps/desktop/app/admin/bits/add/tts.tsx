@@ -1,3 +1,4 @@
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	Card,
 	CardContent,
@@ -344,7 +345,7 @@ export function defaultTtsAssetLayout(
 					...baseBit.meta,
 					en: {
 						...baseBit.meta?.en,
-						description: `${preset.label} asset: ${presetAsset.relativePath}`,
+						description: i18next.t('labelAssetRelativepath', '{{label}} asset: {{relativePath}}', { label: preset.label, relativePath: presetAsset.relativePath }),
 						name: `${preset.label} ${presetAsset.relativePath}`,
 						tags: ["tts-asset", "any-tts", ...preset.tags],
 					},
@@ -418,6 +419,7 @@ export function TTSConfiguration({
 	setAssetBits: Dispatch<SetStateAction<TtsAssetDraft[]>>;
 	createAssetBit: () => IBit;
 }>) {
+	const { t } = useTranslation("common");
 	const parameters = bit.parameters as ITtsModelParameters;
 	const selectedModelType = parameters.model_type ?? ITtsModelType.Kokoro;
 	const selectedPreset = getTtsModelPreset(selectedModelType);
@@ -436,20 +438,19 @@ export function TTSConfiguration({
 		<div className="space-y-6 w-full max-w-screen-lg">
 			<Card className="w-full">
 				<CardHeader>
-					<CardTitle>TTS Model</CardTitle>
-					<CardDescription>
-						{selectedPreset.description} {assetBits.length} files,{" "}
+					<CardTitle>{t('ttsModel', 'TTS Model')}</CardTitle>
+					<CardDescription>{t('descriptionLengthFiles', '{{description}} {{length}} files,', { description: selectedPreset.description, length: assetBits.length })}{" "}
 						{humanFileSize(totalAssetSize)}.
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-2">
-					<Label htmlFor="tts-model-type">Model</Label>
+					<Label htmlFor="tts-model-type">{t('model', 'Model')}</Label>
 					<Select
 						value={selectedModelType}
 						onValueChange={(value) => applyPreset(value as ITtsModelType)}
 					>
 						<SelectTrigger id="tts-model-type">
-							<SelectValue placeholder="Select model" />
+							<SelectValue placeholder={t('selectModel', 'Select model')} />
 						</SelectTrigger>
 						<SelectContent>
 							{TTS_MODEL_TYPES.map((modelType) => {

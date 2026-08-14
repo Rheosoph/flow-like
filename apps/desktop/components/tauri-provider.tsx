@@ -1,4 +1,5 @@
 "use client";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
@@ -289,7 +290,7 @@ export class TauriBackend implements IBackendState {
 			blocked: Boolean(blockedReason),
 		});
 		const commandId = idempotencyKey
-			? `${appId}\u001f${boardId}\u001f${idempotencyKey}`
+			? `${appId}${boardId}${idempotencyKey}`
 			: createId();
 		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
 			// Preserve an already-queued undelivered tail. A renderer replay of the full receipt
@@ -640,7 +641,7 @@ export class TauriBackend implements IBackendState {
 				} else {
 					reject(
 						new Error(
-							`Upload failed with status ${xhr.status}: ${xhr.statusText}`,
+							i18next.t('uploadFailedWithStatusStatusStatustext', 'Upload failed with status {{status}}: {{statusText}}', { status: xhr.status, statusText: xhr.statusText }),
 						),
 					);
 				}
@@ -840,6 +841,7 @@ export function TauriProvider({
 export function ProfileSyncer({
 	auth,
 }: { auth: { isAuthenticated: boolean; accessToken?: string } }) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -1110,7 +1112,7 @@ export function ProfileSyncer({
 								console.log(
 									"[ProfileSync] Found",
 									serverProfiles.length,
-									"profiles on server, creating locally...",
+									t('profilesOnServerCreatingLocally', 'profiles on server, creating locally...'),
 								);
 								let firstProfileId: string | null = null;
 
@@ -1269,7 +1271,7 @@ export function ProfileSyncer({
 				console.log(
 					"[ProfileSync] Sending",
 					profilesToSync.length,
-					"profiles to sync:",
+					t('profilesToSync', 'profiles to sync:'),
 					JSON.stringify(profilesToSync, null, 2),
 				);
 

@@ -9,7 +9,6 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 	AnimatedBrainIcon,
-	AnimatedBugIcon,
 	AnimatedCodeIcon,
 	AnimatedDashboardIcon,
 	AnimatedExploreAppsIcon,
@@ -28,14 +27,6 @@ import {
 	Collapsible,
 	CollapsibleContent,
 	CollapsibleTrigger,
-	Dialog,
-	DialogClose,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-	DialogTrigger,
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuGroup,
@@ -47,8 +38,7 @@ import {
 	FlowBackground,
 	GlobalPermission,
 	IBitTypes,
-	Input,
-	Label,
+	LanguageSwitcher,
 	MobileHeader,
 	MobileHeaderProvider,
 	Sidebar,
@@ -66,7 +56,6 @@ import {
 	SidebarMenuSubItem,
 	SidebarProvider,
 	SidebarRail,
-	Textarea,
 	useBackend,
 	useDeveloperMode,
 	useInvalidateInvoke,
@@ -76,8 +65,8 @@ import {
 	userInitials,
 } from "@flow-like/flow-like-ui";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
-import * as Sentry from "@sentry/nextjs";
 import { invoke } from "@tauri-apps/api/core";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
@@ -122,84 +111,91 @@ import { MobileBottomNav } from "./mobile-bottom-nav";
 import { Shortcuts } from "./shortcuts";
 import { useTauriInvoke } from "./useInvoke";
 
-const data = {
-	navMain: [
-		{
-			title: "Home",
-			url: "/",
-			icon: AnimatedHomeIcon,
-			isActive: true,
-			permission: false,
-			items: [],
-		},
-		{
-			title: "FlowPilot",
-			url: "/chat",
-			icon: AnimatedSparklesIcon,
-			isActive: false,
-			permission: false,
-			items: [],
-		},
-		{
-			title: "Explore",
-			url: "/store/explore/apps",
-			icon: AnimatedExploreAppsIcon,
-			isActive: false,
-			permission: false,
-			items: [],
-		},
-		{
-			title: "Explore Models",
-			url: "/settings/ai",
-			icon: AnimatedBrainIcon,
-			isActive: false,
-			permission: false,
-			devOnly: true,
-			items: [],
-		},
-		{
-			title: "My Apps",
-			url: "/library",
-			icon: AnimatedLibraryIcon,
-			isActive: false,
-			permission: false,
-			items: [],
-		},
-		{
-			title: "University",
-			url: "/learn",
-			icon: AnimatedStudyHatIcon,
-			isActive: false,
-			permission: false,
-			items: [
+/** Labels are rebuilt per render so a language switch relabels the sidebar. */
+function useNavData() {
+	const { t } = useTranslation(["common", "settings"]);
+	return useMemo(
+		() => ({
+			navMain: [
 				{
-					title: "Overview",
-					url: "/learn",
+					title: t("home", "Home"),
+					url: "/",
+					icon: AnimatedHomeIcon,
+					isActive: true,
+					permission: false,
+					items: [],
 				},
 				{
-					title: "Documentation",
-					url: "https://docs.flow-like.com",
-					external: true,
+					title: t("flowpilot", "FlowPilot"),
+					url: "/chat",
+					icon: AnimatedSparklesIcon,
+					isActive: false,
+					permission: false,
+					items: [],
+				},
+				{
+					title: t("explore", "Explore"),
+					url: "/store/explore/apps",
+					icon: AnimatedExploreAppsIcon,
+					isActive: false,
+					permission: false,
+					items: [],
+				},
+				{
+					title: t("exploreModels", "Explore Models"),
+					url: "/settings/ai",
+					icon: AnimatedBrainIcon,
+					isActive: false,
+					permission: false,
+					devOnly: true,
+					items: [],
+				},
+				{
+					title: t("myApps", "My Apps"),
+					url: "/library",
+					icon: AnimatedLibraryIcon,
+					isActive: false,
+					permission: false,
+					items: [],
+				},
+				{
+					title: t("university", "University"),
+					url: "/learn",
+					icon: AnimatedStudyHatIcon,
+					isActive: false,
+					permission: false,
+					items: [
+						{
+							title: t("overview", "Overview"),
+							url: "/learn",
+						},
+						{
+							title: t("settings:documentation", "Documentation"),
+							url: "https://docs.flow-like.com",
+							external: true,
+						},
+					],
+				},
+				{
+					title: t("admin", "Admin"),
+					url: "/admin",
+					icon: AnimatedDashboardIcon,
+					permission: true,
+					items: [],
 				},
 			],
-		},
-		{
-			title: "Admin",
-			url: "/admin",
-			icon: AnimatedDashboardIcon,
-			permission: true,
-			items: [],
-		},
-	],
-	navDev: [
-		{
-			title: "Developer Tools",
-			url: "/developer",
-			icon: AnimatedCodeIcon,
-			isActive: false,
-		},
-	],
-};
+			navDev: [
+				{
+					title: t("developerTools", "Developer Tools"),
+					url: "/developer",
+					icon: AnimatedCodeIcon,
+					isActive: false,
+				},
+			],
+		}),
+		[t],
+	);
+}
 
 interface IUser {
 	name: string;
@@ -239,6 +235,7 @@ export function AppSidebar({
 }
 
 function IOSQuickMenuTrigger() {
+	const { t } = useTranslation("common");
 	const { isMobile, openMobile, toggleSidebar } = useSidebar();
 	const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -295,7 +292,7 @@ function IOSQuickMenuTrigger() {
 				onTouchStart={(event) => {
 					event.stopPropagation();
 				}}
-				aria-label="Open menu"
+				aria-label={t('openMenu', 'Open menu')}
 			>
 				<SidebarOpenIcon className="h-4 w-4" />
 			</Button>
@@ -308,11 +305,8 @@ function InnerSidebar() {
 	const [user] = useState<IUser | undefined>();
 	const { open, toggleSidebar } = useSidebar();
 	const { setTheme } = useTheme();
-	const [feedback, setFeedback] = useState({
-		name: "",
-		email: "",
-		message: "",
-	});
+	const { t } = useTranslation(["common", "settings"]);
+	const data = useNavData();
 
 	return (
 		<Sidebar collapsible="icon" side="left">
@@ -326,121 +320,32 @@ function InnerSidebar() {
 			</SidebarContent>
 			<SidebarFooter>
 				<div className="flex flex-col gap-1">
-					<Dialog>
-						<DialogTrigger asChild>
-							<MotionSidebarMenuButton initial="initial" whileHover="hover">
-								<motion.div variants={iconVariants}>
-									<AnimatedBugIcon />
-								</motion.div>
-								<span>Report Bug</span>
-							</MotionSidebarMenuButton>
-						</DialogTrigger>
-						<DialogContent>
-							<DialogHeader>
-								<DialogTitle className="flex flex-row items-center gap-2">
-									<AnimatedBugIcon />
-									{"Bug Report"}
-								</DialogTitle>
-								<DialogDescription>
-									{
-										"Please describe the bug you encountered, Name and Email are optional."
-									}
-								</DialogDescription>
-							</DialogHeader>
-							<div className="grid gap-4 py-4">
-								<div className="grid grid-cols-1 gap-1.5 sm:grid-cols-4 sm:items-center sm:gap-4">
-									<Label htmlFor="name" className="text-left sm:text-right">
-										{"Name (optional)"}
-									</Label>
-									<Input
-										id="name"
-										value={feedback.name}
-										onChange={(e) =>
-											setFeedback({ ...feedback, name: e.target.value })
-										}
-										className="sm:col-span-3"
-									/>
-								</div>
-								<div className="grid grid-cols-1 gap-1.5 sm:grid-cols-4 sm:items-center sm:gap-4">
-									<Label htmlFor="username" className="text-left sm:text-right">
-										{"Email (optional)"}
-									</Label>
-									<Input
-										id="username"
-										value={feedback.email}
-										onChange={(e) =>
-											setFeedback({ ...feedback, email: e.target.value })
-										}
-										className="sm:col-span-3"
-									/>
-								</div>
-								<div className="grid grid-cols-1 gap-1.5 sm:grid-cols-4 sm:items-center sm:gap-4">
-									<Label htmlFor="message" className="text-left sm:text-right">
-										{"Message"}
-									</Label>
-									<Textarea
-										id="message"
-										value={feedback.message}
-										onChange={(e) =>
-											setFeedback({ ...feedback, message: e.target.value })
-										}
-										className="sm:col-span-3"
-									/>
-								</div>
-							</div>
-
-							<DialogFooter>
-								<DialogClose asChild>
-									<Button
-										disabled={feedback.message === ""}
-										onClick={() => {
-											Sentry.captureFeedback(
-												{
-													name:
-														feedback.name === "" ? undefined : feedback.name, // optional
-													email:
-														feedback.email === "" ? undefined : feedback.email, // optional
-													message: feedback.message, // required
-												},
-												{
-													includeReplay: true, // optional
-												},
-											);
-											toast("Feedback sent successfully ❤️");
-											setFeedback({ name: "", email: "", message: "" });
-										}}
-									>
-										Send
-									</Button>
-								</DialogClose>
-							</DialogFooter>
-						</DialogContent>
-					</Dialog>
+					<LanguageSwitcher />
 					<DropdownMenu>
 						<DropdownMenuTrigger asChild>
 							<MotionSidebarMenuButton initial="initial" whileHover="hover">
 								<motion.div variants={iconVariants}>
 									<AnimatedThemeIcon />
 								</motion.div>
-								<span>{"Toggle Theme"}</span>
+								<span>{t("settings:theme.toggle")}</span>
 							</MotionSidebarMenuButton>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="center" side="right">
 							<DropdownMenuItem onClick={() => setTheme("light")}>
-								{"Light"}
+								{t("settings:theme.light")}
 							</DropdownMenuItem>
 							<DropdownMenuItem onClick={() => setTheme("dark")}>
-								{"Dark"}
+								{t("settings:theme.dark")}
 							</DropdownMenuItem>
 							<DropdownMenuItem onClick={() => setTheme("system")}>
-								{"System Default"}
+								{t("settings:theme.system")}
 							</DropdownMenuItem>
 						</DropdownMenuContent>
 					</DropdownMenu>
 
 					<Link href="/settings">
 						<MotionSidebarMenuButton
-							tooltip="Settings"
+							tooltip={t("settings", "Settings")}
 							initial="initial"
 							whileHover="hover"
 						>
@@ -448,12 +353,12 @@ function InnerSidebar() {
 								<AnimatedSettingsIcon className="size-4" />
 							</motion.div>
 							<span className="w-full flex flex-row items-center justify-between">
-								Settings
+								{t('settings', 'Settings')}
 							</span>
 						</MotionSidebarMenuButton>
 					</Link>
 					<MotionSidebarMenuButton
-						tooltip="Toggle Sidebar"
+						tooltip={t("toggleSidebar", "Toggle Sidebar")}
 						onClick={toggleSidebar}
 						initial="initial"
 						whileHover="hover"
@@ -462,9 +367,9 @@ function InnerSidebar() {
 							<AnimatedSidebarIcon className="size-4" isOpen={open} />
 						</div>
 						<span className="w-full flex flex-row items-center justify-between">
-							Toggle Sidebar{" "}
+							{t('toggleSidebar', 'Toggle Sidebar')}{" "}
 							<span className="ml-auto text-xs tracking-widest text-muted-foreground">
-								⌘B
+								{`⌘B`}
 							</span>
 						</span>
 					</MotionSidebarMenuButton>
@@ -477,6 +382,7 @@ function InnerSidebar() {
 }
 
 function Profiles() {
+	const { t } = useTranslation("common");
 	const [createProfile, setCreateProfile] = useState<boolean>(false);
 	const auth = useAuth();
 	const backend = useBackend();
@@ -582,7 +488,7 @@ function Profiles() {
 					if (!response.ok && response.status !== 404) {
 						const message = await response.text().catch(() => "");
 						throw new Error(
-							message || `Failed to delete profile: ${response.status}`,
+							message || t('failedToDeleteProfileStatus', 'Failed to delete profile: {{status}}', { status: response.status }),
 						);
 					}
 				} catch (err) {
@@ -658,7 +564,7 @@ function Profiles() {
 						sideOffset={4}
 					>
 						<DropdownMenuLabel className="text-xs text-muted-foreground">
-							Profiles
+							{t('profiles', 'Profiles')}
 						</DropdownMenuLabel>
 						{profiles.data &&
 							Object.values(profiles.data).map((profile, index) => {
@@ -726,7 +632,7 @@ function Profiles() {
 								<Plus className="size-4" />
 							</div>
 							<div className="font-medium text-muted-foreground">
-								Add profile
+								{t('addProfile', 'Add profile')}
 							</div>
 						</DropdownMenuItem>
 						<Link href="/settings/profiles">
@@ -735,7 +641,7 @@ function Profiles() {
 									<Edit3Icon className="size-4" />
 								</div>
 								<div className="font-medium text-muted-foreground">
-									Edit profile
+									{t('editProfile', 'Edit profile')}
 								</div>
 							</DropdownMenuItem>
 						</Link>
@@ -755,17 +661,17 @@ function Profiles() {
 			>
 				<AlertDialogContent>
 					<AlertDialogHeader>
-						<AlertDialogTitle>Delete profile</AlertDialogTitle>
+						<AlertDialogTitle>{t('deleteProfile', 'Delete profile')}</AlertDialogTitle>
 						<AlertDialogDescription>
-							Are you sure you want to delete{" "}
+							{t('areYouSureYouWantToDelete', 'Are you sure you want to delete')}{" "}
 							<span className="font-medium text-foreground">
 								{deleteTarget?.name}
 							</span>
-							? This action cannot be undone.
+							{t('thisActionCannotBeUndone', '? This action cannot be undone.')}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
-						<AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+						<AlertDialogCancel disabled={isDeleting}>{t('cancel', 'Cancel')}</AlertDialogCancel>
 						<AlertDialogAction
 							onClick={confirmDeleteProfile}
 							disabled={isDeleting}
@@ -962,6 +868,7 @@ function NavMain({
 	items: INavItem[];
 	devItems: INavItem[];
 }>) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const auth = useAuth();
 	const router = useRouter();
@@ -980,7 +887,7 @@ function NavMain({
 	return (
 		<>
 			<SidebarGroup>
-				<SidebarGroupLabel>Navigation</SidebarGroupLabel>
+				<SidebarGroupLabel>{t('navigation', 'Navigation')}</SidebarGroupLabel>
 				<SidebarMenu>
 					{items
 						.filter((item) => !item.permission)
@@ -1002,7 +909,7 @@ function NavMain({
 			</SidebarGroup>
 			{developerMode && (
 				<SidebarGroup>
-					<SidebarGroupLabel>Development</SidebarGroupLabel>
+					<SidebarGroupLabel>{t('development', 'Development')}</SidebarGroupLabel>
 					<SidebarMenu>
 						{devItems.map((item) =>
 							item.items && item.items.length > 0 ? (
@@ -1022,7 +929,7 @@ function NavMain({
 			)}
 			{(info.data?.permission ?? 0) > 0 && (
 				<SidebarGroup>
-					<SidebarGroupLabel>Admin Area</SidebarGroupLabel>
+					<SidebarGroupLabel>{t('adminArea', 'Admin Area')}</SidebarGroupLabel>
 					<SidebarMenu>
 						{items
 							.filter(
@@ -1090,6 +997,7 @@ export function NavUser({
 }: Readonly<{
 	user?: IUser;
 }>) {
+	const { t } = useTranslation("common");
 	const { isMobile } = useSidebar();
 	const auth = useAuth();
 	const backend = useBackend();
@@ -1198,7 +1106,7 @@ export function NavUser({
 											<Link href="/subscription">
 												<DropdownMenuItem className="gap-2">
 													<AnimatedSparklesIcon />
-													Upgrade to Pro
+													{t('upgradeToPro', 'Upgrade to Pro')}
 												</DropdownMenuItem>
 											</Link>
 										</DropdownMenuGroup>
@@ -1209,7 +1117,7 @@ export function NavUser({
 									<Link href="/account">
 										<DropdownMenuItem className="gap-2">
 											<BadgeCheck className="size-4" />
-											Account
+											{t('account', 'Account')}
 										</DropdownMenuItem>
 									</Link>
 									{profile.data && (
@@ -1227,7 +1135,7 @@ export function NavUser({
 											}}
 										>
 											<CreditCard className="size-4" />
-											Billing
+											{t('billing', 'Billing')}
 										</DropdownMenuItem>
 									)}
 									<Link href="/notifications">
@@ -1241,7 +1149,7 @@ export function NavUser({
 													</div>
 												)}
 											</div>
-											Notifications
+											{t('notifications', 'Notifications')}
 										</DropdownMenuItem>
 									</Link>
 									{developerMode && (
@@ -1249,19 +1157,19 @@ export function NavUser({
 											<Link href="/account/pat">
 												<DropdownMenuItem className="gap-2 p-2">
 													<KeyIcon className="size-4" />
-													Token
+													{t('token', 'Token')}
 												</DropdownMenuItem>
 											</Link>
 											<Link href="/settings/sinks">
 												<DropdownMenuItem className="gap-2 p-2">
 													<ZapIcon className="size-4" />
-													Active Sinks
+													{t('activeSinks', 'Active Sinks')}
 												</DropdownMenuItem>
 											</Link>
 											<Link href="/settings/statistics">
 												<DropdownMenuItem className="gap-2 p-2">
 													<BarChart3 className="size-4" />
-													Board Statistics
+													{t('boardStatistics', 'Board Statistics')}
 												</DropdownMenuItem>
 											</Link>
 										</>
@@ -1275,7 +1183,7 @@ export function NavUser({
 									}}
 								>
 									<LogOut className="size-4" />
-									Log out
+									{t('logOut', 'Log out')}
 								</DropdownMenuItem>
 							</>
 						)}
@@ -1293,7 +1201,7 @@ export function NavUser({
 								}}
 							>
 								<LogInIcon className="size-4" />
-								Log in
+								{t('logIn', 'Log in')}
 							</DropdownMenuItem>
 						)}
 					</DropdownMenuContent>
@@ -1304,6 +1212,7 @@ export function NavUser({
 }
 
 function Flows() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const router = useRouter();
 	const pathname = usePathname();
@@ -1318,7 +1227,7 @@ function Flows() {
 
 	return (
 		<SidebarGroup>
-			<SidebarGroupLabel>Flows</SidebarGroupLabel>
+			<SidebarGroupLabel>{t('flows', 'Flows')}</SidebarGroupLabel>
 			<SidebarMenu>
 				<Collapsible
 					asChild
@@ -1332,7 +1241,7 @@ function Flows() {
 						<CollapsibleTrigger asChild>
 							<MotionSidebarMenuButton
 								variant={pathname.startsWith("/flow") ? "outline" : "default"}
-								tooltip={"Flows"}
+								tooltip={t("flows", "Flows")}
 								initial="initial"
 								whileHover="hover"
 								onClick={() => {
@@ -1346,7 +1255,7 @@ function Flows() {
 								<motion.div variants={iconVariants}>
 									<AnimatedFlowsIcon />
 								</motion.div>
-								<span>Open Flows</span>
+								<span>{t('openFlows', 'Open Flows')}</span>
 								<ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
 							</MotionSidebarMenuButton>
 						</CollapsibleTrigger>

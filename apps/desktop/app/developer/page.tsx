@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -128,6 +129,7 @@ function ProjectCard({
 	project: DeveloperProject;
 	onRemove: (id: string) => void;
 }) {
+	const { t } = useTranslation("common");
 	const [opening, setOpening] = useState(false);
 	const [loading, setLoading] = useState(false);
 	const [inspection, setInspection] = useState<PackageInspection | null>(null);
@@ -226,9 +228,7 @@ function ProjectCard({
 						{project.name}
 					</h3>
 					{inspection?.manifest?.version && (
-						<span className="text-[10px] font-mono text-muted-foreground/50 shrink-0">
-							v{inspection.manifest.version}
-						</span>
+						<span className="text-[10px] font-mono text-muted-foreground/50 shrink-0">{`v${inspection.manifest.version}`}</span>
 					)}
 					{compileStatus && compileStatus !== "idle" && (
 						<PackageStatusBadge status={compileStatus} />
@@ -244,9 +244,7 @@ function ProjectCard({
 									{lintCounts.errors}
 								</Badge>
 							</TooltipTrigger>
-							<TooltipContent>
-								{lintCounts.errors} lint error
-								{lintCounts.errors !== 1 ? "s" : ""}
+							<TooltipContent>{t('errorsLintError', '{{errors}} lint error', { errors: lintCounts.errors })}{lintCounts.errors !== 1 ? "s" : ""}
 							</TooltipContent>
 						</Tooltip>
 					)}
@@ -259,8 +257,11 @@ function ProjectCard({
 								</Badge>
 							</TooltipTrigger>
 							<TooltipContent>
-								{lintCounts.warnings} lint warning
-								{lintCounts.warnings !== 1 ? "s" : ""}
+								{t('countLintWarnings', {
+									defaultValue_one: '{{count}} lint warning',
+									defaultValue_other: '{{count}} lint warnings',
+									count: lintCounts.warnings,
+								})}
 							</TooltipContent>
 						</Tooltip>
 					)}
@@ -295,7 +296,7 @@ function ProjectCard({
 								)}
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>Open in Editor</TooltipContent>
+						<TooltipContent>{t('openInEditor', 'Open in Editor')}</TooltipContent>
 					</Tooltip>
 
 					<Tooltip>
@@ -322,8 +323,8 @@ function ProjectCard({
 						</TooltipTrigger>
 						<TooltipContent>
 							{compileStatus === "stale"
-								? "WASM changed — Reload into Catalog"
-								: "Load into Catalog"}
+								? t('wasmChangedReloadIntoCatalog', 'WASM changed — Reload into Catalog')
+								: t('loadIntoCatalog', 'Load into Catalog')}
 						</TooltipContent>
 					</Tooltip>
 
@@ -341,7 +342,7 @@ function ProjectCard({
 								</Button>
 							</Link>
 						</TooltipTrigger>
-						<TooltipContent>Publish to Registry</TooltipContent>
+						<TooltipContent>{t('publishToRegistry', 'Publish to Registry')}</TooltipContent>
 					</Tooltip>
 
 					<Tooltip>
@@ -358,7 +359,7 @@ function ProjectCard({
 								</Button>
 							</Link>
 						</TooltipTrigger>
-						<TooltipContent>Edit Manifest</TooltipContent>
+						<TooltipContent>{t('editManifest', 'Edit Manifest')}</TooltipContent>
 					</Tooltip>
 
 					<Tooltip>
@@ -375,7 +376,7 @@ function ProjectCard({
 								</Button>
 							</Link>
 						</TooltipTrigger>
-						<TooltipContent>Debug &amp; Test</TooltipContent>
+						<TooltipContent>{t('debugAmpTest', "Debug & Test")}</TooltipContent>
 					</Tooltip>
 
 					<Tooltip>
@@ -392,7 +393,7 @@ function ProjectCard({
 								</Button>
 							</Link>
 						</TooltipTrigger>
-						<TooltipContent>Test Widgets</TooltipContent>
+						<TooltipContent>{t('testWidgets', 'Test Widgets')}</TooltipContent>
 					</Tooltip>
 
 					<Tooltip>
@@ -406,7 +407,7 @@ function ProjectCard({
 								<Trash2 className="h-3 w-3" />
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>Remove</TooltipContent>
+						<TooltipContent>{t('remove', 'Remove')}</TooltipContent>
 					</Tooltip>
 				</div>
 			</div>
@@ -415,6 +416,7 @@ function ProjectCard({
 }
 
 function SettingsDialog() {
+	const { t } = useTranslation("common");
 	const [settings, setSettings] = useState<DeveloperSettings | null>(null);
 	const [saving, setSaving] = useState(false);
 
@@ -442,7 +444,7 @@ function SettingsDialog() {
 	return (
 		<div className="space-y-4">
 			<div className="space-y-2">
-				<Label>Preferred Editor</Label>
+				<Label>{t('preferredEditor', 'Preferred Editor')}</Label>
 				<Select
 					value={settings.preferredEditor}
 					onValueChange={(v) =>
@@ -463,11 +465,11 @@ function SettingsDialog() {
 			</div>
 			<DialogFooter>
 				<DialogClose asChild>
-					<Button variant="outline">Cancel</Button>
+					<Button variant="outline">{t('cancel', 'Cancel')}</Button>
 				</DialogClose>
 				<Button onClick={handleSave} disabled={saving}>
 					{saving && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-					Save
+					{t('save', 'Save')}
 				</Button>
 			</DialogFooter>
 		</div>
@@ -475,6 +477,7 @@ function SettingsDialog() {
 }
 
 export default function DeveloperPage() {
+	const { t } = useTranslation("common");
 	const [projects, setProjects] = useState<DeveloperProject[]>([]);
 	const [isLoading, setIsLoading] = useState(true);
 	const [isAdding, setIsAdding] = useState(false);
@@ -582,10 +585,10 @@ export default function DeveloperPage() {
 		<div className="h-full space-y-6 overflow-auto">
 			<div className="space-y-1">
 				<h1 className="text-2xl font-semibold tracking-tight">
-					Local Packages
+					{t('localPackages', 'Local Packages')}
 				</h1>
 				<p className="text-sm text-muted-foreground/70">
-					Create, inspect, test, and publish local WASM node projects.
+					{t('createInspectTestAndPublishLocalWasmNodeProjects', 'Create, inspect, test, and publish local WASM node projects.')}
 				</p>
 			</div>
 
@@ -593,7 +596,7 @@ export default function DeveloperPage() {
 				<div className="relative flex-1">
 					<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40" />
 					<Input
-						placeholder="Search projects…"
+						placeholder={t('searchProjects', 'Search projects…')}
 						value={search}
 						onChange={(e) => setSearch(e.target.value)}
 						className="pl-10 rounded-full bg-muted/30 border-border/20"
@@ -613,13 +616,13 @@ export default function DeveloperPage() {
 								</Button>
 							</DialogTrigger>
 						</TooltipTrigger>
-						<TooltipContent>Settings</TooltipContent>
+						<TooltipContent>{t('settings', 'Settings')}</TooltipContent>
 					</Tooltip>
 					<DialogContent className="max-w-sm">
 						<DialogHeader>
-							<DialogTitle>Developer Settings</DialogTitle>
+							<DialogTitle>{t('developerSettings', 'Developer Settings')}</DialogTitle>
 							<DialogDescription>
-								Configure your development environment
+								{t('configureYourDevelopmentEnvironment', 'Configure your development environment')}
 							</DialogDescription>
 						</DialogHeader>
 						<SettingsDialog />
@@ -642,7 +645,7 @@ export default function DeveloperPage() {
 							)}
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent>Add Existing</TooltipContent>
+					<TooltipContent>{t('addExisting', 'Add Existing')}</TooltipContent>
 				</Tooltip>
 
 				<Tooltip>
@@ -657,7 +660,7 @@ export default function DeveloperPage() {
 							</Button>
 						</Link>
 					</TooltipTrigger>
-					<TooltipContent>New Project</TooltipContent>
+					<TooltipContent>{t('newProject', 'New Project')}</TooltipContent>
 				</Tooltip>
 
 				<Tooltip>
@@ -674,7 +677,7 @@ export default function DeveloperPage() {
 							/>
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent>Refresh</TooltipContent>
+					<TooltipContent>{t('refresh', 'Refresh')}</TooltipContent>
 				</Tooltip>
 			</div>
 
@@ -702,15 +705,13 @@ export default function DeveloperPage() {
 				</div>
 			) : projects.length > 0 ? (
 				<div className="flex flex-col items-center justify-center py-20">
-					<p className="text-sm text-muted-foreground/50">
-						No projects match &quot;{search}&quot;
-					</p>
+					<p className="text-sm text-muted-foreground/50">{t('noProjectsMatchQuotsearchquot', "No projects match \"{{search}}\"", { search })}</p>
 				</div>
 			) : (
 				<EmptyState
 					icons={[Code2, Sparkles, Package]}
-					title="No node projects yet"
-					description="Create a new node project from a template, or add an existing one from disk."
+					title={t('noNodeProjectsYet', 'No node projects yet')}
+					description={`Create a new node project from a template, or add an existing one from disk.`}
 					action={[
 						{
 							label: "New Project",

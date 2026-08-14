@@ -41,6 +41,14 @@
 					"timeoutMs": 120000
 				},
 				{
+					"type": "click",
+					"selector": ".react-flow__controls-fitview"
+				},
+				{
+					"type": "delay",
+					"ms": 500
+				},
+				{
 					"type": "capture",
 					"name": "FlowLikeStudio",
 					"output": "FlowLikeStudio.webp",
@@ -150,6 +158,10 @@
 				"app": "docs-app",
 				"id": "docs-board"
 			},
+			"viewport": {
+				"width": 1240,
+				"height": 800
+			},
 			"localStorage": {
 				"tutorial-finished-new": "true"
 			},
@@ -165,6 +177,14 @@
 					"selector": ".react-flow__node",
 					"state": "visible",
 					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": ".react-flow__controls-fitview"
+				},
+				{
+					"type": "delay",
+					"ms": 500
 				},
 				{
 					"type": "capture",
@@ -357,7 +377,7 @@
 				{
 					"type": "click",
 					"selector": ".react-flow__node[data-id=\"docs-generic-target\"]",
-					"modifiers": ["Control"]
+					"modifiers": ["Meta"]
 				},
 				{
 					"type": "waitFor",
@@ -566,6 +586,14 @@
 					"selector": ".react-flow__node",
 					"state": "visible",
 					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": ".react-flow__controls-fitview"
+				},
+				{
+					"type": "delay",
+					"ms": 500
 				},
 				{
 					"type": "capture",

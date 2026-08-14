@@ -12614,7 +12614,7 @@ fn flowpilot_mcp_server_instructions<'a>(
     let has_global = names.contains("list_apps") && names.contains("flowpilot_board");
 
     if has_global {
-        return "You are the FlowPilot platform orchestrator. Search this server for tools in three modes. DIRECT: execute ordinary one-call, one-app, or simple two-app tasks without planning. COMPLEX SOLVE: make a dependency plan only when likely to need at least three apps/interfaces or intrinsic multi-stage, reconciliation, approval, verification, or recovery complexity. For either mode, begin app work with list_apps, prefer matching local chat/page/headless interfaces, and use the sealed no-argument research_agent only after a complete inventory has no suitable local app or useful local research candidates returned no answer. BUILD: use project_scout for prior art, then create/fork/acquire a base and coordinate flowpilot_widget, data_studio_agent, flowpilot_board, Events, and safe runtime verification by dependency wave. Board logic, UI, and data are strict specialist boundaries. Preserve exact returned IDs, approvals, partial/manual work, and the user's full acceptance contract; never claim success from a requested, declined, timed-out, or unknown operation. Do not use shell or file-edit tools for FlowPilot artifacts.";
+        return "You are the FlowPilot platform orchestrator. Search this server for tools in three modes. DIRECT: execute ordinary one-call, one-app, or simple two-app tasks without planning. COMPLEX SOLVE: make a dependency plan only when likely to need at least three apps/interfaces or intrinsic multi-stage, reconciliation, approval, verification, or recovery complexity. For either use mode, begin app work with list_apps. Active configured chat/page/headless Events, including REST/API and MCP, are primary: choose the best match and exact consumer. Use data_studio_agent only after prior inventory for an explicit raw schema/table/ontology/SQL/DataFusion request, no suitable Event, or a successfully called Event that reports insufficient capability; set routing_reason and never bypass a failed, declined, timed-out, or approval-blocked Event. Use the sealed no-argument research_agent only after a complete inventory has no suitable local app or useful local research candidates returned no answer. BUILD: use project_scout for prior art, then create/fork/acquire a base and coordinate flowpilot_widget, data_studio_agent, flowpilot_board, Events, and safe runtime verification by dependency wave. Board logic, UI, and data are strict specialist boundaries. Preserve exact returned IDs, approvals, partial/manual work, and the user's full acceptance contract; never claim success from a requested, declined, timed-out, or unknown operation. Do not use shell or file-edit tools for FlowPilot artifacts.";
     }
 
     if workflow_mutation && has_ui {
@@ -25632,6 +25632,11 @@ eventsSimple() {
         assert!(global.contains("DIRECT"));
         assert!(global.contains("SOLVE"));
         assert!(global.contains("at least three apps/interfaces"));
+        assert!(global.contains("Active configured chat/page/headless Events"));
+        assert!(global.contains("including REST/API and MCP"));
+        assert!(global.contains("Use data_studio_agent only after prior inventory"));
+        assert!(global.contains("set routing_reason"));
+        assert!(global.contains("never bypass a failed, declined"));
         assert!(global.contains("BUILD"));
         assert!(global.contains("sealed no-argument research_agent"));
         assert!(global.len() < 2_000);

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Card,
 	CardDescription,
@@ -40,93 +41,124 @@ interface SettingsSection {
 	cards: SettingsCard[];
 }
 
-const SETTINGS_SECTIONS: SettingsSection[] = [
-	{
-		label: "Personalization",
-		cards: [
-			{
-				title: "Profile",
-				description: "Name, avatar, interests, and theme",
-				href: "/settings/profiles",
-				icon: User,
-			},
-			{
-				title: "Notifications",
-				description: "Mobile push status and device registration",
-				href: "/settings/notifications",
-				icon: Bell,
-			},
-		],
-	},
-	{
-		label: "AI & Models",
-		cards: [
-			{
-				title: "AI Models",
-				description: "Browse, download, and manage LLM models",
-				href: "/settings/ai",
-				icon: Brain,
-			},
-		],
-	},
-	{
-		label: "Extensions & Integrations",
-		cards: [
-			{
-				title: "Registry",
-				description: "Installed packages and explore the marketplace",
-				href: "/settings/registry",
-				icon: Package,
-				devOnly: true,
-			},
-			{
-				title: "Sinks & Triggers",
-				description:
-					"Manage active event triggers like webhooks, cron jobs, and more",
-				href: "/settings/sinks",
-				icon: Zap,
-				devOnly: true,
-			},
-		],
-	},
-	{
-		label: "System",
-		cards: [
-			{
-				title: "Local Storage",
-				description: "See what Studio stores and clean up local files",
-				href: "/settings/storage",
-				icon: HardDrive,
-			},
-			{
-				title: "System Info",
-				description: "CPU, RAM, and VRAM details",
-				href: "/settings/system",
-				icon: Cpu,
-			},
-			{
-				title: "Board Statistics",
-				description: "Node usage, category distribution, and board analytics",
-				href: "/settings/statistics",
-				icon: BarChart3,
-				devOnly: true,
-			},
-			{
-				title: "Privacy & Telemetry",
-				description: "Control anonymous usage telemetry and your install id",
-				href: "/settings/privacy",
-				icon: ShieldCheck,
-			},
-			{
-				title: "Third-Party Licenses",
-				description: "SBOM and open-source libraries used in Flow-Like",
-				href: "https://flow-like.com/thirdparty",
-				icon: Scroll,
-				external: true,
-			},
-		],
-	},
-];
+/** Labels are built per render so a language switch relabels the menu. */
+function buildSettingsSections(
+	t: (key: string, defaultValue: string) => string,
+): SettingsSection[] {
+	return [
+		{
+			label: t("personalization", "Personalization"),
+			cards: [
+				{
+					title: t("profile", "Profile"),
+					description: t(
+						"nameAvatarInterestsAndTheme",
+						"Name, avatar, interests, and theme",
+					),
+					href: "/settings/profiles",
+					icon: User,
+				},
+				{
+					title: t("notifications", "Notifications"),
+					description: t(
+						"mobilePushStatusAndDeviceRegistration",
+						"Mobile push status and device registration",
+					),
+					href: "/settings/notifications",
+					icon: Bell,
+				},
+			],
+		},
+		{
+			label: t("aiAmpModels", "AI & Models"),
+			cards: [
+				{
+					title: t("aiModels", "AI Models"),
+					description: t(
+						"browseDownloadAndManageLlmModels",
+						"Browse, download, and manage LLM models",
+					),
+					href: "/settings/ai",
+					icon: Brain,
+				},
+			],
+		},
+		{
+			label: t("extensionsAmpIntegrations", "Extensions & Integrations"),
+			cards: [
+				{
+					title: t("registry", "Registry"),
+					description: t(
+						"installedPackagesAndExploreTheMarketplace",
+						"Installed packages and explore the marketplace",
+					),
+					href: "/settings/registry",
+					icon: Package,
+					devOnly: true,
+				},
+				{
+					title: t("sinksAmpTriggers", "Sinks & Triggers"),
+					description: t(
+						"manageActiveEventTriggersLikeWebhooksCronJobsAndMore",
+						"Manage active event triggers like webhooks, cron jobs, and more",
+					),
+					href: "/settings/sinks",
+					icon: Zap,
+					devOnly: true,
+				},
+			],
+		},
+		{
+			label: t("system", "System"),
+			cards: [
+				{
+					title: t("localStorage", "Local Storage"),
+					description: t(
+						"seeWhatStudioStoresAndCleanUpLocalFiles",
+						"See what Studio stores and clean up local files",
+					),
+					href: "/settings/storage",
+					icon: HardDrive,
+				},
+				{
+					title: t("systemInfo", "System Info"),
+					description: t("cpuRamAndVramDetails", "CPU, RAM, and VRAM details"),
+					href: "/settings/system",
+					icon: Cpu,
+				},
+				{
+					title: t("boardStatistics", "Board Statistics"),
+					description: t(
+						"nodeUsageCategoryDistributionAndBoardAnalytics",
+						"Node usage, category distribution, and board analytics",
+					),
+					href: "/settings/statistics",
+					icon: BarChart3,
+					devOnly: true,
+				},
+				{
+					title: t("privacyAmpTelemetry", "Privacy & Telemetry"),
+					description: t(
+						"controlAnonymousUsageTelemetryAndYourInstallId",
+						"Control anonymous usage telemetry and your install id",
+					),
+					href: "/settings/privacy",
+					icon: ShieldCheck,
+				},
+				{
+					title: t("thirdpartyLicenses", "Third-Party Licenses"),
+					description: t(
+						"sbomAndOpensourceLibrariesUsedInFlowlike",
+						"SBOM and open-source libraries used in Flow-Like",
+					),
+					href: "https://flow-like.com/thirdparty",
+					icon: Scroll,
+					external: true,
+				},
+			],
+		},
+	];
+}
 
 function SettingsCardItem({ card }: Readonly<{ card: SettingsCard }>) {
 	const Icon = card.icon;
@@ -167,24 +199,27 @@ function SettingsCardItem({ card }: Readonly<{ card: SettingsCard }>) {
 }
 
 export default function SettingsPage() {
+	const { t } = useTranslation("common");
 	const { developerMode } = useDeveloperMode();
 
 	const sections = useMemo(
 		() =>
-			SETTINGS_SECTIONS.map((section) => ({
-				...section,
-				cards: section.cards.filter((card) => developerMode || !card.devOnly),
-			})).filter((section) => section.cards.length > 0),
-		[developerMode],
+			buildSettingsSections(t)
+				.map((section) => ({
+					...section,
+					cards: section.cards.filter((card) => developerMode || !card.devOnly),
+				}))
+				.filter((section) => section.cards.length > 0),
+		[developerMode, t],
 	);
 
 	return (
 		<div className="h-full flex flex-col max-h-full overflow-auto min-h-0">
 			<div className="container mx-auto px-2 pb-4 flex flex-col gap-8">
 				<div className="flex flex-col gap-1 pt-2">
-					<h1 className="text-3xl font-bold tracking-tight">Settings</h1>
+					<h1 className="text-3xl font-bold tracking-tight">{t('settings', 'Settings')}</h1>
 					<p className="text-muted-foreground">
-						Manage your preferences, models, and integrations
+						{t('manageYourPreferencesModelsAndIntegrations', 'Manage your preferences, models, and integrations')}
 					</p>
 				</div>
 				{sections.map((section) => (
@@ -201,7 +236,7 @@ export default function SettingsPage() {
 				))}
 				<div className="flex flex-col gap-3">
 					<h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
-						Developer
+						{t('developer', 'Developer')}
 					</h2>
 					<DeveloperModeCard />
 				</div>

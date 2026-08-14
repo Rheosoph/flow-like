@@ -1,0 +1,963 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-automation-recipes",
+		"name": "Automation Recipes",
+		"language": "en",
+		"slug": "automation-recipes",
+		"difficulty": "INTERMEDIATE",
+		"category": "INTEGRATIONS",
+		"estimatedMinutes": 75,
+		"isPublished": true,
+		"iconUrl": null,
+		"bannerUrl": null,
+		"tags": ["automation", "recipes", "email", "schedules", "messaging"],
+		"position": 13,
+		"description": "Five small automations you'll actually keep — inbox triage, scheduled reports, message bots, file watchers, and API glue.",
+		"longDescription": "Brightbeam's two-person ops team spends every Monday on the same five chores — so you automate them, one recipe per lesson. Sweep and triage the support inbox over IMAP, schedule a report that survives a closed laptop, wire a chat bot that answers the pings, watch a drop folder with real change detection, and glue a webhook to a flaky CRM with retries that can't duplicate data. Every recipe follows the same arc — trigger, transform, act, verify — and every lesson makes you prove the guardrails: idempotency, dry-runs first, and durable outcomes over green statuses.",
+		"media": {
+			"icon": "media/app-logo.webp",
+			"banner": "assets/course-banner.webp"
+		},
+		"assets": [
+			{
+				"name": "CourseBanner",
+				"file": "assets/course-banner.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "course-banner.webp",
+				"replace": true
+			},
+			{
+				"name": "FlowLikeStudio",
+				"file": "assets/FlowLikeStudio.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "FlowLikeStudio.webp",
+				"replace": true
+			},
+			{
+				"name": "NodeCatalog",
+				"file": "assets/NodeCatalog.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "NodeCatalog.webp",
+				"replace": true
+			},
+			{
+				"name": "RunsAndLogs",
+				"file": "assets/RunsAndLogs.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "RunsAndLogs.webp",
+				"replace": true
+			},
+			{
+				"name": "AppEvents",
+				"file": "assets/AppEvents.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "AppEvents.webp",
+				"replace": true
+			},
+			{
+				"name": "QuickActionEvent",
+				"file": "assets/QuickActionEvent.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "QuickActionEvent.webp",
+				"replace": true
+			},
+			{
+				"name": "RouteConfiguration",
+				"file": "assets/RouteConfiguration.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "RouteConfiguration.webp",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "course-automation-recipes-module-mindset",
+				"title": "Think in Recipes",
+				"description": "The four-beat arc and the two habits every automation borrows.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "lesson-recipes-mindset",
+						"title": "Monday, 8:55 a.m.",
+						"language": "en",
+						"contentFile": "content/recipe-mindset.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-recipes-act-step",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Look at @FlowLikeStudio — the support pipeline. Which node is the arc's act step, the one whose mistakes reach the outside world?",
+								"explanation": "Send Reply is the only node with an external side effect — it puts words in front of a customer. Prepare Support Reply is the tempting pick because it does the impressive work, but it's the transform: it computes a draft and changes nothing outside the run. Incoming Support Request is the trigger, and Customer Message just holds data.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "send-reply",
+											"label": "Send Reply — it delivers the message to the outside world"
+										},
+										{
+											"id": "prepare-support-reply",
+											"label": "Prepare Support Reply — it does the AI work, so it acts"
+										},
+										{
+											"id": "incoming-support-request",
+											"label": "Incoming Support Request — everything starts there"
+										},
+										{
+											"id": "customer-message",
+											"label": "Customer Message — it holds the message the flow works on"
+										}
+									],
+									"correct": ["send-reply"]
+								}
+							},
+							{
+								"id": "challenge-recipes-idempotent-second-run",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You accidentally trigger the same recipe twice within a minute. What does a properly idempotent recipe do on the second run?",
+								"explanation": "Idempotency means the outcome exists once no matter how many runs chase it — the second run recognizes the work is done and adds nothing. \"Fail loudly with a duplicate error\" is the tempting near-miss: an error might alert you, but a recipe that errors on reruns breaks under the schedules and webhook retries that make reruns normal. Silence-and-converge is the contract.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "recognizes-done",
+											"label": "Recognizes the work is already done and adds nothing new"
+										},
+										{
+											"id": "fails-loudly",
+											"label": "Fails with a duplicate error so you notice the double trigger"
+										},
+										{
+											"id": "tags-duplicate",
+											"label": "Produces the outcome again but tags the copy as a duplicate"
+										},
+										{
+											"id": "asks-first",
+											"label": "Pauses and asks whether the second run should continue"
+										}
+									],
+									"correct": ["recognizes-done"]
+								}
+							},
+							{
+								"id": "challenge-recipes-green-run-no-file",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "A recipe logged a green run, but the file it was supposed to write doesn't exist. Which statements should guide the fix?",
+								"explanation": "Green means finished, not accomplished — the verify step must look at the durable outcome, the file itself. \"Move verification before the act\" is the tempting structural fix, but verify proves the act happened, so before the act there is nothing to prove. And rerunning until the file appears treats the symptom while the broken act step keeps lying.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "verify-outcome",
+											"label": "Point the verify step at the file itself — the durable outcome"
+										},
+										{
+											"id": "green-only-finished",
+											"label": "A green status only proves the run finished, not that the file exists"
+										},
+										{
+											"id": "trust-after-week",
+											"label": "After a week of correct runs, the status alone becomes trustworthy"
+										},
+										{
+											"id": "rerun-until",
+											"label": "Rerun the recipe until the file appears, then move on"
+										},
+										{
+											"id": "verify-before-act",
+											"label": "Move verification before the act step so it can't be skipped"
+										}
+									],
+									"correct": ["verify-outcome", "green-only-finished"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "course-automation-recipes-module-recipes",
+				"title": "The Recipe Book",
+				"description": "Five recipes, one arc: inbox triage, the Monday report, a chat bot, a drop-folder watcher, and API glue.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "lesson-recipes-inbox-triage",
+						"title": "Recipe 1: Tame the Support Inbox",
+						"language": "en",
+						"contentFile": "content/inbox-triage.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-recipes-first-node",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In the triage flow, which node must succeed before anything else can touch the mailbox?",
+								"explanation": "IMAP Connect opens and caches the session every other mail node rides on — no session, no listing, no fetching. The tempting shortcut is assuming the triggering event supplies a connection, but the schedule only starts the run; the mailbox session is the flow's own job. And SMTP is the sending side — the sweep reads before it ever sends.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "imap-connect",
+											"label": "IMAP Connect — it opens and caches the session every other mail node uses"
+										},
+										{
+											"id": "event-provides",
+											"label": "None — the triggering event already carries a mailbox connection"
+										},
+										{
+											"id": "list-mails-first",
+											"label": "List Mails — the flow first needs to know whether there's any work"
+										},
+										{
+											"id": "smtp-connect",
+											"label": "SMTP Connect — mail flows always start with the sending session"
+										}
+									],
+									"correct": ["imap-connect"]
+								}
+							},
+							{
+								"id": "challenge-recipes-double-reply",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The broken first draft re-answered the same mails every fifteen minutes. What single change stops the repeat?",
+								"explanation": "The UNSEEN filter is only a dedupe gate if handled mail exits it — marked seen or moved out, once handling succeeds. Shortening the sweep is the tempting speed fix, but it makes the loop tighter, not smarter: the same mail is still listed as new every time. For Each has no memory across runs, and Flow-Like doesn't silently dedupe runs by payload.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "exit-filter",
+											"label": "Make every handled mail exit the UNSEEN filter — mark it seen or move it out — after handling succeeds"
+										},
+										{
+											"id": "shorten-sweep",
+											"label": "Shorten the sweep to five minutes so replies go out before the next run lists them"
+										},
+										{
+											"id": "foreach-skips",
+											"label": "Re-wire the loop — For Each skips items it already processed in earlier runs"
+										},
+										{
+											"id": "payload-dedupe",
+											"label": "Nothing — Flow-Like recognizes repeated payloads and skips duplicate runs on its own"
+										}
+									],
+									"correct": ["exit-filter"]
+								}
+							},
+							{
+								"id": "challenge-recipes-week-one-guardrails",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which guardrails belong in the triage recipe's first week?",
+								"explanation": "Week one is drafts-only, exit-the-filter-after-success, and never answering robots — each one keeps a young recipe reversible. Deleting unmatched mail is the tempting cleanup instinct, but unmatched means \"the dumb classifier didn't recognize it,\" and deleting what you don't understand is how partner mail disappears. Auto-sending on day one spends trust the recipe hasn't earned.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "draft-first",
+											"label": "Create Draft as the act step — a human still presses send"
+										},
+										{
+											"id": "exit-after-success",
+											"label": "Exit the UNSEEN filter only after classification and drafting succeed"
+										},
+										{
+											"id": "file-robots",
+											"label": "File out-of-office and delivery notices without drafting a reply"
+										},
+										{
+											"id": "delete-unmatched",
+											"label": "Delete mail that matches no category to keep the inbox clean"
+										},
+										{
+											"id": "send-day-one",
+											"label": "Send replies directly from day one — drafts just pile up unread"
+										}
+									],
+									"correct": ["draft-first", "exit-after-success", "file-robots"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-recipes-monday-report",
+						"title": "Recipe 2: The Report That Writes Itself",
+						"language": "en",
+						"contentFile": "content/monday-report.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-recipes-cron-monday",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Which cron expression fires every Monday at 09:00?",
+								"explanation": "Fields read minute, hour, day-of-month, month, day-of-week — so 0 9 * * 1 is minute 0, hour 9, weekday 1: Monday 09:00. The classic slip is transposing the first two fields: 9 0 * * 1 fires Monday at 00:09. And 0 9 1 * * swaps weekday for day-of-month — the first of every month, whatever weekday that is.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "correct-monday",
+											"label": "0 9 * * 1"
+										},
+										{
+											"id": "transposed",
+											"label": "9 0 * * 1"
+										},
+										{
+											"id": "day-of-month",
+											"label": "0 9 1 * *"
+										},
+										{
+											"id": "every-minute",
+											"label": "* 9 * * 1"
+										}
+									],
+									"correct": ["correct-monday"]
+								}
+							},
+							{
+								"id": "challenge-recipes-laptop-closed",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The report must arrive Monday 09:00 even when the ops laptop stays in the bag. How do you configure the Cron event?",
+								"explanation": "A Local schedule lives inside the desktop app and dies with the lid; Remote hands the tick to the hub's scheduler, which doesn't sleep. Hybrid is the tempting \"redundancy\" answer, but it registers both schedulers on purpose — and can deliver the same tick twice, which for a report means two emails. And a missed Local tick doesn't fire on reopen; missed occurrences aren't replayed.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "remote",
+											"label": "Remote — the hub's scheduler owns the tick, laptop or no laptop"
+										},
+										{
+											"id": "hybrid-redundancy",
+											"label": "Hybrid — two schedulers give the run redundancy"
+										},
+										{
+											"id": "leave-open",
+											"label": "Local, with the laptop left open on Mondays"
+										},
+										{
+											"id": "fires-on-open",
+											"label": "Local — the missed 09:00 run fires as soon as the app opens"
+										}
+									],
+									"correct": ["remote"]
+								}
+							},
+							{
+								"id": "challenge-recipes-missed-ticks",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements about schedule ticks are true?",
+								"explanation": "Local schedules fire only while the desktop app runs, and a missed occurrence stays missed — the scheduler doesn't backfill. \"Missed runs queue and fire on reopen\" is the intuition to unlearn; designing around it is why unattended schedules go Remote. Hybrid trades exactly-once away for coverage, and Remote schedules run precisely so the desktop app doesn't have to.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "local-app-open",
+											"label": "A Local schedule fires only while the desktop app is open"
+										},
+										{
+											"id": "no-replay",
+											"label": "A missed occurrence is not replayed once the scheduler is back"
+										},
+										{
+											"id": "queue-on-reopen",
+											"label": "Missed runs queue up and fire in order when the app reopens"
+										},
+										{
+											"id": "hybrid-exactly-once",
+											"label": "Hybrid delivery guarantees each tick fires exactly once"
+										},
+										{
+											"id": "remote-needs-app",
+											"label": "Remote schedules also pause while the desktop app is closed"
+										}
+									],
+									"correct": ["local-app-open", "no-replay"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-recipes-message-bot",
+						"title": "Recipe 3: A Bot Takes the Pings",
+						"language": "en",
+						"contentFile": "content/message-bot.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 2,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-recipes-bot-entry-node",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Which entry node does the Telegram event attach to in the flow?",
+								"explanation": "Discord and Telegram are event types the Chat Event node supports — messages arrive as chat context. The catalog's Telegram nodes are the tempting wrong turn: Send Message and friends act inside a running flow, they don't start one. Simple and Generic Events serve schedules, actions, and forms — not chat.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "chat-event",
+											"label": "Chat Event — Discord and Telegram are event types it supports"
+										},
+										{
+											"id": "simple-event",
+											"label": "Simple Event — bots trigger like any background schedule"
+										},
+										{
+											"id": "generic-event",
+											"label": "Generic Event — chat messages arrive as generic payloads"
+										},
+										{
+											"id": "telegram-entry",
+											"label": "A Telegram node from the catalog — the messaging nodes double as entry points"
+										}
+									],
+									"correct": ["chat-event"]
+								}
+							},
+							{
+								"id": "challenge-recipes-bot-silent-nights",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The Telegram bot answers 9-to-6 and goes silent at night. Token valid, flow unchanged. What's happening?",
+								"explanation": "Long polling needs a continuously running process — here, the desktop app, which closes with the workday. Hosted webhook delivery keeps the bot on around the clock. The allowlist option is the tempting config suspect, but an empty whitelist means no restriction at all, and no filter knows the time of day. A deleted webhook would break webhook delivery — this bot polls.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "polling-in-app",
+											"label": "Delivery is long polling inside the desktop app — switch to hosted webhook delivery for always-on"
+										},
+										{
+											"id": "allowlist-empty",
+											"label": "The chat allowlist is empty, and empty means deny-all outside office hours"
+										},
+										{
+											"id": "webhook-unregistered",
+											"label": "The bot's webhook was deleted, so Telegram has nowhere to deliver overnight"
+										},
+										{
+											"id": "intents-missing",
+											"label": "A privileged intent is missing, so message content turns invisible to the bot"
+										}
+									],
+									"correct": ["polling-in-app"]
+								}
+							},
+							{
+								"id": "challenge-recipes-bot-guardrails",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Before inviting the whole company to use the bot, which guardrails belong in place?",
+								"explanation": "Narrow allowlist, guarded token, and webhook-deleted-before-polling are the three that prevent real incidents — the last one because Telegram allows a single webhook per bot, and a registered webhook starves polling. \"Everyone in the channel is trusted\" is the tempting skip: filters aren't about trusting colleagues, they're about a bot that can trigger costly flows reacting to guests, other bots, and misfires.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "narrow-allowlist",
+											"label": "Scope the chat allowlist to the ops channel first, widen deliberately"
+										},
+										{
+											"id": "token-credential",
+											"label": "Treat the bot token as a credential — no screenshots, repos, or pasted chats"
+										},
+										{
+											"id": "delete-webhook-before-polling",
+											"label": "Delete the bot's webhook before reusing its token for long polling"
+										},
+										{
+											"id": "token-in-topic",
+											"label": "Pin the token in the channel topic so any teammate can maintain the bot"
+										},
+										{
+											"id": "members-safe",
+											"label": "Skip message filters — channel members are trusted, so every message is safe to process"
+										}
+									],
+									"correct": ["narrow-allowlist", "token-credential", "delete-webhook-before-polling"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-recipes-file-watcher",
+						"title": "Recipe 4: Watch the Drop Folder",
+						"language": "en",
+						"contentFile": "content/file-watcher.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 3,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-recipes-change-detection-pair",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Which node pair turns \"process everything, every sweep\" into \"process only what changed\"?",
+								"explanation": "Diff Directory compares the folder against a manifest and emits Added, Updated, and Deleted; Write Directory Manifest commits what succeeded so the next diff starts from there. Process-then-Delete is the tempting classic — it works, until you remember partners own that folder and the deleted file was your audit trail. Do Once can't help: its memory doesn't span runs.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "diff-manifest",
+											"label": "Diff Directory + Write Directory Manifest — diff against a manifest, commit what succeeded"
+										},
+										{
+											"id": "delete-processed",
+											"label": "Process each file, then Delete it so the folder only ever holds new work"
+										},
+										{
+											"id": "list-exists",
+											"label": "List Paths + Path Exists? — list the folder and check each path"
+										},
+										{
+											"id": "foreach-doonce",
+											"label": "For Each + Do Once — the loop passes each file exactly once"
+										}
+									],
+									"correct": ["diff-manifest"]
+								}
+							},
+							{
+								"id": "challenge-recipes-commit-order",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A CSV fails halfway through processing. Why does committing the manifest after success matter?",
+								"explanation": "An uncommitted file is still \"new\" to the next diff — the failure retries itself on the next sweep, no extra machinery. Commit-first is the tempting inversion because it sounds safer against double-processing, but it makes every failure permanent: the file is recorded done and never diffed again. Nothing rolls back automatically, and failed files don't surface in Deleted — that array is for files that vanished.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "retry-free",
+											"label": "An uncommitted failure reappears as Added next sweep — commit-after-success is a built-in retry"
+										},
+										{
+											"id": "commit-first-safer",
+											"label": "It doesn't — committing before processing is safer because a crash can't process a file twice"
+										},
+										{
+											"id": "manifest-rollback",
+											"label": "Ordering is cosmetic; the manifest rolls back on error either way"
+										},
+										{
+											"id": "failed-to-deleted",
+											"label": "Failed files surface in the Deleted array for inspection"
+										}
+									],
+									"correct": ["retry-free"]
+								}
+							},
+							{
+								"id": "challenge-recipes-sweep-overlap",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The sweep fires every 15 minutes; a big partner batch takes 25. Which statements are true?",
+								"explanation": "Overlap prevention isn't built into schedules — sweep two can start while sweep one still runs, and both will diff the same not-yet-committed files. The manifest can't referee that race; idempotent processing makes it harmless because both runs write the same output to the same name. \"The scheduler queues the next tick\" is the comfortable assumption the report lesson already retired — and Hybrid adds deliveries, it doesn't remove them.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "overlap-not-implicit",
+											"label": "Nothing stops the next sweep from starting while this one runs"
+										},
+										{
+											"id": "idempotent-harmless",
+											"label": "Idempotent processing — same input, same output name — makes an overlapping sweep converge instead of duplicate"
+										},
+										{
+											"id": "scheduler-queues",
+											"label": "The scheduler holds the next tick until the current run finishes"
+										},
+										{
+											"id": "hybrid-fixes",
+											"label": "Switching the schedule to Hybrid assigns one scheduler per sweep and removes the overlap"
+										}
+									],
+									"correct": ["overlap-not-implicit", "idempotent-harmless"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-recipes-api-glue",
+						"title": "Recipe 5: Two Systems, One Flow",
+						"language": "en",
+						"contentFile": "content/api-glue.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 4,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-recipes-network-node",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In the chain Make Request → Set Header → Set Struct Body → API Call → To Struct, which node performs the network call?",
+								"explanation": "API Call executes the request; everything before it only builds and decorates a request object, and To Struct parses a response that already arrived. Make Request is the tempting name-trap — \"make\" sounds like \"send,\" but it constructs the method and URL and transmits nothing.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "api-call",
+											"label": "API Call — everything before it only builds the request"
+										},
+										{
+											"id": "make-request",
+											"label": "Make Request — it creates the request, so it sends it"
+										},
+										{
+											"id": "set-struct-body",
+											"label": "Set Struct Body — attaching the payload transmits it"
+										},
+										{
+											"id": "to-struct",
+											"label": "To Struct — parsing the response triggers the exchange"
+										}
+									],
+									"correct": ["api-call"]
+								}
+							},
+							{
+								"id": "challenge-recipes-empty-token",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The inbound signup endpoint ships to production with its auth token left empty. What's the actual exposure?",
+								"explanation": "No token means public: any caller who finds the URL can invoke the flow, and each request becomes a run. The unguessable-URL defense is the tempting one — but a URL travels through logs, browser history, and pasted configs; it's an address, not a secret. There's no automatic IP filtering, and the event activates fine without a token — that's exactly the trap.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "public-endpoint",
+											"label": "Anyone who finds the URL can invoke the flow — the endpoint is public without a token"
+										},
+										{
+											"id": "appid-secret",
+											"label": "Little — the app id in the URL is unguessable, which is protection enough"
+										},
+										{
+											"id": "ip-filter",
+											"label": "None — requests from unknown IPs are refused automatically"
+										},
+										{
+											"id": "cant-activate",
+											"label": "None — the event can't activate without a token, so nothing ships"
+										}
+									],
+									"correct": ["public-endpoint"]
+								}
+							},
+							{
+								"id": "challenge-recipes-retry-design",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The CRM throws an occasional 500. Which pieces belong in the retry design?",
+								"explanation": "Bounded attempts with a Delay, an explicit Is Success branch, and check-before-create on the email — retries and dedupe are one design, not two features. \"Repeating a POST is safe by HTTP design\" is the dangerous half-truth: POST is precisely the method with no idempotency guarantee, which is why the dedupe key exists. And retry-until-accepted turns one CRM outage into a stampede from your side.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "bounded-attempts",
+											"label": "A fixed number of attempts with a Delay between them"
+										},
+										{
+											"id": "branch-success",
+											"label": "Branch on Is Success instead of assuming a 2xx"
+										},
+										{
+											"id": "dedupe-key",
+											"label": "Check-before-create on the email so a retried create can't mint a duplicate"
+										},
+										{
+											"id": "retry-forever",
+											"label": "Keep retrying until the CRM eventually accepts — persistence beats failure"
+										},
+										{
+											"id": "post-safe",
+											"label": "Rely on HTTP semantics — repeating the same POST is safe by design"
+										}
+									],
+									"correct": ["bounded-attempts", "branch-success", "dedupe-key"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "course-automation-recipes-module-assessment",
+				"title": "Final Assessment",
+				"description": "Close out a week of incidents across all five recipes.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "lesson-recipes-final",
+						"title": "Your Automation Portfolio",
+						"language": "en",
+						"contentFile": "content/final-assessment.md",
+						"videoUrl": null,
+						"estimatedMinutes": 15,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-recipes-final-missing-report",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Incident 1: Monday's report never arrived, Runs shows no entry, and the ops laptop spent the weekend in a bag. What's the fix?",
+								"explanation": "No run entry means the trigger never fired — a Local Cron dies with the lid, so the schedule belongs Remote. \"Wait for the laptop to open\" is the tempting patience play, but missed occurrences aren't replayed; that tick is gone. A failed send would have left a run entry, and a Daemon is a long-runner supervisor, not a weekend-proof schedule.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "local-to-remote",
+											"label": "The Cron runs Local and only fires while the app is open — move it to Remote execution"
+										},
+										{
+											"id": "replay-on-open",
+											"label": "Wait — the missed run fires as soon as the laptop opens"
+										},
+										{
+											"id": "smtp-failed",
+											"label": "The run happened but the send failed; fix the mail credentials"
+										},
+										{
+											"id": "needs-daemon",
+											"label": "Weekly schedules need a Daemon to survive weekends"
+										}
+									],
+									"correct": ["local-to-remote"]
+								}
+							},
+							{
+								"id": "challenge-recipes-final-double-batch",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Incident 2: after the watcher's schedule moved to Hybrid \"for reliability,\" Friday's batch processed twice. Which statements are true?",
+								"explanation": "Hybrid registers both the local and the remote scheduler — duplicate delivery is its documented design, so the fix is choosing one target, and idempotent processing is what keeps any surviving duplicate harmless. The failover reading is the tempting one — it's what \"for reliability\" imagined — but nothing waits for the other scheduler to be offline. The diff didn't mis-read anything; it ran twice, honestly, from two triggers.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "hybrid-two-paths",
+											"label": "Hybrid registers both schedulers, so one tick can fire twice"
+										},
+										{
+											"id": "pick-one-target",
+											"label": "Pick Local or Remote — duplicate delivery under Hybrid is by design, not a bug to patch"
+										},
+										{
+											"id": "idempotent-processing",
+											"label": "Idempotent processing keeps a duplicate sweep converging on the same outputs"
+										},
+										{
+											"id": "hybrid-failover",
+											"label": "Hybrid is a failover mode — remote fires only when the local scheduler is offline"
+										},
+										{
+											"id": "diff-broken",
+											"label": "Diff Directory mis-diffed the folder; switching it to Checksum mode fixes the double batch"
+										}
+									],
+									"correct": ["hybrid-two-paths", "pick-one-target", "idempotent-processing"]
+								}
+							},
+							{
+								"id": "challenge-recipes-final-office-hours-bot",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Incident 3: the status bot answers 9-to-6 and sleeps at night. Token valid, flow unchanged. What closes this out?",
+								"explanation": "Office-hours behavior is the polling signature: the desktop app is the continuously running process, and it stops running at six. Hosted webhook delivery removes the laptop from the loop. Running polling and a webhook together is the tempting belt-and-braces answer, but Telegram permits one webhook per bot and a registered webhook starves polling — you'd trade a sleeping bot for a confused one.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "switch-webhook",
+											"label": "Delivery is desktop long polling — switch the bot to hosted webhook delivery"
+										},
+										{
+											"id": "both-modes",
+											"label": "Enable polling and the webhook together so one of them always answers"
+										},
+										{
+											"id": "night-allowlist",
+											"label": "Extend the chat allowlist — it currently only covers daytime chats"
+										},
+										{
+											"id": "reissue-token",
+											"label": "Re-issue the token with BotFather; long-lived tokens go stale overnight"
+										}
+									],
+									"correct": ["switch-webhook"]
+								}
+							},
+							{
+								"id": "challenge-recipes-final-dejavu-drafts",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Incident 4: since a teammate edited the triage flow \"to be safe,\" the same three mails get fresh drafts every sweep. What did the edit break?",
+								"explanation": "The recipe's dedupe is that handled mail exits the UNSEEN filter — the edit removed the mark-seen/move step, so every sweep re-lists the same mail as new and re-drafts it. Blaming the interval is the tempting misdirection: a slower sweep would just space the duplicates out. For Each never had cross-run memory to lose, and IMAP read state isn't reset by reconnecting — it was simply never being set.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "exit-filter-removed",
+											"label": "Handled mail no longer exits the UNSEEN filter, so each sweep re-lists it as new"
+										},
+										{
+											"id": "sweep-too-short",
+											"label": "The 15-minute interval is too short for drafting to finish"
+										},
+										{
+											"id": "foreach-memory",
+											"label": "The edit cleared For Each's built-in record of processed items"
+										},
+										{
+											"id": "imap-resets",
+											"label": "IMAP Connect now re-authenticates each run, resetting read state on the server"
+										}
+									],
+									"correct": ["exit-filter-removed"]
+								}
+							},
+							{
+								"id": "challenge-recipes-final-night-visitors",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Incident 5: the signup endpoint logged 240 overnight runs from an unknown caller. It was set up during testing and never touched since. Which responses close it out?",
+								"explanation": "\"Set up during testing\" means no auth token — the endpoint has been public all along, so lock it with a bearer token and then audit what those runs did to the CRM, because verify means durable outcomes, not run counts. The unguessable-path defense is the tempting shortcut: a URL is an address that leaks through logs and configs, not a secret. And API events can absolutely require a token — that's the setting testing skipped.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "set-bearer-token",
+											"label": "Set a bearer auth token on the endpoint and share it only with the website"
+										},
+										{
+											"id": "audit-outcomes",
+											"label": "Audit what the 240 runs did — check the CRM for records they created, not just the run count"
+										},
+										{
+											"id": "obscure-path",
+											"label": "Rename the path to something unguessable — equivalent protection, less config"
+										},
+										{
+											"id": "local-only-safe",
+											"label": "No action — endpoints are only reachable from the machine that owns the app"
+										},
+										{
+											"id": "no-auth-support",
+											"label": "Accept the risk — API events can't require authentication"
+										}
+									],
+									"correct": ["set-bearer-token", "audit-outcomes"]
+								}
+							},
+							{
+								"id": "challenge-recipes-final-triple-greeting",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Incident 6: during a flaky CRM afternoon, the glue recipe created three duplicate contacts. What's the real fix?",
+								"explanation": "The retry loop ran without a dedupe key, so every retry could mint a fresh contact — check-before-create on the email makes retries converge on one. Lowering the retry count is the tempting damage-control move, but two duplicates instead of three is still a broken contract; bounded retries and idempotent creates are one design. And POST carries no idempotency guarantee — that's why the key exists at all.",
+								"points": 10,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "add-dedupe-key",
+											"label": "Add check-before-create on the email so retried creates converge on one contact"
+										},
+										{
+											"id": "fewer-retries",
+											"label": "Lower the retry count to one so duplicates shrink"
+										},
+										{
+											"id": "post-idempotent",
+											"label": "Nothing in the flow — repeating a POST is safe by HTTP design, the CRM misbehaved"
+										},
+										{
+											"id": "wait-for-crm",
+											"label": "Wait for the CRM's reliability to improve; the duplicates end with the outages"
+										}
+									],
+									"correct": ["add-dedupe-key"]
+								}
+							},
+							{
+								"id": "challenge-recipes-final-promotion-evidence",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Incident 7: the watcher graduates from hand-triggered dry-runs to its 15-minute schedule. Which evidence belongs in the promotion?",
+								"explanation": "The promotion package is a real hand-triggered run with a committed manifest, outputs verified by name and content, and one rehearsed failure proving a bad CSV stays uncommitted and retries. Three green statuses is the tempting shortcut this course keeps burying: green proves runs finished, and the watcher's whole failure mode — processed-never, reported-done — hides behind exactly that green. Diff Directory being well-behaved doesn't make your processing idempotent for free.",
+								"points": 10,
+								"position": 6,
+								"payload": {
+									"options": [
+										{
+											"id": "real-folder-run",
+											"label": "A hand-triggered run against the real drop folder that processed files and committed the manifest"
+										},
+										{
+											"id": "durable-outputs",
+											"label": "Output files checked by name and content — not just run statuses"
+										},
+										{
+											"id": "failure-rehearsal",
+											"label": "A rehearsed failure: one malformed CSV, verified to stay uncommitted and retry next sweep"
+										},
+										{
+											"id": "green-three-times",
+											"label": "Three green runs in the history — status suffices once the flow is stable"
+										},
+										{
+											"id": "skip-checks",
+											"label": "No further checks — Diff Directory is idempotent, so the schedule can't do damage"
+										}
+									],
+									"correct": ["real-folder-run", "durable-outputs", "failure-rehearsal"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		]
+	}
+}

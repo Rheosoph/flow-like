@@ -30,12 +30,6 @@ function getConfigPath(): string {
 	return configPath;
 }
 
-function shouldRunTranslationServer(): boolean {
-	const osType = platform();
-	// Only run translation server on macOS and Linux
-	return osType === "darwin" || osType === "linux";
-}
-
 function prepareWindowsPrereqs(): void {
 	if (platform() !== "win32") return;
 
@@ -70,72 +64,31 @@ async function main() {
 		console.log(`Using config: ${configPath}`);
 		prepareWindowsPrereqs();
 
-		if (shouldRunTranslationServer()) {
-			console.log(`Starting Tauri dev with config and translation server...`);
+		console.log(`Starting Tauri dev with config...`);
 
-			// Start translation server
-			const translationServer = spawn(
-				"bun",
-				["run", "--watch", "./scripts/translation-server.ts"],
-				{
-					stdio: "inherit",
-				},
-			);
+		const tauriDev = spawn(
+			"bun",
+			[
+				"run",
+				"tauri",
+				"dev",
+				"+nightly",
+				"-d",
+				"-b",
+				"none",
+				"--config",
+				configPath,
+			],
+			{
+				stdio: "inherit",
+			},
+		);
 
-			// Start tauri dev
-			const tauriDev = spawn(
-				"bun",
-				[
-					"run",
-					"tauri",
-					"dev",
-					"+nightly",
-					"-d",
-					"-b",
-					"none",
-					"--config",
-					configPath,
-				],
-				{
-					stdio: "inherit",
-				},
-			);
-
-			// Handle process cleanup
-			process.on("SIGINT", () => {
-				console.log("\nShutting down...");
-				translationServer.kill();
-				tauriDev.kill();
-				process.exit(0);
-			});
-		} else {
-			console.log(`Starting Tauri dev with config...`);
-
-			// Run only tauri dev
-			const tauriDev = spawn(
-				"bun",
-				[
-					"run",
-					"tauri",
-					"dev",
-					"+nightly",
-					"-d",
-					"-b",
-					"none",
-					"--config",
-					configPath,
-				],
-				{
-					stdio: "inherit",
-				},
-			);
-
-			process.on("SIGINT", () => {
-				console.log("\nShutting down...");
-				tauriDev.kill();
-				process.exit(0);
-			});
-		}
+		process.on("SIGINT", () => {
+			console.log("\nShutting down...");
+			tauriDev.kill();
+			process.exit(0);
+		});
 	} catch (error) {
 		console.error("Error:", error);
 		process.exit(1);

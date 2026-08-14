@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import { StreamingTextEditor } from "@flow-like/flow-like-ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -42,6 +43,7 @@ And some final text to end the stream.
 `;
 
 export default function StreamingDebugPage() {
+	const { t } = useTranslation("common");
 	const [content, setContent] = useState("");
 	const [isStreaming, setIsStreaming] = useState(false);
 	const [speed, setSpeed] = useState(20);
@@ -125,7 +127,7 @@ export default function StreamingDebugPage() {
 	return (
 		<div className="flex h-full flex-col overflow-hidden">
 			<div className="flex items-center gap-3 border-b px-4 py-2 bg-muted/30 flex-wrap">
-				<span className="text-sm font-semibold">Streaming Debug</span>
+				<span className="text-sm font-semibold">{t('streamingDebug', 'Streaming Debug')}</span>
 
 				<button
 					type="button"
@@ -133,7 +135,7 @@ export default function StreamingDebugPage() {
 					disabled={isStreaming}
 					className="rounded bg-primary px-3 py-1 text-xs text-primary-foreground disabled:opacity-50"
 				>
-					Stream (setInterval)
+					{t('streamSetinterval', 'Stream (setInterval)')}
 				</button>
 				<button
 					type="button"
@@ -141,7 +143,7 @@ export default function StreamingDebugPage() {
 					disabled={isStreaming}
 					className="rounded bg-primary px-3 py-1 text-xs text-primary-foreground disabled:opacity-50"
 				>
-					Stream (RAF)
+					{t('streamRaf', 'Stream (RAF)')}
 				</button>
 				<button
 					type="button"
@@ -149,7 +151,7 @@ export default function StreamingDebugPage() {
 					disabled={!isStreaming}
 					className="rounded bg-destructive px-3 py-1 text-xs text-destructive-foreground disabled:opacity-50"
 				>
-					Stop
+					{t('stop', 'Stop')}
 				</button>
 				<button
 					type="button"
@@ -160,42 +162,33 @@ export default function StreamingDebugPage() {
 					}}
 					className="rounded bg-muted px-3 py-1 text-xs"
 				>
-					Reset
+					{t('reset', 'Reset')}
 				</button>
 
-				<label className="flex items-center gap-1 text-xs">
-					Speed (ms):
+				<label className="flex items-center gap-1 text-xs"><Trans i18nKey="speedMsInputTypenumberValuespeedOnchangeeSetspeednumberetargetvalueClassnamew16RoundedBorderPx1Py05TextxsBgbackgroundMin1">Speed (ms):
 					<input
 						type="number"
 						value={speed}
 						onChange={(e) => setSpeed(Number(e.target.value))}
 						className="w-16 rounded border px-1 py-0.5 text-xs bg-background"
 						min={1}
-					/>
-				</label>
-				<label className="flex items-center gap-1 text-xs">
-					Chunk (chars):
+					/></Trans></label>
+				<label className="flex items-center gap-1 text-xs"><Trans i18nKey="chunkCharsInputTypenumberValuechunksizeOnchangeeSetchunksizenumberetargetvalueClassnamew16RoundedBorderPx1Py05TextxsBgbackgroundMin1">Chunk (chars):
 					<input
 						type="number"
 						value={chunkSize}
 						onChange={(e) => setChunkSize(Number(e.target.value))}
 						className="w-16 rounded border px-1 py-0.5 text-xs bg-background"
 						min={1}
-					/>
-				</label>
-				<label className="flex items-center gap-1 text-xs">
-					<input
+					/></Trans></label>
+				<label className="flex items-center gap-1 text-xs"><Trans i18nKey="inputTypecheckboxCheckedusecustomOnchangeeSetusecustometargetcheckedCustomMd"><input
 						type="checkbox"
 						checked={useCustom}
 						onChange={(e) => setUseCustom(e.target.checked)}
 					/>
-					Custom MD
-				</label>
+					Custom MD</Trans></label>
 
-				<span className="ml-auto text-xs text-muted-foreground">
-					renders: {renderCount} | chars: {content.length}/
-					{(useCustom ? customMd : SAMPLE_MD).length}
-					{isStreaming && " | streaming..."}
+				<span className="ml-auto text-xs text-muted-foreground">{t('rendersRendercountCharsLengthLength2', "renders: {{renderCount}} | chars: {{length}}/ {{length2}}", { renderCount, length: content.length, length2: (useCustom ? customMd : SAMPLE_MD).length })}{isStreaming && t('streaming2', "| streaming...")}
 				</span>
 			</div>
 
@@ -209,7 +202,7 @@ export default function StreamingDebugPage() {
 							value={customMd}
 							onChange={(e) => setCustomMd(e.target.value)}
 							className="h-full w-full resize-none bg-muted/50 p-3 font-mono text-xs outline-none"
-							placeholder="Enter custom markdown..."
+							placeholder={t('enterCustomMarkdown', 'Enter custom markdown...')}
 						/>
 					</div>
 				)}
@@ -219,9 +212,7 @@ export default function StreamingDebugPage() {
 					</div>
 					{content && (
 						<details className="mt-4 text-xs">
-							<summary className="cursor-pointer text-muted-foreground">
-								Raw content ({content.length} chars)
-							</summary>
+							<summary className="cursor-pointer text-muted-foreground">{t('rawContentLengthChars', 'Raw content ({{length}} chars)', { length: content.length })}</summary>
 							<pre className="mt-2 max-h-48 overflow-auto rounded bg-muted p-2 font-mono text-xs whitespace-pre-wrap">
 								{content}
 							</pre>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	LoadingScreen,
@@ -18,6 +19,7 @@ import { toast } from "sonner";
 import { clearPendingInvite, setPendingInvite } from "../../lib/pending-invite";
 
 export default function JoinPage() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const auth = useAuth();
 	const router = useRouter();
@@ -84,10 +86,9 @@ export default function JoinPage() {
 		return (
 			<main className="flex h-full w-full flex-1 items-center justify-center p-6">
 				<div className="w-full max-w-md space-y-4 rounded-xl border bg-card p-8 text-center shadow-floating">
-					<h2 className="text-xl font-semibold">You&apos;ve been invited</h2>
+					<h2 className="text-xl font-semibold">{t('youaposveBeenInvited', "You've been invited")}</h2>
 					<p className="text-sm text-muted-foreground">
-						Sign in to accept this invite. You&apos;ll be brought right back
-						here afterwards.
+						{t('signInToAcceptThisInviteYouaposllBeBroughtRightBackHereAfterwards', "Sign in to accept this invite. You'll be brought right back here afterwards.")}
 					</p>
 					<Button
 						className="w-full"
@@ -95,7 +96,7 @@ export default function JoinPage() {
 						disabled={isRedirecting}
 					>
 						<LogIn className="mr-2 h-4 w-4" />
-						{isRedirecting ? "Opening sign-in..." : "Sign In to Continue"}
+						{isRedirecting ? t('openingSignin', 'Opening sign-in...') : t('signInToContinue', 'Sign In to Continue')}
 					</Button>
 				</div>
 			</main>
@@ -105,7 +106,7 @@ export default function JoinPage() {
 	return (
 		<LoadingScreen
 			progress={Math.min(30 + attempt * 10, 95)}
-			message={attempt > 0 ? "Setting up your account..." : undefined}
+			message={attempt > 0 ? t('settingUpYourAccount', 'Setting up your account...') : undefined}
 		/>
 	);
 }

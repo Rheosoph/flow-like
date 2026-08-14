@@ -1,0 +1,720 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-movfooax-clc0",
+		"name": "Welcome to Flow-Like",
+		"language": "en",
+		"slug": "welcome-to-flow-like",
+		"difficulty": "BEGINNER",
+		"category": "GETTING_STARTED",
+		"estimatedMinutes": 55,
+		"isPublished": true,
+		"tags": ["getting-started", "orientation", "studio", "apps"],
+		"position": 0,
+		"description": "Learn the map, read a real support-automation board wire by wire, run it, inspect the evidence, and create your first App.",
+		"longDescription": "Your first tour of Flow-Like, built around one running example: a Customer Support Copilot that drafts replies, waits for human approval, and sends the answer. You'll learn the four words that organize the whole product (Profile, App, Flow, Studio), read the support board's two kinds of wires, inspect a run like a professional, and create an App of your own — with quick knowledge checks in every lesson.",
+		"media": {
+			"icon": "media/app-logo.webp",
+			"banner": "assets/course-banner.webp"
+		},
+		"assets": [
+			{
+				"name": "HomeOverview",
+				"file": "assets/LandingPage.webp",
+				"replace": true
+			},
+			{
+				"name": "AppAnatomy",
+				"file": "assets/FlowLikeAppAnatomy.webp",
+				"mimeType": "image/webp",
+				"filename": "FlowLikeAppAnatomy.webp",
+				"replace": true
+			},
+			{
+				"name": "StudioCanvas",
+				"file": "assets/FlowLikeStudio.webp",
+				"replace": true
+			},
+			{
+				"name": "NodeCatalog",
+				"file": "assets/NodeCatalog.webp",
+				"replace": true
+			},
+			{
+				"name": "RunHistory",
+				"file": "assets/RunsAndLogs.webp",
+				"replace": true
+			},
+			{
+				"name": "CreateAppDialog",
+				"file": "assets/CreateApp.webp",
+				"replace": true
+			}
+		],
+		"modules": [
+			{
+				"id": "mod-movfxvt7-p9c",
+				"title": "The Studio Tour",
+				"description": "Learn the platform map, then get comfortable reading the Studio canvas.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "les-welcome-platform-map",
+						"title": "Four Words That Unlock Flow-Like",
+						"contentFile": "content/01-platform-map.md",
+						"estimatedMinutes": 5,
+						"position": 0,
+						"challenges": [
+							{
+								"id": "challenge-welcome-01-where-logic",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You're building the Customer Support Copilot. Where does the reply-drafting graph itself live?",
+								"explanation": "The graph is a Flow, and Flows always live inside an App — the project boundary that also owns events, data, and delivery. The tempting answer is the Profile, because model assignments do live there; but a Profile only configures preferences, it never contains logic. Studio is an editor, not storage, and the Library is just the shelf your Apps sit on.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "flow-inside-app",
+											"label": "In a Flow inside the Customer Support Copilot App"
+										},
+										{
+											"id": "in-profile",
+											"label": "In your Profile, since the Profile holds your model assignments"
+										},
+										{
+											"id": "in-studio",
+											"label": "In Studio — Studio stores every graph it edits"
+										},
+										{
+											"id": "in-library",
+											"label": "Directly in the Library, alongside your Apps"
+										}
+									],
+									"correct": ["flow-inside-app"]
+								}
+							},
+							{
+								"id": "challenge-welcome-01-profile-switch",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "You switch from your current Profile to a fresh one. Which statements are true?",
+								"explanation": "A Profile is a bundle of preferences — model assignments, interests, theme, FlowPilot settings — so switching swaps the active configuration and nothing else. Your Apps stay exactly where they are: Apps don't belong to Profiles, so nothing moves, and Flows certainly don't snapshot versions just because your preferences changed. 'Apps move into the new Profile' is the classic week-one misconception this lesson exists to kill.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "prefs-change",
+											"label": "Your active model assignments and preferences change"
+										},
+										{
+											"id": "apps-stay",
+											"label": "The Customer Support Copilot App stays exactly where it was"
+										},
+										{
+											"id": "apps-move",
+											"label": "Your Apps move into the newly selected Profile"
+										},
+										{
+											"id": "flows-version",
+											"label": "Each Flow snapshots a new version to record the switch"
+										}
+									],
+									"correct": ["prefs-change", "apps-stay"]
+								}
+							}
+						]
+					},
+					{
+						"id": "les-welcome-studio-tour",
+						"title": "Two Wires, Two Stories: the Studio Canvas",
+						"contentFile": "content/02-studio-tour.md",
+						"estimatedMinutes": 10,
+						"position": 1,
+						"challenges": [
+							{
+								"id": "challenge-welcome-02-white-wire",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In the support board, what does the solid white wire from Incoming Support Request to Prepare Support Reply carry?",
+								"explanation": "White wires between diamond pins carry control: they say which node runs next, nothing more. The customer's message travels separately, along the dashed pink data wire from Request into Message — that's the tempting mix-up, because both wires leave the same node. Wires never carry configuration, and they're never decoration: every wire has runtime meaning.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "control-order",
+											"label": "Control — it says Prepare Support Reply runs next"
+										},
+										{
+											"id": "message-text",
+											"label": "The customer's message text, on its way to be drafted"
+										},
+										{
+											"id": "shared-config",
+											"label": "Configuration shared between the two nodes"
+										},
+										{
+											"id": "grouping-only",
+											"label": "Nothing at runtime — it marks that both nodes belong to the same comment block"
+										}
+									],
+									"correct": ["control-order"]
+								}
+							},
+							{
+								"id": "challenge-welcome-02-pin-rules",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements about pins and wires in Studio are correct?",
+								"explanation": "Diamond pins carry execution, round colored pins carry typed data, and Studio enforces compatibility while you author — an execution pin won't touch a data pin, and mismatched types refuse to connect, so those mistakes die before any run. 'Types are checked when the flow runs' is the tempting one: many tools work that way, but Flow-Like blocks the wire at authoring time. And pure nodes prove that a node doesn't need an execution wire to matter — they participate through data alone.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "diamond-exec",
+											"label": "Diamond pins carry execution; round colored pins carry typed data"
+										},
+										{
+											"id": "dashed-data",
+											"label": "Dashed, colored wires are data connections"
+										},
+										{
+											"id": "author-blocked",
+											"label": "Studio refuses incompatible pin connections while you author"
+										},
+										{
+											"id": "runtime-check",
+											"label": "Any output can wire to any input; types are checked when the flow runs"
+										},
+										{
+											"id": "exec-required",
+											"label": "Every node needs at least one execution wire to participate in a run"
+										}
+									],
+									"correct": ["diamond-exec", "dashed-data", "author-blocked"]
+								}
+							},
+							{
+								"id": "challenge-welcome-02-cut-wire",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You delete the dashed pink wire that carries Reply into Send Reply's Body, then run the flow. What happens?",
+								"explanation": "Only white wires schedule execution, and the white chain to Send Reply is intact — so the node still fires, just without the drafted reply arriving at Body. The tempting answer is that the run stops or the node is skipped, which assumes data availability controls execution; it doesn't, and that separation is the single most important fact about the canvas. Control wires also never 'fall back' to carrying data — the two systems stay apart.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "still-fires",
+											"label": "Execution still reaches Send Reply — it just no longer receives the drafted reply as its Body"
+										},
+										{
+											"id": "run-stops",
+											"label": "The run stops after Human Review because the reply has nowhere to go"
+										},
+										{
+											"id": "refuses-start",
+											"label": "Studio refuses to start the run until every input pin is wired"
+										},
+										{
+											"id": "white-carries",
+											"label": "The white wire delivers the reply instead — control wires carry data when needed"
+										}
+									],
+									"correct": ["still-fires"]
+								}
+							}
+						]
+					}
+				]
+			},
+			{
+				"id": "mod-movfxxoh-jw2",
+				"title": "See It Run First",
+				"description": "Read an existing graph, run it, and use execution evidence to understand what happened.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "les-welcome-read-a-flow",
+						"title": "Read a Flow Like a Story",
+						"contentFile": "content/03-read-a-flow.md",
+						"estimatedMinutes": 10,
+						"position": 0,
+						"challenges": [
+							{
+								"id": "challenge-welcome-03-entry",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Which node starts a run of the support board in @StudioCanvas?",
+								"explanation": "Incoming Support Request is the event node — orange-red header, play button, and diamond execution pins for the run to leave through. Customer Message is the tempting pick because the story starts with the customer, but it's a pure node: no diamond pins, so execution can't begin there. Canvas position never decides anything, and Prepare Support Reply only runs once the event hands it control.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "incoming-request",
+											"label": "Incoming Support Request — the event node with the play button"
+										},
+										{
+											"id": "customer-message",
+											"label": "Customer Message — the customer's words are where the story begins"
+										},
+										{
+											"id": "leftmost-node",
+											"label": "Whichever node sits furthest left when the run starts"
+										},
+										{
+											"id": "prepare-reply",
+											"label": "Prepare Support Reply — the first step that does real work"
+										}
+									],
+									"correct": ["incoming-request"]
+								}
+							},
+							{
+								"id": "challenge-welcome-03-pure-run",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "When does Format Generic Value — the amber node at the bottom of @StudioCanvas — run?",
+								"explanation": "Pure nodes are data dependencies, not steps: the runtime evaluates one exactly when a downstream consumer needs its output, and on this board nothing consumes Value, so it never runs. The tempting answer is 'right after the event fires' — but presence on the canvas doesn't put a node on the execution path; only white wires do, and pure nodes have none. It isn't disabled either: wire its Value somewhere and it springs to life on demand.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "on-demand",
+											"label": "Only when a downstream node needs its Value output"
+										},
+										{
+											"id": "after-event",
+											"label": "Right after Incoming Support Request fires, like every node on the canvas"
+										},
+										{
+											"id": "bottom-last",
+											"label": "After Send Reply, because it sits at the bottom of the board"
+										},
+										{
+											"id": "disabled",
+											"label": "Never — a node without white wires is disabled until you add one"
+										},
+										{
+											"id": "parallel-path",
+											"label": "In parallel with the main chain, on every run"
+										}
+									],
+									"correct": ["on-demand"]
+								}
+							},
+							{
+								"id": "challenge-welcome-03-wire-claims",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which claims can you verify by reading the wires in @StudioCanvas?",
+								"explanation": "The white wires put Human Review after Prepare Support Reply; the long dashed wire carries Reply from Prepare Support Reply straight past Human Review into Send Reply's Body; and a short dashed wire feeds Customer Message into Format Generic Value. The tempting wrong claim is that Human Review rewrites the reply — it gates when sending happens, but the text bypasses it entirely, which is exactly what pass 3 reveals. And left-to-right placement proves nothing: order lives in wires, not geography.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "review-after-draft",
+											"label": "Human Review runs after Prepare Support Reply"
+										},
+										{
+											"id": "body-from-prepare",
+											"label": "Send Reply's Body comes from Prepare Support Reply, not from Human Review"
+										},
+										{
+											"id": "message-feeds-format",
+											"label": "Customer Message feeds Format Generic Value"
+										},
+										{
+											"id": "review-edits",
+											"label": "Human Review rewrites the reply text before it reaches Send Reply"
+										},
+										{
+											"id": "left-to-right",
+											"label": "Nodes run in left-to-right order of placement"
+										}
+									],
+									"correct": [
+										"review-after-draft",
+										"body-from-prepare",
+										"message-feeds-format"
+									]
+								}
+							}
+						]
+					},
+					{
+						"id": "les-welcome-run-and-inspect",
+						"title": "Press Run, Then Read the Evidence",
+						"contentFile": "content/04-run-and-inspect.md",
+						"estimatedMinutes": 10,
+						"position": 1,
+						"challenges": [
+							{
+								"id": "challenge-welcome-04-first-move",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A run of your copilot finished, but the reply text is wrong. What's your first move?",
+								"explanation": "Evidence first: open the run and read its logs in order, looking for the first entry that doesn't match your expectation. Re-wiring on a hunch is the tempting move, but a downstream symptom usually traces back to an earlier missing value — you'd be editing blind. Changing the payload breaks the one control you have (holding input constant), and execution location doesn't change what the logs record.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "open-run",
+											"label": "Open that run in the Runs panel and read its logs from the first entry"
+										},
+										{
+											"id": "rewire-first",
+											"label": "Re-wire the graph where you suspect the bug, then run again to compare"
+										},
+										{
+											"id": "vary-payload",
+											"label": "Run again with a different payload to gather more information"
+										},
+										{
+											"id": "go-remote",
+											"label": "Switch the flow to remote execution — server logs are more detailed"
+										}
+									],
+									"correct": ["open-run"]
+								}
+							},
+							{
+								"id": "challenge-welcome-04-log-evidence",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In @RunHistory, the second log entry reads \"Drafted a helpful reply and queued human review\" — 730.00 ms, Token Out: 96 — attributed to Draft Helpful Reply. What does this evidence support?",
+								"explanation": "Token counts prove a model call happened, and the attribution names Draft Helpful Reply — a node that appears nowhere on the top-level board, so it must live inside the Prepare Support Reply layer: logs see through layers. The near-miss is reading 730 ms as the run's total; that's this step's duration, while the run entry shows 1.85 s overall. 'Queued human review' means queued, not approved — and nothing here says Send Reply delivered anything.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "layer-step-ran",
+											"label": "A drafting step inside the Prepare Support Reply layer ran and called a model"
+										},
+										{
+											"id": "total-time",
+											"label": "The whole run took 730 ms"
+										},
+										{
+											"id": "reply-delivered",
+											"label": "The reply reached the customer"
+										},
+										{
+											"id": "review-approved",
+											"label": "Human review approved the draft"
+										}
+									],
+									"correct": ["layer-step-ran"]
+								}
+							},
+							{
+								"id": "challenge-welcome-04-local-only",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Your flow gains a node that reads files from your laptop. Which statements are true?",
+								"explanation": "Local-only capabilities bind the entire run to your machine, and Flow-Like decides that by scanning the whole graph — including inside every layer — before execution starts. The tempting answer is the hybrid split: hybrid means the same flow may run locally or remotely per invocation, never that one run is divided between machines. And a remote caller doesn't get quietly degraded results; the local requirement stands.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "whole-run-local",
+											"label": "Every run of the flow must now execute locally"
+										},
+										{
+											"id": "scans-layers",
+											"label": "Flow-Like scans the whole graph — including inside layers — before deciding where a run may execute"
+										},
+										{
+											"id": "hybrid-split",
+											"label": "Hybrid execution will read the files locally and run the rest remotely"
+										},
+										{
+											"id": "remote-empty",
+											"label": "Remote invocations still work; the file node quietly returns empty results"
+										}
+									],
+									"correct": ["whole-run-local", "scans-layers"]
+								}
+							}
+						]
+					}
+				]
+			},
+			{
+				"id": "mod-movfye38-sww",
+				"title": "App Basics",
+				"description": "Understand the App boundary, make a sound connectivity choice, and confirm the essentials.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "les-welcome-create-an-app",
+						"title": "Create Your Copilot App",
+						"contentFile": "content/05-create-an-app.md",
+						"estimatedMinutes": 10,
+						"position": 0,
+						"challenges": [
+							{
+								"id": "challenge-welcome-05-create-what",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In @CreateAppDialog you press Create Project. What exists afterward?",
+								"explanation": "Despite the dialog's title, Create Project creates an App — the project boundary that holds your first Flow along with events, data, and delivery settings. Taking 'Create Flow' literally is the tempting mistake; the subtitle ('create a new project') and the button give the honest answer. No login is needed because Offline is selected, and Profiles are never created this way.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "app-with-flow",
+											"label": "A new App — the project boundary that will hold your first Flow"
+										},
+										{
+											"id": "flow-only",
+											"label": "A single Flow with no App around it — the dialog title says so"
+										},
+										{
+											"id": "online-workspace",
+											"label": "An online team workspace — creating a project always requires login"
+										},
+										{
+											"id": "new-profile",
+											"label": "A new Profile pre-loaded with your embedding models"
+										}
+									],
+									"correct": ["app-with-flow"]
+								}
+							},
+							{
+								"id": "challenge-welcome-05-connectivity",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You want to experiment privately now, but the support team needs the copilot in their browser next month. What's a sound plan?",
+								"explanation": "Start offline and, when the team is ready, have Flow-Like create an online copy — the local source stays intact, known secrets are stripped from the copy, and you review its credentials and access before sharing. The tempting answer is the toggle: there is no in-place conversion, that's exactly the trap. Starting online without an account isn't possible (login required), and offline work is never a dead end.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "offline-then-copy",
+											"label": "Start offline; later create an online copy and review its credentials and access"
+										},
+										{
+											"id": "flip-toggle",
+											"label": "Start offline and flip the connectivity setting when the team is ready"
+										},
+										{
+											"id": "must-start-online",
+											"label": "Start online — offline work can never reach the web later"
+										},
+										{
+											"id": "online-anonymous",
+											"label": "Start online without signing in and share the link"
+										}
+									],
+									"correct": ["offline-then-copy"]
+								}
+							},
+							{
+								"id": "challenge-welcome-05-app-owns",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements match the app anatomy shown in @AppAnatomy?",
+								"explanation": "The five cards hang off the App: Experiences (Events, Pages, routes, Chat), Data (Storage and Data Studio), Reuse, Delivery — and Flows, where the graphs themselves live. Team access is a Delivery concern at the App level, never per node; and Storage belongs to the App, shared by its Flows, rather than each Flow keeping a private copy. That sharing is the point of the boundary: one project, one set of resources.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "events-app-level",
+											"label": "Events, Pages, and Chat surfaces live at the App level, as Experiences"
+										},
+										{
+											"id": "data-app-level",
+											"label": "Storage and Data Studio belong to the App, shared by its Flows"
+										},
+										{
+											"id": "graph-in-flow",
+											"label": "The reply-drafting graph itself lives inside a Flow"
+										},
+										{
+											"id": "roles-per-node",
+											"label": "Team access is granted per node inside the graph"
+										},
+										{
+											"id": "flow-private-storage",
+											"label": "Each Flow keeps its own private copy of the App's storage"
+										}
+									],
+									"correct": [
+										"events-app-level",
+										"data-app-level",
+										"graph-in-flow"
+									]
+								}
+							}
+						]
+					},
+					{
+						"id": "les-welcome-final-assessment",
+						"title": "Checkpoint: From Laptop to Team",
+						"contentFile": "content/06-final-assessment.md",
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-welcome-app-vs-flow",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The team needs Research Digest in the browser. What actually travels to the web — the Flow or the App — and how?",
+								"explanation": "Going online is an App-level move, because the App is the boundary that owns the Flow together with its Events, storage, and settings — and it happens by copy, never by a toggle. Flow-Like creates an online copy, leaves your local source intact, strips known secret fields, and you review credentials and access before the team touches it. The toggle is the tempting option since the create dialog offers Online/Offline, but that choice is made at creation; there is no silent in-place conversion afterward. Exporting 'just the Flow' misreads the App as a wrapper, and Profiles hold preferences, never projects.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "online-copy-app",
+											"label": "Flow-Like creates an online copy of the whole App — the Flow plus its Events, storage, and settings move together, and you review the copy's credentials and access"
+										},
+										{
+											"id": "export-flow-only",
+											"label": "You export just the Flow; an App is only a per-device wrapper, so each machine grows its own"
+										},
+										{
+											"id": "flip-online-toggle",
+											"label": "You flip the offline App's connectivity setting and it converts in place"
+										},
+										{
+											"id": "move-to-profile",
+											"label": "You move the Flow into your teammate's Profile so it syncs under her account"
+										}
+									],
+									"correct": ["online-copy-app"]
+								}
+							},
+							{
+								"id": "challenge-welcome-profile",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Your teammate suggests: \"Switch to my Profile on your machine — then the app is mine.\" Which statements are true?",
+								"explanation": "Switching Profiles changes active preferences and model assignments — full stop. Ownership and sharing run through the App: an online copy with team access is what actually hands the digest over, and Profiles play no part in that. The tempting options both assume Profiles contain Apps; they never do, which is why signing in on your machine changes her configuration, not your project's ownership.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "prefs-only",
+											"label": "Switching Profiles changes active preferences and model assignments, nothing more"
+										},
+										{
+											"id": "sharing-needs-online",
+											"label": "Actually sharing the app takes an online copy with team access — Profiles play no part in ownership"
+										},
+										{
+											"id": "apps-follow-profile",
+											"label": "Apps move into whichever Profile is active when they're opened"
+										},
+										{
+											"id": "signin-transfers",
+											"label": "If she signs into her Profile on your machine, the offline App becomes hers"
+										}
+									],
+									"correct": ["prefs-only", "sharing-needs-online"]
+								}
+							},
+							{
+								"id": "challenge-welcome-wires",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Look at @StudioCanvas: solid white wires link the four-node chain, while a dashed wire carries Reply from Prepare Support Reply directly into Send Reply's Body. Which readings are correct?",
+								"explanation": "Human Review sits on the white chain, so it gates when Send Reply runs — but the dashed wire shows the reply text bypassing it entirely, coming straight from Prepare Support Reply. And the amber pure nodes run only on demand; since nothing consumes their output here, they never run. The tempting error is letting data schedule execution ('fires as soon as Body is ready') — only white wires schedule anything. Placement order and 'pure nodes join the white path' fail for the same reason: execution lives in white wires alone.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "gate-vs-source",
+											"label": "Human Review controls when Send Reply runs, but the reply text itself comes from Prepare Support Reply"
+										},
+										{
+											"id": "pure-on-demand",
+											"label": "The amber pure nodes at the bottom run only if something needs their output — on this board, they never run"
+										},
+										{
+											"id": "data-triggers",
+											"label": "Send Reply fires as soon as its Body value is ready, even if Human Review hasn't finished"
+										},
+										{
+											"id": "left-runs-first",
+											"label": "Nodes further left always run earlier"
+										},
+										{
+											"id": "pure-joins-path",
+											"label": "Pure nodes appear on the white execution path once their value is used"
+										}
+									],
+									"correct": ["gate-vs-source", "pure-on-demand"]
+								}
+							},
+							{
+								"id": "challenge-welcome-offline-online",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Research Digest reads files from your laptop, and the team wants a browser version with nightly runs. Which statements are true?",
+								"explanation": "The laptop-file node is local-only, so every run — even from an online App — must execute on your machine; a server-scheduled, browser-facing version needs that step replaced with server-compatible storage. The tempting fix is the hybrid split: hybrid means the same flow runs locally or remotely per invocation, never a single run divided between machines. Online doesn't force remote execution (local-only nodes still win), and online never means public — publication stays a separate, deliberate step.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "local-forced",
+											"label": "As long as the Flow reads laptop files, every run must execute on your machine — even from an online App"
+										},
+										{
+											"id": "replace-storage",
+											"label": "For a server-scheduled, browser-facing version, the laptop-file step must give way to server-compatible storage"
+										},
+										{
+											"id": "hybrid-solves",
+											"label": "Hybrid execution solves it by reading files locally and summarizing remotely in the same run"
+										},
+										{
+											"id": "online-means-remote",
+											"label": "Making the App online is enough — online Apps always run remotely"
+										},
+										{
+											"id": "online-means-public",
+											"label": "Going online publishes the digest to everyone automatically"
+										}
+									],
+									"correct": ["local-forced", "replace-storage"]
+								}
+							},
+							{
+								"id": "challenge-welcome-debug",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Green check, 1.9 s — but this morning's summary contains yesterday's text. What's the evidence-first move?",
+								"explanation": "Open the run itself: confirm which payload it received and whether it executed Latest or a pinned version, then read the logs for the first value that breaks your expectation — the first surprise marks the real bug, not the loudest downstream symptom. Trusting the green check is the tempting trap; success only means the graph finished, and a stale payload or a pinned version produces exactly this 'succeeded but wrong' shape. Dragging the write step right changes nothing (placement never affects order), and varying payloads destroys your controlled comparison.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "open-run-first",
+											"label": "Open that run: confirm its payload and whether it used Latest or a pinned version, then read the logs for the first value that doesn't match your expectation"
+										},
+										{
+											"id": "trust-success",
+											"label": "Trust the green check — the Flow logic is proven, so the input files must be at fault"
+										},
+										{
+											"id": "drag-node-right",
+											"label": "Drag the write step further right so it runs later, then re-run"
+										},
+										{
+											"id": "vary-payloads",
+											"label": "Re-run with different payloads until the output changes, to gather more information"
+										}
+									],
+									"correct": ["open-run-first"]
+								}
+							}
+						]
+					}
+				]
+			}
+		]
+	}
+}

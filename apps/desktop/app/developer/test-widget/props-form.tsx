@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -56,6 +57,7 @@ function WidgetPropField({
 	errors,
 	onChange,
 }: WidgetPropFieldProps) {
+	const { t } = useTranslation("common");
 	const errorId = `${id}-error`;
 	const labelId = `${id}-label`;
 	const descriptionId = input.description ? `${id}-description` : undefined;
@@ -140,7 +142,7 @@ function WidgetPropField({
 							aria-invalid={invalid}
 							aria-describedby={describedBy || undefined}
 						>
-							<SelectValue placeholder="Select a value…" />
+							<SelectValue placeholder={t('selectAValue', 'Select a value…')} />
 						</SelectTrigger>
 						<SelectContent>
 							{choices.map((choice) => (
@@ -223,7 +225,7 @@ function WidgetPropField({
 					</Badge>
 					{input.optional && (
 						<Badge variant="secondary" className="text-[10px] font-normal">
-							Optional
+							{t('optional', 'Optional')}
 						</Badge>
 					)}
 				</div>
@@ -252,7 +254,7 @@ function WidgetPropField({
 						htmlFor={`${id}-included`}
 						className="text-xs font-normal text-muted-foreground"
 					>
-						Include value
+						{t('includeValue', 'Include value')}
 					</Label>
 				</div>
 			)}
@@ -264,10 +266,10 @@ function WidgetPropField({
 					variant="outline"
 					size="sm"
 					onClick={() => onChange(emptyWidgetPropDraft(input))}
-					aria-label={`Set a value for ${name}`}
+					aria-label={t('setAValueForName', 'Set a value for {{name}}', { name })}
 					aria-describedby={describedBy || undefined}
 				>
-					Set value
+					{t('setValue', 'Set value')}
 				</Button>
 			) : (
 				control
@@ -275,9 +277,9 @@ function WidgetPropField({
 
 			{hasBounds && (
 				<p id={boundsId} className="text-[10px] text-muted-foreground">
-					{input.min !== undefined ? `Minimum ${input.min}` : ""}
-					{input.min !== undefined && input.max !== undefined ? " · " : ""}
-					{input.max !== undefined ? `Maximum ${input.max}` : ""}
+					{input.min !== undefined ? t('minimumMin', 'Minimum {{min}}', { min: input.min }) : ""}
+					{input.min !== undefined && input.max !== undefined ? ` · ` : ""}
+					{input.max !== undefined ? t('maximumMax', 'Maximum {{max}}', { max: input.max }) : ""}
 				</p>
 			)}
 
@@ -300,13 +302,14 @@ export function WidgetPropsForm({
 	errors,
 	onChange,
 }: WidgetPropsFormProps) {
+	const { t } = useTranslation("common");
 	const inputs = Object.entries(contract.inputs ?? {});
 	const idPrefix = useId();
 
 	if (inputs.length === 0) {
 		return (
 			<div className="rounded-lg border border-dashed border-border/40 p-6 text-center text-sm text-muted-foreground">
-				This widget does not declare any props.
+				{t('thisWidgetDoesNotDeclareAnyProps', 'This widget does not declare any props.')}
 			</div>
 		);
 	}

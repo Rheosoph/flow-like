@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -106,7 +107,7 @@ function createDefaultManifest(): ManifestData {
 	return {
 		manifest_version: 1,
 		id: "com.example.my-package",
-		name: "My Package",
+		name: i18next.t('myPackage', 'My Package'),
 		version: "0.1.0",
 		description: "",
 		authors: [{ name: "" }],
@@ -170,19 +171,20 @@ function IdentitySection({
 	data: ManifestData;
 	onChange: (d: ManifestData) => void;
 }) {
+	const { t } = useTranslation("common");
 	return (
 		<Card>
 			<CardHeader className="pb-3">
 				<SectionHeader
 					icon={Package}
-					title="Package Identity"
-					description="Core metadata for your package"
+					title={t('packageIdentity', 'Package Identity')}
+					description={t('coreMetadataForYourPackage', 'Core metadata for your package')}
 				/>
 			</CardHeader>
 			<CardContent className="space-y-4">
 				<div className="grid grid-cols-2 gap-4">
 					<div className="space-y-1.5">
-						<Label className="text-xs">Package ID</Label>
+						<Label className="text-xs">{t('packageId2', 'Package ID')}</Label>
 						<Input
 							value={data.id}
 							onChange={(e) => onChange({ ...data, id: e.target.value })}
@@ -191,7 +193,7 @@ function IdentitySection({
 						/>
 					</div>
 					<div className="space-y-1.5">
-						<Label className="text-xs">Version</Label>
+						<Label className="text-xs">{t('version', 'Version')}</Label>
 						<Input
 							value={data.version}
 							onChange={(e) => onChange({ ...data, version: e.target.value })}
@@ -210,7 +212,7 @@ function IdentitySection({
 						/>
 					</div>
 					<div className="space-y-1.5">
-						<Label className="text-xs">License</Label>
+						<Label className="text-xs">{t('license', 'License')}</Label>
 						<Input
 							value={data.license ?? ""}
 							onChange={(e) =>
@@ -225,18 +227,18 @@ function IdentitySection({
 					</div>
 				</div>
 				<div className="space-y-1.5">
-					<Label className="text-xs">Description</Label>
+					<Label className="text-xs">{t('description', 'Description')}</Label>
 					<Textarea
 						value={data.description}
 						onChange={(e) => onChange({ ...data, description: e.target.value })}
 						rows={2}
 						className="text-sm"
-						placeholder="What does this package do?"
+						placeholder={t('whatDoesThisPackageDo', 'What does this package do?')}
 					/>
 				</div>
 				<div className="grid grid-cols-2 gap-4">
 					<div className="space-y-1.5">
-						<Label className="text-xs">Repository</Label>
+						<Label className="text-xs">{t('repository', 'Repository')}</Label>
 						<Input
 							value={data.repository ?? ""}
 							onChange={(e) =>
@@ -250,7 +252,7 @@ function IdentitySection({
 						/>
 					</div>
 					<div className="space-y-1.5">
-						<Label className="text-xs">Homepage</Label>
+						<Label className="text-xs">{t('homepage', 'Homepage')}</Label>
 						<Input
 							value={data.homepage ?? ""}
 							onChange={(e) =>
@@ -265,7 +267,7 @@ function IdentitySection({
 					</div>
 				</div>
 				<div className="space-y-1.5">
-					<Label className="text-xs">Keywords (comma-separated)</Label>
+					<Label className="text-xs">{t('keywordsCommaseparated', 'Keywords (comma-separated)')}</Label>
 					<Input
 						value={data.keywords.join(", ")}
 						onChange={(e) =>
@@ -277,7 +279,7 @@ function IdentitySection({
 									.filter(Boolean),
 							})
 						}
-						placeholder="ai, transform, data"
+						placeholder={t('aiTransformData', 'ai, transform, data')}
 						className="h-9"
 					/>
 				</div>
@@ -297,6 +299,7 @@ function AuthorsEditor({
 	authors: ManifestData["authors"];
 	onChange: (a: ManifestData["authors"]) => void;
 }) {
+	const { t } = useTranslation("common");
 	const addAuthor = () => onChange([...authors, { name: "" }]);
 	const removeAuthor = (i: number) =>
 		onChange(authors.filter((_, idx) => idx !== i));
@@ -309,7 +312,7 @@ function AuthorsEditor({
 	return (
 		<div className="space-y-2">
 			<div className="flex items-center justify-between">
-				<Label className="text-xs">Authors</Label>
+				<Label className="text-xs">{t('authors', 'Authors')}</Label>
 				<Button
 					variant="ghost"
 					size="sm"
@@ -317,7 +320,7 @@ function AuthorsEditor({
 					className="h-7 text-xs"
 				>
 					<Plus className="h-3 w-3 mr-1" />
-					Add
+					{t('add', 'Add')}
 				</Button>
 			</div>
 			{authors.map((author, i) => (
@@ -357,6 +360,7 @@ function PermissionsSection({
 	data: ManifestData;
 	onChange: (d: ManifestData) => void;
 }) {
+	const { t } = useTranslation("common");
 	const p = data.permissions ?? {};
 	const net = p.network ?? {
 		http_enabled: false,
@@ -384,18 +388,18 @@ function PermissionsSection({
 				<SectionHeader
 					icon={Lock}
 					title="Permissions"
-					description="Declare what your package needs access to"
+					description={t('declareWhatYourPackageNeedsAccessTo', 'Declare what your package needs access to')}
 				/>
 			</CardHeader>
 			<CardContent className="space-y-5">
 				{/* Resources */}
 				<div className="space-y-3">
 					<div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-						<HardDrive className="h-3 w-3" /> Resources
+						<HardDrive className="h-3 w-3" /> {t('resources', 'Resources')}
 					</div>
 					<div className="grid grid-cols-2 gap-4">
 						<div className="space-y-1.5">
-							<Label className="text-xs">Memory</Label>
+							<Label className="text-xs">{t('memory', 'Memory')}</Label>
 							<Select
 								value={p.memory}
 								onValueChange={(v) => updatePerm({ memory: v })}
@@ -413,7 +417,7 @@ function PermissionsSection({
 							</Select>
 						</div>
 						<div className="space-y-1.5">
-							<Label className="text-xs">Timeout</Label>
+							<Label className="text-xs">{t('timeout', 'Timeout')}</Label>
 							<Select
 								value={p.timeout}
 								onValueChange={(v) => updatePerm({ timeout: v })}
@@ -438,11 +442,11 @@ function PermissionsSection({
 				{/* Network */}
 				<div className="space-y-3">
 					<div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-						<Globe className="h-3 w-3" /> Network
+						<Globe className="h-3 w-3" /> {t('network', 'Network')}
 					</div>
 					<div className="space-y-3">
 						<PermToggle
-							label="HTTP Access"
+							label={t('httpAccess', 'HTTP Access')}
 							checked={net.http_enabled}
 							onChange={(v) =>
 								updatePerm({
@@ -458,7 +462,7 @@ function PermissionsSection({
 								className="space-y-1.5 pl-6"
 							>
 								<Label className="text-xs">
-									Allowed Hosts (comma-separated, empty = all)
+									{t('allowedHostsCommaseparatedEmptyAll', 'Allowed Hosts (comma-separated, empty = all)')}
 								</Label>
 								<Input
 									value={(net.allowed_hosts ?? []).join(", ")}
@@ -473,13 +477,13 @@ function PermissionsSection({
 											},
 										})
 									}
-									placeholder="api.example.com, cdn.example.com"
+									placeholder={t('apiexamplecomCdnexamplecom', 'api.example.com, cdn.example.com')}
 									className="h-8 text-xs"
 								/>
 							</motion.div>
 						)}
 						<PermToggle
-							label="WebSocket"
+							label={t('websocket', 'WebSocket')}
 							checked={net.websocket_enabled}
 							onChange={(v) =>
 								updatePerm({
@@ -491,7 +495,7 @@ function PermissionsSection({
 							}
 						/>
 						<PermToggle
-							label="TCP Sockets"
+							label={t('tcpSockets', 'TCP Sockets')}
 							checked={net.tcp_enabled ?? false}
 							onChange={(v) =>
 								updatePerm({
@@ -500,7 +504,7 @@ function PermissionsSection({
 							}
 						/>
 						<PermToggle
-							label="UDP Sockets"
+							label={t('udpSockets', 'UDP Sockets')}
 							checked={net.udp_enabled ?? false}
 							onChange={(v) =>
 								updatePerm({
@@ -509,7 +513,7 @@ function PermissionsSection({
 							}
 						/>
 						<PermToggle
-							label="DNS Lookups"
+							label={t('dnsLookups', 'DNS Lookups')}
 							checked={net.dns_enabled ?? false}
 							onChange={(v) =>
 								updatePerm({
@@ -525,11 +529,11 @@ function PermissionsSection({
 				{/* Filesystem */}
 				<div className="space-y-3">
 					<div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-						<HardDrive className="h-3 w-3" /> Filesystem
+						<HardDrive className="h-3 w-3" /> {t('filesystem', 'Filesystem')}
 					</div>
 					<div className="space-y-2">
 						<PermToggle
-							label="Node Storage"
+							label={t('nodeStorage', 'Node Storage')}
 							checked={fs.node_storage}
 							onChange={(v) =>
 								updatePerm({
@@ -541,7 +545,7 @@ function PermissionsSection({
 							}
 						/>
 						<PermToggle
-							label="User Storage"
+							label={t('userStorage', 'User Storage')}
 							checked={fs.user_storage}
 							onChange={(v) =>
 								updatePerm({
@@ -553,7 +557,7 @@ function PermissionsSection({
 							}
 						/>
 						<PermToggle
-							label="Upload Directory"
+							label={t('uploadDirectory', 'Upload Directory')}
 							checked={fs.upload_dir}
 							onChange={(v) =>
 								updatePerm({
@@ -565,7 +569,7 @@ function PermissionsSection({
 							}
 						/>
 						<PermToggle
-							label="Cache Directory"
+							label={t('cacheDirectory', 'Cache Directory')}
 							checked={fs.cache_dir}
 							onChange={(v) =>
 								updatePerm({
@@ -584,7 +588,7 @@ function PermissionsSection({
 				{/* Capabilities */}
 				<div className="space-y-3">
 					<div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-						<Zap className="h-3 w-3" /> Capabilities
+						<Zap className="h-3 w-3" /> {t('capabilities', 'Capabilities')}
 					</div>
 					<div className="space-y-2">
 						<PermToggle
@@ -603,12 +607,12 @@ function PermissionsSection({
 							onChange={(v) => updatePerm({ streaming: v })}
 						/>
 						<PermToggle
-							label="A2UI"
+							label={`A2UI`}
 							checked={p.a2ui}
 							onChange={(v) => updatePerm({ a2ui: v })}
 						/>
 						<PermToggle
-							label="Models / LLM"
+							label={t('modelsLlm', 'Models / LLM')}
 							checked={p.models}
 							onChange={(v) => updatePerm({ models: v })}
 						/>
@@ -637,6 +641,7 @@ function PermToggle({
 }
 
 function ManifestEditorContent() {
+	const { t } = useTranslation("common");
 	const router = useRouter();
 	const searchParams = useSearchParams();
 	const initialPath = searchParams.get("path") ?? "";
@@ -738,10 +743,10 @@ function ManifestEditorContent() {
 					<div>
 						<div className="flex items-center gap-2">
 							<FileText className="h-5 w-5 text-primary" />
-							<h1 className="text-2xl font-bold">Manifest Editor</h1>
+							<h1 className="text-2xl font-bold">{t('manifestEditor', 'Manifest Editor')}</h1>
 						</div>
 						<p className="text-sm text-muted-foreground">
-							Configure your flow-like.toml visually
+							{t('configureYourFlowliketomlVisually', 'Configure your flow-like.toml visually')}
 						</p>
 					</div>
 				</div>
@@ -751,7 +756,7 @@ function ManifestEditorContent() {
 							variant="outline"
 							className="text-xs text-amber-600 border-amber-500/30"
 						>
-							Unsaved changes
+							{t('unsavedChanges', 'Unsaved changes')}
 						</Badge>
 					)}
 					<Button
@@ -765,7 +770,7 @@ function ManifestEditorContent() {
 						) : (
 							<Save className="h-4 w-4" />
 						)}
-						Save
+						{t('save', 'Save')}
 					</Button>
 				</div>
 			</div>
@@ -779,13 +784,13 @@ function ManifestEditorContent() {
 							<Input
 								value={projectPath}
 								onChange={(e) => setProjectPath(e.target.value)}
-								placeholder="Select a project directory..."
+								placeholder={t('selectAProjectDirectory', 'Select a project directory...')}
 								className="flex-1 h-9"
 								readOnly
 							/>
 							<Button variant="outline" size="sm" onClick={selectProject}>
 								<FolderOpen className="h-4 w-4 mr-2" />
-								Open
+								{t('open', 'Open')}
 							</Button>
 							<Button
 								variant="outline"
@@ -803,7 +808,7 @@ function ManifestEditorContent() {
 							</Button>
 							<Button variant="outline" size="sm" onClick={createNew}>
 								<Plus className="h-4 w-4 mr-2" />
-								New
+								{t('new', 'New')}
 							</Button>
 						</div>
 					</CardContent>
@@ -829,14 +834,14 @@ function ManifestEditorContent() {
 								<CardContent className="py-12 text-center space-y-3">
 									<AlertCircle className="h-10 w-10 text-muted-foreground mx-auto" />
 									<div>
-										<p className="font-medium">No flow-like.toml found</p>
+										<p className="font-medium">{t('noFlowliketomlFound', 'No flow-like.toml found')}</p>
 										<p className="text-sm text-muted-foreground">
-											Create a new manifest for this project
+											{`Create a new manifest for this project`}
 										</p>
 									</div>
 									<Button onClick={createNew} className="gap-1.5">
 										<Plus className="h-4 w-4" />
-										Create Manifest
+										{t('createManifest', 'Create Manifest')}
 									</Button>
 								</CardContent>
 							</Card>
@@ -849,10 +854,10 @@ function ManifestEditorContent() {
 								<FileText className="h-12 w-12 text-muted-foreground/30 mx-auto" />
 								<div>
 									<p className="font-medium">
-										Select a project to edit its manifest
+										{t('selectAProjectToEditItsManifest', 'Select a project to edit its manifest')}
 									</p>
 									<p className="text-sm text-muted-foreground">
-										Or create a new one from scratch
+										{`Or create a new one from scratch`}
 									</p>
 								</div>
 							</CardContent>

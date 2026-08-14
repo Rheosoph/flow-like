@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -80,6 +81,7 @@ function InstalledPackageCard({
 		| "error"
 		| "stale";
 }) {
+	const { t } = useTranslation("common");
 	const { primaryHue, isDark } = useThemeInfo();
 	const gradient = useMemo(
 		() => hashToGradient(pkg.id, primaryHue, isDark),
@@ -136,10 +138,8 @@ function InstalledPackageCard({
 					<h3 className="text-sm font-semibold font-mono truncate group-hover:text-primary transition-colors">
 						{displayName}
 					</h3>
-					<span className="text-[10px] font-mono text-muted-foreground/50 shrink-0">
-						v{pkg.version}
-						{updateAvailable && (
-							<span className="text-primary"> → v{updateAvailable}</span>
+					<span className="text-[10px] font-mono text-muted-foreground/50 shrink-0">{`v${pkg.version}`}{updateAvailable && (
+							<span className="text-primary">{`→ v${updateAvailable}`}</span>
 						)}
 					</span>
 					<div className="flex items-center gap-1 ml-auto shrink-0">
@@ -155,7 +155,7 @@ function InstalledPackageCard({
 								className="gap-0.5 text-[10px] px-1.5 py-0.5"
 							>
 								<AlertCircle className="h-2.5 w-2.5" />
-								Update
+								{t('update', 'Update')}
 							</Badge>
 						)}
 					</div>
@@ -225,6 +225,7 @@ function InstalledPackageCard({
 }
 
 function InstalledContent() {
+	const { t } = useTranslation("common");
 	const queryClient = useQueryClient();
 	const auth = useAuth();
 	const [searchQuery, setSearchQuery] = useState("");
@@ -372,7 +373,7 @@ function InstalledContent() {
 				<div className="relative flex-1">
 					<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40" />
 					<Input
-						placeholder="Search installed packages…"
+						placeholder={t('searchInstalledPackages', 'Search installed packages…')}
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						className="pl-10 rounded-full bg-muted/30 border-border/20"
@@ -390,7 +391,9 @@ function InstalledContent() {
 						) : (
 							<RefreshCw className="h-3.5 w-3.5" />
 						)}
-						Update All ({availableUpdates.data?.length})
+						{t("updateAllLength", "Update All ({{length}})", {
+							length: availableUpdates.data?.length ?? 0,
+						})}
 					</Button>
 				)}
 			</div>
@@ -398,9 +401,7 @@ function InstalledContent() {
 			{installedPackages.data && (
 				<div className="flex gap-4 text-xs text-muted-foreground/60">
 					<span className="flex items-center gap-1">
-						<CheckCircle className="h-3.5 w-3.5 text-green-500" />
-						{registryPackages.length} installed
-					</span>
+						<CheckCircle className="h-3.5 w-3.5 text-green-500" />{t('lengthInstalled', '{{length}} installed', { length: registryPackages.length })}</span>
 					{hasUpdates && (
 						<span className="flex items-center gap-1">
 							<AlertCircle className="h-3.5 w-3.5 text-yellow-500" />
@@ -433,13 +434,13 @@ function InstalledContent() {
 					icons={[Download, Package, Sparkles]}
 					title={
 						searchQuery
-							? "No matching packages"
-							: "No registry packages installed"
+							? t('noMatchingPackages', 'No matching packages')
+							: t('noRegistryPackagesInstalled', 'No registry packages installed')
 					}
 					description={
 						searchQuery
-							? "Try a different search term"
-							: "Browse the Explore tab to find and install packages"
+							? t('tryADifferentSearchTerm', 'Try a different search term')
+							: t('browseTheExploreTabToFindAndInstallPackages', 'Browse the Explore tab to find and install packages')
 					}
 					className="border border-dashed border-border/30 rounded-2xl bg-muted/5"
 				/>
@@ -471,6 +472,7 @@ function InstalledContent() {
 // ─── Page Shell ──────────────────────────────────────────────────────────────
 
 function PackagesHub() {
+	const { t } = useTranslation("common");
 	const auth = useAuth();
 	const router = useRouter();
 	const searchParams = useSearchParams();
@@ -514,11 +516,11 @@ function PackagesHub() {
 					<TabsList>
 						<TabsTrigger value="explore">
 							<Search className="h-3.5 w-3.5 mr-1.5" />
-							Explore
+							{t('explore', 'Explore')}
 						</TabsTrigger>
 						<TabsTrigger value="installed">
 							<Download className="h-3.5 w-3.5 mr-1.5" />
-							Installed
+							{t('installed', 'Installed')}
 						</TabsTrigger>
 					</TabsList>
 

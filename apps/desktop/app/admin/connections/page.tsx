@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type IProcessGraphResponse,
 	ProcessGraph,
@@ -12,6 +13,7 @@ import { Waypoints } from "lucide-react";
 import { useCallback, useState } from "react";
 
 export default function AdminConnectionsPage() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const [days, setDays] = useState(30);
@@ -75,11 +77,10 @@ export default function AdminConnectionsPage() {
 					<div>
 						<h1 className="text-3xl font-bold flex items-center gap-2">
 							<Waypoints className="h-7 w-7" />
-							Process Graph
+							{t('processGraph', 'Process Graph')}
 						</h1>
 						<p className="text-muted-foreground">
-							Platform-wide view of app connections, observed call chains, and
-							process notes
+							{t('platformwideViewOfAppConnectionsObservedCallChainsAndProcessNotes', "Platform-wide view of app connections, observed call chains, and process notes")}
 						</p>
 					</div>
 

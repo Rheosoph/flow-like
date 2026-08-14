@@ -1,0 +1,955 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-ml-and-vision",
+		"name": "Machine Learning & Vision",
+		"language": "en",
+		"slug": "ml-and-vision",
+		"difficulty": "ADVANCED",
+		"category": "AI",
+		"estimatedMinutes": 75,
+		"isPublished": true,
+		"iconUrl": null,
+		"bannerUrl": null,
+		"tags": ["ml", "training", "onnx", "vision", "classification"],
+		"position": 17,
+		"description": "Train, evaluate, and run real ML — classification, regression, OCR, and object detection — without leaving your flows.",
+		"longDescription": "The support team wants tickets categorized, priorities graded, and scanned invoices read — so you build it. Pick the task your target actually describes, prepare leak-free training data, let cross-validation choose and tune the model, evaluate with the metric that hurts, and ship a versioned prediction contract into the triage flow. Then point pretrained ONNX models at pixels: OCR relays, runtime-labeled entity extraction, and object detection with an honest hand-labeled reality check. The final assessment hands you the team's build log and a broken dry run — you sign off on the release.",
+		"media": {
+			"icon": "media/app-logo.webp",
+			"banner": "assets/course-banner.webp"
+		},
+		"assets": [
+			{
+				"name": "MLPipelineOverview",
+				"file": "assets/course-banner.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "course-banner.webp",
+				"replace": true
+			},
+			{
+				"name": "MLTaskDecisionGuide",
+				"file": "assets/ml-task-decision-guide.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "ml-task-decision-guide.webp",
+				"replace": true
+			},
+			{
+				"name": "MLAutoTraining",
+				"file": "assets/ml-auto-training.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "ml-auto-training.webp",
+				"replace": true
+			},
+			{
+				"name": "MLConfigurationMap",
+				"file": "assets/ml-configuration-map.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "ml-configuration-map.webp",
+				"replace": true
+			},
+			{
+				"name": "DataScienceOverview",
+				"file": "assets/data-science-overview.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "data-science-overview.webp",
+				"replace": true
+			},
+			{
+				"name": "DataStudioOverview",
+				"file": "assets/DataStudioOverview.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "DataStudioOverview.webp",
+				"replace": true
+			},
+			{
+				"name": "AppDatabases",
+				"file": "assets/AppDatabases.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "AppDatabases.webp",
+				"replace": true
+			},
+			{
+				"name": "AppStorage",
+				"file": "assets/AppStorage.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "AppStorage.webp",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "course-ml-and-vision-module-frame",
+				"title": "Frame & Prepare",
+				"description": "Pick the learning task your target actually describes, then get honest, model-ready data.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "lesson-mlv-which-problem",
+						"title": "Which Problem Is This, Exactly?",
+						"language": "en",
+						"contentFile": "content/which-problem.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-mlv-priority-task",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "First field on the board: priority — low, medium, high, urgent. Which task does the decision guide route it to?",
+								"explanation": "Ordered levels are the ordinal branch: the order carries information, and an ordinal model knows a three-level miss is worse than a one-level one. Classification is the tempting answer because the levels are names — but the deciding test fails: reordering priority labels absolutely changes the problem. Regression fails the other way, inventing distances the levels don't carry, as if urgent were exactly twice high.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "ordinal",
+											"label": "Ordinal — the levels are ordered, and the order carries information"
+										},
+										{
+											"id": "classification",
+											"label": "Classification — four named labels means four classes"
+										},
+										{
+											"id": "regression",
+											"label": "Regression — map the levels to 1–4 and predict the number"
+										},
+										{
+											"id": "clustering",
+											"label": "Clustering — let the model discover the priority groups itself"
+										}
+									],
+									"correct": ["ordinal"]
+								}
+							},
+							{
+								"id": "challenge-mlv-unlabeled-archive",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A teammate suspects the archive hides ticket types nobody has named yet — there is no target column at all. Which task fits?",
+								"explanation": "No target column means clustering: you want groups, but nothing supplies the correct groups. Novelty detection is the tempting neighbor — it also lacks a target — but it needs normal-only examples and answers inlier or outlier, never \"what groups exist.\" Classification can't help here because it never invents labels; someone has to supply them.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "clustering",
+											"label": "Clustering — you want groups, but nothing supplies the correct groups"
+										},
+										{
+											"id": "classification",
+											"label": "Classification — the model will invent the categories during training"
+										},
+										{
+											"id": "novelty",
+											"label": "Novelty detection — unusual tickets are exactly what we're looking for"
+										},
+										{
+											"id": "regression",
+											"label": "Regression — predict how many tickets fall into each group"
+										}
+									],
+									"correct": ["clustering"]
+								}
+							},
+							{
+								"id": "challenge-mlv-task-truths",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Standup is debating the three ticket fields. Which claims survive the decision guide?",
+								"explanation": "Category passes the reorder test — shuffling billing/bug/how-to changes nothing, so it's classification — and a classifier really does charge a low-for-urgent miss exactly like a high-for-urgent one, which is why priority needs ordinal instead. Priority-as-regression is the tempting slip: the levels look like 1–4, but regression invents distances the levels don't carry. And the task is never sorted out during training — the target's shape decides it before any algorithm is picked.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "category-classification",
+											"label": "Reordering billing/bug/how-to changes nothing, so category is classification"
+										},
+										{
+											"id": "classifier-distance-blind",
+											"label": "A classifier scores a low-for-urgent miss exactly like a high-for-urgent miss"
+										},
+										{
+											"id": "priority-regression",
+											"label": "Priority levels are basically the numbers 1–4, so regression is the natural fit"
+										},
+										{
+											"id": "algorithm-decides",
+											"label": "Pick a strong algorithm first — the task sorts itself out during training"
+										}
+									],
+									"correct": ["category-classification", "classifier-distance-blind"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-mlv-data-first",
+						"title": "Data First: Feed the Model Right",
+						"language": "en",
+						"contentFile": "content/data-first.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-mlv-split-first",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The 3,000 archived tickets sit in one table. What's your first preparation move?",
+								"explanation": "Split first, then fit preprocessing on the training split only. Fitting the scaler on all rows sounds like consistency — that's what makes it tempting — but it bakes the test rows' statistics into the scaler, so your held-out evaluation has already been consulted. Two per-split scalers measure with two different rulers, and shuffling changes row order, not what the scaler sees.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "split-first",
+											"label": "Split into train and test, then fit the scaler on the training split only"
+										},
+										{
+											"id": "scale-all",
+											"label": "Fit the scaler on all 3,000 rows so both splits share consistent statistics"
+										},
+										{
+											"id": "two-scalers",
+											"label": "Fit one scaler per split so each side is scaled to its own distribution"
+										},
+										{
+											"id": "shuffle-only",
+											"label": "Shuffle the table — random order makes leakage impossible"
+										}
+									],
+									"correct": ["split-first"]
+								}
+							},
+							{
+								"id": "challenge-mlv-stratified",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Category runs 70% billing, 20% bug, 10% how-to. Which split protects your evaluation, and why?",
+								"explanation": "Stratified Split splits within each class, so both tables keep the 70/20/10 shape and the test set can't be starved of how-to tickets — plus its Seed pin makes the split reproducible. A plain random split preserving class shares is exactly what you can't count on with a small minority class. K-Fold is a cross-validation tool, not a requirement imposed by imbalance, and duplicating minority rows changes the data instead of protecting the evaluation.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "stratified",
+											"label": "Stratified Split — it splits within each class, so the test set keeps its share of how-to tickets"
+										},
+										{
+											"id": "plain-equivalent",
+											"label": "Split Dataset — with a fair ratio, any random split preserves the class shares anyway"
+										},
+										{
+											"id": "kfold-required",
+											"label": "K-Fold Split — multiple folds are mandatory whenever classes are uneven"
+										},
+										{
+											"id": "sample-balance",
+											"label": "Sample Dataset — sample extra how-to rows until all three classes are equal"
+										}
+									],
+									"correct": ["stratified"]
+								}
+							},
+							{
+								"id": "challenge-mlv-transform-truths",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements about the preprocessing nodes are true?",
+								"explanation": "Fit nodes learn; Apply Transform replays — always with the same fitted model that was fitted on train. And TF-IDF is the documented exception: document frequencies are recomputed per Apply Transform run, so vectors only compare within one run. The tempting wrong answer is the refit — the scaler's formula is identical, but the learned offsets and scales differ, and those learned statistics are the entire point.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "apply-same-fitted",
+											"label": "Apply Transform must receive the same fitted model that was fitted on the training split"
+										},
+										{
+											"id": "tfidf-one-run",
+											"label": "TF-IDF vectors are only comparable within a single Apply Transform run"
+										},
+										{
+											"id": "refit-formula",
+											"label": "Refitting a scaler on the test split is safe — the formula is identical, so the result is too"
+										},
+										{
+											"id": "apply-relearns",
+											"label": "Apply Transform re-learns statistics from each new table before transforming it"
+										}
+									],
+									"correct": ["apply-same-fitted", "tfidf-one-run"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "course-ml-and-vision-module-train",
+				"title": "Train, Trust & Ship",
+				"description": "Select and tune with cross-validation, evaluate on untouched rows, and serve predictions inside a flow.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "lesson-mlv-train-honestly",
+						"title": "Train Honestly, Measure What Hurts",
+						"language": "en",
+						"contentFile": "content/train-honestly.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-mlv-ask-for",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Your teammate's Decision Tree reports 99% accuracy on the rows it trained on. What do you ask for before Friday?",
+								"explanation": "The only number that counts is the score on the held-out split the model never saw — a deep tree can memorize its training set, so a training score isn't evidence. A deeper tree memorizes harder, training on all rows destroys your ability to measure anything, and averaging training scores across seeds just averages memorization.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "heldout-score",
+											"label": "The score on the held-out test split the model never saw"
+										},
+										{
+											"id": "more-depth",
+											"label": "A deeper tree — 99% means there's signal left to capture"
+										},
+										{
+											"id": "train-on-all",
+											"label": "A retrain on all rows — more data makes the 99% more trustworthy"
+										},
+										{
+											"id": "seed-average",
+											"label": "The training score averaged across five random seeds"
+										}
+									],
+									"correct": ["heldout-score"]
+								}
+							},
+							{
+								"id": "challenge-mlv-priority-tuner",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Priority was tuned with Auto Classifier and the leaderboard looks plausible. What's wrong?",
+								"explanation": "Auto Classifier ranks by accuracy or macro-F1, and both are distance-blind: filing an urgent ticket as low costs the objective exactly what filing it as high does. The trap is that nothing looks wrong — the leaderboard stays plausible while crowning a model that can't respect the order. Ordered targets get Auto Ordinal and a distance-aware metric. More folds or more candidates under the same blind objective change nothing, and Auto-then-Grid is the correct order, not the problem.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "distance-blind",
+											"label": "Accuracy is distance-blind on ordered levels — re-tune with Auto Ordinal and a distance-aware metric"
+										},
+										{
+											"id": "nothing-wrong",
+											"label": "Nothing — a clean leaderboard means the tuner fit the task"
+										},
+										{
+											"id": "more-folds",
+											"label": "Too few folds — add folds until the ranking stabilizes"
+										},
+										{
+											"id": "grid-first",
+											"label": "Grid Search should run before Auto Classifier, not after"
+										}
+									],
+									"correct": ["distance-blind"]
+								}
+							},
+							{
+								"id": "challenge-mlv-test-discipline",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which practices keep the evaluation honest?",
+								"explanation": "The test set is split off before any tuner sees a row and reports the final number exactly once — cross-validation scores are selection tools. And direction matters: Mean Rank Error is an error metric where lower is better, which is why Ordinal Grid Search publishes a Higher Is Better pin to branch on. The tempting slip is recycling test rows as an extra fold: it feels like wasting nothing, and it spends the only honest number you had.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "test-outside",
+											"label": "Split the test set off before any tuner sees the rows"
+										},
+										{
+											"id": "cv-selects",
+											"label": "Treat cross-validation scores as selection tools; the held-out test reports the final number"
+										},
+										{
+											"id": "direction-pin",
+											"label": "Read the metric's direction from the node — for Mean Rank Error, lower is better"
+										},
+										{
+											"id": "test-as-fold",
+											"label": "Let the test rows join cross-validation as one extra fold — more data per candidate"
+										},
+										{
+											"id": "bigger-wins",
+											"label": "Whatever the metric, the bigger leaderboard number is the better model"
+										}
+									],
+									"correct": ["test-outside", "cv-selects", "direction-pin"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-mlv-ship-the-winner",
+						"title": "Ship the Winner",
+						"language": "en",
+						"contentFile": "content/ship-the-winner.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-mlv-ship-list",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The category model passed its held-out test. What actually gets persisted?",
+								"explanation": "Each Save Model call accepts one model handle, and the classifier is a contract of three fitted artifacts — predictor, scaler, vectorizer — saved separately and versioned together. The bundling assumption is the tempting one because it feels like how it should work. Shipping the predictor alone and refitting preprocessing at inference is exactly the shifted-ruler bug this lesson warns about.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "contract",
+											"label": "Predictor, fitted scaler, and fitted vectorizer — separate Save Model calls, versioned together"
+										},
+										{
+											"id": "one-call",
+											"label": "One Save Model call — the trainer's output bundles its preprocessing"
+										},
+										{
+											"id": "predictor-only",
+											"label": "The predictor alone — preprocessing is refitted at inference from incoming rows"
+										},
+										{
+											"id": "training-table",
+											"label": "The training table — any model can be refitted from it on demand"
+										}
+									],
+									"correct": ["contract"]
+								}
+							},
+							{
+								"id": "challenge-mlv-confidence",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Uncertain tickets must route to a human. Where can a per-ticket confidence come from?",
+								"explanation": "Confidence exists only on the struct Vector-mode Predict returns — one row at a time, and only for models that carry a probability model. Database mode writes the predicted class and nothing else, so the \"confidence column\" is the tempting fiction. The Confusion Matrix is aggregate evaluation, not per-row output, and tree, forest, AdaBoost, and Naive Bayes models report no confidence at all — model choice is part of the routing design.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "vector-mode",
+											"label": "Vector-mode Predict's returned struct — and only for a model that carries a probability model"
+										},
+										{
+											"id": "database-column",
+											"label": "Database-mode Predict — it writes a confidence column beside the Output Col"
+										},
+										{
+											"id": "every-model",
+											"label": "Any trained model — confidence is part of every prediction"
+										},
+										{
+											"id": "confusion-matrix",
+											"label": "The Confusion Matrix node — its cells convert to per-ticket confidence"
+										}
+									],
+									"correct": ["vector-mode"]
+								}
+							},
+							{
+								"id": "challenge-mlv-monday-skew",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Held-out metrics were fine, but live predictions skew badly — and the inference flow fits a fresh scaler on each day's tickets. What's the fix?",
+								"explanation": "Load the saved training-fitted scaler and replay it with Apply Transform — the same replay rule that protected the test split, applied forever. \"Adaptive\" refitting is how the bug gets justified: it changes the ruler daily, not the model. Drift is possible, but the observed defect is the refit, and features are consumed by position and transform contract — matching names rescues nothing.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "replay-saved",
+											"label": "Load the saved training-fitted scaler and replay it with Apply Transform before Predict"
+										},
+										{
+											"id": "adaptive-good",
+											"label": "Keep the daily refit — it adapts the model to each day's distribution"
+										},
+										{
+											"id": "retrain-model",
+											"label": "Retrain the model — the data has clearly drifted"
+										},
+										{
+											"id": "names-match",
+											"label": "Nothing — features are matched by name, so preprocessing differences are harmless"
+										}
+									],
+									"correct": ["replay-saved"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "course-ml-and-vision-module-vision",
+				"title": "Vision & Final Assessment",
+				"description": "Run pretrained OCR, NER, and vision models — then review the whole triage release.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "lesson-mlv-read-the-scan",
+						"title": "Read the Scan: OCR & NER",
+						"language": "en",
+						"contentFile": "content/read-the-scan.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-mlv-ocr-order",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Wire the invoice reader. Which order works?",
+								"explanation": "Detection finds the text regions, Crop cuts them out, Recognition reads each crop. Feeding the full page straight into Text Recognition is the tempting shortcut — but recognizers are trained on cropped text snippets, so a whole page returns gibberish. And Crop can't run first: until detection has found regions, there's nothing to crop.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "detect-crop-recognize",
+											"label": "Text Detection → Crop Text Regions → Text Recognition"
+										},
+										{
+											"id": "recognize-direct",
+											"label": "Text Recognition alone — it reads whatever image it's given"
+										},
+										{
+											"id": "crop-first",
+											"label": "Crop Text Regions → Text Detection → Text Recognition"
+										},
+										{
+											"id": "classify-first",
+											"label": "Image Classification → Text Recognition"
+										}
+									],
+									"correct": ["detect-crop-recognize"]
+								}
+							},
+							{
+								"id": "challenge-mlv-runtime-labels",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You need invoice_number, amount, and due_date as ticket fields — labels no pretrained fixed-set model ships with. What do you reach for?",
+								"explanation": "Zero-Shot NER (GLiNER) extracts entities for any labels you name at runtime — no fixed label set, no retraining. The tempting bridge is retraining the NER model with the ML tuners, but Grid Search tunes Flow-Like's own classic trainers, never ONNX exports — those are trained elsewhere. Fixed-set NER can't stretch to labels it never learned, and Text Detection finds where text sits, not what it means.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "gliner",
+											"label": "Zero-Shot NER (GLiNER) — name the labels at runtime, no retraining"
+										},
+										{
+											"id": "retrain-ner",
+											"label": "Retrain the NER model on labeled invoices with Grid Search"
+										},
+										{
+											"id": "fixed-ner",
+											"label": "Named Entity Recognition — its built-in date entity covers due_date, close enough"
+										},
+										{
+											"id": "detection-classes",
+											"label": "Text Detection with three custom classes, one per field"
+										}
+									],
+									"correct": ["gliner"]
+								}
+							},
+							{
+								"id": "challenge-mlv-onnx-truths",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements about the ONNX family are true?",
+								"explanation": "ONNX nodes run models trained elsewhere and exported; NER additionally needs the tokenizer.json from the same repository, and Model Info reports the expected input and output tensors so you can verify the contract before wiring. The tempting miss is Save Model: it persists Flow-Like's own trained ML artifacts, while ONNX models are files you manage in Storage. And nothing fine-tunes at inference — an ONNX model never learns from your data.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "pretrained",
+											"label": "ONNX nodes run models trained elsewhere and exported — you don't train them in Flow-Like"
+										},
+										{
+											"id": "tokenizer-repo",
+											"label": "The NER node needs the tokenizer.json from the same repository as the model"
+										},
+										{
+											"id": "model-info",
+											"label": "Model Info reports the expected input and output tensors — check them before wiring"
+										},
+										{
+											"id": "save-model-onnx",
+											"label": "Save Model persists a loaded ONNX session for the next run"
+										},
+										{
+											"id": "finetune-run",
+											"label": "ONNX nodes fine-tune the model a little on your data with every inference"
+										}
+									],
+									"correct": ["pretrained", "tokenizer-repo", "model-info"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-mlv-see-the-picture",
+						"title": "See the Picture: Detection & Friends",
+						"language": "en",
+						"contentFile": "content/see-the-picture.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-mlv-hardware-photo",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Flag hardware photos where the product is visible — and mark where it is. Which node?",
+								"explanation": "\"What's here, and where\" is Object Detection: classes plus bounding boxes. Image Classification is the tempting near-miss — it can flag that a product appears, but it answers which, never where. Segmentation over-answers at real cost when a box satisfies the requirement, and embeddings from Feature Extraction don't decode back into positions.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "detection",
+											"label": "Object Detection — classes plus bounding boxes"
+										},
+										{
+											"id": "classification",
+											"label": "Image Classification — with 'product' as one of the labels"
+										},
+										{
+											"id": "segmentation",
+											"label": "Semantic Segmentation — per-pixel maps are strictly more information"
+										},
+										{
+											"id": "feature-extraction",
+											"label": "Feature Extraction — embeddings encode position implicitly"
+										}
+									],
+									"correct": ["detection"]
+								}
+							},
+							{
+								"id": "challenge-mlv-backlog",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "4,000 archived attachments need the attachment-type model run over them. What's the built-in way?",
+								"explanation": "Batch Image Inference takes one loaded ONNX session and a list of images and processes them in batches. The tempting mixup is the classic Predict node — but Predict serves Flow-Like's own trained tabular models, not ONNX image sessions; the two families never share serving nodes. Reloading the model per image wastes the session for nothing, and Storage stores files — nothing runs on upload.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "batch-inference",
+											"label": "Batch Image Inference — one loaded model, a list of images, batched runs"
+										},
+										{
+											"id": "vector-predict",
+											"label": "Loop the images through the classic Predict node in Vector mode"
+										},
+										{
+											"id": "reload-per-image",
+											"label": "Call Load ONNX freshly for every image so sessions stay clean"
+										},
+										{
+											"id": "upload-again",
+											"label": "Re-upload the folder — Storage runs inference on upload"
+										}
+									],
+									"correct": ["batch-inference"]
+								}
+							},
+							{
+								"id": "challenge-mlv-vision-rollout",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which steps belong in the vision rollout?",
+								"explanation": "Verify tensors with Model Info, route attachment types with Image Classification, and — lesson 3's honesty rule relocated — compare the model against a hand-labeled sample of your own attachments before automating. The tempting shortcut is trusting the published benchmark: it describes the model's home dataset, not your inbox. And no vision node requires segmentation masks as a prerequisite.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "hand-labeled",
+											"label": "Hand-label a sample of real attachments and compare the model's answers before automating"
+										},
+										{
+											"id": "route-classify",
+											"label": "Route attachment types with Image Classification, then send each type down its own branch"
+										},
+										{
+											"id": "verify-tensors",
+											"label": "Check each export's expected tensors with Model Info before wiring"
+										},
+										{
+											"id": "benchmark-proof",
+											"label": "Take the published benchmark score as proof it works on your attachments"
+										},
+										{
+											"id": "segmentation-required",
+											"label": "Run Semantic Segmentation first — the other vision nodes require its masks"
+										}
+									],
+									"correct": ["hand-labeled", "route-classify", "verify-tensors"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-mlv-final",
+						"title": "The Triage Machine",
+						"language": "en",
+						"contentFile": "content/final-assessment.md",
+						"videoUrl": null,
+						"estimatedMinutes": 15,
+						"position": 2,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-mlv-final-suspicious-994",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "D1: category test accuracy is 99.4%. B1 tells you how it was built. Your review verdict?",
+								"explanation": "B1 fitted the scaler and vectorizer on all 3,000 rows before splitting — the test rows' statistics are baked into the preprocessing, so the evaluation was consulted before it ever ran. \"The split came before training\" is the tempting defense, but the leak happened in preprocessing, not training. The fix: split, fit on train only, Apply Transform everywhere else, re-evaluate — and expect a lower, honest number.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "leakage",
+											"label": "Preprocessing was fitted on all rows before the split — test statistics leaked, the number is inflated"
+										},
+										{
+											"id": "genuine",
+											"label": "The score is genuine — the split happened before training, which is what matters"
+										},
+										{
+											"id": "too-few-classes",
+											"label": "99.4% is expected — three classes make the problem nearly trivial"
+										},
+										{
+											"id": "more-depth",
+											"label": "Suspicious, but the fix is a deeper model to confirm the ceiling"
+										}
+									],
+									"correct": ["leakage"]
+								}
+							},
+							{
+								"id": "challenge-mlv-final-urgent-low",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "D2: urgent tickets were filed as low, yet B2's leaderboard looked clean. Diagnosis?",
+								"explanation": "Priority is an ordered target and Auto Classifier's accuracy objective is distance-blind: a four-level miss costs it exactly what a one-level miss costs, so the leaderboard stays plausible while crowning a model that can't respect the order. Re-tune with Auto Ordinal and judge with Ordinal Metrics, whose quadratic kappa charges misses by distance. Sweeping more families under the same blind metric changes nothing, and thresholding the output patches a model that never learned the order.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "wrong-tuner",
+											"label": "Accuracy is distance-blind on ordered levels — re-tune with Auto Ordinal and judge with Ordinal Metrics"
+										},
+										{
+											"id": "bad-luck",
+											"label": "Shadow-mode bad luck — the leaderboard already proved the model"
+										},
+										{
+											"id": "more-candidates",
+											"label": "Too few families swept — rerun Auto Classifier with every include toggle on"
+										},
+										{
+											"id": "threshold-fix",
+											"label": "Keep the model and raise the priority threshold until urgent stops landing low"
+										}
+									],
+									"correct": ["wrong-tuner"]
+								}
+							},
+							{
+								"id": "challenge-mlv-final-monday-skew",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "D3: Monday's live predictions skew heavily toward billing. B3 explains why. The fix?",
+								"explanation": "B3's daily scaler refit changes the ruler every morning: different offsets and scales than the model was trained on, so features arrive distorted and predictions skew. The inference contract is the fix — ship the training-fitted scaler with the model and replay it with Apply Transform. Retraining chases a drift that isn't the defect, and down-weighting billing outputs patches the symptom of a broken input contract.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "replay-contract",
+											"label": "Ship the training-fitted scaler with the model and replay it via Apply Transform in the inference flow"
+										},
+										{
+											"id": "daily-adaptive",
+											"label": "Keep the daily refit and retrain the model weekly so it catches up"
+										},
+										{
+											"id": "drift-retrain",
+											"label": "Customer behavior drifted over the weekend — retrain on Monday's tickets"
+										},
+										{
+											"id": "billing-prior",
+											"label": "Down-weight billing predictions until the output distribution matches the archive"
+										}
+									],
+									"correct": ["replay-contract"]
+								}
+							},
+							{
+								"id": "challenge-mlv-final-invoice-fix",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "D4: the invoice reader returns gibberish, and R3 still needs its fields. Which two changes complete the requirement?",
+								"explanation": "B4 skipped the relay: recognizers read cropped snippets, so Text Detection and Crop Text Regions must run first — resolution isn't the problem, wiring is. The fields then come from Zero-Shot NER (GLiNER) with invoice_number, amount, and due_date named at runtime. The tempting fix is tuning the recognizer with Grid Search, but the ML tuners train Flow-Like's classic models — ONNX exports are trained elsewhere and never pass through them.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "add-detect-crop",
+											"label": "Insert Text Detection and Crop Text Regions before Text Recognition"
+										},
+										{
+											"id": "gliner-fields",
+											"label": "Extract invoice_number, amount, and due_date with Zero-Shot NER (GLiNER), naming the labels at runtime"
+										},
+										{
+											"id": "train-recognizer",
+											"label": "Tune the recognizer on labeled invoices with Grid Search until the gibberish stops"
+										},
+										{
+											"id": "higher-res",
+											"label": "Keep the wiring and raise the image resolution — recognizers just need more pixels"
+										}
+									],
+									"correct": ["add-detect-crop", "gliner-fields"]
+								}
+							},
+							{
+								"id": "challenge-mlv-final-photo-backlog",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "B5: the hardware-photo requirement plus 4,000 archived images. Which pairing covers R4 and the backlog?",
+								"explanation": "R4 asks what-and-where, so Object Detection's boxes are the requirement's shape, and the archive is a list of images — Batch Image Inference's exact job. The classification-plus-Predict pairing is the tempting one, but it fails twice: classification can't mark positions, and the classic Predict node serves Flow-Like's trained tabular models, not ONNX sessions. Crop Text Regions crops text regions, not products.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "detect-batch",
+											"label": "Object Detection for product-and-position, Batch Image Inference for the archive"
+										},
+										{
+											"id": "classify-vector",
+											"label": "Image Classification for the flag, Vector-mode Predict for the archive"
+										},
+										{
+											"id": "segment-save",
+											"label": "Semantic Segmentation for precision, Save Model to persist the session between runs"
+										},
+										{
+											"id": "similarity-crop",
+											"label": "Feature Similarity to find products, Crop Text Regions to mark their positions"
+										}
+									],
+									"correct": ["detect-batch"]
+								}
+							},
+							{
+								"id": "challenge-mlv-final-ship-review",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Review B6 and design D5. Which items belong on the corrected ship list?",
+								"explanation": "Save Model takes one handle per call, so B6's bundle doesn't exist — predictor, scaler, and vectorizer each get their own save, versioned together as one contract. R5's routing runs through Vector-mode Predict's confidence, which requires choosing a model that carries a probability model. And the held-out test rows stay out of every future tuning loop — spent once, never recycled. The Database-mode confidence column is the persistent fiction: that mode writes the predicted class only.",
+								"points": 10,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "separate-saves",
+											"label": "One Save Model call per artifact — predictor, scaler, vectorizer — versioned together as a contract"
+										},
+										{
+											"id": "vector-confidence",
+											"label": "Route uncertain tickets via Vector-mode Predict's confidence, choosing a model that carries a probability model"
+										},
+										{
+											"id": "test-untouched",
+											"label": "Keep the held-out test rows out of every future tuning loop, too"
+										},
+										{
+											"id": "bundle-save",
+											"label": "Keep B6 as written — Save Model bundles the model with its preprocessing"
+										},
+										{
+											"id": "db-confidence",
+											"label": "Read confidence from the column Database-mode Predict writes next to the prediction"
+										}
+									],
+									"correct": ["separate-saves", "vector-confidence", "test-untouched"]
+								}
+							},
+							{
+								"id": "challenge-mlv-final-knn-privacy",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "B7: switch the category model to K-Nearest Neighbours, with customer account details in the ticket text. What must the review flag?",
+								"explanation": "A KNN model embeds a verbatim copy of its training set, so with account details in the text, the saved artifact is exactly as sensitive as the source table and needs the same access controls. Nothing anonymizes a model on save. A missing probability model would only limit confidence-based routing, not make predictions invalid — and a fixed seed never makes ensemble artifacts byte-identical, so it's no basis for approval either.",
+								"points": 10,
+								"position": 6,
+								"payload": {
+									"options": [
+										{
+											"id": "embeds-rows",
+											"label": "A KNN artifact embeds the training rows verbatim — the model file needs the source table's access controls"
+										},
+										{
+											"id": "auto-anonymized",
+											"label": "Nothing — saved models are anonymized as they're written"
+										},
+										{
+											"id": "knn-invalid",
+											"label": "KNN can't be the category model — without a probability model its predictions are invalid"
+										},
+										{
+											"id": "seed-identical",
+											"label": "Approve if the seed is fixed — a fixed seed makes every artifact byte-identical"
+										}
+									],
+									"correct": ["embeds-rows"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		]
+	}
+}

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Download, Search } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -9,6 +10,7 @@ export default function RegistryLayout({
 }: Readonly<{
 	children: React.ReactNode;
 }>) {
+	const { t } = useTranslation("common");
 	const pathname = usePathname();
 	const isExplore = pathname === "/settings/registry/explore";
 
@@ -17,10 +19,10 @@ export default function RegistryLayout({
 			<div className="px-4 sm:px-8 pt-5 space-y-4">
 				<div>
 					<h1 className="text-2xl font-semibold tracking-tight">
-						Custom Nodes
+						{t('customNodes', 'Custom Nodes')}
 					</h1>
 					<p className="text-sm text-muted-foreground/70">
-						Browse and manage node packages
+						{t('browseAndManageNodePackages', 'Browse and manage node packages')}
 					</p>
 				</div>
 
@@ -34,7 +36,7 @@ export default function RegistryLayout({
 							}`}
 						>
 							<Download className="h-3.5 w-3.5" />
-							Owned
+							{t('owned', 'Owned')}
 						</div>
 					</Link>
 					<Link href="/settings/registry/explore">
@@ -46,7 +48,7 @@ export default function RegistryLayout({
 							}`}
 						>
 							<Search className="h-3.5 w-3.5" />
-							Explore
+							{t('explore', 'Explore')}
 						</div>
 					</Link>
 				</div>

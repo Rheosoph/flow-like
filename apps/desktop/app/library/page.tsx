@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	type IApp,
@@ -22,6 +23,7 @@ import { isMobileDevice as detectMobileDevice } from "./../../lib/platform";
 import ImportEncryptedDialog from "./components/ImportEncryptedDialog";
 
 export default function DesktopLibraryPage() {
+	const { t } = useTranslation("common");
 	const router = useRouter();
 	const auth = useAuth();
 	const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -77,8 +79,8 @@ export default function DesktopLibraryPage() {
 			setImportDialogOpen(true);
 			return;
 		}
-		const toastId = toast.loading("Importing app...", {
-			description: "Please wait.",
+		const toastId = toast.loading(t('importingApp', 'Importing app...'), {
+			description: t('pleaseWait', 'Please wait.'),
 		});
 		try {
 			const app = await invoke<IApp>("import_app_from_file", { path });
@@ -86,10 +88,10 @@ export default function DesktopLibraryPage() {
 				visibility: app.visibility ?? IAppVisibility.Offline,
 				appId: app.id,
 			});
-			toast.success("App imported successfully!", { id: toastId });
+			toast.success(t('appImportedSuccessfully', 'App imported successfully!'), { id: toastId });
 		} catch (err) {
 			console.error(err);
-			toast.error("Failed to import app", { id: toastId });
+			toast.error(`Failed to import app`, { id: toastId });
 		}
 	}, []);
 
@@ -97,7 +99,7 @@ export default function DesktopLibraryPage() {
 		type Filter = { name: string; extensions: string[] };
 		const filtersOption: Filter[] | undefined = isMobileDevice
 			? undefined
-			: [{ name: "Flow App", extensions: ["flow-app"] }];
+			: [{ name: t('flowApp', 'Flow App'), extensions: ["flow-app"] }];
 
 		const selection = await open({
 			multiple: false,
@@ -150,7 +152,7 @@ export default function DesktopLibraryPage() {
 						<ImportIcon className="h-4 w-4" />
 					</Button>
 				</TooltipTrigger>
-				<TooltipContent>Import app</TooltipContent>
+				<TooltipContent>{t('importApp', 'Import app')}</TooltipContent>
 			</Tooltip>
 		),
 		[pickImportFile],

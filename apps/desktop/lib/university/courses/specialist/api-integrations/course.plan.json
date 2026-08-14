@@ -1,0 +1,862 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-api-integrations",
+		"name": "API Integrations & Webhooks",
+		"language": "en",
+		"slug": "api-integrations",
+		"difficulty": "INTERMEDIATE",
+		"category": "INTEGRATIONS",
+		"estimatedMinutes": 65,
+		"isPublished": true,
+		"iconUrl": null,
+		"bannerUrl": null,
+		"tags": ["api", "http", "webhooks", "endpoints", "secrets"],
+		"position": 15,
+		"description": "Call anything, be called by anything — HTTP flows, webhooks, API keys, and secrets that stay secret.",
+		"longDescription": "One support app, one CRM, both directions. You pull customer context with request-builder and API Call nodes, move the credential into runtime variables before it can leak, and teach the flow to survive rate limits, deploy blips, and retries that would otherwise duplicate data. Then you flip the arrow: an inbound webhook endpoint with a bearer token at the door, a REST surface for the CRM's backend, and API keys that outlive any single teammate. The final assessment hands you the dry-run findings — duplicate notes, a vanished secret, a parser broken by an overnight draft edit — and makes you close every one.",
+		"media": {
+			"icon": "media/app-logo.webp",
+			"banner": "assets/course-banner.webp"
+		},
+		"assets": [
+			{
+				"name": "ApiIntegrationOverview",
+				"file": "assets/course-banner.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "course-banner.webp",
+				"replace": true
+			},
+			{
+				"name": "AppEvents",
+				"file": "assets/AppEvents.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "AppEvents.webp",
+				"replace": true
+			},
+			{
+				"name": "QuickActionEvent",
+				"file": "assets/QuickActionEvent.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "QuickActionEvent.webp",
+				"replace": true
+			},
+			{
+				"name": "RouteConfiguration",
+				"file": "assets/RouteConfiguration.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "RouteConfiguration.webp",
+				"replace": true
+			},
+			{
+				"name": "RuntimeVariables",
+				"file": "assets/RuntimeVariables.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "RuntimeVariables.webp",
+				"replace": true
+			},
+			{
+				"name": "RunsAndLogs",
+				"file": "assets/RunsAndLogs.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "RunsAndLogs.webp",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "course-api-integrations-module-calling-out",
+				"title": "Calling Out",
+				"description": "Build, authenticate, and harden outbound HTTP calls from your flows.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "course-api-integrations-lesson-outbound-calls",
+						"title": "Call Orbit: Your First Outbound Request",
+						"language": "en",
+						"contentFile": "content/outbound-calls.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-api-sends-request",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In the triage flow, which node actually sends the request to Orbit?",
+								"explanation": "Nothing touches the network until execution reaches API Call — that's why it's the node with execution pins. Make Request is the tempting slip: \"make\" sounds like \"send\", but it only assembles the request as a value on the data path. The builders refine that value, and To Struct reads a response that must already exist.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "api-call",
+											"label": "API Call — the execution-path node that performs the exchange"
+										},
+										{
+											"id": "make-request",
+											"label": "Make Request — it creates the request, so it also sends it"
+										},
+										{
+											"id": "set-bearer",
+											"label": "Set Bearer Auth — the request fires once credentials are attached"
+										},
+										{
+											"id": "to-struct",
+											"label": "To Struct — reading the response is what triggers the exchange"
+										}
+									],
+									"correct": ["api-call"]
+								}
+							},
+							{
+								"id": "challenge-api-404-path",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Orbit answers the pull with 404 Not Found for an unknown email. What does API Call do?",
+								"explanation": "Success is reserved for 2xx status codes. A 404 is a complete, well-formed exchange, so it takes the Error path with the Response pin populated — which is exactly what lets you branch on the status later. \"A response arrived, so it succeeded\" confuses transport with outcome, and API Call has no automatic retry; the decision is yours.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "error-with-response",
+											"label": "Fires Error, with the Response pin populated so you can read the 404"
+										},
+										{
+											"id": "success-completed",
+											"label": "Fires Success — the request completed and a response arrived"
+										},
+										{
+											"id": "node-crashes",
+											"label": "Errors the node itself and stops the flow"
+										},
+										{
+											"id": "auto-retry",
+											"label": "Retries automatically until it receives a 2xx"
+										}
+									],
+									"correct": ["error-with-response"]
+								}
+							},
+							{
+								"id": "challenge-api-builder-nodes",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements about the Web/API/Request builder nodes (Set Header, Set Bearer Auth, Set Struct Body, …) are true?",
+								"explanation": "Builders transform a value: request in, modified request out, nothing sent. The tempting miss is \"sends its part as it runs\" — no network traffic happens until API Call executes, which is also why the builders need no execution pins. And nothing in a flow follows canvas placement; data follows connections.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "pure-data",
+											"label": "They're pure — they chain on the request's data pin with no execution pins"
+										},
+										{
+											"id": "return-modified",
+											"label": "Each takes a request and returns a modified request you pass forward"
+										},
+										{
+											"id": "send-incremental",
+											"label": "Each builder sends its part of the request as soon as it runs"
+										},
+										{
+											"id": "exec-required",
+											"label": "Set Bearer Auth needs its own execution pin so the token is applied securely"
+										},
+										{
+											"id": "order-left-right",
+											"label": "Builders apply in left-to-right canvas order, not connection order"
+										}
+									],
+									"correct": ["pure-data", "return-modified"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-api-integrations-lesson-auth-secrets",
+						"title": "Secrets That Stay Secret",
+						"language": "en",
+						"contentFile": "content/auth-and-secrets.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-api-secret-location",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Once you save a value for CRM_API_TOKEN, where does it actually live?",
+								"explanation": "The flow definition keeps only the variable's name, type, and settings; the value sits in local application storage and is never synced. \"Encrypted in the flow\" is the tempting one — the design goal is that the value never enters the flow at all, encrypted or otherwise, so rotating it never touches the app.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "local-storage",
+											"label": "In Flow-Like's local application storage on your device, keyed by app and variable"
+										},
+										{
+											"id": "flow-definition",
+											"label": "In the flow definition, encrypted, so it syncs safely"
+										},
+										{
+											"id": "event-record",
+											"label": "On the event that triggers the flow"
+										},
+										{
+											"id": "team-vault",
+											"label": "In a shared team vault so teammates receive it automatically"
+										}
+									],
+									"correct": ["local-storage"]
+								}
+							},
+							{
+								"id": "challenge-api-secret-behaviors",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "CRM_API_TOKEN is marked Secret and Runtime Configured. Which behaviors do you actually get?",
+								"explanation": "Secret masks the display and filters the value from remote execution payloads; Runtime Configured stores it per app and device — which is exactly why nothing distributes automatically. Auto-distribution is the tempting one: convenient, and precisely what the separation exists to prevent. Sharing an app must never mean sharing credentials.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "masked",
+											"label": "The value displays masked on the Runtime Variables screen"
+										},
+										{
+											"id": "excluded-remote",
+											"label": "The value is excluded from remote execution payloads"
+										},
+										{
+											"id": "per-device",
+											"label": "Each teammate and machine configures its own value"
+										},
+										{
+											"id": "auto-distributed",
+											"label": "The value is distributed to teammates' devices on their next sync"
+										},
+										{
+											"id": "written-back",
+											"label": "After the first successful run, the value is written into the flow's default"
+										}
+									],
+									"correct": ["masked", "excluded-remote", "per-device"]
+								}
+							},
+							{
+								"id": "challenge-api-remote-secret",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A flow that needs CRM_API_TOKEN later runs remotely on the server. What happens with the secret you configured on your laptop?",
+								"explanation": "Secrets are filtered out before a remote execution request ever leaves the device — the value simply never travels, so the run needs a server-side credential. \"Sent encrypted\" confuses channel security with the deliberate policy of exclusion. Only interactive local runs can prompt for missing values, and runtime values never sync with the definition, so there's nothing to fall back to.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "not-sent",
+											"label": "It isn't sent — the remote run needs a server-side credential instead"
+										},
+										{
+											"id": "sent-encrypted",
+											"label": "It's sent encrypted in transit, like any HTTPS payload"
+										},
+										{
+											"id": "prompts-caller",
+											"label": "The run pauses and prompts whoever triggered it for the value"
+										},
+										{
+											"id": "last-synced",
+											"label": "The run uses the last value that synced with the app definition"
+										}
+									],
+									"correct": ["not-sent"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-api-integrations-lesson-resilience",
+						"title": "When Orbit Has a Bad Day",
+						"language": "en",
+						"contentFile": "content/resilience.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 2,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-api-retry-which",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Which Orbit response deserves an automatic retry with backoff?",
+								"explanation": "5xx is their problem and usually transient — retry with widening waits. 401 is the tempting distractor: it feels temporary, but it's a configuration failure that a retry can only repeat. A 404 is an answer, not an obstacle, and an empty 200 is a parsing question, not a retry question.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "resp-503",
+											"label": "503 Service Unavailable"
+										},
+										{
+											"id": "resp-404",
+											"label": "404 Not Found"
+										},
+										{
+											"id": "resp-401",
+											"label": "401 Unauthorized"
+										},
+										{
+											"id": "resp-200",
+											"label": "200 OK with an empty body"
+										}
+									],
+									"correct": ["resp-503"]
+								}
+							},
+							{
+								"id": "challenge-api-retry-design",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which pieces belong in the retry design for calls to Orbit?",
+								"explanation": "Sort by status, then retry, then bound — that's the whole recipe. \"Retry everything for coverage\" is the tempting one: a 4xx reproduces identically forever, so retrying it is pure noise, and for 429s without a pause it's fuel on the fire. API Call has no built-in retry; the Error pin hands that decision to you.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "bounded-attempts",
+											"label": "A bounded attempt count with a hard cap"
+										},
+										{
+											"id": "delay-backoff",
+											"label": "A Delay between attempts that widens each time"
+										},
+										{
+											"id": "branch-status",
+											"label": "Branching on the status code before deciding to retry at all"
+										},
+										{
+											"id": "retry-4xx",
+											"label": "Retrying 4xx responses too, since coverage beats gaps"
+										},
+										{
+											"id": "builtin-retry",
+											"label": "Relying on API Call's built-in automatic retries"
+										}
+									],
+									"correct": ["bounded-attempts", "delay-backoff", "branch-status"]
+								}
+							},
+							{
+								"id": "challenge-api-duplicate-note",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The resolution push timed out, the flow retried, and Orbit now shows two identical notes. What was missing?",
+								"explanation": "A timeout means \"no answer\", not \"no effect\" — the first POST had already landed. Only idempotent design makes a retry converge on one note. A longer Delay is the tempting patch, but it just changes the race odds; a GET can't create a note at all; and pinning a version freezes logic, not outcomes.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "idempotent-design",
+											"label": "An idempotency guard — check whether the note exists before creating it, or send an identifier Orbit can deduplicate"
+										},
+										{
+											"id": "longer-delay",
+											"label": "A longer Delay so Orbit has time to finish before the retry"
+										},
+										{
+											"id": "use-get",
+											"label": "Using GET instead of POST, since GETs retry safely"
+										},
+										{
+											"id": "pin-version",
+											"label": "Pinning the flow to a numbered version so retries hit the same logic"
+										}
+									],
+									"correct": ["idempotent-design"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "course-api-integrations-module-being-called",
+				"title": "Being Called",
+				"description": "Expose webhooks, endpoints, and credentials so external systems reach your app safely.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "course-api-integrations-lesson-inbound-webhooks",
+						"title": "Now You're the API: Inbound Webhooks",
+						"language": "en",
+						"contentFile": "content/inbound-webhooks.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-api-webhook-location",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Orbit's plan-change notification must land at 2 a.m. while every laptop sleeps. Which execution location does the API event need?",
+								"explanation": "Local delivery requires the desktop app to be running — installing it isn't enough, and nothing buffers a request nobody was listening for. Hybrid doesn't split one run between machines either. Remote is the whole point of hosting the endpoint: it accepts the request while every desktop is off.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "remote",
+											"label": "Remote — the hosted endpoint accepts requests with no desktop running"
+										},
+										{
+											"id": "local",
+											"label": "Local — port 9657 is always listening once the app is installed"
+										},
+										{
+											"id": "either-buffered",
+											"label": "Either — missed webhooks queue until a desktop comes online"
+										},
+										{
+											"id": "hybrid-split",
+											"label": "Hybrid — the trigger arrives remotely and the flow runs locally later"
+										}
+									],
+									"correct": ["remote"]
+								}
+							},
+							{
+								"id": "challenge-api-webhook-401",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Your test curl to the webhook endpoint returns 401 Unauthorized. What's the most likely cause?",
+								"explanation": "With an auth token configured, every request that doesn't carry it correctly gets a 401. The wrong path is the tempting neighbor, but that produces a 404 — no sink matched. The flow version affects what runs, not whether you're allowed in, and webhook callers authenticate with the token, never with app membership.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "missing-bearer",
+											"label": "The request is missing or mismatching the configured bearer token in its Authorization header"
+										},
+										{
+											"id": "wrong-path",
+											"label": "The path doesn't match any configured endpoint"
+										},
+										{
+											"id": "wrong-version",
+											"label": "The event targets the wrong flow version"
+										},
+										{
+											"id": "not-team",
+											"label": "Orbit hasn't been added as a team member of the app"
+										}
+									],
+									"correct": ["missing-bearer"]
+								}
+							},
+							{
+								"id": "challenge-api-webhook-build",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements should shape the webhook build?",
+								"explanation": "The endpoint is a boundary: the token gates who can trigger, validation gates what you accept — a leaked token or a replayed request defeats one but not both. \"Secret means sent encrypted\" resurfaces from the secrets lesson, and it's still wrong: Secret means not sent at all, which is why remote runs need server-side credentials.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "validate-inside",
+											"label": "Validate the payload inside the flow — any request shaped like Orbit's reaches the entry node"
+										},
+										{
+											"id": "secret-unavailable",
+											"label": "A secret configured only on your laptop is unavailable to the remote webhook run"
+										},
+										{
+											"id": "one-endpoint",
+											"label": "An API event exposes exactly one endpoint — a second webhook path means a second event"
+										},
+										{
+											"id": "secret-encrypted-remote",
+											"label": "Marking the token Secret sends it to the server encrypted for the remote run"
+										},
+										{
+											"id": "token-validates",
+											"label": "With a bearer token configured, payload validation is redundant"
+										}
+									],
+									"correct": [
+										"validate-inside",
+										"secret-unavailable",
+										"one-endpoint"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-api-integrations-lesson-api-keys",
+						"title": "Hand Them a Key, Not Your Login",
+						"language": "en",
+						"contentFile": "content/api-keys.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-api-key-choice",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Orbit's production backend needs a credential for server-to-server calls into the app. Which one?",
+								"explanation": "The technical-user key is scoped to the app and tied to no person. Your PAT is the tempting one because it would work — which is exactly the problem: the integration would act as you and die the day your account changes. Runtime variables configure values your flows consume, not credentials for callers, and the app ID appears in every endpoint path — it identifies, it doesn't authenticate.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "technical-key",
+											"label": "A Technical User API Key (flk_…) created in the app's Team settings"
+										},
+										{
+											"id": "personal-pat",
+											"label": "Your Personal Access Token (pat_…) — it already has all the needed access"
+										},
+										{
+											"id": "runtime-variable",
+											"label": "A runtime variable marked Secret, shared with Orbit"
+										},
+										{
+											"id": "app-id-only",
+											"label": "The app ID from the Endpoints page — it's unique per app"
+										}
+									],
+									"correct": ["technical-key"]
+								}
+							},
+							{
+								"id": "challenge-api-rest-internal",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A connected partner app should query several authenticated endpoints as one coherent service, with no public endpoint exposed. Which configuration?",
+								"explanation": "Internal is the no-public-endpoint option: only connected apps reach the surface, through the app-connection proxy. Public with auth is the tempting compromise, but authentication gates who succeeds, not what's exposed. Stacked API events never become one service contract, and REST is remote-only by design, so Local isn't on the menu.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "rest-internal",
+											"label": "A REST event, Remote, set to Internal — callable by connected apps through the app-connection proxy"
+										},
+										{
+											"id": "rest-public",
+											"label": "A REST event set to Public — the API key already keeps strangers out"
+										},
+										{
+											"id": "stacked-api",
+											"label": "Several API events sharing a path prefix — together they form a REST surface"
+										},
+										{
+											"id": "rest-local",
+											"label": "A REST event set to Local, so it never leaves the machine"
+										}
+									],
+									"correct": ["rest-internal"]
+								}
+							},
+							{
+								"id": "challenge-api-contract-protection",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Before Orbit's integration goes live, which moves protect the contract?",
+								"explanation": "Pinning turns \"our draft\" into \"their contract\" — Latest is how a Tuesday-night edit becomes Orbit's Wednesday-morning parser failure. Instant-fixes-via-Latest is the tempting one because it sounds agile; it also ships every unreviewed save. And credentials never belong on wikis or behind disabled auth, launch week least of all.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "pin-version",
+											"label": "Point every externally consumed event at a numbered flow version instead of Latest"
+										},
+										{
+											"id": "key-hygiene",
+											"label": "Rotate the key on a schedule and revoke it when the integration or its owner leaves"
+										},
+										{
+											"id": "target-latest",
+											"label": "Target Latest so bug fixes reach Orbit the moment a draft is saved"
+										},
+										{
+											"id": "pat-wiki",
+											"label": "Publish a shared PAT on the team wiki so anyone can debug the integration"
+										},
+										{
+											"id": "disable-auth",
+											"label": "Disable the surface's authentication during launch week to simplify Orbit's rollout"
+										}
+									],
+									"correct": ["pin-version", "key-hygiene"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "course-api-integrations-module-final",
+				"title": "Final Assessment",
+				"description": "Ship the two-way Orbit integration and close every dry-run finding.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "course-api-integrations-lesson-final",
+						"title": "Close the Loop with Orbit",
+						"language": "en",
+						"contentFile": "content/final-assessment.md",
+						"videoUrl": null,
+						"estimatedMinutes": 15,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-api-final-remote-secret",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Finding F1: the remote webhook run fails — the CRM token configured on the developer's laptop resolves to nothing on the server. What's the correct fix?",
+								"explanation": "Secrets never leave the device — that's the guarantee, not the bug. Removing the Secret flag is the tempting patch: a non-secret runtime value would be sent, but then your CRM credential travels unmasked in run payloads, outside every secret-handling path. Local-plus-an-awake-laptop resurrects exactly the fragility R3 forbids, and runtime values never sync with the definition at all.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "server-side-cred",
+											"label": "Provision the credential server-side for the remote deployment — laptop secrets are excluded from remote payloads by design"
+										},
+										{
+											"id": "unmark-secret",
+											"label": "Remove the Secret flag so the value uploads with the run"
+										},
+										{
+											"id": "keep-laptop-on",
+											"label": "Run the webhook Local and keep the developer's laptop awake"
+										},
+										{
+											"id": "sync-app",
+											"label": "Re-sync the app so the runtime value travels with the definition"
+										}
+									],
+									"correct": ["server-side-cred"]
+								}
+							},
+							{
+								"id": "challenge-api-final-status-handling",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "R1 meets Orbit's constraints: the pull can hit 404 (unknown email), 429 (rate limit), and 503 (deploy blip). Which handling rules are right?",
+								"explanation": "Success/Error splits 2xx from everything else, but the Error path still contains three different problems needing three different responses — that's why Get Status Code comes first. Retrying a 404 is the tempting waste: it's an answer (\"not a customer\"), and no amount of backoff changes an answer.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "treat-404-answer",
+											"label": "Treat 404 as an answer: attach \"no CRM context\" and continue without retrying"
+										},
+										{
+											"id": "backoff-503",
+											"label": "Retry 503 with a widening Delay and a capped attempt count"
+										},
+										{
+											"id": "pause-429",
+											"label": "On 429, pause before retrying — and space paginated calls so the loop stops manufacturing them"
+										},
+										{
+											"id": "retry-404",
+											"label": "Retry 404s with backoff until the customer appears"
+										},
+										{
+											"id": "success-catches",
+											"label": "Skip status branching — the Success pin already filters the bad responses out"
+										}
+									],
+									"correct": ["treat-404-answer", "backoff-503", "pause-429"]
+								}
+							},
+							{
+								"id": "challenge-api-final-duplicate-fix",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Finding F2: one resolved ticket, two identical notes in Orbit after a slow deploy. Which change closes the finding?",
+								"explanation": "A timeout says \"no answer\", not \"no effect\" — the first POST had landed. Only a convergent write makes the retry safe. Dropping the retry trades a duplicate-note bug for a lost-note bug, and R2 requires exactly one, which fails in both directions. A bigger timeout merely re-tunes the race it can never win.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "converge-retry",
+											"label": "Make the push idempotent — check for the note before creating it, or send an identifier Orbit can deduplicate — and keep the bounded retry"
+										},
+										{
+											"id": "remove-retry",
+											"label": "Remove the retry entirely; a lost note is safer than a duplicate"
+										},
+										{
+											"id": "trust-timeout",
+											"label": "Treat every timeout as a failure and always retry — the deploy was Orbit's fault"
+										},
+										{
+											"id": "bigger-timeout",
+											"label": "Raise the Timeout so slow deploys finish before the retry starts"
+										}
+									],
+									"correct": ["converge-retry"]
+								}
+							},
+							{
+								"id": "challenge-api-final-webhook-config",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Which configuration satisfies R3 — plan-change notifications around the clock, no desktop involved, only Orbit may trigger — end to end?",
+								"explanation": "One notification = one endpoint = an API event; Remote covers \"no desktop involved\"; the bearer token covers \"only Orbit\". The REST surface is the overbuilt distractor — R3 needs one endpoint, not an authenticated multi-endpoint service. Both human-in-the-loop options reintroduce exactly the availability gap the requirement forbids.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "api-remote-token",
+											"label": "An API event on the flow's entry node, Remote execution, bearer token configured"
+										},
+										{
+											"id": "api-local-always-on",
+											"label": "An API event, Local, on a machine someone promises to keep awake"
+										},
+										{
+											"id": "rest-public-webhook",
+											"label": "A REST event, Public, because inbound integrations deserve a full service surface"
+										},
+										{
+											"id": "quick-action-manual",
+											"label": "A Quick Action the on-call agent triggers when Orbit emails about plan changes"
+										}
+									],
+									"correct": ["api-remote-token"]
+								}
+							},
+							{
+								"id": "challenge-api-final-reporting-service",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "R4: which two choices are right for the reporting service?",
+								"explanation": "Multi-endpoint plus authenticated means REST; app-scoped plus survives-offboarding means a technical-user key — R4 names both properties outright. The lead's PAT fails the survival clause the day the lead leaves, stacked API events never form one service contract, and runtime variables configure values flows consume, not credentials callers present.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "rest-event",
+											"label": "Expose it as a REST event — an authenticated multi-endpoint surface, Remote"
+										},
+										{
+											"id": "technical-key",
+											"label": "Authenticate Orbit with a Technical User API Key from the app's Team settings"
+										},
+										{
+											"id": "lead-pat",
+											"label": "Authenticate Orbit with the integration lead's PAT — simplest to create"
+										},
+										{
+											"id": "stack-api-events",
+											"label": "Compose the service from stacked API events sharing a path prefix"
+										},
+										{
+											"id": "secret-runtime-cred",
+											"label": "Hand Orbit a Secret runtime variable as its caller credential"
+										}
+									],
+									"correct": ["rest-event", "technical-key"]
+								}
+							},
+							{
+								"id": "challenge-api-final-latest-break",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Finding F3: a draft edit broke Orbit's parser overnight, with the event configuration untouched. What happened, and what prevents a repeat?",
+								"explanation": "Latest follows the editable draft: every save is instantly live for events that target it, no event edit required — behavior changing under untouched configuration is the Latest signature. Key rotation and route changes produce auth and not-found failures, not parse failures, and the webhook direction has nothing to do with Orbit reading summaries.",
+								"points": 10,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "latest-followed",
+											"label": "The summaries event targets Latest, so the saved draft went live instantly — pin the event to a numbered version"
+										},
+										{
+											"id": "key-rotation-broke",
+											"label": "The API key rotated automatically at midnight — disable rotation"
+										},
+										{
+											"id": "webhook-retry-storm",
+											"label": "Orbit's webhook retried into the draft — add a dedupe key"
+										},
+										{
+											"id": "route-changed",
+											"label": "The draft edit changed the endpoint path — freeze the route"
+										}
+									],
+									"correct": ["latest-followed"]
+								}
+							},
+							{
+								"id": "challenge-api-final-release-evidence",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which responses actually close finding F4 — a hand-crafted request created a plan-change record — and prove the integration release-ready?",
+								"explanation": "F4 proves the door was open and the flow trusted whatever walked in: fix both layers, then prove it through the path Orbit will actually use, checking durable outcomes rather than green statuses. A board-editor run never touches the endpoint config, the token, or the hosted path — and an unguessed URL is not an auth mechanism, it's a countdown.",
+								"points": 10,
+								"position": 6,
+								"payload": {
+									"options": [
+										{
+											"id": "token-plus-validate",
+											"label": "Configure the bearer token and validate payload fields inside the flow before writing records"
+										},
+										{
+											"id": "real-path-test",
+											"label": "Re-test through the real remote endpoint with both valid and forged requests"
+										},
+										{
+											"id": "verify-logs-outcomes",
+											"label": "Check Runs and Logs and the durable records — not just terminal status — after each rehearsal"
+										},
+										{
+											"id": "board-run-covers",
+											"label": "Accept a passing board-editor run as covering the webhook path"
+										},
+										{
+											"id": "obscure-url",
+											"label": "Keep the endpoint URL secret and rely on nobody finding it"
+										}
+									],
+									"correct": [
+										"token-plus-validate",
+										"real-path-test",
+										"verify-logs-outcomes"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		]
+	}
+}

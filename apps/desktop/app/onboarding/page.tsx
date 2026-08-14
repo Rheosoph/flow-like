@@ -1,4 +1,5 @@
 "use client";
+import { Trans, useTranslation } from "@flow-like/locales";
 import type { IHub, UseQueryResult } from "@flow-like/flow-like-ui";
 import {
 	Bit,
@@ -63,6 +64,7 @@ const requiresHostedSignIn = (bit: IBit): boolean => {
 let hasInitiatedProfilePull = false;
 
 export default function Onboarding() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const auth = useAuth();
 	const router = useRouter();
@@ -312,20 +314,18 @@ export default function Onboarding() {
 }
 
 function OnboardingIntro() {
+	const { t } = useTranslation("common");
 	return (
 		<div className="text-center space-y-4 max-w-2xl px-1 sm:px-2">
 			<div className="space-y-2">
-				<h1 className="text-3xl sm:text-5xl font-bold text-foreground tracking-tight">
-					Welcome to <span className="highlight">Flow-Like</span>
-				</h1>
+				<h1 className="text-3xl sm:text-5xl font-bold text-foreground tracking-tight"><Trans i18nKey="welcomeToSpanClassnamehighlightflowlikespan">Welcome to <span className="highlight">Flow-Like</span></Trans></h1>
 				<div className="w-24 h-1 mx-auto rounded-full bg-gradient-to-r from-primary to-primary/70" />
 			</div>
 			<h2 className="text-xl sm:text-2xl text-muted-foreground font-medium mt-4 sm:mt-6">
-				Select your starting profile
+				{t('selectYourStartingProfile', 'Select your starting profile')}
 			</h2>
 			<p className="text-sm sm:text-base text-muted-foreground/80 max-w-lg mx-auto leading-relaxed">
-				Choose one or more profiles that match your interests. You can always
-				add, change or remove profiles later.
+				{t('chooseOneOrMoreProfilesThatMatchYourInterestsYouCanAlwaysAddChangeOrRemoveProfilesLater', "Choose one or more profiles that match your interests. You can always add, change or remove profiles later.")}
 			</p>
 		</div>
 	);
@@ -334,6 +334,7 @@ function OnboardingIntro() {
 function ExistingAccountBanner({
 	onSignIn,
 }: Readonly<{ onSignIn: () => void }>) {
+	const { t } = useTranslation("common");
 	const handleClick = () => {
 		console.log("[Onboarding] ExistingAccountBanner Sign in clicked");
 		onSignIn();
@@ -342,14 +343,14 @@ function ExistingAccountBanner({
 		<div className="w-full max-w-6xl">
 			<div className="flex flex-col items-center gap-4 rounded-xl border bg-card/80 backdrop-blur-sm px-6 py-6 shadow-sm">
 				<div className="text-center space-y-2">
-					<h3 className="text-lg font-semibold">Already have an account?</h3>
+					<h3 className="text-lg font-semibold">{t('alreadyHaveAnAccount', 'Already have an account?')}</h3>
 					<p className="text-sm text-muted-foreground">
-						Sign in to restore your profiles and settings from another device.
+						{`Sign in to restore your profiles and settings from another device.`}
 					</p>
 				</div>
 				<Button variant="outline" className="gap-2" onClick={handleClick}>
 					<LogIn className="h-4 w-4" />
-					Sign in
+					{t('signIn', 'Sign in')}
 				</Button>
 			</div>
 			<div className="relative mt-8">
@@ -358,7 +359,7 @@ function ExistingAccountBanner({
 				</div>
 				<div className="relative flex justify-center text-xs uppercase">
 					<span className="bg-background px-2 text-muted-foreground">
-						Or choose a starter profile
+						{t('orChooseAStarterProfile', 'Or choose a starter profile')}
 					</span>
 				</div>
 			</div>
@@ -367,10 +368,11 @@ function ExistingAccountBanner({
 }
 
 function RestoreProfilesLoading() {
+	const { t } = useTranslation("common");
 	return (
 		<div className="w-full max-w-6xl flex flex-col items-center gap-4 py-12">
 			<Loader2 className="h-8 w-8 animate-spin text-primary" />
-			<p className="text-sm text-muted-foreground">Restoring your profiles…</p>
+			<p className="text-sm text-muted-foreground">{t('restoringYourProfiles', 'Restoring your profiles…')}</p>
 		</div>
 	);
 }
@@ -394,16 +396,15 @@ function ProfilesSection({
 	activeProfiles: string[];
 	onToggleProfile: (profileId: string) => void;
 }>) {
+	const { t } = useTranslation("common");
 	const hiddenMessage =
-		filteredOutCount === 1
-			? "1 profile includes a downloadable local LLM/VLM and isn't available on this device."
-			: `${filteredOutCount} profiles include downloadable local LLMs/VLMs and aren't available on this device.`;
+		t('countProfilesIncludeDownloadableLocalLlmsvlmsAndArentAvailableOnThisDevice', { defaultValue_one: '1 profile includes a downloadable local LLM/VLM and isn\'t available on this device.', defaultValue_other: '{{count}} profiles include downloadable local LLMs/VLMs and aren\'t available on this device.', count: filteredOutCount });
 
 	return (
 		<div className="w-full max-w-6xl space-y-4 sm:space-y-6">
 			{showLocalModelAlert && (
 				<Alert className="bg-card/80 backdrop-blur-sm border-border/60 shadow-sm">
-					<AlertTitle>Local model hosting required</AlertTitle>
+					<AlertTitle>{t('localModelHostingRequired', 'Local model hosting required')}</AlertTitle>
 					<AlertDescription>{hiddenMessage}</AlertDescription>
 				</Alert>
 			)}
@@ -411,20 +412,19 @@ function ProfilesSection({
 				<Alert className="bg-muted/60 border-border/60 backdrop-blur-sm">
 					<AlertTitle>
 						{isAuthenticated
-							? "Hosted models unlocked"
-							: "Hosted models need a sign-in"}
+							? t('hostedModelsUnlocked', 'Hosted models unlocked')
+							: t('hostedModelsNeedASignin', 'Hosted models need a sign-in')}
 					</AlertTitle>
 					<AlertDescription>
 						{isAuthenticated
-							? "You're already signed in—hosted profiles will connect automatically when you download."
-							: "Profiles marked “Requires sign in” rely on hosted LLMs or VLMs. Continue now and sign in whenever you're ready."}
+							? t('youreAlreadySignedInhostedProfilesWillConnectAutomaticallyWhenYouDownload', 'You\'re already signed in—hosted profiles will connect automatically when you download.')
+							: t('profilesMarkedRequiresSignInRelyOnHostedLlmsOrVlmsContinueNowAndSignInWheneverYoureReady', 'Profiles marked “Requires sign in” rely on hosted LLMs or VLMs. Continue now and sign in whenever you\'re ready.')}
 					</AlertDescription>
 				</Alert>
 			)}
 			{noProfilesAvailable ? (
 				<div className="rounded-2xl border border-dashed border-border/60 bg-muted/40 px-6 py-12 text-center text-sm text-muted-foreground">
-					No compatible profiles are available for your current setup. Enable
-					local model hosting or sign in to unlock more starter profiles.
+					{t('noCompatibleProfilesAreAvailableForYourCurrentSetupEnableLocalModelHostingOrSignInToUnlockMoreStarterProfiles', "No compatible profiles are available for your current setup. Enable local model hosting or sign in to unlock more starter profiles.")}
 				</div>
 			) : (
 				<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -470,6 +470,7 @@ function DownloadPanel({
 	onSignIn: () => Promise<void> | void;
 	downloadHref: string | null;
 }>) {
+	const { t } = useTranslation("common");
 	const downloadDisabled = !downloadHref;
 
 	return (
@@ -490,7 +491,7 @@ function DownloadPanel({
 										: "text-amber-600"
 								}`}
 							>
-								{isAuthenticated ? "Ready" : "Sign-in needed"}
+								{isAuthenticated ? "Ready" : t('signinNeeded', 'Sign-in needed')}
 							</Badge>
 						)}
 					</div>
@@ -513,11 +514,11 @@ function DownloadPanel({
 					>
 						{downloadHref ? (
 							<a href={downloadHref}>
-								<ArrowBigRight className="w-4 h-4" /> Download
+								<ArrowBigRight className="w-4 h-4" /> {t('download', 'Download')}
 							</a>
 						) : (
 							<>
-								<ArrowBigRight className="w-4 h-4" /> Select profiles
+								<ArrowBigRight className="w-4 h-4" /> {t('selectProfiles', 'Select profiles')}
 							</>
 						)}
 					</Button>
@@ -544,6 +545,7 @@ function PreviewCard({
 	requiresSignIn?: boolean;
 	isAuthenticated?: boolean;
 }>) {
+	const { t } = useTranslation("common");
 	return (
 		<button
 			type="button"
@@ -603,7 +605,7 @@ function PreviewCard({
 								variant={active ? "default" : "secondary"}
 								className="text-[0.65rem] uppercase tracking-wide"
 							>
-								Local model download
+								{t('localModelDownload', 'Local model download')}
 							</Badge>
 						)}
 						{requiresSignIn && (
@@ -615,7 +617,7 @@ function PreviewCard({
 										: ""
 								}`}
 							>
-								{isAuthenticated ? "Hosted model ready" : "Requires sign in"}
+								{isAuthenticated ? t('hostedModelReady', 'Hosted model ready') : t('requiresSignIn', 'Requires sign in')}
 							</Badge>
 						)}
 					</div>

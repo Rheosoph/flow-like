@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -66,6 +67,7 @@ const openInBrowser = async (href: string) => {
 };
 
 const GlobalAnchorHandler = () => {
+	const { t } = useTranslation("common");
 	const [contextMenuData, setContextMenuData] = useState<{
 		x: number;
 		y: number;
@@ -444,7 +446,7 @@ const GlobalAnchorHandler = () => {
 									}}
 									style={{ cursor: "pointer" }}
 								>
-									{IOS ? "Open in browser" : "Open in new window"}
+									{IOS ? t('openInBrowser', 'Open in browser') : `Open in new window`}
 								</button>
 							</DropdownMenuItem>
 
@@ -459,7 +461,7 @@ const GlobalAnchorHandler = () => {
 									}}
 									style={{ cursor: "pointer" }}
 								>
-									Copy Link
+									{t('copyLink', 'Copy Link')}
 								</button>
 							</DropdownMenuItem>
 						</DropdownMenuContent>

@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -101,7 +102,7 @@ async function uploadArtifact(
 	if (!response.ok) {
 		const errorBody = await response.text().catch(() => "<no response body>");
 		throw new Error(
-			`${label} upload failed (${response.status} ${response.statusText}): ${errorBody}`,
+			i18next.t('labelUploadFailedStatusStatustextErrorbody', '{{label}} upload failed ({{status}} {{statusText}}): {{errorBody}}', { label, status: response.status, statusText: response.statusText, errorBody }),
 		);
 	}
 }
@@ -179,6 +180,7 @@ function formFromManifest(m: PackageManifest): PublishFormData {
 }
 
 function DeveloperPublishPageContent() {
+	const { t } = useTranslation("common");
 	const router = useRouter();
 	const searchParams = useSearchParams();
 	const projectPath = searchParams.get("project");
@@ -348,7 +350,7 @@ function DeveloperPublishPageContent() {
 				setFormData((prev) => ({ ...prev, version: bumped }));
 				setVersionCheckState("bumped");
 				toast.info(
-					`Version ${formData.version} already exists — bumped to ${bumped}`,
+					t('versionVersionAlreadyExistsBumpedToBumped', 'Version {{version}} already exists — bumped to {{bumped}}', { version: formData.version, bumped }),
 				);
 			}
 		} catch {
@@ -394,7 +396,7 @@ function DeveloperPublishPageContent() {
 			if (artifacts.widgetBundle) {
 				if (!uploadTargets.widget_bundle_upload_url) {
 					throw new Error(
-						"The registry did not provide a widget bundle upload URL",
+						t('theRegistryDidNotProvideAWidgetBundleUploadUrl', 'The registry did not provide a widget bundle upload URL'),
 					);
 				}
 				const bundleBytes = await readFile(artifacts.widgetBundle);
@@ -490,7 +492,7 @@ function DeveloperPublishPageContent() {
 
 			toast.success(
 				response.message ??
-					"Package published as private! You can manage it from the registry.",
+					`Package published as private! You can manage it from the registry.`,
 			);
 			router.push("/developer");
 		} catch (err) {
@@ -505,15 +507,15 @@ function DeveloperPublishPageContent() {
 			<div className="flex-col flex grow items-center justify-center">
 				<Card className="max-w-md">
 					<CardHeader>
-						<CardTitle>No Project Selected</CardTitle>
+						<CardTitle>{t('noProjectSelected', 'No Project Selected')}</CardTitle>
 						<CardDescription>
-							Go back to Projects and select a project to publish.
+							{t('goBackToProjectsAndSelectAProjectToPublish', 'Go back to Projects and select a project to publish.')}
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
 						<Button variant="outline" onClick={() => router.push("/developer")}>
 							<ArrowLeft className="mr-2 h-4 w-4" />
-							Back to Projects
+							{t('backToProjects', 'Back to Projects')}
 						</Button>
 					</CardContent>
 				</Card>
@@ -526,9 +528,9 @@ function DeveloperPublishPageContent() {
 			<div className="flex-col flex grow items-center justify-center">
 				<Card className="max-w-md">
 					<CardHeader>
-						<CardTitle>Authentication Required</CardTitle>
+						<CardTitle>{t('authenticationRequired', 'Authentication Required')}</CardTitle>
 						<CardDescription>
-							Please sign in to publish packages to the registry.
+							{t('pleaseSignInToPublishPackagesToTheRegistry', 'Please sign in to publish packages to the registry.')}
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
@@ -552,16 +554,14 @@ function DeveloperPublishPageContent() {
 			<div className="flex-col flex grow items-center justify-center">
 				<Card className="max-w-md">
 					<CardHeader>
-						<CardTitle>Missing Manifest</CardTitle>
-						<CardDescription>
-							This project needs a <code>flow-like.toml</code> manifest before
-							it can be published. Edit the manifest first.
-						</CardDescription>
+						<CardTitle>{t('missingManifest', 'Missing Manifest')}</CardTitle>
+						<CardDescription><Trans i18nKey="thisProjectNeedsACodeflowliketomlcodeManifestBeforeItCanBePublishedEditTheManifestFirst">This project needs a <code>flow-like.toml</code> manifest before
+							it can be published. Edit the manifest first.</Trans></CardDescription>
 					</CardHeader>
 					<CardContent className="flex gap-2">
 						<Button variant="outline" onClick={() => router.push("/developer")}>
 							<ArrowLeft className="mr-2 h-4 w-4" />
-							Back
+							{t('back', 'Back')}
 						</Button>
 						<Button
 							onClick={() =>
@@ -570,7 +570,7 @@ function DeveloperPublishPageContent() {
 								)
 							}
 						>
-							Edit Manifest
+							{t('editManifest', 'Edit Manifest')}
 						</Button>
 					</CardContent>
 				</Card>
@@ -590,15 +590,14 @@ function DeveloperPublishPageContent() {
 						onClick={() => router.push("/developer")}
 					>
 						<ArrowLeft className="mr-1 h-4 w-4" />
-						Back to Projects
+						{t('backToProjects', 'Back to Projects')}
 					</Button>
 					<h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
 						<Upload className="h-8 w-8" />
-						Publish Package
+						{t('publishPackage', 'Publish Package')}
 					</h1>
 					<p className="text-muted-foreground">
-						Publish your local package (nodes and widgets) as a private project
-						to the registry
+						{t('publishYourLocalPackageNodesAndWidgetsAsAPrivateProjectToTheRegistry', "Publish your local package (nodes and widgets) as a private project to the registry")}
 					</p>
 				</div>
 
@@ -607,7 +606,7 @@ function DeveloperPublishPageContent() {
 					<StepIndicator
 						step="manifest"
 						currentStep={step}
-						label="Package Info"
+						label={t('packageInfo', 'Package Info')}
 					/>
 					<ChevronRight className="h-4 w-4 text-muted-foreground" />
 					<StepIndicator
@@ -624,15 +623,15 @@ function DeveloperPublishPageContent() {
 					{step === "manifest" && (
 						<>
 							<CardHeader>
-								<CardTitle className="text-lg">Package Information</CardTitle>
+								<CardTitle className="text-lg">{t('packageInformation', 'Package Information')}</CardTitle>
 								<CardDescription>
-									Review and edit your package details before publishing
+									{t('reviewAndEditYourPackageDetailsBeforePublishing', 'Review and edit your package details before publishing')}
 								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-4">
 								<div className="grid grid-cols-2 gap-4">
 									<div className="space-y-2">
-										<Label htmlFor="id">Package ID *</Label>
+										<Label htmlFor="id">{t('packageId', 'Package ID *')}</Label>
 										<div className="flex gap-2">
 											<Input
 												id="id"
@@ -670,21 +669,21 @@ function DeveloperPublishPageContent() {
 											</Button>
 										</div>
 										{idCheckState === "available" && (
-											<p className="text-xs text-green-500">ID is available</p>
+											<p className="text-xs text-green-500">{t('idIsAvailable', 'ID is available')}</p>
 										)}
 										{idCheckState === "owned" && (
 											<p className="text-xs text-green-500">
-												You own this package
+												{t('youOwnThisPackage', 'You own this package')}
 											</p>
 										)}
 										{idCheckState === "taken" && (
 											<p className="text-xs text-destructive">
-												ID is already taken by another user
+												{t('idIsAlreadyTakenByAnotherUser', 'ID is already taken by another user')}
 											</p>
 										)}
 									</div>
 									<div className="space-y-2">
-										<Label htmlFor="version">Version *</Label>
+										<Label htmlFor="version">{t('version2', 'Version *')}</Label>
 										<div className="flex gap-2">
 											<Input
 												id="version"
@@ -725,30 +724,30 @@ function DeveloperPublishPageContent() {
 										</div>
 										{versionCheckState === "available" && (
 											<p className="text-xs text-green-500">
-												Version is available
+												{t('versionIsAvailable', 'Version is available')}
 											</p>
 										)}
 										{versionCheckState === "bumped" && (
 											<p className="text-xs text-yellow-500">
-												Auto-bumped to available version
+												{t('autobumpedToAvailableVersion', 'Auto-bumped to available version')}
 											</p>
 										)}
 									</div>
 								</div>
 								<div className="space-y-2">
-									<Label htmlFor="name">Display Name *</Label>
+									<Label htmlFor="name">{t('displayName3', 'Display Name *')}</Label>
 									<Input
 										id="name"
-										placeholder="My Awesome Package"
+										placeholder={t('myAwesomePackage', 'My Awesome Package')}
 										value={formData.name}
 										onChange={(e) => updateField("name", e.target.value)}
 									/>
 								</div>
 								<div className="space-y-2">
-									<Label htmlFor="description">Description *</Label>
+									<Label htmlFor="description">{t('description2', 'Description *')}</Label>
 									<Textarea
 										id="description"
-										placeholder="A brief description of what your package does..."
+										placeholder={t('aBriefDescriptionOfWhatYourPackageDoes', 'A brief description of what your package does...')}
 										value={formData.description}
 										onChange={(e) => updateField("description", e.target.value)}
 										rows={3}
@@ -757,7 +756,7 @@ function DeveloperPublishPageContent() {
 								<Separator />
 								<div className="grid grid-cols-2 gap-4">
 									<div className="space-y-2">
-										<Label htmlFor="license">License</Label>
+										<Label htmlFor="license">{t('license', 'License')}</Label>
 										<Input
 											id="license"
 											placeholder="MIT"
@@ -766,10 +765,10 @@ function DeveloperPublishPageContent() {
 										/>
 									</div>
 									<div className="space-y-2">
-										<Label htmlFor="keywords">Keywords</Label>
+										<Label htmlFor="keywords">{t('keywords', 'Keywords')}</Label>
 										<Input
 											id="keywords"
-											placeholder="ai, data, transform"
+											placeholder={t('aiDataTransform', 'ai, data, transform')}
 											value={formData.keywords}
 											onChange={(e) => updateField("keywords", e.target.value)}
 										/>
@@ -782,7 +781,7 @@ function DeveloperPublishPageContent() {
 											className="flex items-center gap-1"
 										>
 											<Github className="h-4 w-4" />
-											Repository URL
+											{t('repositoryUrl', 'Repository URL')}
 										</Label>
 										<Input
 											id="repository"
@@ -799,7 +798,7 @@ function DeveloperPublishPageContent() {
 											className="flex items-center gap-1"
 										>
 											<Globe className="h-4 w-4" />
-											Homepage
+											{t('homepage', 'Homepage')}
 										</Label>
 										<Input
 											id="homepage"
@@ -817,16 +816,16 @@ function DeveloperPublishPageContent() {
 						<>
 							<CardHeader>
 								<CardTitle className="text-lg">
-									Permissions & Resources
+									{t('permissionsResources', 'Permissions & Resources')}
 								</CardTitle>
 								<CardDescription>
-									Declare the capabilities your package needs
+									{t('declareTheCapabilitiesYourPackageNeeds', 'Declare the capabilities your package needs')}
 								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-6">
 								<div className="grid grid-cols-2 gap-4">
 									<div className="space-y-2">
-										<Label>Memory Tier</Label>
+										<Label>{t('memoryTier', 'Memory Tier')}</Label>
 										<Select
 											value={formData.memoryTier}
 											onValueChange={(v) =>
@@ -837,24 +836,24 @@ function DeveloperPublishPageContent() {
 												<SelectValue />
 											</SelectTrigger>
 											<SelectContent>
-												<SelectItem value="minimal">Minimal (16 MB)</SelectItem>
-												<SelectItem value="light">Light (32 MB)</SelectItem>
+												<SelectItem value="minimal">{t('minimal16Mb', 'Minimal (16 MB)')}</SelectItem>
+												<SelectItem value="light">{t('light32Mb', 'Light (32 MB)')}</SelectItem>
 												<SelectItem value="standard">
-													Standard (64 MB)
+													{t('standard64Mb', 'Standard (64 MB)')}
 												</SelectItem>
-												<SelectItem value="heavy">Heavy (128 MB)</SelectItem>
+												<SelectItem value="heavy">{t('heavy128Mb', 'Heavy (128 MB)')}</SelectItem>
 												<SelectItem value="intensive">
-													Intensive (256 MB)
+													{t('intensive256Mb', 'Intensive (256 MB)')}
 												</SelectItem>
-												<SelectItem value="large">Large (512 MB)</SelectItem>
-												<SelectItem value="huge">Huge (1 GB)</SelectItem>
-												<SelectItem value="extreme">Extreme (2 GB)</SelectItem>
-												<SelectItem value="maximum">Maximum (4 GB)</SelectItem>
+												<SelectItem value="large">{t('large512Mb', 'Large (512 MB)')}</SelectItem>
+												<SelectItem value="huge">{t('huge1Gb', 'Huge (1 GB)')}</SelectItem>
+												<SelectItem value="extreme">{t('extreme2Gb', 'Extreme (2 GB)')}</SelectItem>
+												<SelectItem value="maximum">{t('maximum4Gb', 'Maximum (4 GB)')}</SelectItem>
 											</SelectContent>
 										</Select>
 									</div>
 									<div className="space-y-2">
-										<Label>Timeout Tier</Label>
+										<Label>{t('timeoutTier', 'Timeout Tier')}</Label>
 										<Select
 											value={formData.timeoutTier}
 											onValueChange={(v) =>
@@ -865,16 +864,16 @@ function DeveloperPublishPageContent() {
 												<SelectValue />
 											</SelectTrigger>
 											<SelectContent>
-												<SelectItem value="quick">Quick (5s)</SelectItem>
-												<SelectItem value="standard">Standard (30s)</SelectItem>
-												<SelectItem value="extended">Extended (60s)</SelectItem>
+												<SelectItem value="quick">{t('quick5s', 'Quick (5s)')}</SelectItem>
+												<SelectItem value="standard">{t('standard30s', 'Standard (30s)')}</SelectItem>
+												<SelectItem value="extended">{t('extended60s', 'Extended (60s)')}</SelectItem>
 												<SelectItem value="long_running">
-													Long Running (5min)
+													{t('longRunning5min', 'Long Running (5min)')}
 												</SelectItem>
 												<SelectItem value="very_long">
-													Very Long (10min)
+													{t('veryLong10min', 'Very Long (10min)')}
 												</SelectItem>
-												<SelectItem value="maximum">Maximum (30min)</SelectItem>
+												<SelectItem value="maximum">{t('maximum30min', 'Maximum (30min)')}</SelectItem>
 											</SelectContent>
 										</Select>
 									</div>
@@ -883,7 +882,7 @@ function DeveloperPublishPageContent() {
 								<Separator />
 
 								<div className="space-y-4">
-									<h4 className="font-medium">Network Access</h4>
+									<h4 className="font-medium">{t('networkAccess', 'Network Access')}</h4>
 									<div className="flex items-center space-x-2">
 										<Checkbox
 											id="httpEnabled"
@@ -892,16 +891,16 @@ function DeveloperPublishPageContent() {
 												updateField("httpEnabled", c === true)
 											}
 										/>
-										<Label htmlFor="httpEnabled">Enable HTTP requests</Label>
+										<Label htmlFor="httpEnabled">{t('enableHttpRequests', 'Enable HTTP requests')}</Label>
 									</div>
 									{formData.httpEnabled && (
 										<div className="space-y-2 ml-6">
 											<Label htmlFor="allowedHosts">
-												Allowed Hosts (comma-separated, empty = all)
+												{t('allowedHostsCommaseparatedEmptyAll', 'Allowed Hosts (comma-separated, empty = all)')}
 											</Label>
 											<Input
 												id="allowedHosts"
-												placeholder="api.example.com, cdn.example.com"
+												placeholder={t('apiexamplecomCdnexamplecom', 'api.example.com, cdn.example.com')}
 												value={formData.allowedHosts}
 												onChange={(e) =>
 													updateField("allowedHosts", e.target.value)
@@ -914,11 +913,11 @@ function DeveloperPublishPageContent() {
 											id="websocketEnabled"
 											checked={formData.websocketEnabled}
 											onCheckedChange={(c) =>
-												updateField("websocketEnabled", c === true)
+												updateField(`websocketEnabled`, c === true)
 											}
 										/>
 										<Label htmlFor="websocketEnabled">
-											Enable WebSocket connections
+											{t('enableWebsocketConnections', 'Enable WebSocket connections')}
 										</Label>
 									</div>
 									<div className="flex items-center space-x-2">
@@ -929,7 +928,7 @@ function DeveloperPublishPageContent() {
 												updateField("tcpEnabled", c === true)
 											}
 										/>
-										<Label htmlFor="tcpEnabled">Enable TCP sockets</Label>
+										<Label htmlFor="tcpEnabled">{t('enableTcpSockets', 'Enable TCP sockets')}</Label>
 									</div>
 									<div className="flex items-center space-x-2">
 										<Checkbox
@@ -939,7 +938,7 @@ function DeveloperPublishPageContent() {
 												updateField("udpEnabled", c === true)
 											}
 										/>
-										<Label htmlFor="udpEnabled">Enable UDP sockets</Label>
+										<Label htmlFor="udpEnabled">{t('enableUdpSockets', 'Enable UDP sockets')}</Label>
 									</div>
 									<div className="flex items-center space-x-2">
 										<Checkbox
@@ -949,14 +948,14 @@ function DeveloperPublishPageContent() {
 												updateField("dnsEnabled", c === true)
 											}
 										/>
-										<Label htmlFor="dnsEnabled">Enable DNS lookups</Label>
+										<Label htmlFor="dnsEnabled">{t('enableDnsLookups', 'Enable DNS lookups')}</Label>
 									</div>
 								</div>
 
 								<Separator />
 
 								<div className="space-y-4">
-									<h4 className="font-medium">Storage Access</h4>
+									<h4 className="font-medium">{t('storageAccess', 'Storage Access')}</h4>
 									<div className="flex items-center space-x-2">
 										<Checkbox
 											id="nodeStorage"
@@ -965,7 +964,7 @@ function DeveloperPublishPageContent() {
 												updateField("nodeStorage", c === true)
 											}
 										/>
-										<Label htmlFor="nodeStorage">Node-scoped storage</Label>
+										<Label htmlFor="nodeStorage">{t('nodescopedStorage', 'Node-scoped storage')}</Label>
 									</div>
 									<div className="flex items-center space-x-2">
 										<Checkbox
@@ -975,14 +974,14 @@ function DeveloperPublishPageContent() {
 												updateField("userStorage", c === true)
 											}
 										/>
-										<Label htmlFor="userStorage">User-scoped storage</Label>
+										<Label htmlFor="userStorage">{t('userscopedStorage', 'User-scoped storage')}</Label>
 									</div>
 								</div>
 
 								<Separator />
 
 								<div className="space-y-4">
-									<h4 className="font-medium">Additional Capabilities</h4>
+									<h4 className="font-medium">{t('additionalCapabilities', 'Additional Capabilities')}</h4>
 									<div className="grid grid-cols-2 gap-2">
 										<div className="flex items-center space-x-2">
 											<Checkbox
@@ -992,7 +991,7 @@ function DeveloperPublishPageContent() {
 													updateField("variables", c === true)
 												}
 											/>
-											<Label htmlFor="variables">Variables</Label>
+											<Label htmlFor="variables">{t('variables', 'Variables')}</Label>
 										</div>
 										<div className="flex items-center space-x-2">
 											<Checkbox
@@ -1002,7 +1001,7 @@ function DeveloperPublishPageContent() {
 													updateField("cache", c === true)
 												}
 											/>
-											<Label htmlFor="cache">Cache</Label>
+											<Label htmlFor="cache">{t('cache', 'Cache')}</Label>
 										</div>
 										<div className="flex items-center space-x-2">
 											<Checkbox
@@ -1012,7 +1011,7 @@ function DeveloperPublishPageContent() {
 													updateField("streaming", c === true)
 												}
 											/>
-											<Label htmlFor="streaming">Streaming</Label>
+											<Label htmlFor="streaming">{t('streaming', 'Streaming')}</Label>
 										</div>
 										<div className="flex items-center space-x-2">
 											<Checkbox
@@ -1020,7 +1019,7 @@ function DeveloperPublishPageContent() {
 												checked={formData.a2ui}
 												onCheckedChange={(c) => updateField("a2ui", c === true)}
 											/>
-											<Label htmlFor="a2ui">A2UI</Label>
+											<Label htmlFor="a2ui">{`A2UI`}</Label>
 										</div>
 										<div className="flex items-center space-x-2">
 											<Checkbox
@@ -1030,7 +1029,7 @@ function DeveloperPublishPageContent() {
 													updateField("models", c === true)
 												}
 											/>
-											<Label htmlFor="models">Models / LLM</Label>
+											<Label htmlFor="models">{t('modelsLlm', 'Models / LLM')}</Label>
 										</div>
 									</div>
 								</div>
@@ -1041,9 +1040,9 @@ function DeveloperPublishPageContent() {
 					{step === "review" && (
 						<>
 							<CardHeader>
-								<CardTitle className="text-lg">Review & Submit</CardTitle>
+								<CardTitle className="text-lg">{t('reviewSubmit', 'Review & Submit')}</CardTitle>
 								<CardDescription>
-									Review your package details before submitting
+									{t('reviewYourPackageDetailsBeforeSubmitting', 'Review your package details before submitting')}
 								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-6">
@@ -1051,14 +1050,12 @@ function DeveloperPublishPageContent() {
 									<div className="flex items-center gap-2">
 										<Package className="h-5 w-5" />
 										<span className="font-semibold">{formData.name}</span>
-										<Badge variant="outline">v{formData.version}</Badge>
+										<Badge variant="outline">{`v${formData.version}`}</Badge>
 									</div>
 									<p className="text-sm text-muted-foreground">
 										{formData.description}
 									</p>
-									<p className="text-xs text-muted-foreground">
-										ID: {formData.id}
-									</p>
+									<p className="text-xs text-muted-foreground">{t('idId', 'ID: {{id}}', { id: formData.id })}</p>
 									{formData.keywords && (
 										<div className="flex flex-wrap gap-1">
 											{formData.keywords
@@ -1079,9 +1076,7 @@ function DeveloperPublishPageContent() {
 
 								{inspection && inspection.nodes.length > 0 && (
 									<div className="rounded-lg border p-4 space-y-2">
-										<h4 className="font-medium text-sm">
-											{inspection.nodes.length} Node(s)
-										</h4>
+										<h4 className="font-medium text-sm">{t('countNodes', { defaultValue_one: '{{count}} Node', defaultValue_other: '{{count}} Nodes', count: inspection.nodes.length })}</h4>
 										<div className="flex flex-wrap gap-1">
 											{inspection.nodes.map((node) => (
 												<Badge
@@ -1100,9 +1095,7 @@ function DeveloperPublishPageContent() {
 								{inspection && inspection.widgets.length > 0 && (
 									<div className="rounded-lg border p-4 space-y-3">
 										<h4 className="font-medium text-sm flex items-center gap-2">
-											<LayoutTemplate className="h-4 w-4" />
-											{inspection.widgets.length} Widget(s)
-										</h4>
+											<LayoutTemplate className="h-4 w-4" />{t('countWidgets', { defaultValue_one: '{{count}} Widget', defaultValue_other: '{{count}} Widgets', count: inspection.widgets.length })}</h4>
 										<div className="space-y-2">
 											{inspection.widgets.map((widget) => (
 												<div
@@ -1117,13 +1110,28 @@ function DeveloperPublishPageContent() {
 															</p>
 														)}
 													</div>
-													<Badge
-														variant="outline"
-														className="text-[10px] font-normal shrink-0"
-													>
-														{widget.inputCount} inputs · {widget.eventCount}{" "}
-														events · {widget.queryCount} queries
-													</Badge>
+												<Badge
+													variant="outline"
+													className="text-[10px] font-normal shrink-0"
+												>
+													{[
+														t('countInputs', {
+															defaultValue_one: '{{count}} input',
+															defaultValue_other: '{{count}} inputs',
+															count: widget.inputCount,
+														}),
+														t('countEvents', {
+															defaultValue_one: '{{count}} event',
+															defaultValue_other: '{{count}} events',
+															count: widget.eventCount,
+														}),
+														t('countQueries', {
+															defaultValue_one: '{{count}} query',
+															defaultValue_other: '{{count}} queries',
+															count: widget.queryCount,
+														}),
+													].join(' · ')}
+												</Badge>
 												</div>
 											))}
 										</div>
@@ -1133,20 +1141,16 @@ function DeveloperPublishPageContent() {
 								<div className="rounded-lg border p-4 space-y-2">
 									<h4 className="font-medium flex items-center gap-2">
 										<Shield className="h-4 w-4" />
-										Permissions Summary
+										{t('permissionsSummary', 'Permissions Summary')}
 									</h4>
 									<div className="flex flex-wrap gap-1">
-										<Badge variant="outline">
-											Memory: {formData.memoryTier}
-										</Badge>
-										<Badge variant="outline">
-											Timeout: {formData.timeoutTier}
-										</Badge>
+										<Badge variant="outline">{t('memoryMemorytier', 'Memory: {{memoryTier}}', { memoryTier: formData.memoryTier })}</Badge>
+										<Badge variant="outline">{t('timeoutTimeouttier', 'Timeout: {{timeoutTier}}', { timeoutTier: formData.timeoutTier })}</Badge>
 										{formData.httpEnabled && (
-											<Badge variant="outline">HTTP</Badge>
+											<Badge variant="outline">{`HTTP`}</Badge>
 										)}
 										{formData.websocketEnabled && (
-											<Badge variant="outline">WebSocket</Badge>
+											<Badge variant="outline">{t('websocket', 'WebSocket')}</Badge>
 										)}
 										{formData.tcpEnabled && (
 											<Badge variant="outline">TCP</Badge>
@@ -1158,20 +1162,20 @@ function DeveloperPublishPageContent() {
 											<Badge variant="outline">DNS</Badge>
 										)}
 										{formData.nodeStorage && (
-											<Badge variant="outline">Node Storage</Badge>
+											<Badge variant="outline">{t('nodeStorage', 'Node Storage')}</Badge>
 										)}
 										{formData.userStorage && (
-											<Badge variant="outline">User Storage</Badge>
+											<Badge variant="outline">{t('userStorage', 'User Storage')}</Badge>
 										)}
 										{formData.variables && (
-											<Badge variant="outline">Variables</Badge>
+											<Badge variant="outline">{t('variables', 'Variables')}</Badge>
 										)}
-										{formData.cache && <Badge variant="outline">Cache</Badge>}
+										{formData.cache && <Badge variant="outline">{t('cache', 'Cache')}</Badge>}
 										{formData.streaming && (
-											<Badge variant="outline">Streaming</Badge>
+											<Badge variant="outline">{t('streaming', 'Streaming')}</Badge>
 										)}
-										{formData.a2ui && <Badge variant="outline">A2UI</Badge>}
-										{formData.models && <Badge variant="outline">Models</Badge>}
+										{formData.a2ui && <Badge variant="outline">{`A2UI`}</Badge>}
+										{formData.models && <Badge variant="outline">{t('models', 'Models')}</Badge>}
 									</div>
 								</div>
 
@@ -1181,13 +1185,11 @@ function DeveloperPublishPageContent() {
 											<AlertTriangle className="h-5 w-5 text-destructive mt-0.5" />
 											<div>
 												<h4 className="font-medium text-destructive">
-													Build Required
+													{t('buildRequired', 'Build Required')}
 												</h4>
 												<p className="text-sm text-muted-foreground mt-1">
-													No compiled WASM or widget bundle found. Run{" "}
-													<code>mise run build</code> in your project directory
-													before publishing.
-												</p>
+													{t('noCompiledWasmOrWidgetBundleFoundRun', 'No compiled WASM or widget bundle found. Run')}{" "}<Trans i18nKey="codemiseRunBuildcodeInYourProjectDirectoryBeforePublishing"><code>mise run build</code> in your project directory
+													before publishing.</Trans></p>
 											</div>
 										</div>
 									</div>
@@ -1198,12 +1200,10 @@ function DeveloperPublishPageContent() {
 										<AlertTriangle className="h-5 w-5 text-yellow-500 mt-0.5" />
 										<div>
 											<h4 className="font-medium text-yellow-500">
-												Private Package
+												{t('privatePackage', 'Private Package')}
 											</h4>
 											<p className="text-sm text-muted-foreground mt-1">
-												Your package will be published as a private project. You
-												can request public visibility later from the registry
-												management page.
+												{`Your package will be published as a private project. You can request public visibility later from the registry management page.`}
 											</p>
 										</div>
 									</div>
@@ -1220,7 +1220,7 @@ function DeveloperPublishPageContent() {
 								step === "manifest" ? () => router.push("/developer") : prevStep
 							}
 						>
-							Back
+							{t('back', 'Back')}
 						</Button>
 						{step === "review" ? (
 							<Button
@@ -1238,13 +1238,13 @@ function DeveloperPublishPageContent() {
 								) : (
 									<>
 										<Upload className="mr-2 h-4 w-4" />
-										Publish as Private
+										{t('publishAsPrivate', 'Publish as Private')}
 									</>
 								)}
 							</Button>
 						) : (
 							<Button onClick={nextStep} disabled={!canProceed()}>
-								Continue
+								{t('continue', 'Continue')}
 								<ChevronRight className="ml-2 h-4 w-4" />
 							</Button>
 						)}

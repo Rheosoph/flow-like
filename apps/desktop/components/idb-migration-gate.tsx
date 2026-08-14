@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
@@ -15,6 +16,7 @@ import {
 export function IdbMigrationGate({
 	children,
 }: Readonly<{ children: React.ReactNode }>) {
+	const { t } = useTranslation("common");
 	const [migrating, setMigrating] = useState(
 		() => typeof window !== "undefined" && needsSqliteIdbMigration(),
 	);
@@ -38,7 +40,7 @@ export function IdbMigrationGate({
 			>
 				<Loader2 className="size-6 animate-spin text-muted-foreground" />
 				<p className="text-sm text-muted-foreground">
-					Upgrading local storage…
+					{t('upgradingLocalStorage', 'Upgrading local storage…')}
 				</p>
 			</div>
 		);

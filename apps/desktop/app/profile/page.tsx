@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	Alert,
 	AlertDescription,
@@ -111,7 +112,7 @@ const ProfileError = ({ error }: { error: string }) => (
 			<Alert className="border-destructive/30 bg-destructive/5">
 				<AlertCircle className="h-4 w-4" />
 				<AlertDescription>
-					{error || "Failed to load user profile"}
+					{error || i18next.t('failedToLoadUserProfile', 'Failed to load user profile')}
 				</AlertDescription>
 			</Alert>
 		</motion.div>
@@ -163,13 +164,12 @@ function TextSection({
 }
 
 function EmptyAppsState({ displayName }: { displayName: string }) {
+	const { t } = useTranslation("common");
 	return (
 		<div className="rounded-lg border border-dashed p-8 text-center sm:p-12">
 			<Package className="mx-auto h-10 w-10 text-muted-foreground" />
-			<h3 className="mt-4 text-base font-semibold">No published apps yet</h3>
-			<p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
-				{displayName} has not published any apps to the store.
-			</p>
+			<h3 className="mt-4 text-base font-semibold">{t('noPublishedAppsYet', 'No published apps yet')}</h3>
+			<p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">{t('displaynameHasNotPublishedAnyAppsToTheStore', '{{displayName}} has not published any apps to the store.', { displayName })}</p>
 		</div>
 	);
 }
@@ -205,6 +205,7 @@ const ProfileContent = ({
 	isAppsLoading: boolean;
 	appsError: Error | null;
 }) => {
+	const { t } = useTranslation("common");
 	const router = useRouter();
 	const displayName = userDisplayName(user, "Unknown user");
 	const username = userHandle(user);
@@ -229,7 +230,7 @@ const ProfileContent = ({
 					<div className="grid gap-y-4 sm:grid-cols-[96px_minmax(0,1fr)] sm:gap-x-5">
 						<div className="inline-flex items-center gap-2 text-xs font-semibold uppercase text-muted-foreground sm:col-start-2">
 							<CircleUserRound className="h-3.5 w-3.5" />
-							Public profile
+							{t('publicProfile', 'Public profile')}
 						</div>
 
 						<Avatar className="h-24 w-24 shrink-0 rounded-lg border bg-card shadow-sm sm:row-start-2">
@@ -245,21 +246,19 @@ const ProfileContent = ({
 									{displayName}
 								</h1>
 								{username && (
-									<p className="break-words text-base text-muted-foreground">
-										@{username}
-									</p>
+									<p className="break-words text-base text-muted-foreground">{`@${username}`}</p>
 								)}
 							</div>
 
 							<div className="flex flex-wrap gap-2">
 								<Badge variant="secondary">
 									<BadgeCheck />
-									Flow-Like user
+									{t('flowlikeUser', 'Flow-Like user')}
 								</Badge>
 								{user.email && (
 									<Badge variant="outline">
 										<Mail />
-										Contact available
+										{t('contactAvailable', 'Contact available')}
 									</Badge>
 								)}
 							</div>
@@ -278,7 +277,7 @@ const ProfileContent = ({
 								<ProfileFact
 									icon={Mail}
 									label="Contact"
-									value={user.email ? "Available" : "Not listed"}
+									value={user.email ? "Available" : t('notListed', 'Not listed')}
 								/>
 							</div>
 						</div>
@@ -295,21 +294,21 @@ const ProfileContent = ({
 			>
 				<div className="min-w-0 space-y-5 sm:pl-[116px]">
 					{hasDescription && (
-						<TextSection icon={UserRound} title="About">
+						<TextSection icon={UserRound} title={t('about', 'About')}>
 							<p>{user.description}</p>
 						</TextSection>
 					)}
 
 					{hasAdditionalInfo && (
-						<TextSection icon={PanelsTopLeft} title="Additional information">
+						<TextSection icon={PanelsTopLeft} title={t('additionalInformation', 'Additional information')}>
 							<p>{user.additional_info}</p>
 						</TextSection>
 					)}
 
 					{!hasDescription && !hasAdditionalInfo && (
-						<TextSection icon={UserRound} title="About">
+						<TextSection icon={UserRound} title={t('about', 'About')}>
 							<p className="text-muted-foreground">
-								This user has not added profile details yet.
+								{t('thisUserHasNotAddedProfileDetailsYet', 'This user has not added profile details yet.')}
 							</p>
 						</TextSection>
 					)}
@@ -320,12 +319,10 @@ const ProfileContent = ({
 								<div className="flex items-center gap-2">
 									<Package className="h-5 w-5 text-muted-foreground" />
 									<h2 className="text-xl font-semibold tracking-tight">
-										Published apps
+										{t('publishedApps', 'Published apps')}
 									</h2>
 								</div>
-								<p className="mt-1 text-sm text-muted-foreground">
-									Public apps shared by {displayName}.
-								</p>
+								<p className="mt-1 text-sm text-muted-foreground">{t('publicAppsSharedByDisplayname', 'Public apps shared by {{displayName}}.', { displayName })}</p>
 							</div>
 							<Badge variant="secondary">{appCountLabel}</Badge>
 						</div>
@@ -333,9 +330,7 @@ const ProfileContent = ({
 						{appsError && (
 							<Alert className="border-destructive/30 bg-destructive/5">
 								<AlertCircle className="h-4 w-4" />
-								<AlertDescription>
-									Failed to load apps: {appsError.message}
-								</AlertDescription>
+								<AlertDescription>{t('failedToLoadAppsMessage', 'Failed to load apps: {{message}}', { message: appsError.message })}</AlertDescription>
 							</Alert>
 						)}
 
@@ -369,10 +364,10 @@ const ProfileContent = ({
 									{isFetchingNextPage ? (
 										<>
 											<Loader2 className="h-4 w-4 animate-spin" />
-											Loading more
+											{t('loadingMore', 'Loading more')}
 										</>
 									) : (
-										"Load more apps"
+										t('loadMoreApps', 'Load more apps')
 									)}
 								</Button>
 							</div>

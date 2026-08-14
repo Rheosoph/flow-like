@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -143,7 +144,7 @@ function validatedRepeat(value: number | undefined): number {
 	const parsed = value ?? 1;
 	if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > MAX_CLI_REPEAT) {
 		throw new Error(
-			`CLI repeat must be an integer from 1 to ${MAX_CLI_REPEAT}.`,
+			i18next.t('cliRepeatMustBeAnIntegerFrom1ToMax_cli_repeat', 'CLI repeat must be an integer from 1 to {{MAX_CLI_REPEAT}}.', { MAX_CLI_REPEAT }),
 		);
 	}
 	return parsed;
@@ -161,7 +162,7 @@ function validatedConcurrency(value: number | undefined): number {
 		parsed > MAX_PARALLEL_CASES
 	) {
 		throw new Error(
-			`Case concurrency must be an integer from 1 to ${MAX_PARALLEL_CASES}.`,
+			i18next.t('caseConcurrencyMustBeAnIntegerFrom1ToMax_parallel_cases', 'Case concurrency must be an integer from 1 to {{MAX_PARALLEL_CASES}}.', { MAX_PARALLEL_CASES }),
 		);
 	}
 	return parsed;
@@ -199,7 +200,7 @@ function parseCliCallback(value: string | null): URL {
 		!callback.port
 	) {
 		throw new Error(
-			"CLI callback must be an explicit http://localhost:<port> URL.",
+			i18next.t('cliCallbackMustBeAnExplicitHttplocalhostportUrl', 'CLI callback must be an explicit http://localhost:<port> URL.'),
 		);
 	}
 	return callback;
@@ -384,7 +385,7 @@ function answerForUnexpectedAsk(
 	if (ask?.mode === "multiple_choice") {
 		return firstValue === undefined ? [] : [firstValue];
 	}
-	return firstValue ?? "Use a safe placeholder suitable for this benchmark.";
+	return firstValue ?? i18next.t('useASafePlaceholderSuitableForThisBenchmark', 'Use a safe placeholder suitable for this benchmark.');
 }
 
 function appendRunnerFailures(
@@ -479,7 +480,7 @@ async function collectOr<T>(
 	} catch (error) {
 		issues.push({
 			code: `collector.${code}`,
-			message: `${code} collection failed: ${errorMessage(error)}`,
+			message: i18next.t('codeCollectionFailedVal', '{{code}} collection failed: {{val}}', { code, val: errorMessage(error) }),
 		});
 		return fallback;
 	}
@@ -694,11 +695,9 @@ async function findCreatedApp(
 		await delay(500);
 	}
 	throw new Error(
-		`Could not identify the created app ${JSON.stringify(expectedName)}${
-			lastCandidates.length > 0
+		i18next.t('couldNotIdentifyTheCreatedAppValval2', 'Could not identify the created app {{val}}{{val2}}.', { val: JSON.stringify(expectedName), val2: lastCandidates.length > 0
 				? `; new candidates: ${lastCandidates.join(", ")}`
-				: "; no new app appeared"
-		}.`,
+				: "; no new app appeared" }),
 	);
 }
 
@@ -728,6 +727,7 @@ function StatusIcon({ phase }: { phase: RunPhase }) {
 }
 
 export default function FlowPilotE2EPage() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const codex = useCopilotSDK("codex");
 	const [selected, setSelected] = useState<Set<FlowPilotE2ECaseId>>(
@@ -775,9 +775,7 @@ export default function FlowPilotE2EPage() {
 			const requested = models.find((model) => model.id === pinned.model);
 			if (!requested) {
 				throw new Error(
-					`Codex model ${pinned.model} is unavailable. Available: ${
-						models.map((model) => model.id).join(", ") || "none"
-					}.`,
+					t('codexModelModelIsUnavailableAvailableVal', 'Codex model {{model}} is unavailable. Available: {{val}}.', { model: pinned.model, val: models.map((model) => model.id).join(", ") || "none" }),
 				);
 			}
 			if (
@@ -787,7 +785,7 @@ export default function FlowPilotE2EPage() {
 				)
 			) {
 				throw new Error(
-					`${requested.id} does not advertise ${pinned.reasoningEffort} reasoning.`,
+					t('idDoesNotAdvertiseReasoningeffortReasoning', '{{id}} does not advertise {{reasoningEffort}} reasoning.', { id: requested.id, reasoningEffort: pinned.reasoningEffort }),
 				);
 			}
 		},
@@ -808,7 +806,7 @@ export default function FlowPilotE2EPage() {
 			);
 			if (!FLOWPILOT_DEBUG_ENABLED) {
 				throw new Error(
-					"FlowPilot app-creation E2E requires a development build so compiler receipts and traces can be captured; no model request was started.",
+					t('flowpilotAppcreationE2eRequiresADevelopmentBuildSoCompilerReceiptsAndTracesCanBeCapturedNoModelRequestWasStarted', 'FlowPilot app-creation E2E requires a development build so compiler receipts and traces can be captured; no model request was started.'),
 				);
 			}
 			const initialChat = useGlobalChatStore.getState();
@@ -817,7 +815,7 @@ export default function FlowPilotE2EPage() {
 			}
 			if (initialChat.toolPrompt) {
 				throw new Error(
-					"Resolve the existing FlowPilot prompt before starting E2E.",
+					t('resolveTheExistingFlowpilotPromptBeforeStartingE2e', 'Resolve the existing FlowPilot prompt before starting E2E.'),
 				);
 			}
 			runningRef.current = true;
@@ -888,14 +886,14 @@ export default function FlowPilotE2EPage() {
 							handledPrompts.add(prompt.id);
 							issues.push({
 								code: "runner.unexpected_ask",
-								message: `The benchmark required no questions, but ${prompt.toolName} asked: ${prompt.description ?? prompt.title}`,
+								message: t('theBenchmarkRequiredNoQuestionsButToolnameAskedVal', 'The benchmark required no questions, but {{toolName}} asked: {{val}}', { toolName: prompt.toolName, val: prompt.description ?? prompt.title }),
 							});
 							prompt.respond({ answer: answerForUnexpectedAsk(prompt) });
 						} else if (prompt.destructive) {
 							handledPrompts.add(prompt.id);
 							issues.push({
 								code: "runner.destructive_approval",
-								message: `The run requested destructive approval for ${prompt.toolName}; the runner denied it.`,
+								message: t('theRunRequestedDestructiveApprovalForToolnameTheRunnerDeniedIt', 'The run requested destructive approval for {{toolName}}; the runner denied it.', { toolName: prompt.toolName }),
 							});
 							prompt.respond({ approved: false, remember: false });
 						}
@@ -926,7 +924,7 @@ export default function FlowPilotE2EPage() {
 								configured.reasoningEffort !== pinnedModel.reasoningEffort
 							) {
 								throw new Error(
-									`Could not configure ${pinnedModel.provider}/${pinnedModel.model} with ${pinnedModel.reasoningEffort} reasoning.`,
+									t('couldNotConfigureProvidermodelWithReasoningeffortReasoning', 'Could not configure {{provider}}/{{model}} with {{reasoningEffort}} reasoning.', { provider: pinnedModel.provider, model: pinnedModel.model, reasoningEffort: pinnedModel.reasoningEffort }),
 								);
 							}
 							chat.setDraft({
@@ -941,7 +939,7 @@ export default function FlowPilotE2EPage() {
 								await waitForChatState(
 									() => Boolean(tracker?.started()),
 									START_TIMEOUT_MS,
-									`Starting ${caseDefinition.id}`,
+									t('startingId', 'Starting {{id}}', { id: caseDefinition.id }),
 								);
 							} catch (error) {
 								throw new Error(
@@ -977,7 +975,7 @@ export default function FlowPilotE2EPage() {
 						) {
 							issues.push({
 								code: "runner.model_mismatch",
-								message: `The live turn started as ${observedModel.provider}/${observedModel.model}/${observedModel.reasoningEffort || "auto"}, not ${pinnedModel.provider}/${pinnedModel.model}/${pinnedModel.reasoningEffort}.`,
+								message: t('theLiveTurnStartedAsProvidermodelvalNotProvider2model2reasoningeffort', 'The live turn started as {{provider}}/{{model}}/{{val}}, not {{provider2}}/{{model2}}/{{reasoningEffort}}.', { provider: observedModel.provider, model: observedModel.model, val: observedModel.reasoningEffort || "auto", provider2: pinnedModel.provider, model2: pinnedModel.model, reasoningEffort: pinnedModel.reasoningEffort }),
 							});
 						}
 						// Slow runs must COMPLETE so their receipts show where the time went (plan-step
@@ -986,7 +984,7 @@ export default function FlowPilotE2EPage() {
 							(state) =>
 								conversationRuns(state, conversationId ?? "").length === 0,
 							flowPilotE2ECaseRunTimeoutMs(caseDefinition),
-							`Running ${caseDefinition.id}`,
+							t('runningId', 'Running {{id}}', { id: caseDefinition.id }),
 						);
 						useGlobalChatStore.getState().setPendingNavigation(null);
 						setRun(caseDefinition.id, { phase: "collecting" });
@@ -995,7 +993,7 @@ export default function FlowPilotE2EPage() {
 						if (!trace) {
 							issues.push({
 								code: "runner.missing_assistant_trace",
-								message: "The completed turn has no persisted assistant trace.",
+								message: t('theCompletedTurnHasNoPersistedAssistantTrace', 'The completed turn has no persisted assistant trace.'),
 							});
 						}
 						const debugReport = trace?.debugReport as
@@ -1010,12 +1008,12 @@ export default function FlowPilotE2EPage() {
 						if (!trace?.debugReport) {
 							issues.push({
 								code: "runner.missing_debug_report",
-								message: "The completed turn has no FlowPilot debug report.",
+								message: t('theCompletedTurnHasNoFlowpilotDebugReport', 'The completed turn has no FlowPilot debug report.'),
 							});
 						} else if (debugOutcome !== "ok") {
 							issues.push({
 								code: "runner.agent_outcome",
-								message: `The agent debug report ended with outcome ${debugOutcome ?? "missing"}.`,
+								message: t('theAgentDebugReportEndedWithOutcomeVal', 'The agent debug report ended with outcome {{val}}.', { val: debugOutcome ?? "missing" }),
 							});
 						}
 						if (
@@ -1026,7 +1024,7 @@ export default function FlowPilotE2EPage() {
 						) {
 							issues.push({
 								code: "runner.debug_model_mismatch",
-								message: `The persisted trace records ${debugReport.provider ?? "missing"}/${debugReport.model ?? "missing"}/${debugReport.reasoning_effort ?? "missing"}, not ${pinnedModel.provider}/${pinnedModel.model}/${pinnedModel.reasoningEffort}.`,
+								message: t('thePersistedTraceRecordsValval2val3NotProvidermodelreasoningeffort', 'The persisted trace records {{val}}/{{val2}}/{{val3}}, not {{provider}}/{{model}}/{{reasoningEffort}}.', { val: debugReport.provider ?? "missing", val2: debugReport.model ?? "missing", val3: debugReport.reasoning_effort ?? "missing", provider: pinnedModel.provider, model: pinnedModel.model, reasoningEffort: pinnedModel.reasoningEffort }),
 							});
 						}
 						const appRefs = trace?.appRefs ?? [];
@@ -1131,7 +1129,7 @@ export default function FlowPilotE2EPage() {
 								(state) =>
 									conversationRuns(state, conversationId ?? "").length === 0,
 								CANCEL_TIMEOUT_MS,
-								`Cancelling ${caseDefinition.id}`,
+								t('cancellingId', 'Cancelling {{id}}', { id: caseDefinition.id }),
 							);
 						} catch (error) {
 							issues.push({
@@ -1424,11 +1422,10 @@ export default function FlowPilotE2EPage() {
 					</div>
 					<div>
 						<h1 className="text-base font-semibold">
-							FlowPilot app-creation E2E
+							{t('flowpilotAppcreationE2e', 'FlowPilot app-creation E2E')}
 						</h1>
 						<p className="text-xs text-muted-foreground">
-							Real global chat, tool bridge, persisted artifacts, and
-							authoritative FlowScript checks.
+							{t('realGlobalChatToolBridgePersistedArtifactsAndAuthoritativeFlowscriptChecks', "Real global chat, tool bridge, persisted artifacts, and authoritative FlowScript checks.")}
 						</p>
 					</div>
 				</div>
@@ -1448,9 +1445,7 @@ export default function FlowPilotE2EPage() {
 							</Button>
 						))}
 					</div>
-					<Badge variant="outline">
-						{pinnedModel.reasoningEffort} reasoning
-					</Badge>
+					<Badge variant="outline">{t('reasoningeffortReasoning', '{{reasoningEffort}} reasoning', { reasoningEffort: pinnedModel.reasoningEffort })}</Badge>
 				</div>
 			</div>
 
@@ -1468,7 +1463,7 @@ export default function FlowPilotE2EPage() {
 								}
 								disabled={isSuiteRunning}
 							>
-								Smoke
+								{t('smoke', 'Smoke')}
 							</Button>
 							<Button
 								size="sm"
@@ -1477,9 +1472,7 @@ export default function FlowPilotE2EPage() {
 									choose(FLOWPILOT_APP_CREATION_CASES.map((item) => item.id))
 								}
 								disabled={isSuiteRunning}
-							>
-								All {FLOWPILOT_APP_CREATION_CASES.length}
-							</Button>
+							>{t('allLength', 'All {{length}}', { length: FLOWPILOT_APP_CREATION_CASES.length })}</Button>
 							<Button
 								size="sm"
 								className="ml-auto gap-2"
@@ -1490,14 +1483,10 @@ export default function FlowPilotE2EPage() {
 									<Loader2 className="h-4 w-4 animate-spin" />
 								) : (
 									<Play className="h-4 w-4" />
-								)}
-								Run {selectedCases.length}
-							</Button>
+								)}{t('runLength', 'Run {{length}}', { length: selectedCases.length })}</Button>
 						</div>
 						<div className="space-y-1.5">
-							<Label htmlFor="case-concurrency" className="text-xs">
-								Cases in flight at once (1–{MAX_PARALLEL_CASES})
-							</Label>
+							<Label htmlFor="case-concurrency" className="text-xs">{t('casesInFlightAtOnce1max_parallel_cases', 'Cases in flight at once (1–{{MAX_PARALLEL_CASES}})', { MAX_PARALLEL_CASES })}</Label>
 							<Input
 								id="case-concurrency"
 								type="number"
@@ -1513,13 +1502,13 @@ export default function FlowPilotE2EPage() {
 						</div>
 						<div className="space-y-1.5">
 							<Label htmlFor="flowscript-min" className="text-xs">
-								FlowScript non-whitespace floor override
+								{t('flowscriptNonwhitespaceFloorOverride', 'FlowScript non-whitespace floor override')}
 							</Label>
 							<Input
 								id="flowscript-min"
 								type="number"
 								min={1}
-								placeholder="Use each case default"
+								placeholder={t('useEachCaseDefault', 'Use each case default')}
 								value={minimumOverride}
 								onChange={(event) => setMinimumOverride(event.target.value)}
 								disabled={isSuiteRunning}
@@ -1538,7 +1527,7 @@ export default function FlowPilotE2EPage() {
 									})
 								}
 							>
-								<Download className="h-4 w-4" /> Export completed runs
+								<Download className="h-4 w-4" /> {t('exportCompletedRuns', 'Export completed runs')}
 							</Button>
 						)}
 					</div>
@@ -1593,14 +1582,8 @@ export default function FlowPilotE2EPage() {
 
 										{report && (
 											<div className="mt-2 flex items-center gap-2 text-xs">
-												<span>
-													{report.summary.passed}/{report.summary.checks} checks
-												</span>
-												<span className="text-muted-foreground">
-													{report.inventory.totalNodes} nodes ·{" "}
-													{report.inventory.pages} pages ·{" "}
-													{report.inventory.tables} tables
-												</span>
+												<span>{`${report.summary.passed}/${report.summary.checks} checks`}</span>
+												<span className="text-muted-foreground">{t('totalnodesNodes', '{{totalNodes}} nodes ·', { totalNodes: report.inventory.totalNodes })}{" "}{t('pagesPages', '{{pages}} pages ·', { pages: report.inventory.pages })}{" "}{t('tablesTables', '{{tables}} tables', { tables: report.inventory.tables })}</span>
 											</div>
 										)}
 										{run?.error && (
@@ -1611,9 +1594,7 @@ export default function FlowPilotE2EPage() {
 										)}
 										{report && report.failures.length > 0 && (
 											<details className="mt-2 text-xs text-destructive">
-												<summary className="cursor-pointer">
-													{report.failures.length} failed checks
-												</summary>
+												<summary className="cursor-pointer">{t('lengthFailedChecks', '{{length}} failed checks', { length: report.failures.length })}</summary>
 												<ul className="mt-1 list-disc space-y-1 pl-4">
 													{report.failures.map((failure, index) => (
 														<li key={`${failure.code}-${index}`}>
@@ -1636,7 +1617,7 @@ export default function FlowPilotE2EPage() {
 														)
 													}
 												>
-													<Download className="h-3.5 w-3.5" /> JSON
+													<Download className="h-3.5 w-3.5" /> {`JSON`}
 												</Button>
 												<Button
 													size="sm"
@@ -1649,7 +1630,7 @@ export default function FlowPilotE2EPage() {
 														toast.success("Benchmark artifact copied");
 													}}
 												>
-													<Clipboard className="h-3.5 w-3.5" /> Copy
+													<Clipboard className="h-3.5 w-3.5" /> {t('copy', 'Copy')}
 												</Button>
 											</div>
 										)}

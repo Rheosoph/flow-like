@@ -1,0 +1,102 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "agent-authoring-example",
+		"name": "Agent-authored Flow-Like course",
+		"language": "en",
+		"slug": "agent-authoring-example",
+		"difficulty": "BEGINNER",
+		"category": "GETTING_STARTED",
+		"estimatedMinutes": 20,
+		"isPublished": false,
+		"tags": ["example", "agents"],
+		"description": "A small course showing lessons, an asset, and a final assessment.",
+		"longDescription": "Use this plan as a starting point for courses authored by Codex or Claude Code.",
+		"assets": [
+			{
+				"name": "CourseMap",
+				"file": "assets/course-map.svg"
+			}
+		],
+		"modules": [
+			{
+				"id": "agent-authoring-example.module.introduction",
+				"title": "Introduction",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "agent-authoring-example.lesson.welcome",
+						"title": "Welcome",
+						"contentFile": "content/welcome.md",
+						"estimatedMinutes": 5,
+						"position": 0
+					}
+				]
+			},
+			{
+				"id": "agent-authoring-example.module.assessment",
+				"title": "Final assessment",
+				"description": "Check the learner's understanding at the end of the course.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "agent-authoring-example.lesson.final-assessment",
+						"title": "Final assessment",
+						"content": "# Final assessment\n\nComplete both questions to finish the course.",
+						"estimatedMinutes": 5,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "agent-authoring-example.challenge.asset-reference",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "How is a named course asset embedded in lesson Markdown?",
+								"explanation": "Use the asset's stable name with an @ prefix.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "at-name",
+											"label": "@CourseMap"
+										},
+										{
+											"id": "local-path",
+											"label": "A local filesystem path"
+										}
+									],
+									"correct": ["at-name"]
+								}
+							},
+							{
+								"id": "agent-authoring-example.challenge.safe-apply",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which safeguards are used while applying a course plan?",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "draft-first",
+											"label": "Write the course as a draft first"
+										},
+										{
+											"id": "verify",
+											"label": "Verify the remote structure before publishing"
+										},
+										{
+											"id": "implicit-delete",
+											"label": "Delete undeclared content automatically"
+										}
+									],
+									"correct": ["draft-first", "verify"]
+								}
+							}
+						]
+					}
+				]
+			}
+		]
+	}
+}

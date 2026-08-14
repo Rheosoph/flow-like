@@ -1,0 +1,850 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-models-and-profiles",
+		"name": "Models & Profiles: Your AI Toolkit",
+		"language": "en",
+		"slug": "models-and-profiles",
+		"difficulty": "BEGINNER",
+		"category": "AI",
+		"estimatedMinutes": 65,
+		"isPublished": true,
+		"iconUrl": null,
+		"bannerUrl": null,
+		"tags": ["models", "profiles", "llm", "embeddings", "local-ai"],
+		"position": 12,
+		"description": "Local or hosted, chat or embeddings — pick the right model, put it in your profile, and every flow can use it.",
+		"longDescription": "One scenario runs through the whole course: a support drafter that works offline on the train and switches to a hosted heavyweight for production. You'll learn what a profile actually bundles, read a model card's capability line (what goes in, how much fits, where it runs), weigh local against hosted, tell chat models from embeddings and speech, and switch between profiles in two clicks. Challenges in every lesson, and a hand-over scenario as the final exam.",
+		"media": {
+			"icon": "media/app-logo.webp",
+			"banner": "assets/course-banner.webp"
+		},
+		"assets": [
+			{
+				"name": "CourseBanner",
+				"file": "assets/course-banner.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "course-banner.webp",
+				"replace": true
+			},
+			{
+				"name": "SelectingFirstProfile",
+				"file": "assets/SelectingFirstProfile.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "SelectingFirstProfile.webp",
+				"replace": true
+			},
+			{
+				"name": "LoadingFirstModels",
+				"file": "assets/LoadingFirstModels.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "LoadingFirstModels.webp",
+				"replace": true
+			},
+			{
+				"name": "ModelCatalog",
+				"file": "assets/ModelCatalog.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "ModelCatalog.webp",
+				"replace": true
+			},
+			{
+				"name": "AddingModelToProfile",
+				"file": "assets/AddingModelToProfile.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "AddingModelToProfile.webp",
+				"replace": true
+			},
+			{
+				"name": "GenAiOverview",
+				"file": "assets/genai-overview.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "genai-overview.webp",
+				"replace": true
+			},
+			{
+				"name": "SwitchAndEditProfiles",
+				"file": "assets/SwitchAndEditProfiles.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "SwitchAndEditProfiles.webp",
+				"replace": true
+			},
+			{
+				"name": "ProfileSettings",
+				"file": "assets/ProfileSettings.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "ProfileSettings.webp",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "course-models-and-profiles-module-toolkit",
+				"title": "Your AI Toolkit",
+				"description": "What a profile bundles, and how to read a model card before you trust it.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "course-models-and-profiles-lesson-one-profile",
+						"title": "One Profile, Every Flow",
+						"language": "en",
+						"contentFile": "content/one-profile-every-flow.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-models-profile-bundle",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A teammate asks what actually changed when you picked the Chatting profile on first run. What does a profile bundle?",
+								"explanation": "A profile groups the preferences that should change together: assigned models, interests, theme, and FlowPilot model settings — the toolkit every flow reaches into. The tempting slip is apps: switching profiles changes the active configuration and never moves or duplicates your apps. And profiles work without signing in, so they're not accounts either.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "config-toolkit",
+											"label": "Model assignments, interests, theme, and FlowPilot settings — the configuration every flow reaches into"
+										},
+										{
+											"id": "apps-package",
+											"label": "Your apps and their flows, packaged so they can move between machines"
+										},
+										{
+											"id": "user-account",
+											"label": "A user account — one profile per sign-in"
+										},
+										{
+											"id": "download-folder",
+											"label": "A folder of downloaded model files"
+										}
+									],
+									"correct": ["config-toolkit"]
+								}
+							},
+							{
+								"id": "challenge-models-switch-apps",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You build a support app while the Chatting profile is active, then switch to a different profile. Where is the app?",
+								"explanation": "Switching changes the active configuration — the toolkit — and nothing else: apps are never moved or duplicated by a profile change. \"Gone until you switch back\" is the tempting one; it confuses profile-scoped settings with app storage, which profiles don't own.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "right-where-it-was",
+											"label": "Right where it was — switching changes the active configuration, not your apps"
+										},
+										{
+											"id": "moved-over",
+											"label": "Moved into the other profile — apps follow the active profile"
+										},
+										{
+											"id": "duplicated",
+											"label": "Duplicated — each profile keeps its own copy"
+										},
+										{
+											"id": "hidden-until-back",
+											"label": "Hidden until you switch back — apps live inside the profile that created them"
+										}
+									],
+									"correct": ["right-where-it-was"]
+								}
+							},
+							{
+								"id": "challenge-models-first-run",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "First run: you picked Chatting (the card with the LOCAL MODEL DOWNLOAD badge) and the 2.0 GiB download sits at 43.75%. Which statements are true?",
+								"explanation": "The Background Download button exists exactly so you can continue into the app while files arrive, and the welcome screen itself promises you can always add, change, or remove profiles later. Sign-in is the tempting wrong pick — it's offered only to restore profiles from another device; profiles work without an account.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "background-ok",
+											"label": "You can hit Background Download and keep exploring while the files arrive"
+										},
+										{
+											"id": "change-later",
+											"label": "The choice isn't permanent — you can add, change, or remove profiles later"
+										},
+										{
+											"id": "must-sign-in",
+											"label": "You had to sign in first — profiles don't exist without an account"
+										},
+										{
+											"id": "wait-for-full",
+											"label": "The app stays locked until the download reaches 100%"
+										}
+									],
+									"correct": ["background-ok", "change-later"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-models-and-profiles-lesson-model-card",
+						"title": "Read the Model Card",
+						"language": "en",
+						"contentFile": "content/read-the-model-card.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-models-image-reader",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The customer attached a screenshot of a broken invoice. Going by the cards in @ModelCatalog, which model can read it?",
+								"explanation": "Only one card lists Image on its accepts side: Gemini 2.5 Flash (Text + Image → Text). Claude Sonnet 4 is the tempting pick — strongest reasoner on the page, but its Text → Text line is a veto: reasoning talent doesn't add eyes. And Whisper accepts audio; the \"media\" on its card means meetings and recordings, not screenshots.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "gemini-flash",
+											"label": "Gemini 2.5 Flash — its card reads Text + Image → Text"
+										},
+										{
+											"id": "claude-sonnet",
+											"label": "Claude Sonnet 4 — the strongest reasoner on the page handles attachments"
+										},
+										{
+											"id": "whisper-media",
+											"label": "Whisper Large v3 — its card says it's built for media"
+										},
+										{
+											"id": "deepseek-analysis",
+											"label": "DeepSeek R1 — deliberate reasoning includes image analysis"
+										}
+									],
+									"correct": ["gemini-flash"]
+								}
+							},
+							{
+								"id": "challenge-models-context-class",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "A gnarly ticket: a huge exported thread plus policy excerpts must all fit in one request. Which models on the page offer 1M-class context?",
+								"explanation": "The ctx figure is the budget for everything the model considers at once, and only two cards read 1.0M: Gemini 2.5 Flash and GPT-4.1 Mini. Claude Sonnet 4 is the tempting third — an excellent model, but 200K is a fifth of the 1.0M cards. Capability lines veto by numbers, not by reputation.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "gemini-1m",
+											"label": "Gemini 2.5 Flash (1.0M ctx)"
+										},
+										{
+											"id": "gpt41-1m",
+											"label": "GPT-4.1 Mini (1.0M ctx)"
+										},
+										{
+											"id": "claude-200k",
+											"label": "Claude Sonnet 4 (200K ctx)"
+										},
+										{
+											"id": "deepseek-131k",
+											"label": "DeepSeek R1 (131K ctx)"
+										},
+										{
+											"id": "gemma-33k",
+											"label": "Gemma 4B Local (33K ctx)"
+										}
+									],
+									"correct": ["gemini-1m", "gpt41-1m"]
+								}
+							},
+							{
+								"id": "challenge-models-in-profile-meaning",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The IN YOUR PROFILE strip shows Gemini 2.5 Flash and Claude Sonnet 4. What does that membership actually mean?",
+								"explanation": "The strip's own caption says it: \"Available to every flow in this workspace.\" Assignment is what exposes a model to compatible Studio nodes and FlowPilot's picker. \"Downloaded\" is the trap — both models are Hosted; assignment is toolkit membership, not a copy of weights. Copying weights to disk is what On-device models do.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "toolkit-membership",
+											"label": "They're in your active toolkit — available to every flow in this workspace and selectable from compatible Studio nodes"
+										},
+										{
+											"id": "files-downloaded",
+											"label": "Their files are downloaded to your device"
+										},
+										{
+											"id": "pinned-default",
+											"label": "They're pinned as the automatic default for every AI node"
+										},
+										{
+											"id": "billing-summary",
+											"label": "You've purchased both — the strip is a billing summary"
+										}
+									],
+									"correct": ["toolkit-membership"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "course-models-and-profiles-module-practice",
+				"title": "Models in Practice",
+				"description": "Local models and downloads, embeddings versus chat, and switching between profiles.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "course-models-and-profiles-lesson-local-models",
+						"title": "Models That Never Phone Home",
+						"language": "en",
+						"contentFile": "content/models-that-never-phone-home.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-models-airplane-mode",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Airplane mode, no Wi-Fi — and the drafting flow still writes. Which part of the model's card explains it?",
+								"explanation": "On-device is the hosting axis: the weights are on your disk and your machine does the computing, so connectivity is irrelevant. The arrow is the tempting misread — Text → Text says what a model processes, not where; a hosted text-only model still calls its provider. And a small context makes nothing offline-capable.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "on-device-axis",
+											"label": "On-device — the model's files are on your machine and your hardware runs it"
+										},
+										{
+											"id": "small-ctx",
+											"label": "33K ctx — a small context makes the model light enough to run offline"
+										},
+										{
+											"id": "text-only",
+											"label": "Text → Text — text-only models don't need a connection"
+										},
+										{
+											"id": "cached-response",
+											"label": "Hosted — the last response was cached locally"
+										}
+									],
+									"correct": ["on-device-axis"]
+								}
+							},
+							{
+								"id": "challenge-models-local-tradeoffs",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "You're pitching the local gear to your lead, who wants the honest downsides. Which trade-offs of Gemma 4B Local are real?",
+								"explanation": "Local means your disk (2.0 GiB of weights), your hardware doing the computing, and — on these cards — less context headroom than the hosted heavyweights. The last two options describe hosted models: the entire point of On-device is that no provider sits in the loop, for accounts or for processing.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "disk-space",
+											"label": "It occupies real disk space — 2.0 GiB of model files"
+										},
+										{
+											"id": "your-hardware",
+											"label": "Your machine does the computing — it runs on supported local hardware"
+										},
+										{
+											"id": "less-headroom",
+											"label": "Less headroom — 33K ctx against the hosted cards' 200K–1.0M"
+										},
+										{
+											"id": "provider-account",
+											"label": "It still needs a provider account for each run"
+										},
+										{
+											"id": "phones-home",
+											"label": "Prompts are still processed on a provider server; only caching is local"
+										}
+									],
+									"correct": ["disk-space", "your-hardware", "less-headroom"]
+								}
+							},
+							{
+								"id": "challenge-models-missing-in-studio",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You downloaded Gemma 4B Local — the progress bar finished — but a Studio node's model list won't offer it. What did you skip?",
+								"explanation": "The card menu holds two separate acts: Download puts files on the current device, Add to Profile puts the model into the toolkit that Studio nodes and profile AI features read from. Only the second makes it selectable. Sign-in is the tempting overcorrection — profiles and local models work without an account.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "add-to-profile",
+											"label": "Add to Profile — downloading only puts files on the device; assignment makes it usable"
+										},
+										{
+											"id": "sign-in-first",
+											"label": "Signing in — local models need an account before they activate"
+										},
+										{
+											"id": "redownload",
+											"label": "Re-downloading — the first download must have corrupted"
+										},
+										{
+											"id": "restart-app",
+											"label": "Restarting the app so the node's model list refreshes"
+										}
+									],
+									"correct": ["add-to-profile"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-models-and-profiles-lesson-model-types",
+						"title": "Two Jobs, Two Model Types",
+						"language": "en",
+						"contentFile": "content/two-jobs-two-model-types.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-models-vector-job",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "\"Find the policy paragraph closest in meaning to this complaint.\" Which model type does that job?",
+								"explanation": "Meaning-based search runs on embeddings: texts become vectors, and near vectors mean near meanings. The chat model is the tempting pick — it could read a passage you hand it, but finding that passage among thousands is the embedding model's job. Context size measures capacity, not searching ability.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "embedding-model",
+											"label": "An embedding model — it turns texts into vectors you can compare for closeness"
+										},
+										{
+											"id": "chat-model",
+											"label": "A chat model — reading text and answering is exactly what chat models do"
+										},
+										{
+											"id": "speech-model",
+											"label": "A speech model — it specializes in understanding human language"
+										},
+										{
+											"id": "biggest-ctx",
+											"label": "Whichever model has the biggest context window"
+										}
+									],
+									"correct": ["embedding-model"]
+								}
+							},
+							{
+								"id": "challenge-models-capability-checklist",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The support flow must search the policy knowledge base by meaning, draft replies, and transcribe voicemails. What must the profile provide?",
+								"explanation": "Capabilities are per-model: a text-generation model is not automatically an embedding or speech model, so each job needs a model of its type — chat to draft, embedding to search, speech-to-text for the audio. And mind the direction: voicemail audio → text is speech-to-text; text-to-speech points the other way.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "chat-for-drafts",
+											"label": "A chat model for drafting"
+										},
+										{
+											"id": "embedding-for-search",
+											"label": "An embedding model for the meaning-based search"
+										},
+										{
+											"id": "stt-for-voicemail",
+											"label": "A speech-to-text model for the voicemails"
+										},
+										{
+											"id": "one-hero-model",
+											"label": "Just one strong chat model — text generation covers embedding and speech too"
+										},
+										{
+											"id": "tts-for-voicemail",
+											"label": "A text-to-speech model to convert the voicemail audio"
+										}
+									],
+									"correct": [
+										"chat-for-drafts",
+										"embedding-for-search",
+										"stt-for-voicemail"
+									]
+								}
+							},
+							{
+								"id": "challenge-models-embedding-swap",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You swap the profile's embedding model for a newer one and immediately search the old policy index. What happens?",
+								"explanation": "Index and query must use the same embedding model and configuration — vectors from different models live in different spaces, so comparing them is numerology. \"Newer means better matches\" is the trap: quality returns only after you rebuild the index by re-embedding the documents with the new model.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "degrades-rebuild",
+											"label": "Matches degrade — the new model's query vectors live in a different space than the indexed ones, so the index needs rebuilding"
+										},
+										{
+											"id": "improves",
+											"label": "Search improves — newer embeddings mean better matches against the same index"
+										},
+										{
+											"id": "auto-converts",
+											"label": "Nothing changes — the index converts its vectors to the new model automatically"
+										},
+										{
+											"id": "chat-takes-over",
+											"label": "The chat model silently takes over the search"
+										}
+									],
+									"correct": ["degrades-rebuild"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-models-and-profiles-lesson-switch-gears",
+						"title": "Switch Gears in Two Clicks",
+						"language": "en",
+						"contentFile": "content/switch-gears-in-two-clicks.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 2,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-models-where-to-switch",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Ten minutes to the demo. Where do you switch to the production profile?",
+								"explanation": "The profile name in the upper-left of the sidebar opens the Profiles menu — switch, add, or edit from there, and the menu even prints ⌘-shortcuts next to each row. Changing per-flow dropdowns is the tempting grind: it misses the point that the profile swaps the whole toolkit at once.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "upper-left-menu",
+											"label": "Click the profile name in the upper-left of the sidebar and pick the profile — or use its ⌘-shortcut"
+										},
+										{
+											"id": "settings-account",
+											"label": "Settings → Account, then sign in again with the production identity"
+										},
+										{
+											"id": "per-flow-dropdown",
+											"label": "Open each flow and change its model selection by hand"
+										},
+										{
+											"id": "separate-install",
+											"label": "Each profile is a separate installation — launch the other one"
+										}
+									],
+									"correct": ["upper-left-menu"]
+								}
+							},
+							{
+								"id": "challenge-models-what-changes",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "You flip from Chatting to Work mid-afternoon. What just changed?",
+								"explanation": "A profile is configuration: the switch swaps model assignments and profile-scoped settings like theme, GPU mode, and max context size — and leaves your apps exactly where they were. Copied-into-the-profile apps and rebuilt flows are the classic misconceptions; lesson one's rule holds: apps are never moved, never duplicated.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "model-assignments",
+											"label": "The assigned models — flows now reach into Work's toolkit"
+										},
+										{
+											"id": "profile-settings",
+											"label": "Profile-scoped settings — theme and execution options like GPU mode and max context size"
+										},
+										{
+											"id": "apps-untouched",
+											"label": "Nothing about your apps — they don't move, duplicate, or disappear"
+										},
+										{
+											"id": "flows-rebuilt",
+											"label": "Your flows were rebuilt against the new models"
+										},
+										{
+											"id": "apps-copied",
+											"label": "Your apps were copied into Work so it can use them"
+										}
+									],
+									"correct": [
+										"model-assignments",
+										"profile-settings",
+										"apps-untouched"
+									]
+								}
+							},
+							{
+								"id": "challenge-models-same-flow-two-gears",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The same drafting flow picks the local model on the train and the hosted heavyweight at the office — no edits in between. How?",
+								"explanation": "Find Model resolves at run time against the active profile, guided by preferences built with Make Preferences and Set Preference Weight. The flow stays constant while the toolkit changes underneath it. Profiles never rewrite flows — that's exactly why switching is safe — and there's no automatic hosted-to-local fallback to lean on.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "find-model-prefs",
+											"label": "It uses Find Model with preferences, which selects from whatever profile is active"
+										},
+										{
+											"id": "profiles-rewrite",
+											"label": "Switching profiles rewrites the model names inside your flows"
+										},
+										{
+											"id": "secret-copies",
+											"label": "There are secretly two flows, one per profile"
+										},
+										{
+											"id": "offline-fallback",
+											"label": "Hosted models automatically fall back to local ones when offline"
+										}
+									],
+									"correct": ["find-model-prefs"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "course-models-and-profiles-module-assessment",
+				"title": "Final Assessment",
+				"description": "Hand the two-gear setup to a new teammate and resolve her first week.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "course-models-and-profiles-lesson-final",
+						"title": "Hand Over the Toolkit",
+						"language": "en",
+						"contentFile": "content/final-assessment.md",
+						"videoUrl": null,
+						"estimatedMinutes": 15,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-models-final-offline-failure",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "S1: on the train, the drafting flow errors while trying to reach a provider. What's the most likely cause?",
+								"explanation": "Hosted models run on provider infrastructure, so offline they fail — and model selection comes from the active profile, which means the fix is the profile switcher, not the flow. On-device models need no network at all, and an oversized input produces context errors; it never silently reroutes a run to a hosted model.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "production-gear-active",
+											"label": "The production gear is still active — its hosted model needs a provider, so the train ride needs the local gear"
+										},
+										{
+											"id": "gemma-heartbeat",
+											"label": "The local model crashed — on-device models still need a periodic network heartbeat"
+										},
+										{
+											"id": "ctx-forces-hosted",
+											"label": "The ticket exceeded the local context limit, which forces a hosted call"
+										},
+										{
+											"id": "wiring-error",
+											"label": "The flow is miswired — model errors always mean flow errors"
+										}
+									],
+									"correct": ["production-gear-active"]
+								}
+							},
+							{
+								"id": "challenge-models-final-cross-device",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "S2: Priya signed in on the laptop and her profiles came right back — but the local model won't run there. Why?",
+								"explanation": "Signing in restores profiles and their settings across devices, but a download puts model files on the current device only — each machine needs its own copy of the weights, and the catalog shows the pending download. Re-assigning changes nothing because the assignment already synced with the profile; the files are what's missing.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "download-per-device",
+											"label": "Downloads are per-device — the profile lists the model, but the laptop still needs to download its files"
+										},
+										{
+											"id": "reassign-everywhere",
+											"label": "She must remove and re-add the model to the profile on every machine"
+										},
+										{
+											"id": "local-cant-sync",
+											"label": "Local models can't be part of signed-in profiles"
+										},
+										{
+											"id": "wrong-hub",
+											"label": "The laptop points at the wrong hub, which blocks local execution"
+										}
+									],
+									"correct": ["download-per-device"]
+								}
+							},
+							{
+								"id": "challenge-models-final-production-capabilities",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Stocking the production profile for R2, R3, and R4 — which capabilities must it cover?",
+								"explanation": "One model per job. R2 needs a chat model whose accepts side includes Image and whose context is large — Text → Text can't see screenshots, whatever its reputation. R3 runs on an embedding model, its own type with its own catalog tab. R4 is audio → text, which is speech-to-text — text-to-speech points the wrong way. \"One flagship covers it all\" is the misconception the model-types lesson exists to kill.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "vision-large-ctx",
+											"label": "A hosted chat model that accepts images and carries a large context — screenshots plus very long threads"
+										},
+										{
+											"id": "embedding-search",
+											"label": "An embedding model — meaning-based policy search runs on vectors"
+										},
+										{
+											"id": "stt-voicemail",
+											"label": "A speech-to-text model — voicemail audio must become text"
+										},
+										{
+											"id": "flagship-covers-all",
+											"label": "One flagship chat model — strong text generation subsumes embedding and speech"
+										},
+										{
+											"id": "tts-voicemail",
+											"label": "A text-to-speech model for the voicemails"
+										}
+									],
+									"correct": [
+										"vision-large-ctx",
+										"embedding-search",
+										"stt-voicemail"
+									]
+								}
+							},
+							{
+								"id": "challenge-models-final-search-collapse",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "S3: after trying a newer embedding model, policy search returns nonsense. What's the correct recovery?",
+								"explanation": "Vectors are only comparable within one model's space: index and query must share the same embedding model and configuration, and changing the model normally means rebuilding the index. Re-embedding only the queries still compares across two spaces, and no amount of cache-warming fixes a geometry mismatch.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "one-model-rebuild",
+											"label": "Commit to one embedding model, re-embed the policy documents with it, and query with that same model and configuration"
+										},
+										{
+											"id": "keep-querying",
+											"label": "Keep querying with the newer model — its vectors are higher quality, so results improve as caches warm"
+										},
+										{
+											"id": "reembed-queries-only",
+											"label": "Re-embed only the queries; the document index can stay as it is"
+										},
+										{
+											"id": "big-ctx-chat",
+											"label": "Route the search through the biggest-context chat model instead"
+										}
+									],
+									"correct": ["one-model-rebuild"]
+								}
+							},
+							{
+								"id": "challenge-models-final-handover-steps",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which steps belong in setting up Priya's two-gear toolkit?",
+								"explanation": "Gears are profiles: create the second one from the menu, stock each with its models — for the on-device model that means download and Add to Profile, both — and switch from the upper-left. Copying the app into each profile is the persistent myth: apps aren't profile-owned, so both gears see the same app the moment you switch.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "add-second-profile",
+											"label": "Create a second profile via the upper-left menu's Add profile"
+										},
+										{
+											"id": "stock-local-gear",
+											"label": "On the laptop: download the on-device model and add it to the drafting profile"
+										},
+										{
+											"id": "stock-production-gear",
+											"label": "Add the hosted heavyweights to the production profile"
+										},
+										{
+											"id": "switch-from-menu",
+											"label": "Switch gears from the upper-left profile menu or its ⌘-shortcuts"
+										},
+										{
+											"id": "copy-app-into-profiles",
+											"label": "Copy the support app into each profile so both can reach it"
+										}
+									],
+									"correct": [
+										"add-second-profile",
+										"stock-local-gear",
+										"stock-production-gear",
+										"switch-from-menu"
+									]
+								}
+							},
+							{
+								"id": "challenge-models-final-one-flow",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "S4: \"Do I really need two copies of the drafting flow, one per model?\" What do you tell Priya?",
+								"explanation": "One flow is enough when it selects through Find Model: preferences resolve against whatever profile is active, so the train run picks the local model and the office run picks the heavyweight — no edits, no copies. Profiles never rewrite a flow's contents, and a flow isn't bound to whichever model was active when it was built.",
+								"points": 10,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "one-flow-find-model",
+											"label": "No — one flow that selects via Find Model preferences rides whichever profile is active"
+										},
+										{
+											"id": "bound-at-build",
+											"label": "Yes — a flow is bound to the model that was active when it was built"
+										},
+										{
+											"id": "profiles-rewrite-nodes",
+											"label": "No — switching profiles rewrites the flow's model nodes for you"
+										},
+										{
+											"id": "copy-per-device",
+											"label": "Yes, one per device — flows can't share models across machines"
+										}
+									],
+									"correct": ["one-flow-find-model"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		]
+	}
+}

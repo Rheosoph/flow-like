@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type DownloadCompleteListener,
 	useDownloadManager,
@@ -28,6 +29,7 @@ async function loadNotificationPlugin(): Promise<NotificationApi | null> {
 }
 
 export default function DownloadNotificationProvider() {
+	const { t } = useTranslation("common");
 	const onComplete = useDownloadManager((s) => s.onComplete);
 	const notificationApi = useRef<NotificationApi | null>(null);
 	const permissionGranted = useRef<boolean>(false);
@@ -63,12 +65,12 @@ export default function DownloadNotificationProvider() {
 
 			if (notificationApi.current && permissionGranted.current) {
 				notificationApi.current.sendNotification({
-					title: "Download Complete",
-					body: `${modelName} has been downloaded successfully.`,
+					title: t('downloadComplete', 'Download Complete'),
+					body: t('modelnameHasBeenDownloadedSuccessfully', '{{modelName}} has been downloaded successfully.', { modelName }),
 				});
 			} else {
-				toast.success("Download Complete", {
-					description: `${modelName} has been downloaded successfully.`,
+				toast.success(t('downloadComplete', 'Download Complete'), {
+					description: t('modelnameHasBeenDownloadedSuccessfully', '{{modelName}} has been downloaded successfully.', { modelName }),
 				});
 			}
 		};

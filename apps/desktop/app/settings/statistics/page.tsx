@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -167,6 +168,7 @@ function StatCard({
 }
 
 function BoardLink({ board }: Readonly<{ board: BoardRef }>) {
+	const { t } = useTranslation("common");
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
@@ -178,12 +180,13 @@ function BoardLink({ board }: Readonly<{ board: BoardRef }>) {
 					<ExternalLink className="h-3 w-3" />
 				</Link>
 			</TooltipTrigger>
-			<TooltipContent>Open board</TooltipContent>
+			<TooltipContent>{t('openBoard', 'Open board')}</TooltipContent>
 		</Tooltip>
 	);
 }
 
 function NodeUsageBarChart({ nodes }: Readonly<{ nodes: NodeUsage[] }>) {
+	const { t } = useTranslation("common");
 	const data = useMemo(
 		() =>
 			nodes.slice(0, 15).map((node) => ({
@@ -238,7 +241,7 @@ function NodeUsageBarChart({ nodes }: Readonly<{ nodes: NodeUsage[] }>) {
 							background: "hsl(var(--popover))",
 							color: "hsl(var(--popover-foreground))",
 							borderRadius: "8px",
-							boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+							boxShadow: `0 4px 12px rgba(0,0,0,0.15)`,
 						},
 					},
 				}}
@@ -250,6 +253,7 @@ function NodeUsageBarChart({ nodes }: Readonly<{ nodes: NodeUsage[] }>) {
 function CategoryPieChart({
 	categories,
 }: Readonly<{ categories: CategoryStats[] }>) {
+	const { t } = useTranslation("common");
 	const data = useMemo(
 		() =>
 			categories
@@ -289,16 +293,14 @@ function CategoryPieChart({
 							background: "hsl(var(--popover))",
 							color: "hsl(var(--popover-foreground))",
 							borderRadius: "8px",
-							boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+							boxShadow: `0 4px 12px rgba(0,0,0,0.15)`,
 						},
 					},
 				}}
 				tooltip={({ datum }) => (
 					<div className="px-3 py-2 bg-popover text-popover-foreground rounded-lg shadow-lg border">
 						<strong>{datum.label}</strong>
-						<div className="text-sm text-muted-foreground">
-							{datum.value} nodes ({datum.data.unique} unique)
-						</div>
+						<div className="text-sm text-muted-foreground">{t('valueNodesUniqueUnique', '{{value}} nodes ({{unique}} unique)', { value: datum.value, unique: datum.data.unique })}</div>
 					</div>
 				)}
 			/>
@@ -309,9 +311,10 @@ function CategoryPieChart({
 function BoardComplexityTreeMap({
 	boards,
 }: Readonly<{ boards: BoardSummary[] }>) {
+	const { t } = useTranslation("common");
 	const data = useMemo(
 		() => ({
-			name: "Boards",
+			name: t('boards', 'Boards'),
 			children: boards.slice(0, 30).map((board) => ({
 				name: board.name,
 				value: board.node_count + board.connection_count,
@@ -346,16 +349,14 @@ function BoardComplexityTreeMap({
 							background: "hsl(var(--popover))",
 							color: "hsl(var(--popover-foreground))",
 							borderRadius: "8px",
-							boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+							boxShadow: `0 4px 12px rgba(0,0,0,0.15)`,
 						},
 					},
 				}}
 				tooltip={({ node }) => (
 					<div className="px-3 py-2 bg-popover text-popover-foreground rounded-lg shadow-lg border">
 						<strong>{node.id}</strong>
-						<div className="text-sm text-muted-foreground">
-							Complexity: {node.value}
-						</div>
+						<div className="text-sm text-muted-foreground">{t('complexityValue', 'Complexity: {{value}}', { value: node.value })}</div>
 					</div>
 				)}
 			/>
@@ -488,6 +489,7 @@ function PatternCard({
 	index: number;
 	scoreType: "rarity" | "frequency";
 }>) {
+	const { t } = useTranslation("common");
 	const score =
 		scoreType === "rarity" ? pattern.rarity_score : pattern.frequency_score;
 	const scoreLabel = scoreType === "rarity" ? "Rarity" : "Frequency";
@@ -500,11 +502,10 @@ function PatternCard({
 						<span className="flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold">
 							{index + 1}
 						</span>
-						<Badge variant="outline">{pattern.nodes.length} nodes</Badge>
-						<Badge variant="secondary">{pattern.edge_count} edges</Badge>
+						<Badge variant="outline">{t('countNodes', { defaultValue_one: '{{count}} Node', defaultValue_other: '{{count}} Nodes', count: pattern.nodes.length })}</Badge>
+						<Badge variant="secondary">{t('edge_countEdges', '{{edge_count}} edges', { edge_count: pattern.edge_count })}</Badge>
 					</div>
-					<Badge className="bg-linear-to-r from-primary/80 to-primary">
-						{scoreLabel}: {score.toFixed(1)}
+					<Badge className="bg-linear-to-r from-primary/80 to-primary">{`${scoreLabel}:`}{score.toFixed(1)}
 					</Badge>
 				</div>
 			</CardHeader>
@@ -512,9 +513,7 @@ function PatternCard({
 				<PatternSchematic pattern={pattern} />
 				<div className="pt-2 border-t">
 					<div className="flex items-center gap-1 flex-wrap">
-						<span className="text-xs text-muted-foreground mr-1">
-							{pattern.occurrences}× in:
-						</span>
+						<span className="text-xs text-muted-foreground mr-1">{`${pattern.occurrences}× in:`}</span>
 						{pattern.boards.slice(0, 5).map((board) => (
 							<BoardLink key={board.id} board={board} />
 						))}
@@ -531,26 +530,27 @@ function PatternCard({
 }
 
 function BoardsTable({ boards }: Readonly<{ boards: BoardSummary[] }>) {
+	const { t } = useTranslation("common");
 	return (
 		<div className="rounded-md border">
 			<table className="w-full">
 				<thead>
 					<tr className="border-b bg-muted/50">
-						<th className="h-10 px-4 text-left text-sm font-medium">Board</th>
-						<th className="h-10 px-4 text-right text-sm font-medium">Nodes</th>
+						<th className="h-10 px-4 text-left text-sm font-medium">{t('board', 'Board')}</th>
+						<th className="h-10 px-4 text-right text-sm font-medium">{t('nodes', 'Nodes')}</th>
 						<th className="h-10 px-4 text-right text-sm font-medium hidden sm:table-cell">
-							Connections
+							{t('connections', 'Connections')}
 						</th>
 						<th className="h-10 px-4 text-right text-sm font-medium hidden md:table-cell">
-							Variables
+							{t('variables', 'Variables')}
 						</th>
 						<th className="h-10 px-4 text-right text-sm font-medium hidden lg:table-cell">
-							Layers
+							{t('layers', 'Layers')}
 						</th>
 						<th className="h-10 px-4 text-right text-sm font-medium hidden lg:table-cell">
-							Comments
+							{t('comments', 'Comments')}
 						</th>
-						<th className="h-10 px-4 text-right text-sm font-medium">Action</th>
+						<th className="h-10 px-4 text-right text-sm font-medium">{t('action', 'Action')}</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -577,7 +577,7 @@ function BoardsTable({ boards }: Readonly<{ boards: BoardSummary[] }>) {
 									href={`/flow?id=${board.id}&app=${board.app_id}`}
 									className="inline-flex items-center gap-1 text-primary hover:underline"
 								>
-									Open <ExternalLink className="h-3 w-3" />
+									{t('open', 'Open')} <ExternalLink className="h-3 w-3" />
 								</Link>
 							</td>
 						</tr>
@@ -618,18 +618,18 @@ function LoadingSkeleton() {
 }
 
 function EmptyState({ onRefresh }: Readonly<{ onRefresh: () => void }>) {
+	const { t } = useTranslation("common");
 	return (
 		<Card>
 			<CardContent className="flex flex-col items-center justify-center py-12 text-center">
 				<BarChart3 className="h-12 w-12 text-muted-foreground mb-4" />
-				<h3 className="text-lg font-semibold mb-2">No boards found</h3>
+				<h3 className="text-lg font-semibold mb-2">{t('noBoardsFound', 'No boards found')}</h3>
 				<p className="text-sm text-muted-foreground mb-4 max-w-sm">
-					Create some boards in your apps to see statistics about your node
-					usage patterns and workflows.
+					{t('createSomeBoardsInYourAppsToSeeStatisticsAboutYourNodeUsagePatternsAndWorkflows', "Create some boards in your apps to see statistics about your node usage patterns and workflows.")}
 				</p>
 				<Button onClick={onRefresh} variant="outline" className="gap-2">
 					<RefreshCw className="h-4 w-4" />
-					Refresh
+					{t('refresh', 'Refresh')}
 				</Button>
 			</CardContent>
 		</Card>
@@ -637,6 +637,7 @@ function EmptyState({ onRefresh }: Readonly<{ onRefresh: () => void }>) {
 }
 
 export default function StatisticsPage() {
+	const { t } = useTranslation("common");
 	const currentProfile = useTauriInvoke<ISettingsProfile>(
 		"get_settings_profile",
 		{},
@@ -738,9 +739,9 @@ export default function StatisticsPage() {
 			<div className="container mx-auto p-6 max-w-7xl">
 				<div className="flex items-center justify-between mb-6">
 					<div>
-						<h1 className="text-2xl font-bold">Board Statistics</h1>
+						<h1 className="text-2xl font-bold">{t('boardStatistics', 'Board Statistics')}</h1>
 						<p className="text-muted-foreground">
-							Analyzing your local boards...
+							{t('analyzingYourLocalBoards', 'Analyzing your local boards...')}
 						</p>
 					</div>
 				</div>
@@ -755,7 +756,7 @@ export default function StatisticsPage() {
 				<Card>
 					<CardContent className="flex flex-col items-center justify-center py-12 text-center">
 						<h3 className="text-lg font-semibold mb-2 text-destructive">
-							Error loading statistics
+							{t('errorLoadingStatistics', 'Error loading statistics')}
 						</h3>
 						<p className="text-sm text-muted-foreground mb-4">{error}</p>
 						<Button
@@ -764,7 +765,7 @@ export default function StatisticsPage() {
 							className="gap-2"
 						>
 							<RefreshCw className="h-4 w-4" />
-							Try Again
+							{t('tryAgain2', 'Try Again')}
 						</Button>
 					</CardContent>
 				</Card>
@@ -777,9 +778,9 @@ export default function StatisticsPage() {
 			<div className="container mx-auto p-6 max-w-7xl">
 				<div className="flex items-center justify-between mb-6">
 					<div>
-						<h1 className="text-2xl font-bold">Board Statistics</h1>
+						<h1 className="text-2xl font-bold">{t('boardStatistics', 'Board Statistics')}</h1>
 						<p className="text-muted-foreground">
-							Insights from your local boards
+							{`Insights from your local boards`}
 						</p>
 					</div>
 				</div>
@@ -795,7 +796,7 @@ export default function StatisticsPage() {
 					<div>
 						<h1 className="text-2xl font-bold flex items-center gap-2">
 							<Sparkles className="h-6 w-6 text-primary" />
-							Board Statistics
+							{t('boardStatistics', 'Board Statistics')}
 							{isComputing && (
 								<Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
 							)}
@@ -805,14 +806,12 @@ export default function StatisticsPage() {
 								</Badge>
 							)}
 						</h1>
-						<p className="text-muted-foreground">
-							Insights from {statistics.total_boards} local board
-							{statistics.total_boards !== 1 ? "s" : ""} in your current profile
+						<p className="text-muted-foreground">{`Insights from ${statistics.total_boards} local board`}{statistics.total_boards !== 1 ? "s" : ""} {t('inYourCurrentProfile', 'in your current profile')}
 							{isComputing && (
 								<span className="ml-2 text-xs">
-									{phase === "loading-boards" && "— loading boards..."}
-									{phase === "loading-nodes" && "— analyzing node usage..."}
-									{phase === "mining-patterns" && "— mining patterns..."}
+									{phase === "loading-boards" && t('loadingBoards', '— loading boards...')}
+									{phase === "loading-nodes" && t('analyzingNodeUsage', '— analyzing node usage...')}
+									{phase === "mining-patterns" && t('miningPatterns', '— mining patterns...')}
 								</span>
 							)}
 						</p>
@@ -826,31 +825,31 @@ export default function StatisticsPage() {
 						<RefreshCw
 							className={`h-4 w-4 ${isComputing ? "animate-spin" : ""}`}
 						/>
-						Refresh
+						{t('refresh', 'Refresh')}
 					</Button>
 				</div>
 
 				<div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 mb-6">
 					<StatCard
-						title="Total Boards"
+						title={t('totalBoards', 'Total Boards')}
 						value={statistics.total_boards}
 						icon={Workflow}
-						description="Boards in current profile"
+						description={t('boardsInCurrentProfile', 'Boards in current profile')}
 					/>
 					<StatCard
-						title="Total Nodes"
+						title={t('totalNodes', 'Total Nodes')}
 						value={statistics.total_nodes}
 						icon={Boxes}
-						description={`~${statistics.avg_nodes_per_board.toFixed(1)} per board`}
+						description={t('valPerBoard', '~{{val}} per board', { val: statistics.avg_nodes_per_board.toFixed(1) })}
 					/>
 					<StatCard
-						title="Total Connections"
+						title={t('totalConnections', 'Total Connections')}
 						value={statistics.total_connections}
 						icon={GitBranchIcon}
-						description={`~${statistics.avg_connections_per_board.toFixed(1)} per board`}
+						description={t('valPerBoard', '~{{val}} per board', { val: statistics.avg_connections_per_board.toFixed(1) })}
 					/>
 					<StatCard
-						title="Total Variables"
+						title={t('totalVariables', 'Total Variables')}
 						value={statistics.total_variables}
 						icon={Variable}
 					/>
@@ -858,47 +857,47 @@ export default function StatisticsPage() {
 
 				<div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 mb-6">
 					<StatCard
-						title="Total Layers"
+						title={t('totalLayers', 'Total Layers')}
 						value={statistics.total_layers}
 						icon={Layers}
 					/>
 					<StatCard
-						title="Total Comments"
+						title={t('totalComments', 'Total Comments')}
 						value={statistics.total_comments}
 						icon={MessageSquare}
 					/>
 					<StatCard
-						title="Node Categories"
+						title={t('nodeCategories', 'Node Categories')}
 						value={statistics.category_stats.length}
 						icon={HashIcon}
 					/>
 					<StatCard
-						title="Unique Nodes"
+						title={t('uniqueNodes', 'Unique Nodes')}
 						value={statistics.most_used_nodes.length}
 						icon={TrendingUp}
-						description="Different node types used"
+						description={t('differentNodeTypesUsed', 'Different node types used')}
 					/>
 				</div>
 
 				<Tabs defaultValue="overview" className="space-y-4">
 					<TabsList className="flex w-full overflow-x-auto no-scrollbar sm:grid sm:grid-cols-5">
 						<TabsTrigger value="overview" className="flex-none">
-							Overview
+							{t('overview', 'Overview')}
 						</TabsTrigger>
 						<TabsTrigger value="nodes" className="flex-none">
-							Top Nodes
+							{t('topNodes', 'Top Nodes')}
 						</TabsTrigger>
 						<TabsTrigger value="patterns" className="flex-none">
-							Patterns
+							{t('patterns', 'Patterns')}
 							{phase === "mining-patterns" && (
 								<Loader2 className="h-3 w-3 animate-spin ml-1" />
 							)}
 						</TabsTrigger>
 						<TabsTrigger value="categories" className="flex-none">
-							Categories
+							{t('categories', 'Categories')}
 						</TabsTrigger>
 						<TabsTrigger value="boards" className="flex-none">
-							Boards
+							{t('boards', 'Boards')}
 						</TabsTrigger>
 					</TabsList>
 
@@ -906,9 +905,9 @@ export default function StatisticsPage() {
 						<div className="grid gap-4 md:grid-cols-2">
 							<Card>
 								<CardHeader>
-									<CardTitle>Top Nodes by Usage</CardTitle>
+									<CardTitle>{t('topNodesByUsage', 'Top Nodes by Usage')}</CardTitle>
 									<CardDescription>
-										Most frequently used nodes across all boards
+										{t('mostFrequentlyUsedNodesAcrossAllBoards', 'Most frequently used nodes across all boards')}
 									</CardDescription>
 								</CardHeader>
 								<CardContent>
@@ -923,9 +922,9 @@ export default function StatisticsPage() {
 							</Card>
 							<Card>
 								<CardHeader>
-									<CardTitle>Category Distribution</CardTitle>
+									<CardTitle>{t('categoryDistribution', 'Category Distribution')}</CardTitle>
 									<CardDescription>
-										Node usage breakdown by category
+										{t('nodeUsageBreakdownByCategory', 'Node usage breakdown by category')}
 									</CardDescription>
 								</CardHeader>
 								<CardContent>
@@ -941,9 +940,9 @@ export default function StatisticsPage() {
 						</div>
 						<Card>
 							<CardHeader>
-								<CardTitle>Board Complexity Map</CardTitle>
+								<CardTitle>{t('boardComplexityMap', 'Board Complexity Map')}</CardTitle>
 								<CardDescription>
-									Board sizes visualized by node and connection count
+									{t('boardSizesVisualizedByNodeAndConnectionCount', 'Board sizes visualized by node and connection count')}
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
@@ -961,9 +960,9 @@ export default function StatisticsPage() {
 					<TabsContent value="nodes">
 						<Card>
 							<CardHeader>
-								<CardTitle>Most Used Nodes</CardTitle>
+								<CardTitle>{t('mostUsedNodes', 'Most Used Nodes')}</CardTitle>
 								<CardDescription>
-									The nodes you use most frequently across all boards
+									{t('theNodesYouUseMostFrequentlyAcrossAllBoards', 'The nodes you use most frequently across all boards')}
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
@@ -985,9 +984,7 @@ export default function StatisticsPage() {
 															<p className="font-medium truncate">
 																{node.friendly_name || node.name}
 															</p>
-															<p className="text-xs text-muted-foreground">
-																{node.count}× in {node.boards.length} board
-																{node.boards.length !== 1 ? "s" : ""}
+															<p className="text-xs text-muted-foreground">{t('countInLengthBoard', '{{count}}× in {{length}} board', { count: node.count, length: node.boards.length })}{node.boards.length !== 1 ? "s" : ""}
 															</p>
 														</div>
 														<Badge
@@ -1004,7 +1001,7 @@ export default function StatisticsPage() {
 									<div className="flex items-center justify-center py-12">
 										<Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
 										<span className="ml-2 text-muted-foreground">
-											Analyzing node usage...
+											{t('analyzingNodeUsage2', 'Analyzing node usage...')}
 										</span>
 									</div>
 								)}
@@ -1018,13 +1015,13 @@ export default function StatisticsPage() {
 								<CardHeader>
 									<CardTitle className="flex items-center gap-2">
 										<TrendingUp className="h-5 w-5 text-primary" />
-										Common Patterns
+										{t('commonPatterns', 'Common Patterns')}
 										{phase === "mining-patterns" && (
 											<Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
 										)}
 									</CardTitle>
 									<CardDescription>
-										Frequently used node combinations across your boards
+										{t('frequentlyUsedNodeCombinationsAcrossYourBoards', 'Frequently used node combinations across your boards')}
 									</CardDescription>
 								</CardHeader>
 								<CardContent>
@@ -1044,14 +1041,14 @@ export default function StatisticsPage() {
 									) : phase === "mining-patterns" ? (
 										<div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
 											<Loader2 className="h-8 w-8 animate-spin mb-3" />
-											<p className="text-sm">Mining subgraph patterns...</p>
+											<p className="text-sm">{t('miningSubgraphPatterns', 'Mining subgraph patterns...')}</p>
 											<p className="text-xs mt-1">
-												This may take a moment for large workspaces
+												{t('thisMayTakeAMomentForLargeWorkspaces', 'This may take a moment for large workspaces')}
 											</p>
 										</div>
 									) : (
 										<div className="text-center py-8 text-muted-foreground">
-											No common patterns found.
+											{t('noCommonPatternsFound', 'No common patterns found.')}
 										</div>
 									)}
 								</CardContent>
@@ -1060,13 +1057,13 @@ export default function StatisticsPage() {
 								<CardHeader>
 									<CardTitle className="flex items-center gap-2">
 										<Sparkles className="h-5 w-5 text-amber-500" />
-										Rare Patterns
+										{t('rarePatterns', 'Rare Patterns')}
 										{phase === "mining-patterns" && (
 											<Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
 										)}
 									</CardTitle>
 									<CardDescription>
-										Large node structures that appear in fewer boards
+										{t('largeNodeStructuresThatAppearInFewerBoards', 'Large node structures that appear in fewer boards')}
 									</CardDescription>
 								</CardHeader>
 								<CardContent>
@@ -1086,14 +1083,14 @@ export default function StatisticsPage() {
 									) : phase === "mining-patterns" ? (
 										<div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
 											<Loader2 className="h-8 w-8 animate-spin mb-3" />
-											<p className="text-sm">Mining subgraph patterns...</p>
+											<p className="text-sm">{t('miningSubgraphPatterns', 'Mining subgraph patterns...')}</p>
 											<p className="text-xs mt-1">
-												This may take a moment for large workspaces
+												{t('thisMayTakeAMomentForLargeWorkspaces', 'This may take a moment for large workspaces')}
 											</p>
 										</div>
 									) : (
 										<div className="text-center py-8 text-muted-foreground">
-											No rare patterns found.
+											{t('noRarePatternsFound', 'No rare patterns found.')}
 										</div>
 									)}
 								</CardContent>
@@ -1104,9 +1101,9 @@ export default function StatisticsPage() {
 					<TabsContent value="categories">
 						<Card>
 							<CardHeader>
-								<CardTitle>Node Categories</CardTitle>
+								<CardTitle>{t('nodeCategories', 'Node Categories')}</CardTitle>
 								<CardDescription>
-									Distribution of nodes by category
+									{t('distributionOfNodesByCategory', 'Distribution of nodes by category')}
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
@@ -1125,9 +1122,7 @@ export default function StatisticsPage() {
 															<p className="font-medium">
 																{cat.name || "Uncategorized"}
 															</p>
-															<p className="text-xs text-muted-foreground">
-																{cat.unique_nodes} unique node types
-															</p>
+															<p className="text-xs text-muted-foreground">{t('unique_nodesUniqueNodeTypes', '{{unique_nodes}} unique node types', { unique_nodes: cat.unique_nodes })}</p>
 														</div>
 														<Badge variant="secondary">{cat.node_count}</Badge>
 													</div>
@@ -1138,7 +1133,7 @@ export default function StatisticsPage() {
 									<div className="flex items-center justify-center py-12">
 										<Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
 										<span className="ml-2 text-muted-foreground">
-											Loading categories...
+											{t('loadingCategories', 'Loading categories...')}
 										</span>
 									</div>
 								)}
@@ -1149,9 +1144,9 @@ export default function StatisticsPage() {
 					<TabsContent value="boards">
 						<Card>
 							<CardHeader>
-								<CardTitle>Board Details</CardTitle>
+								<CardTitle>{t('boardDetails', 'Board Details')}</CardTitle>
 								<CardDescription>
-									Overview of all boards sorted by complexity
+									{t('overviewOfAllBoardsSortedByComplexity', 'Overview of all boards sorted by complexity')}
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
@@ -1163,7 +1158,7 @@ export default function StatisticsPage() {
 									<div className="flex items-center justify-center py-12">
 										<Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
 										<span className="ml-2 text-muted-foreground">
-											Loading boards...
+											{t('loadingBoards2', 'Loading boards...')}
 										</span>
 									</div>
 								)}

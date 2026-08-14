@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -77,6 +78,7 @@ function PackageItem({
 		| "error"
 		| "stale";
 }) {
+	const { t } = useTranslation("common");
 	return (
 		<div
 			className="rounded-xl border border-border/20 bg-card/50 hover:bg-muted/10 p-4 transition-all cursor-pointer"
@@ -96,9 +98,7 @@ function PackageItem({
 					{pkg.verified && (
 						<Shield className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
 					)}
-					<span className="text-[11px] text-muted-foreground/50 shrink-0">
-						v{pkg.latestVersion}
-					</span>
+					<span className="text-[11px] text-muted-foreground/50 shrink-0">{`v${pkg.latestVersion}`}</span>
 					{compileStatus && compileStatus !== "idle" && (
 						<PackageStatusBadge status={compileStatus} />
 					)}
@@ -137,8 +137,7 @@ function PackageItem({
 				{isInstalled ? (
 					<div className="flex items-center gap-2">
 						<span className="text-[11px] text-muted-foreground/60 flex items-center gap-1">
-							<Check className="h-3 w-3 text-green-500/70" />v{installedVersion}
-						</span>
+							<Check className="h-3 w-3 text-green-500/70" />{`v${installedVersion}`}</span>
 						<Button
 							size="sm"
 							variant="ghost"
@@ -172,7 +171,7 @@ function PackageItem({
 						) : (
 							<>
 								<Download className="h-3.5 w-3.5" />
-								Install
+								{t('install', 'Install')}
 							</>
 						)}
 					</Button>
@@ -205,6 +204,7 @@ function PackageItemSkeleton() {
 }
 
 export default function ExplorePackagesPage() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const auth = useAuth();
 	const [isInitialized, setIsInitialized] = useState(false);
@@ -328,7 +328,7 @@ export default function ExplorePackagesPage() {
 				<div className="flex flex-col items-center gap-3">
 					<Loader2 className="h-5 w-5 animate-spin text-muted-foreground/50" />
 					<p className="text-xs text-muted-foreground/50">
-						Initializing registry…
+						{t('initializingRegistry', 'Initializing registry…')}
 					</p>
 				</div>
 			</div>
@@ -371,7 +371,7 @@ export default function ExplorePackagesPage() {
 				<div className="relative flex-1 max-w-lg">
 					<Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40" />
 					<Input
-						placeholder="Search packages…"
+						placeholder={t('searchPackages2', 'Search packages…')}
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						onKeyDown={(e) => e.key === "Enter" && fetchPackages()}
@@ -410,9 +410,7 @@ export default function ExplorePackagesPage() {
 			</div>
 
 			{searchResults && (
-				<p className="text-xs text-muted-foreground/50">
-					{searchResults.totalCount} package
-					{searchResults.totalCount !== 1 ? "s" : ""} found
+				<p className="text-xs text-muted-foreground/50">{t('countPackagesFound', { defaultValue_one: '{{count}} package found', defaultValue_other: '{{count}} packages found', count: searchResults.totalCount })}
 				</p>
 			)}
 
@@ -453,10 +451,10 @@ export default function ExplorePackagesPage() {
 					<div className="flex flex-col items-center justify-center py-20 text-center">
 						<Package className="h-8 w-8 text-muted-foreground/30 mb-3" />
 						<p className="text-sm text-muted-foreground/50">
-							No packages found
+							{t('noPackagesFound', 'No packages found')}
 						</p>
 						<p className="text-xs text-muted-foreground/30 mt-1">
-							Try a different search term
+							{t('tryADifferentSearchTerm', 'Try a different search term')}
 						</p>
 					</div>
 				)}
