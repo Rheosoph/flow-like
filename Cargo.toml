@@ -17,6 +17,7 @@ members = [
     "apps/backend/aws/executor-ecs",
     "apps/backend/azure/api",
     "apps/backend/azure/queue-worker",
+    "packages/azure-data",
     "apps/backend/kubernetes/api",
     "apps/backend/kubernetes/executor",
     "apps/backend/kubernetes/compiler",
@@ -84,6 +85,7 @@ flow-like-executor = { path = "packages/executor" }
 flow-like-compiler = { path = "packages/compiler" }
 flow-like-wasm = { path = "packages/wasm" }
 flow-like-secrets = { path = "packages/secrets" }
+flow-like-azure-data = { path = "packages/azure-data" }
 tauri-plugin-flow-like-dexie-blob-offload = { path = "packages/dexie-tauri-adapter/backend" }
 lambda_http = "0.15.1"
 futures = "0.3.31"

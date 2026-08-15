@@ -2561,6 +2561,7 @@ dependencies = [
  "azure_core 0.32.0",
  "azure_identity 0.32.0",
  "flow-like-api",
+ "flow-like-azure-data",
  "flow-like-catalog",
  "flow-like-secrets",
  "flow-like-storage",
@@ -2588,18 +2589,25 @@ dependencies = [
  "azure_core 1.1.0",
  "azure_identity 1.0.0",
  "azure_storage_queue",
+ "blake3",
+ "chrono",
  "flow-like",
+ "flow-like-azure-data",
  "flow-like-catalog",
  "flow-like-compiler",
  "flow-like-executor",
+ "flow-like-storage",
  "flow-like-types",
+ "image",
  "mimalloc",
+ "sea-orm",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "uuid 1.23.1",
+ "webp",
 ]
 
 [[package]]
@@ -7678,6 +7686,7 @@ dependencies = [
  "aws-sdk-dynamodb",
  "aws_lambda_events 0.16.1",
  "chrono",
+ "flow-like-secrets",
  "lambda_runtime 0.14.4",
  "sea-orm",
  "serde",
@@ -7888,6 +7897,7 @@ dependencies = [
  "ed25519-dalek",
  "eventsource-stream",
  "flow-like",
+ "flow-like-azure-data",
  "flow-like-catalog-core",
  "flow-like-secrets",
  "flow-like-sinks",
@@ -7945,6 +7955,27 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "flow-like-azure-data"
+version = "0.1.0"
+dependencies = [
+ "azure_core 0.32.0",
+ "azure_identity 0.32.0",
+ "bytes",
+ "chrono",
+ "moka",
+ "reqwest 0.12.28",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+ "urlencoding",
+ "uuid 1.23.1",
 ]
 
 [[package]]

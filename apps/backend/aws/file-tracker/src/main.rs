@@ -1,12 +1,39 @@
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
 use aws_lambda_events::sqs::SqsEvent;
 use aws_sdk_dynamodb::Client as DynamoClient;
+use flow_like_secrets::{
+    AwsParameterStoreProviderConfig, ExposeSecret, ProviderConfig, SecretRef, SecretStore,
+    SecretStoreConfig,
+};
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use sea_orm::{ConnectOptions, Database};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 mod entity;
 mod event_handler;
 use std::time::Duration;
+
+async fn resolve_database_url() -> String {
+    match std::env::var("DATABASE_URL") {
+        Ok(url) if !url.trim().is_empty() => url,
+        _ => {
+            let secret_prefix = std::env::var("SECRET_PREFIX").ok();
+            let secret_config = SecretStoreConfig::default().with_provider(
+                ProviderConfig::AwsParameterStore(AwsParameterStoreProviderConfig {
+                    prefix: secret_prefix,
+                    with_decryption: true,
+                    ..Default::default()
+                }),
+            );
+            let secrets =
+                SecretStore::new(secret_config).expect("Failed to create secret store");
+            let value = secrets
+                .get_secret_string(&SecretRef::new("DATABASE_URL"))
+                .await
+                .expect("DATABASE_URL must be set via env or under SECRET_PREFIX");
+            ExposeSecret::expose_secret(&*value).to_string()
+        }
+    }
+}
 
 fn create_dynamo_client(config: &SdkConfig) -> DynamoClient {
     let retry_config = RetryConfig::standard()
@@ -34,7 +61,7 @@ async fn main() -> Result<(), Error> {
         .with(env_filter)
         .try_init();
 
-    let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let db_url = resolve_database_url().await;
     let mut opt = ConnectOptions::new(db_url.to_owned());
 
     opt.max_connections(100)

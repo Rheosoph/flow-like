@@ -29,7 +29,7 @@ pub mod alerting;
 pub mod audit;
 pub mod cache;
 #[cfg(feature = "cosmos")]
-mod cosmos;
+pub(crate) use flow_like_azure_data::cosmos;
 pub mod credentials;
 mod db_backfills;
 pub mod error;

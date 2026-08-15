@@ -1,6 +1,10 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod blob_events;
+mod file_tracking;
+mod media_transformation;
+
 use azure_core_queue::base64;
 use azure_core_queue::http::headers::HeaderName;
 use azure_core_queue::http::{RequestContent, Url, XmlFormat};
@@ -12,14 +16,21 @@ use azure_storage_queue::models::{
     QueueClientReceiveMessagesOptions, QueueClientSendMessageOptions, QueueMessage, ReceivedMessage,
 };
 use azure_storage_queue::{QueueClient, QueueServiceClient};
+use blob_events::{BlobEvent, BlobEventError};
+use file_tracking::{FileTrackingContext, FileTrackingError};
+use flow_like_azure_data::cosmos::CosmosClient;
+use flow_like_azure_data::postgres::{self, ManagedIdentityPostgresConfig};
 use flow_like_compiler::{CompilerConfig, CompilerError, compile};
 use flow_like_executor::{
     ExecutionRequest, ExecutorConfig, ExecutorError, MAX_REMOTE_PAYLOAD_BYTES, ResolveError,
     fetch_bounded, report_queue_failure, resolve_payload_from_str,
 };
+use flow_like_storage::object_store::azure::MicrosoftAzureBuilder;
 use flow_like_types::dispatch::{CompilationJob, CompilationJobRef};
+use media_transformation::{MediaTransformationContext, MediaTransformationError};
 use serde::Deserialize;
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -72,16 +83,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let signal_shutdown = shutdown_tx.clone();
     tokio::spawn(async move {
         wait_for_shutdown_signal().await;
-        let _ = shutdown_tx.send(true);
+        let _ = signal_shutdown.send(true);
     });
 
-    run(config, shutdown_rx).await?;
+    let (context, database_lifecycle) = WorkloadContext::build(&config).await?;
+
+    // The PostgreSQL pool holds one managed-identity token that cannot be
+    // refreshed in place (see flow_like_azure_data::postgres). The worker
+    // therefore stops taking messages once the token enters its safety window
+    // and exits before expiry; KEDA/Container Apps start a fresh replica.
+    let hard_stop = async {
+        match database_lifecycle {
+            Some(lifecycle) => {
+                let drain_shutdown = shutdown_tx.clone();
+                let drain_lifecycle = lifecycle.clone();
+                tokio::spawn(async move {
+                    drain_lifecycle.wait_until_drain().await;
+                    tracing::warn!(
+                        token_lifetime_seconds = drain_lifecycle.remaining_seconds(),
+                        "database access token entered its safety window; draining"
+                    );
+                    let _ = drain_shutdown.send(true);
+                });
+                lifecycle.wait_until_hard_stop().await;
+            }
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::pin!(hard_stop);
+
+    let worker = run(config, context, shutdown_rx);
+    tokio::pin!(worker);
+
+    tokio::select! {
+        result = &mut worker => result?,
+        _ = &mut hard_stop => {
+            tracing::error!(
+                graceful_shutdown_seconds = postgres::GRACEFUL_SHUTDOWN_SECONDS,
+                "forcing worker rotation before the database access token expires"
+            );
+        }
+    }
     Ok(())
 }
 
-async fn run(config: Config, mut shutdown: watch::Receiver<bool>) -> Result<(), WorkerError> {
+async fn run(
+    config: Config,
+    context: WorkloadContext,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<(), WorkerError> {
     let mut retry_delay = Duration::from_secs(1);
 
     loop {
@@ -89,7 +142,7 @@ async fn run(config: Config, mut shutdown: watch::Receiver<bool>) -> Result<(), 
             return Ok(());
         }
 
-        match run_connection(&config, &mut shutdown).await {
+        match run_connection(&config, &context, &mut shutdown).await {
             Ok(()) => return Ok(()),
             Err(error) => {
                 // No connection strings or SAS credentials exist in this process,
@@ -112,6 +165,7 @@ async fn run(config: Config, mut shutdown: watch::Receiver<bool>) -> Result<(), 
 
 async fn run_connection(
     config: &Config,
+    context: &WorkloadContext,
     shutdown: &mut watch::Receiver<bool>,
 ) -> Result<(), WorkerError> {
     let credential = ManagedIdentityCredential::new(Some(ManagedIdentityCredentialOptions {
@@ -173,7 +227,7 @@ async fn run_connection(
 
         poll_delay = config.poll_min_interval;
         for message in messages {
-            match process_and_settle(&source, &poison, message, config, shutdown).await? {
+            match process_and_settle(&source, &poison, message, config, context, shutdown).await? {
                 ProcessDirective::Continue => {}
                 ProcessDirective::Shutdown => return Ok(()),
             }
@@ -186,6 +240,7 @@ async fn process_and_settle(
     poison: &QueueClient,
     message: ReceivedMessage,
     config: &Config,
+    context: &WorkloadContext,
     shutdown: &mut watch::Receiver<bool>,
 ) -> Result<ProcessDirective, WorkerError> {
     let (Some(message_id), Some(initial_receipt)) =
@@ -238,7 +293,8 @@ async fn process_and_settle(
     };
 
     let outcome = {
-        let processing = process_message(config.workload, prepared.payload, prepared.job_id);
+        let processing =
+            process_message(context, config.workload, prepared.payload, prepared.job_id);
         tokio::pin!(processing);
 
         let deadline = tokio::time::sleep(config.process_timeout);
@@ -526,6 +582,21 @@ fn prepare(message: &ReceivedMessage, workload: Workload) -> Result<PreparedMess
         return Err("message_too_large");
     }
 
+    // Blob-event workloads receive Event Grid deliveries (CloudEvents or Event
+    // Grid schema), never the dispatch envelope. The event id stands in for
+    // the job id; the payload is the raw event so the handler re-parses it.
+    if workload.is_blob_event_workload() {
+        let event = BlobEvent::parse(&decoded).map_err(|error| match error {
+            BlobEventError::Malformed => workload.invalid_payload_code(),
+            BlobEventError::UnsupportedType => "unsupported_blob_event_type",
+        })?;
+        let payload = String::from_utf8(decoded).map_err(|_| workload.invalid_payload_code())?;
+        return Ok(PreparedMessage {
+            job_id: event.id,
+            payload,
+        });
+    }
+
     let envelope = serde_json::from_slice::<DispatchEnvelope>(&decoded)
         .map_err(|_| workload.invalid_payload_code())?;
     if envelope.v != ENVELOPE_VERSION {
@@ -540,8 +611,43 @@ fn prepare(message: &ReceivedMessage, workload: Workload) -> Result<PreparedMess
     })
 }
 
-async fn process_message(workload: Workload, payload: String, job_id: String) -> ProcessOutcome {
+async fn process_message(
+    context: &WorkloadContext,
+    workload: Workload,
+    payload: String,
+    job_id: String,
+) -> ProcessOutcome {
     match workload {
+        Workload::FileTracking | Workload::MediaTransformation => {
+            let event = match BlobEvent::parse(payload.as_bytes()) {
+                Ok(event) => event,
+                Err(_) => return ProcessOutcome::Permanent(workload.invalid_payload_code()),
+            };
+            if event.id != job_id {
+                return ProcessOutcome::Permanent("blob_event_id_mismatch");
+            }
+            match context {
+                WorkloadContext::FileTracking(ctx) => {
+                    match file_tracking::process(ctx, &event).await {
+                        Ok(()) => ProcessOutcome::Success,
+                        Err(FileTrackingError::Permanent(code)) => ProcessOutcome::Permanent(code),
+                        Err(FileTrackingError::Retryable(code)) => ProcessOutcome::Retryable(code),
+                    }
+                }
+                WorkloadContext::MediaTransformation(ctx) => {
+                    match media_transformation::process(ctx, &event).await {
+                        Ok(()) => ProcessOutcome::Success,
+                        Err(MediaTransformationError::Permanent(code)) => {
+                            ProcessOutcome::Permanent(code)
+                        }
+                        Err(MediaTransformationError::Retryable(code)) => {
+                            ProcessOutcome::Retryable(code)
+                        }
+                    }
+                }
+                WorkloadContext::Dispatch => ProcessOutcome::Permanent("workload_context_mismatch"),
+            }
+        }
         Workload::Execution => {
             // The payload is either inline or a claim-check reference to a
             // staged blob, so the job ID is only known after resolution.
@@ -637,6 +743,8 @@ struct DispatchEnvelope {
 enum Workload {
     Execution,
     Compilation,
+    FileTracking,
+    MediaTransformation,
 }
 
 impl Workload {
@@ -644,7 +752,14 @@ impl Workload {
         match self {
             Self::Execution => "invalid_execution_payload",
             Self::Compilation => "invalid_compilation_payload",
+            Self::FileTracking | Self::MediaTransformation => "invalid_blob_event",
         }
+    }
+
+    /// Fed by Event Grid blob subscriptions instead of the API's dispatch
+    /// envelope; see `prepare`.
+    fn is_blob_event_workload(self) -> bool {
+        matches!(self, Self::FileTracking | Self::MediaTransformation)
     }
 }
 
@@ -653,7 +768,79 @@ impl Display for Workload {
         formatter.write_str(match self {
             Self::Execution => "execution",
             Self::Compilation => "compilation",
+            Self::FileTracking => "file-tracking",
+            Self::MediaTransformation => "media-transformation",
         })
+    }
+}
+
+/// Clients a workload owns for its lifetime. Execution and compilation hold
+/// none: they reach the API over HTTPS with the JWT inside the signed
+/// payload. The blob-event workloads are the first that need data-plane
+/// clients of their own, always through the assigned managed identity.
+enum WorkloadContext {
+    Dispatch,
+    FileTracking(FileTrackingContext),
+    MediaTransformation(MediaTransformationContext),
+}
+
+impl WorkloadContext {
+    async fn build(
+        config: &Config,
+    ) -> Result<(Self, Option<postgres::DatabaseTokenLifecycle>), WorkerError> {
+        match config.workload {
+            Workload::Execution | Workload::Compilation => Ok((Self::Dispatch, None)),
+            Workload::FileTracking => {
+                let cosmos = CosmosClient::from_env()
+                    .map_err(|error| WorkerError::new("cosmos_client_init", error))?;
+                let files_container = std::env::var("COSMOS_FILES_CONTAINER")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| file_tracking::DEFAULT_FILES_CONTAINER.to_string());
+                let content_container = required_env("AZURE_CONTENT_CONTAINER")?;
+                let postgres_config =
+                    ManagedIdentityPostgresConfig::from_env(Some(&config.client_id))
+                        .map_err(|error| WorkerError::new("postgres_config", error))?;
+                let managed =
+                    postgres::connect_as(&postgres_config, "flow-like-azure-file-tracker")
+                        .await
+                        .map_err(|error| WorkerError::new("postgres_connect", error))?;
+                tracing::info!(
+                    token_lifetime_seconds = managed.lifecycle.remaining_seconds(),
+                    files_container = %files_container,
+                    "file tracker connected to Cosmos and PostgreSQL with managed identity"
+                );
+                Ok((
+                    Self::FileTracking(FileTrackingContext {
+                        cosmos,
+                        files_container,
+                        content_container,
+                        database: managed.connection,
+                    }),
+                    Some(managed.lifecycle),
+                ))
+            }
+            Workload::MediaTransformation => {
+                let account = required_env("AZURE_STORAGE_ACCOUNT_NAME")?;
+                validate_account_name(&account)?;
+                let content_container = required_env("AZURE_CONTENT_CONTAINER")?;
+                // from_env picks up the Container Apps identity endpoint and
+                // AZURE_CLIENT_ID; no key or SAS setting is present (rejected
+                // at startup).
+                let store = MicrosoftAzureBuilder::from_env()
+                    .with_account(&account)
+                    .with_container_name(&content_container)
+                    .build()
+                    .map_err(|error| WorkerError::new("blob_store_init", error))?;
+                Ok((
+                    Self::MediaTransformation(MediaTransformationContext {
+                        store: Arc::new(store),
+                        content_container,
+                    }),
+                    None,
+                ))
+            }
+        }
     }
 }
 
@@ -697,10 +884,12 @@ impl Config {
         {
             "execution" => Workload::Execution,
             "compilation" => Workload::Compilation,
+            "file-tracking" => Workload::FileTracking,
+            "media-transformation" => Workload::MediaTransformation,
             _ => {
                 return Err(WorkerError::message(
                     "invalid_workload",
-                    "AZURE_QUEUE_WORKLOAD must be 'execution' or 'compilation'",
+                    "AZURE_QUEUE_WORKLOAD must be 'execution', 'compilation', 'file-tracking' or 'media-transformation'",
                 ));
             }
         };

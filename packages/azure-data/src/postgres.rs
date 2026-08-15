@@ -4,17 +4,18 @@
 //! asynchronous credential callback when the pool opens a new connection.
 //! An Entra access token therefore cannot be refreshed safely inside an
 //! existing SeaORM pool. This module obtains a managed-identity token at
-//! startup and exposes a fail-closed lifecycle: the API drains and terminates
-//! before that token expires, allowing Container Apps to restart it with a new
-//! token. Static PostgreSQL passwords and connection strings are rejected.
+//! startup and exposes a fail-closed lifecycle: the process drains and
+//! terminates before that token expires, allowing Container Apps to restart it
+//! with a new token. Static PostgreSQL passwords and connection strings are
+//! rejected. Shared by the Azure API and the Azure queue workers.
 
 use azure_core::credentials::TokenCredential;
 use azure_identity::{ManagedIdentityCredential, ManagedIdentityCredentialOptions, UserAssignedId};
+use sea_orm::DatabaseConnection;
 use sea_orm::sqlx::{
     ConnectOptions as _,
     postgres::{PgConnectOptions, PgPoolOptions, PgSslMode},
 };
-use sea_orm::{ConnectionTrait, DatabaseConnection};
 use std::{env, time::Duration};
 
 const POSTGRES_SCOPE: &str = "https://ossrdbms-aad.database.windows.net/.default";
@@ -322,6 +323,15 @@ pub struct ManagedIdentityDatabase {
 pub async fn connect(
     config: &ManagedIdentityPostgresConfig,
 ) -> Result<ManagedIdentityDatabase, PostgresAuthError> {
+    connect_as(config, "flow-like-azure-api").await
+}
+
+/// Connect with an explicit `application_name`, so each Azure process is
+/// distinguishable in `pg_stat_activity` and the server logs.
+pub async fn connect_as(
+    config: &ManagedIdentityPostgresConfig,
+    application_name: &str,
+) -> Result<ManagedIdentityDatabase, PostgresAuthError> {
     let credential = ManagedIdentityCredential::new(Some(ManagedIdentityCredentialOptions {
         user_assigned_id: Some(UserAssignedId::ClientId(config.client_id.clone())),
         ..Default::default()
@@ -344,7 +354,7 @@ pub async fn connect(
         .database(&config.database)
         .password(access_token.token.secret())
         .ssl_mode(PgSslMode::VerifyFull)
-        .application_name("flow-like-azure-api")
+        .application_name(application_name)
         .disable_statement_logging();
 
     let pool = PgPoolOptions::new()

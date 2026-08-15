@@ -15,7 +15,7 @@ use std::{future::IntoFuture, sync::Arc};
 
 mod config;
 mod health;
-mod postgres;
+use flow_like_azure_data::postgres;
 mod storage;
 
 const REQUIRED_SECRETS: &[(&str, usize)] = &[

@@ -51,6 +51,17 @@ const ENVELOPE_VERSION: u8 = 1;
 
 pub(crate) const WORKLOAD_EXECUTION: &str = "execution";
 pub(crate) const WORKLOAD_COMPILATION: &str = "compilation";
+/// Fed by Event Grid blob subscriptions in the deployment; the API never
+/// dispatches into these queues today, but the worker accepts the names and a
+/// future re-enqueue path must not be rejected here.
+pub(crate) const WORKLOAD_FILE_TRACKING: &str = "file-tracking";
+pub(crate) const WORKLOAD_MEDIA_TRANSFORMATION: &str = "media-transformation";
+const SUPPORTED_WORKLOADS: [&str; 4] = [
+    WORKLOAD_EXECUTION,
+    WORKLOAD_COMPILATION,
+    WORKLOAD_FILE_TRACKING,
+    WORKLOAD_MEDIA_TRANSFORMATION,
+];
 
 const STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
 const QUEUE_API_VERSION: &str = "2023-11-03";
@@ -282,7 +293,7 @@ fn validate_queue_name(value: &str) -> Result<(), String> {
 }
 
 fn validate_workload(value: &str) -> Result<(), String> {
-    if value != WORKLOAD_EXECUTION && value != WORKLOAD_COMPILATION {
+    if !SUPPORTED_WORKLOADS.contains(&value) {
         return Err(format!("unsupported queue workload '{value}'"));
     }
     Ok(())
@@ -318,10 +329,13 @@ mod tests {
     }
 
     #[test]
-    fn workloads_are_restricted_to_the_two_dispatch_paths() {
+    fn workloads_are_restricted_to_the_deployed_worker_set() {
         assert!(validate_workload(WORKLOAD_EXECUTION).is_ok());
         assert!(validate_workload(WORKLOAD_COMPILATION).is_ok());
-        assert!(validate_workload("file-tracking").is_err());
+        assert!(validate_workload(WORKLOAD_FILE_TRACKING).is_ok());
+        assert!(validate_workload(WORKLOAD_MEDIA_TRANSFORMATION).is_ok());
+        assert!(validate_workload("file-tracker").is_err());
+        assert!(validate_workload("").is_err());
     }
 
     #[test]

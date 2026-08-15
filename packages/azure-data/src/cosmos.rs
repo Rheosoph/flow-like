@@ -29,7 +29,7 @@ const PARTITION_KEY_HEADER: &str = "x-ms-documentdb-partitionkey";
 const CONTINUATION_HEADER: &str = "x-ms-continuation";
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CosmosError {
+pub enum CosmosError {
     #[error("Cosmos configuration error: {0}")]
     Configuration(String),
     #[error("Cosmos authentication error: {0}")]
@@ -53,7 +53,7 @@ pub(crate) enum CosmosError {
 
 /// Result of an operation whose target can be absent or can lose an ETag race.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MutationOutcome {
+pub enum MutationOutcome {
     Applied,
     NotFound,
     Conflict,
@@ -61,9 +61,9 @@ pub(crate) enum MutationOutcome {
 }
 
 #[derive(Debug)]
-pub(crate) struct QueryPage<T> {
-    pub(crate) documents: Vec<T>,
-    pub(crate) continuation: Option<String>,
+pub struct QueryPage<T> {
+    pub documents: Vec<T>,
+    pub continuation: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -80,13 +80,13 @@ struct QueryRequest<'a> {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub(crate) struct QueryParameter {
+pub struct QueryParameter {
     name: String,
     value: Value,
 }
 
 impl QueryParameter {
-    pub(crate) fn new(name: impl Into<String>, value: impl Into<Value>) -> Self {
+    pub fn new(name: impl Into<String>, value: impl Into<Value>) -> Self {
         Self {
             name: name.into(),
             value: value.into(),
@@ -102,7 +102,7 @@ struct RawResponse {
 
 /// A cloneable REST client shared by the cache and execution-state stores.
 #[derive(Clone)]
-pub(crate) struct CosmosClient {
+pub struct CosmosClient {
     http: reqwest::Client,
     endpoint: String,
     database: String,
@@ -122,7 +122,7 @@ impl Debug for CosmosClient {
 }
 
 impl CosmosClient {
-    pub(crate) fn from_env() -> Result<Self, CosmosError> {
+    pub fn from_env() -> Result<Self, CosmosError> {
         let endpoint = required_env("COSMOS_ENDPOINT")?;
         let database = std::env::var("COSMOS_DATABASE")
             .ok()
@@ -201,7 +201,7 @@ impl CosmosClient {
         })
     }
 
-    pub(crate) async fn read_document<T: DeserializeOwned>(
+    pub async fn read_document<T: DeserializeOwned>(
         &self,
         container: &str,
         id: &str,
@@ -227,7 +227,7 @@ impl CosmosClient {
 
     /// Create a document without upsert semantics. A conflict is returned to the caller
     /// so `try_insert` can retain its atomic contract.
-    pub(crate) async fn create_document<T: Serialize>(
+    pub async fn create_document<T: Serialize>(
         &self,
         container: &str,
         partition_key: &str,
@@ -245,7 +245,7 @@ impl CosmosClient {
         .await
     }
 
-    pub(crate) async fn upsert_document<T: Serialize>(
+    pub async fn upsert_document<T: Serialize>(
         &self,
         container: &str,
         partition_key: &str,
@@ -270,7 +270,7 @@ impl CosmosClient {
         }
     }
 
-    pub(crate) async fn replace_document<T: Serialize>(
+    pub async fn replace_document<T: Serialize>(
         &self,
         container: &str,
         id: &str,
@@ -337,7 +337,7 @@ impl CosmosClient {
         }
     }
 
-    pub(crate) async fn delete_document(
+    pub async fn delete_document(
         &self,
         container: &str,
         id: &str,
@@ -367,7 +367,7 @@ impl CosmosClient {
         }
     }
 
-    pub(crate) async fn query_page<T: DeserializeOwned>(
+    pub async fn query_page<T: DeserializeOwned>(
         &self,
         container: &str,
         query: &str,
@@ -631,7 +631,7 @@ fn validate_resource_id(label: &str, value: &str) -> Result<(), CosmosError> {
     Ok(())
 }
 
-pub(crate) fn validate_container_id(value: &str) -> Result<(), CosmosError> {
+pub fn validate_container_id(value: &str) -> Result<(), CosmosError> {
     validate_resource_id("Cosmos container", value)
 }
 
@@ -686,7 +686,7 @@ fn session_key(path: &str, partition_key: Option<&str>) -> String {
 /// Convert an absolute epoch-millisecond expiry into Cosmos' relative `ttl` seconds.
 /// A minimum of one second avoids accidentally serializing `0`, which disables TTL for
 /// that item rather than expiring it.
-pub(crate) fn ttl_seconds(expires_at_ms: Option<i64>, now_ms: i64) -> Option<i64> {
+pub fn ttl_seconds(expires_at_ms: Option<i64>, now_ms: i64) -> Option<i64> {
     expires_at_ms.map(|expires_at| {
         let remaining_ms = expires_at.saturating_sub(now_ms);
         remaining_ms.saturating_add(999).div_euclid(1_000).max(1)

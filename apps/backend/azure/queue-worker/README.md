@@ -1,8 +1,10 @@
 # Azure Queue Storage queue worker
 
-This image consumes either Flow-Like execution jobs or compilation jobs from
-Azure Queue Storage. Deploy two Container Apps from the same digest with
-separate user-assigned identities. Each identity needs, scoped to its own
+This image consumes one of four Flow-Like workloads from Azure Queue Storage:
+execution jobs and compilation jobs (dispatched by the API), or released-content
+blob events for file tracking and media transformation (delivered by an Event
+Grid system topic). Deploy one Container App per workload from the same digest
+with separate user-assigned identities. Each identity needs, scoped to its own
 queue, `Storage Queue Data Message Processor` (receive + delete), `Storage
 Queue Data Reader` (KEDA reads `ApproximateMessagesCount`), a custom role
 granting `Microsoft.Storage/storageAccounts/queueServices/queues/messages/write`
@@ -11,7 +13,8 @@ granting `Microsoft.Storage/storageAccounts/queueServices/queues/messages/write`
 
 Required environment variables:
 
-- `AZURE_QUEUE_WORKLOAD`: `execution` or `compilation`
+- `AZURE_QUEUE_WORKLOAD`: `execution`, `compilation`, `file-tracking` or
+  `media-transformation`
 - `AZURE_QUEUE_STORAGE_ACCOUNT_NAME`: storage account hosting the queues
 - `AZURE_QUEUE_NAME`: the queue this replica consumes
 - `AZURE_QUEUE_POISON_NAME`: must be `<AZURE_QUEUE_NAME>-poison`
@@ -19,14 +22,35 @@ Required environment variables:
 - the existing executor/compiler runtime configuration and Key Vault-injected
   runtime values required by those packages
 
+Blob-event workloads (Event Grid → Queue Storage, CloudEvents 1.0 or Event
+Grid schema, base64 or raw JSON):
+
+- `file-tracking` additionally needs `AZURE_CONTENT_CONTAINER`, the Cosmos
+  settings (`COSMOS_ENDPOINT`, `COSMOS_DATABASE`, `COSMOS_AUTH_MODE`,
+  `COSMOS_FILES_CONTAINER` default `files`) and the managed-identity
+  PostgreSQL settings (`AZURE_POSTGRES_AUTH_MODE=managed_identity`,
+  `AZURE_POSTGRES_HOST`, `AZURE_POSTGRES_DATABASE`, `AZURE_POSTGRES_USER`).
+  It keeps a size ledger per blob in the `files` container (`pk` = app id) and
+  applies size deltas to `App.totalSize` / `User.totalSize`. Its SQL role must
+  exist and be allowed to `UPDATE` both tables. Because the PostgreSQL token
+  cannot be refreshed in the pool, the process requests its own shutdown when
+  the token enters its safety window and hard-stops before expiry; KEDA
+  restarts it.
+- `media-transformation` additionally needs `AZURE_STORAGE_ACCOUNT_NAME` and
+  `AZURE_CONTENT_CONTAINER`; its identity needs `Storage Blob Data
+  Contributor` on the content container. It converts `media/` uploads to WebP
+  next to the original and deletes the original; `.webp` inputs are ignored,
+  videos kept, other extensions deleted (AWS parity).
+
 Optional bounded settings:
 
 - `AZURE_QUEUE_VISIBILITY_TIMEOUT_SECS` (default `300`, range `60..604800`)
 - `AZURE_QUEUE_RENEWAL_INTERVAL_SECS` (default `60`, range `10..3600`; must be
   below half the visibility timeout)
-- `AZURE_QUEUE_PROCESS_TIMEOUT_SECS` (default `3600`, range `30..7200`)
+- `AZURE_QUEUE_PROCESS_TIMEOUT_SECS` (default `EXECUTOR_TIMEOUT_SECS + 600`;
+  must exceed the executor run timeout)
 - `AZURE_QUEUE_MAX_DEQUEUE_COUNT` (default `3`, range `1..100`)
-- `AZURE_QUEUE_BATCH_SIZE` (default `1`, range `1..32`)
+- `AZURE_QUEUE_BATCH_SIZE` (pinned to `1` until waiting-message renewal exists)
 - `AZURE_QUEUE_POLL_MIN_INTERVAL_SECS` (default `1`, range `1..60`)
 - `AZURE_QUEUE_POLL_MAX_INTERVAL_SECS` (default `30`, range `1..300`)
 
