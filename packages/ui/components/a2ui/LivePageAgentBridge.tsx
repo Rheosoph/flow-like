@@ -17,6 +17,8 @@ interface LivePageAgentBridgeProps {
 	pageId: string;
 	eventId?: string;
 	getSurface: () => Surface | null;
+	/** This instance's rendered page container ([data-page-id] node) for captures. */
+	getContainer?: () => HTMLElement | null;
 	/** The page's surface reducer entry point — used to mirror value writes visually. */
 	applyServerMessage: (message: A2UIServerMessage) => void;
 	loading: boolean;
@@ -32,6 +34,7 @@ export function LivePageAgentBridge({
 	pageId,
 	eventId,
 	getSurface,
+	getContainer,
 	applyServerMessage,
 	loading,
 }: LivePageAgentBridgeProps) {
@@ -47,6 +50,7 @@ export function LivePageAgentBridge({
 	// The handle must always act on the latest render's callbacks without re-registering.
 	const latest = useRef({
 		getSurface,
+		getContainer,
 		applyServerMessage,
 		getElementValues,
 		setElementValue,
@@ -55,6 +59,7 @@ export function LivePageAgentBridge({
 	});
 	latest.current = {
 		getSurface,
+		getContainer,
 		applyServerMessage,
 		getElementValues,
 		setElementValue,
@@ -75,6 +80,7 @@ export function LivePageAgentBridge({
 				return eventIdRef.current;
 			},
 			getSurface: () => latest.current.getSurface(),
+			getContainer: () => latest.current.getContainer?.() ?? null,
 			getElementValues: () => latest.current.getElementValues?.() ?? {},
 			setElementValue: (componentId, value) => {
 				// Payload half: what the next workflow run receives in _elements/_input_values.
@@ -122,6 +128,10 @@ export function LivePageAgentBridge({
 				const unsubscribe = subscribeLivePageRuns(
 					latest.current.surfaceId ?? pageId,
 					(record) => {
+						// The bus is surface-keyed and shared by every actor on this page (a user
+						// clicking during the await, a second live instance). Collect only runs
+						// started by the component THIS trigger fired.
+						if (record.componentId !== componentId) return;
 						runs.push(record);
 					},
 				);

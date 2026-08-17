@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { resolveLayerChain } from "../../hooks/use-layer-navigation";
 import {
 	type IBoard,
 	type INode,
@@ -771,11 +772,22 @@ function BoardPreviewInner({ board }: { board: IBoard }) {
 		[],
 	);
 
-	const pushLayer = useCallback((layer: ILayer) => {
-		setSelectedNodeId(undefined);
-		setCurrentLayer(layer.id);
-		setLayerPath((prev) => (prev ? `${prev}/${layer.id}` : layer.id));
-	}, []);
+	const pushLayer = useCallback(
+		(layer: ILayer) => {
+			setSelectedNodeId(undefined);
+			setCurrentLayer(layer.id);
+
+			// Resolved from the layer's own ancestry: a function body is opened from wherever
+			// its Call Function node sits, which is rarely the layer currently on screen.
+			const chain = resolveLayerChain(board.layers, layer.id);
+			if (chain.length > 0) {
+				setLayerPath(chain.join("/"));
+				return;
+			}
+			setLayerPath((prev) => (prev ? `${prev}/${layer.id}` : layer.id));
+		},
+		[board.layers],
+	);
 
 	const handleBreadcrumbNav = useCallback((path?: string) => {
 		setSelectedNodeId(undefined);
@@ -820,20 +832,14 @@ function BoardPreviewInner({ board }: { board: IBoard }) {
 			setSelectedNodeId(nodeId);
 			pendingFocusNodeIdRef.current = nodeId;
 
-			const layerTree: string[] = [];
-			let parentLayer = normalizedLayerId(node.layer);
-			let iteration = 0;
-			while (parentLayer && iteration < 40) {
-				iteration++;
-				const layer = board.layers[parentLayer];
-				if (!layer) break;
-				layerTree.push(layer.id);
-				parentLayer = normalizedLayerId(layer.parent_id);
-			}
+			const chain = resolveLayerChain(
+				board.layers,
+				normalizedLayerId(node.layer),
+			);
 
-			if (layerTree.length > 0) {
-				setCurrentLayer(layerTree[0]);
-				setLayerPath(layerTree.slice().reverse().join("/"));
+			if (chain.length > 0) {
+				setCurrentLayer(chain[chain.length - 1]);
+				setLayerPath(chain.join("/"));
 			} else {
 				setCurrentLayer(undefined);
 				setLayerPath(undefined);
@@ -847,14 +853,8 @@ function BoardPreviewInner({ board }: { board: IBoard }) {
 	const navigateToLayer = useCallback(
 		(layerId: string) => {
 			setSelectedNodeId(undefined);
-			// Build path through parent chain
-			const buildPath = (id: string): string => {
-				const layer = board.layers[id];
-				if (!layer?.parent_id || !board.layers[layer.parent_id]) return id;
-				return `${buildPath(layer.parent_id)}/${id}`;
-			};
-			const path = buildPath(layerId);
-			setLayerPath(path);
+			const chain = resolveLayerChain(board.layers, layerId);
+			setLayerPath(chain.length > 0 ? chain.join("/") : layerId);
 			setCurrentLayer(layerId);
 		},
 		[board.layers],

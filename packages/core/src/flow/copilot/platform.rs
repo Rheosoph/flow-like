@@ -1129,7 +1129,7 @@ impl PlatformCopilot {
                 }
                 if !tool_images.is_empty() {
                     image_contents.push(UserContent::text(
-                        "Rendered app page capture(s) from the preceding open_app_page result, ordered top-to-bottom. Inspect all images before answering about the page's content.",
+                        "Rendered app page capture(s) from the preceding page tool result (open_app_page / interact_app_page), ordered top-to-bottom. Inspect all images before answering about the page's content.",
                     ));
                 }
                 image_contents.extend(tool_images.into_iter().map(|image| {

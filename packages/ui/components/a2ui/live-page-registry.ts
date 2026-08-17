@@ -12,7 +12,11 @@ import type { Surface } from "./types";
  */
 
 export interface LivePageRunRecord {
-	status: "ok" | "error";
+	/**
+	 * ok = dispatched and no Error/Fatal logs; failed = dispatched but logged Error/Fatal;
+	 * error = dispatch threw; not_executed = nothing ran (e.g. consent declined).
+	 */
+	status: "ok" | "failed" | "error" | "not_executed";
 	runId?: string;
 	componentId?: string;
 	nodeId?: string;
@@ -38,6 +42,8 @@ export interface LivePageHandle {
 	/** The page Event currently rendered (route/eventId target), when known. */
 	eventId?: string;
 	getSurface: () => Surface | null;
+	/** The instance's own rendered page container, so captures shoot the DRIVEN instance. */
+	getContainer?: () => HTMLElement | null;
 	getElementValues: () => Record<string, unknown>;
 	/** Writes both halves of an input value: the run-payload store and the visual surface. */
 	setElementValue: (componentId: string, value: unknown) => void;

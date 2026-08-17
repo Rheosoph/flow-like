@@ -1,3 +1,5 @@
+"use client";
+
 import { useTranslation } from "@flow-like/locales";
 import { Button } from "@flow-like/flow-like-ui";
 import { Separator } from "@flow-like/flow-like-ui/components/ui/separator";

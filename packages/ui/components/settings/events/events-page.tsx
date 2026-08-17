@@ -57,6 +57,10 @@ import type {
 	IOAuthTokenStoreWithPending,
 	IStoredOAuthToken,
 } from "@flow-like/flow-like-ui/lib/oauth/types";
+import {
+	isEventOverridable,
+	isRuntimeConfigured,
+} from "@flow-like/flow-like-ui/lib/runtime-vars-utils";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import type { IHub } from "@flow-like/flow-like-ui/lib/schema/hub/hub";
 import { stableStringify } from "@flow-like/flow-like-ui/lib/stable-stringify";
@@ -98,7 +102,7 @@ import { EventSectionRail } from "./event-section-rail";
 import { EventsOverview } from "./events-overview";
 import { SectionGuidance } from "./section-guidance";
 import { SetupChecklist } from "./setup-checklist";
-import { useEventIssues } from "./use-event-issues";
+import { isHeadlessEventType, useEventIssues } from "./use-event-issues";
 
 function errorMessage(error: unknown): string {
 	if (error instanceof Error) return error.message;
@@ -1265,6 +1269,31 @@ function EventConfiguration({
 		[formData.config],
 	);
 
+	const overridableVariables = useMemo(
+		() =>
+			Object.entries(board.data?.variables ?? {}).filter(([_, variable]) =>
+				isEventOverridable(variable),
+			),
+		[board.data?.variables],
+	);
+
+	/**
+	 * Runtime-configured variables the flow needs but this event does not supply.
+	 * They normally come from the user's device, which a headless trigger has no
+	 * access to — so left unset they read null and the flow misbehaves silently.
+	 * Interactive events still prompt, so there is nothing to warn about there.
+	 */
+	const unsetRuntimeVariables = useMemo(
+		() =>
+			isHeadlessEventType(formData.event_type)
+				? overridableVariables.filter(
+						([key, variable]) =>
+							isRuntimeConfigured(variable) && !formData.variables[key],
+					)
+				: [],
+		[overridableVariables, formData.variables, formData.event_type],
+	);
+
 	const issues = useEventIssues({
 		event: formData,
 		config: parsedConfig,
@@ -1275,6 +1304,7 @@ function EventConfiguration({
 			board.data?.nodes?.[formData.node_id]?.name,
 		),
 		routeError: routePathError,
+		boardVariables: board.data?.variables,
 	});
 
 	const enterEdit = useCallback(() => {
@@ -2148,71 +2178,83 @@ function EventConfiguration({
 														</DialogDescription>
 													</DialogHeader>
 													<div className="space-y-2 max-h-80 overflow-y-auto">
-														{board.data?.variables &&
-															Object.entries(board.data.variables)
-																.filter(([_, variable]) => variable.exposed)
-																.map(([key, variable]) => {
-																	const isAlreadyAdded =
-																		formData.variables.hasOwnProperty(key);
-																	return (
-																		<div
-																			key={key}
-																			className="flex items-center justify-between p-3 border rounded"
-																		>
-																			<div className="flex-1">
-																				<div className="flex flex-row items-center gap-2">
-																					<VariableTypeIndicator
-																						valueType={variable.data_type}
-																						type={variable.value_type}
-																					/>
-																					<div className="font-medium text-sm">
-																						{variable.name}
-																					</div>
-																				</div>
-																				{variable.default_value && (
-																					<div className="text-xs text-muted-foreground mt-1">
-																						{t('default2', 'Default:')}{" "}
-																						<span>
-																							{String(
-																								parseUint8ArrayToJson(
-																									variable.default_value,
-																								),
-																							)}
-																						</span>
-																					</div>
-																				)}
+														{overridableVariables.map(([key, variable]) => {
+															const isAlreadyAdded =
+																formData.variables.hasOwnProperty(key);
+															return (
+																<div
+																	key={key}
+																	className="flex items-center justify-between p-3 border rounded"
+																>
+																	<div className="flex-1">
+																		<div className="flex flex-row items-center gap-2">
+																			<VariableTypeIndicator
+																				valueType={variable.data_type}
+																				type={variable.value_type}
+																			/>
+																			<div className="font-medium text-sm">
+																				{variable.name}
 																			</div>
-																			<Button
-																				variant={
-																					isAlreadyAdded ? "outline" : "default"
-																				}
-																				size="sm"
-																				onClick={() => {
-																					if (isAlreadyAdded) {
-																						const newVars = {
-																							...formData.variables,
-																						};
-																						delete newVars[key];
-																						handleInputChange(
-																							"variables",
-																							newVars,
-																						);
-																					} else {
-																						handleInputChange("variables", {
-																							...formData.variables,
-																							[key]: variable,
-																						});
-																					}
-																				}}
-																			>
-																				{isAlreadyAdded ? "Remove" : t('add', 'Add')}
-																			</Button>
+																			{isRuntimeConfigured(variable) && (
+																				<Badge
+																					variant="outline"
+																					className="gap-1 text-[10px]"
+																				>
+																					{variable.secret && (
+																						<Lock className="h-2.5 w-2.5" />
+																					)}
+																					{t(
+																						"runtimeConfigured",
+																						"Runtime configured",
+																					)}
+																				</Badge>
+																			)}
 																		</div>
-																	);
-																})}
-														{(!board.data?.variables ||
-															Object.keys(board.data.variables).length ===
-																0) && (
+																		{/* Secrets reach the browser blank from the API,
+																		    but desktop reads boards straight off disk —
+																		    don't print the value there either. */}
+																		{variable.default_value && !variable.secret && (
+																			<div className="text-xs text-muted-foreground mt-1">
+																				{t('default2', 'Default:')}{" "}
+																				<span>
+																					{String(
+																						parseUint8ArrayToJson(
+																							variable.default_value,
+																						),
+																					)}
+																				</span>
+																			</div>
+																		)}
+																	</div>
+																	<Button
+																		variant={
+																			isAlreadyAdded ? "outline" : "default"
+																		}
+																		size="sm"
+																		onClick={() => {
+																			if (isAlreadyAdded) {
+																				const newVars = {
+																					...formData.variables,
+																				};
+																				delete newVars[key];
+																				handleInputChange(
+																					"variables",
+																					newVars,
+																				);
+																			} else {
+																				handleInputChange("variables", {
+																					...formData.variables,
+																					[key]: variable,
+																				});
+																			}
+																		}}
+																	>
+																		{isAlreadyAdded ? "Remove" : t('add', 'Add')}
+																	</Button>
+																</div>
+															);
+														})}
+														{overridableVariables.length === 0 && (
 															<div className="text-center py-8 text-muted-foreground">
 																{t('noBoardVariablesAvailable', 'No board variables available')}
 															</div>
@@ -2223,7 +2265,44 @@ function EventConfiguration({
 										)}
 									</div>
 								</CardHeader>
-								<CardContent>
+								<CardContent className="space-y-4">
+									{unsetRuntimeVariables.length > 0 && (
+										<div className="flex gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
+											<AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-500" />
+											<div className="space-y-1 text-sm">
+												<p className="font-medium">
+													{t(
+														"runtimeVariablesUnset",
+														"Runtime variables have no value here",
+													)}
+												</p>
+												<p className="text-muted-foreground">
+													{t(
+														"runtimeVariablesUnsetDetail",
+														"These are normally filled in from your device when you run the flow yourself. A trigger runs without you, so unless you set them here they read as empty:",
+													)}{" "}
+													<span className="font-medium text-foreground">
+														{unsetRuntimeVariables
+															.map(([, variable]) => variable.name)
+															.join(", ")}
+													</span>
+												</p>
+											</div>
+										</div>
+									)}
+									{Object.values(formData.variables).some(
+										(variable) => variable.secret,
+									) && (
+										<div className="flex gap-3 rounded-lg border bg-muted/40 p-3">
+											<Lock className="h-4 w-4 shrink-0 mt-0.5 text-muted-foreground" />
+											<p className="text-sm text-muted-foreground">
+												{t(
+													"eventSecretStorageNotice",
+													"Secret values set here are saved with the event so this trigger can run without you — unlike runtime variables, which stay on your device. They are never shown back to you, and leaving a secret field blank keeps the stored value.",
+												)}
+											</p>
+										</div>
+									)}
 									{Object.keys(formData.variables).length > 0 ? (
 										<div className="space-y-2">
 											{Object.entries(formData.variables).map(

@@ -23,7 +23,7 @@ use flow_like::flow::copilot::{
     CatalogProvider, FlowIrDraftStore, NodeMetadata, PinMetadata, enrich_node_metadata,
     score_catalog_metadata,
 };
-use flow_like::flow::node::NodeLogic;
+use flow_like::flow::node::{Node, NodeLogic};
 use flow_like::flow::pin::{Pin, PinType};
 use flow_like::flow::variable::VariableType;
 use flow_like::models::llm::ModelUsageContext;
@@ -275,6 +275,22 @@ fn validate_images(images: &[ChatImage], context: &str) -> Result<(), ApiError> 
 
 struct ServerCatalogProvider {
     catalog: Arc<Vec<Arc<dyn NodeLogic>>>,
+    /// Nodes of the WASM packages the requesting app pins. The hosted apply boundary
+    /// (`apply_flowscript`, `flow_ir_commit`) already merges these, so omitting them here would
+    /// let the model author only against builtins while the applier accepts strictly more —
+    /// package nodes would be unusable rather than merely undiscoverable.
+    wasm_nodes: Arc<Vec<Node>>,
+}
+
+impl ServerCatalogProvider {
+    /// Every node visible to this request, builtin catalog first so a package node that reuses a
+    /// builtin name does not displace it in first-match lookups.
+    fn nodes(&self) -> impl Iterator<Item = Node> + '_ {
+        self.catalog
+            .iter()
+            .map(|logic| logic.get_node())
+            .chain(self.wasm_nodes.iter().cloned())
+    }
 }
 
 fn pin_to_metadata(pin: &Pin) -> PinMetadata {
@@ -341,8 +357,8 @@ impl CatalogProvider for ServerCatalogProvider {
     async fn search(&self, query: &str) -> Vec<NodeMetadata> {
         let mut scored_matches: Vec<(i32, NodeMetadata)> = Vec::new();
 
-        for logic in self.catalog.iter() {
-            let metadata = node_to_metadata(logic.get_node());
+        for node in self.nodes() {
+            let metadata = node_to_metadata(node);
             let score = score_catalog_metadata(&metadata, query);
 
             if score > 0 {
@@ -362,9 +378,7 @@ impl CatalogProvider for ServerCatalogProvider {
         let pin_type = pin_type.to_lowercase();
         let mut matches = Vec::new();
 
-        for logic in self.catalog.iter() {
-            let node = logic.get_node();
-
+        for node in self.nodes() {
             let has_matching_pin = node.pins.values().any(|p| {
                 let is_correct_direction = if is_input {
                     p.pin_type == PinType::Input
@@ -391,8 +405,7 @@ impl CatalogProvider for ServerCatalogProvider {
         let category_prefix = category_prefix.to_lowercase();
         let mut matches = Vec::new();
 
-        for logic in self.catalog.iter() {
-            let node = logic.get_node();
+        for node in self.nodes() {
             let name_lower = node.name.to_lowercase();
             let category = name_lower.split("::").nth(1).unwrap_or("");
 
@@ -407,17 +420,13 @@ impl CatalogProvider for ServerCatalogProvider {
     }
 
     async fn get_node_metadata(&self, node_type: &str) -> Option<NodeMetadata> {
-        self.catalog.iter().find_map(|logic| {
-            let node = logic.get_node();
-            (node.name == node_type).then(|| node_to_metadata(node))
-        })
+        self.nodes()
+            .find(|node| node.name == node_type)
+            .map(node_to_metadata)
     }
 
     async fn get_all_nodes(&self) -> Vec<String> {
-        self.catalog
-            .iter()
-            .map(|logic| logic.get_node().name)
-            .collect()
+        self.nodes().map(|node| node.name).collect()
     }
 }
 
@@ -480,14 +489,33 @@ async fn build_unified_copilot(
     profile: Option<Arc<Profile>>,
     usage_context: Option<ModelUsageContext>,
     flow_ir_draft_store: Option<Arc<FlowIrDraftStore>>,
+    catalog_app_id: Option<&str>,
 ) -> Result<flow_like::copilot::UnifiedCopilot, ApiError> {
     let flow_like_state = master_flow_like_state(state).await?;
 
     let catalog_provider: Option<Arc<dyn CatalogProvider>> = match scope {
         CopilotScope::Frontend => None,
-        _ => Some(Arc::new(ServerCatalogProvider {
-            catalog: state.catalog.clone(),
-        })),
+        _ => {
+            // Package nodes are a per-app pin, so an unscoped request legitimately resolves to the
+            // builtin catalog. A lookup failure must not, however, silently downgrade a scoped one.
+            let wasm_nodes = match catalog_app_id {
+                Some(app_id) => crate::routes::app::wasm_catalog::app_wasm_nodes(state, app_id)
+                    .await
+                    .unwrap_or_else(|error| {
+                        tracing::warn!(
+                            app_id = %app_id,
+                            error = %error,
+                            "copilot catalog: failed to resolve app WASM nodes; continuing with builtins only"
+                        );
+                        Vec::new()
+                    }),
+                None => Vec::new(),
+            };
+            Some(Arc::new(ServerCatalogProvider {
+                catalog: state.catalog.clone(),
+                wasm_nodes: Arc::new(wasm_nodes),
+            }))
+        }
     };
 
     let mut copilot = flow_like::copilot::UnifiedCopilot::new(
@@ -651,6 +679,7 @@ pub async fn copilot_chat(
         profile,
         usage_context,
         flow_ir_draft_store.clone(),
+        retained_app_id.as_deref().or(attribution_app_id.as_deref()),
     )
     .await?
     .with_request_identity_prompt(Some(request_identity_prompt));

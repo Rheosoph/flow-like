@@ -17,7 +17,14 @@ import {
 } from "../../lib/composer-activity";
 import { observeResize } from "../../lib/observe-resize";
 import { cn } from "../../lib/utils";
-import { type BubbleFilmUniforms, createBubbleFilm } from "./bubble-film";
+import { BUBBLE_BLOB_COUNT, createBubbleFilm } from "./bubble-film";
+import { approach, clamp01, smoothstep } from "./film-motion";
+import {
+	FISSION_CHIP_STAGGER,
+	FISSION_COALESCE,
+	poseFission,
+	poseFissionAtRest,
+} from "./flowpilot-fission";
 import {
 	ORB_COMPOSING_PARAMS,
 	ORB_INVITING_PARAMS,
@@ -50,63 +57,31 @@ interface IFlowPilotEmptyStateProps {
 	readonly typingMotion?: boolean;
 }
 
-/** Satellite orbit relative to the film's own radius, matching the launcher's proportions. */
-const SAT_ORBIT_RATIO = 0.63 / 0.48;
 /** The launcher's film-to-canvas ratio, used as the canvas' lower bound. */
 const FILM_BOX = 0.48;
-const SAT_COUNT = 3;
 /** Gap between the film and the suggestion row — `mt-7`. */
 const ROW_GAP = 28;
 /** Below this the mark reads as an icon rather than a mark, so it stops shrinking. */
 const MIN_FILM = 84;
+/**
+ * How far a child of the split travels from the mark's centre, as a fraction of the film's
+ * diameter, radius included. The canvas has to cover it or the bubbles are clipped mid-flight.
+ */
+const FISSION_REACH = 0.95;
 
-// Entrance choreography, ms from mount. The film inflates, buds three satellites off its own rim,
-// and flies one to each suggestion — so the affordances arrive as part of the mark, not beside it.
-const SAT_RELEASE = 420;
-const SAT_EMERGE = 420;
-const DOCK_START = 900;
-const DOCK_DURATION = 700;
-const DOCK_STAGGER = 130;
-const COLLAPSE_DURATION = 260;
-/** A suggestion materializes just before its satellite finishes collapsing into it. */
-const REVEAL_LEAD = 180;
-/** With no satellites to wait for, the suggestions just stagger in on their own. */
+/** A suggestion materializes just before the children finish fusing. */
+const REVEAL_LEAD = 60;
+/** With no split to wait for, the suggestions just stagger in on their own. */
 const BARE_REVEAL_STAGGER = 70;
 
 /** The swell that greets the start of a burst of typing — a breath, not the entrance's shockwave. */
 const PERK_SWELL = 0.05;
 
-const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
-const smoothstep = (value: number) => value * value * (3 - 2 * value);
-
 /**
- * Frame-rate independent damping. The per-frame constants this replaces ran at double speed on a
- * 120Hz display and stuttered whenever a frame was dropped.
+ * Light-mode saturation for this mark. The shader's default is tuned for the 72px launcher and
+ * reads as hot magenta at the size the empty state renders. See `u_sat_l`.
  */
-const approach = (current: number, target: number, rate: number, dt: number) =>
-	current + (target - current) * (1 - Math.exp(-rate * dt));
-
-/**
- * Poses the satellites for `ms` into the entrance: budding out of the rim as their orbit opens
- * from nothing, flying to their suggestion, then collapsing into it.
- */
-function poseSatellites(
-	ms: number,
-	orbit: number,
-	u: BubbleFilmUniforms,
-	gone: boolean,
-) {
-	const emerge = smoothstep(clamp01((ms - SAT_RELEASE) / SAT_EMERGE));
-	u.sat = gone ? 0 : 1;
-	u.satOrbit = Math.max(1e-3, orbit * emerge);
-	for (let i = 0; i < SAT_COUNT; i++) {
-		const start = DOCK_START + i * DOCK_STAGGER;
-		u.satDock[i] = smoothstep(clamp01((ms - start) / DOCK_DURATION));
-		u.satShrink[i] = smoothstep(
-			clamp01((ms - (start + DOCK_DURATION)) / COLLAPSE_DURATION),
-		);
-	}
-}
+const FILM_SAT_LIGHT = 1.35;
 
 /** Scratch for the bulge aim, reused so the render loop never allocates. */
 const bulge = { x: 0, y: 0, near: 0, attention: 0 };
@@ -156,7 +131,7 @@ function revealDelay(index: number, suggestionsOnly: boolean) {
 	if (suggestionsOnly) return index * BARE_REVEAL_STAGGER;
 	return Math.max(
 		0,
-		DOCK_START + index * DOCK_STAGGER + DOCK_DURATION - REVEAL_LEAD,
+		(FISSION_COALESCE + index * FISSION_CHIP_STAGGER) * 1000 - REVEAL_LEAD,
 	);
 }
 
@@ -182,8 +157,9 @@ export function useEmptyStateExit(show: boolean, durationMs = 420) {
 /**
  * The FlowPilot empty state: the same soap-film orb that runs in the launcher and follows the
  * assistant for the rest of the conversation, rather than a mark you never see again. It
- * inflates on mount, hands its three satellites to the suggestion buttons, rests almost still
- * while leaning toward the pointer, and collapses into the live orb when the first message goes.
+ * inflates on mount, breaks into three bubbles and fuses them back together — see
+ * `flowpilot-fission` — rests almost still while leaning toward the pointer, and collapses into
+ * the live orb when the first message goes.
  *
  * With `typingMotion` on it also answers the composer: it perks up as a burst of writing starts,
  * gathers and leans down at the draft while you keep going, and settles back the moment you stop.
@@ -202,12 +178,7 @@ export function FlowPilotEmptyState({
 	const rootRef = useRef<HTMLDivElement>(null);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const rowRef = useRef<HTMLDivElement>(null);
-	const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
-	const geomRef = useRef({
-		box: FILM_BOX,
-		satOrbit: FILM_BOX * SAT_ORBIT_RATIO,
-		satPos: new Float32Array(SAT_COUNT * 2),
-	});
+	const geomRef = useRef({ box: FILM_BOX });
 
 	const [layout, setLayout] = useState(() => ({
 		film: maxSize,
@@ -228,8 +199,8 @@ export function FlowPilotEmptyState({
 	exitingRef.current = exiting;
 	suggestionsOnlyRef.current = suggestionsOnly;
 
-	// The canvas is centred on the film and square, so film space and canvas space share an
-	// origin — satellite targets are then the same mapping the pointer already uses.
+	// The canvas is centred on the film and square, so film space and canvas space share an origin
+	// and the pointer maps straight into it.
 	const measure = useCallback(() => {
 		const canvas = canvasRef.current;
 		const root = rootRef.current;
@@ -262,11 +233,10 @@ export function FlowPilotEmptyState({
 			),
 		);
 
-		// Reach from the film's centre to whichever edge of the block is furthest — normally the
-		// suggestion row — plus room for the film's bloom to fade out instead of being cut off.
-		const blockHeight = film + ROW_GAP + rowHeight;
+		// Reach from the film's centre to the furthest a child of the split travels, plus room for
+		// the film's bloom to fade out instead of being cut off by the canvas.
 		const blockWidth = Math.max(film, row.offsetWidth);
-		const reach = Math.max(film / 2, blockHeight - film / 2, blockWidth / 2);
+		const reach = Math.max(film * FISSION_REACH, blockWidth / 2);
 		const side = Math.max(
 			Math.ceil((reach + film * 0.3) * 2),
 			Math.ceil(film / FILM_BOX),
@@ -278,19 +248,7 @@ export function FlowPilotEmptyState({
 
 		const rect = canvas.getBoundingClientRect();
 		if (!rect.height) return;
-		const geom = geomRef.current;
-		geom.box = film / rect.height;
-		geom.satOrbit = geom.box * SAT_ORBIT_RATIO;
-		for (let i = 0; i < SAT_COUNT; i++) {
-			const button = buttonRefs.current[i];
-			if (!button) continue;
-			const b = button.getBoundingClientRect();
-			const cx = b.left + b.width / 2;
-			const cy = b.top + b.height / 2;
-			geom.satPos[i * 2] = ((cx - rect.left) * 2 - rect.width) / rect.height;
-			geom.satPos[i * 2 + 1] =
-				(rect.height - 2 * (cy - rect.top)) / rect.height;
-		}
+		geomRef.current.box = film / rect.height;
 	}, []);
 
 	useLayoutEffect(() => {
@@ -337,11 +295,12 @@ export function FlowPilotEmptyState({
 		let elapsed = 0;
 		let clock = 0;
 		let spin = 0;
-		let grow = 0;
-		let growVelocity = 0;
-		let growTarget = 1;
-		let pop = 0;
-		let released = false;
+		// The entrance owns the mark's scale analytically; `collapse` is only the hand-off, which
+		// is an interruption at an arbitrary instant and so has to be integrated.
+		let collapse = 1;
+		let collapseVelocity = 0;
+		let collapseTarget = 1;
+		let exitPop = 0;
 		let departed = false;
 		// Pointer attention is read from the whole viewport, not just the film, so the orb
 		// notices you crossing the page and leans at whatever you are about to click.
@@ -390,43 +349,62 @@ export function FlowPilotEmptyState({
 							)
 						: ORB_INVITING_PARAMS;
 
+				let body: ReturnType<typeof poseFission>;
 				if (reduced) {
 					clock = 6 * params.rate;
-					grow = 1;
-					pop = 0;
-					u.sat = 0;
-					u.satDock.fill(0);
-					u.satShrink.fill(0);
+					collapse = 1;
+					exitPop = 0;
+					body = poseFissionAtRest(geom.box, u);
 				} else {
 					elapsed += dt;
 					if (exitingRef.current && !departed) {
 						departed = true;
-						growTarget = 0.05;
-						pop = 1;
+						collapseTarget = 0.05;
+						exitPop = 1;
 					}
-					clock += dt * params.rate * (1 + pop * 1.2);
+					body = poseFission(
+						elapsed,
+						geom.box,
+						u,
+						hasPointer && !departed ? pointer : null,
+					);
+					// The first message can be sent at any instant, including mid-split — when the
+					// body is off and the children are carrying the whole film. The body comes
+					// straight back so there is always something to collapse, and the children
+					// collapse with it rather than being cut. The shockwave covers the change.
+					if (departed) {
+						// Blobs are placed around the film's own origin, so scaling their positions
+						// gathers them onto the body as it goes rather than leaving three bubbles
+						// to shrink where they stand.
+						for (let i = 0; i < BUBBLE_BLOB_COUNT; i++) {
+							u.blob[i * 4] *= collapse;
+							u.blob[i * 4 + 1] *= collapse;
+							u.blob[i * 4 + 2] *= collapse;
+						}
+					}
+					clock += dt * params.rate * (1 + body.pop * 1.2);
 					spin += dt * params.spin;
 					// A real spring in seconds, so the film lands the same way at 60 and 120Hz.
-					growVelocity += ((growTarget - grow) * 190 - growVelocity * 9) * dt;
-					grow += growVelocity * dt;
-
-					const ms = elapsed * 1000;
-					if (!released && ms >= SAT_RELEASE) {
-						released = true;
-						pop = 1;
-					}
-					pop *= Math.exp(-2.76 * dt);
-					poseSatellites(ms, geom.satOrbit, u, departed);
+					collapseVelocity +=
+						((collapseTarget - collapse) * 190 - collapseVelocity * 9) * dt;
+					collapse += collapseVelocity * dt;
+					exitPop *= Math.exp(-2.76 * dt);
 				}
+				const pop = departed ? exitPop : body.pop;
 
 				// A longer draft fills the mark out very slightly — enough to notice between a
 				// blank composer and a written one, not enough to watch it happen.
-				const box =
+				//
+				// `nominal` is the mark's size with the split factored out: it is what the film
+				// still reads as while the body has handed its area to the children, and so it is
+				// what the directional grade and the window streak have to be measured against.
+				const nominal =
 					geom.box *
-					grow *
+					collapse *
 					params.scale *
 					(1 + fullness * 0.02 + perk * PERK_SWELL) *
 					(1 + Math.sin(clock * 1.6) * params.breathe);
+				const box = nominal * body.scale;
 				const aim = aimBulge(
 					clock,
 					box,
@@ -445,10 +423,13 @@ export function FlowPilotEmptyState({
 					params.focus +
 					aim.near * 0.3 +
 					pop * 0.6 +
+					body.effort +
 					fullness * 0.12 +
 					perk * 0.35;
-				u.boxX = box;
-				u.boxY = box;
+				// The waist is the split's own anisotropy, and afterwards the rest loop's: a
+				// stretch that keeps almost pinching and never does.
+				u.boxX = box * (1 + body.waist);
+				u.boxY = box * (1 - body.waist);
 				u.mouseX = mx;
 				u.mouseY = my;
 				u.mstr = Math.min(
@@ -459,7 +440,10 @@ export function FlowPilotEmptyState({
 				u.spin = spin;
 				u.spinMix = params.spinMix;
 				u.pop = pop;
-				u.satPos.set(geom.satPos);
+				u.bodyOff = departed ? 0 : body.bodyOff;
+				u.gradeX = nominal;
+				u.gradeY = nominal;
+				u.satL = FILM_SAT_LIGHT;
 			},
 		});
 
@@ -525,9 +509,6 @@ export function FlowPilotEmptyState({
 				{suggestions.map((suggestion, index) => (
 					<button
 						key={suggestion.label}
-						ref={(element) => {
-							buttonRefs.current[index] = element;
-						}}
 						type="button"
 						aria-label={suggestion.label}
 						title={suggestion.label}

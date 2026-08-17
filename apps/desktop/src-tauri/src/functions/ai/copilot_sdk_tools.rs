@@ -73,7 +73,7 @@ use flow_like::flow::copilot::tool_spec::{
     OPEN_URL_TOOL, PlatformToolSpec, cross_board_source_tool_specs, data_studio_tool_specs,
     find_global_tool_spec, global_assistant_tool_specs, interact_app_page_tool_spec,
     missing_required_args, public_web_tool_specs, resolve_tool_approval,
-    runtime_execution_tool_specs, scout_tool_specs,
+    runtime_execution_tool_specs, scoped_call_app_chat_spec, scout_tool_specs,
 };
 #[cfg(test)]
 use flow_like::flow::copilot::typed_ir_schema_hint;
@@ -750,16 +750,20 @@ pub fn create_board_support_tools(bridge: FrontendToolBridge) -> Vec<(Tool, Tool
             .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None)),
     );
     // End-to-end verification of UI-driven and chat-driven workflows: drive a live page and
-    // invoke the app's chat event headlessly, observing the runs they start.
+    // invoke the app's chat event, observing the runs they start. call_app_chat uses the SCOPED
+    // spec — the global one requires app_id/forward_files before the host injects the app context.
     tools.push(sdk_tool_from_spec(
         &interact_app_page_tool_spec(),
         bridge.clone(),
         None,
         None,
     ));
-    if let Some(spec) = find_global_tool_spec("call_app_chat") {
-        tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None, None));
-    }
+    tools.push(sdk_tool_from_spec(
+        &scoped_call_app_chat_spec(),
+        bridge.clone(),
+        None,
+        None,
+    ));
     // Lets a board specialist fetch the FlowScript a Scout plan referenced, keeping fragment text
     // out of the orchestrator's context.
     tools.extend(
@@ -787,9 +791,12 @@ pub fn create_frontend_support_tools(bridge: FrontendToolBridge) -> Vec<(Tool, T
         None,
         None,
     ));
-    if let Some(spec) = find_global_tool_spec("call_app_chat") {
-        tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None, None));
-    }
+    tools.push(sdk_tool_from_spec(
+        &scoped_call_app_chat_spec(),
+        bridge.clone(),
+        None,
+        None,
+    ));
     tools
 }
 
@@ -1133,7 +1140,7 @@ fn frontend_tool_result_with_timeout(
         if images.is_empty() {
             object.insert(
                     "message".to_string(),
-                    json!("The page was embedded inline, but its temporary visual captures could not be loaded by this agent. Do not claim to have read the page visually."),
+                    json!("The page rendered, but its temporary visual captures could not be loaded by this agent. Do not claim to have read the page visually."),
                 );
         }
     }
@@ -1392,7 +1399,7 @@ fn flowscript_validation_message(flowscript: &str, diagnostics: &[String]) -> St
         .iter()
         .any(|diagnostic| diagnostic.contains("nodes (max"))
     {
-        return "FlowScript validation failed: a layer would exceed the 50-node cap. Nothing was queued. Split the logic into smaller `function name(...) { ... }` declarations — each function layer has its own 50-node budget — and call the helpers from the parent flow.".to_string();
+        return "FlowScript validation failed: a layer would exceed the 100-node cap. Nothing was queued. Split the logic into smaller `function name(...) { ... }` declarations — each function layer has its own 100-node budget — and call the helpers from the parent flow.".to_string();
     }
 
     if diagnostics
@@ -2953,7 +2960,7 @@ RULES:
 - Helper `function` declarations are fully supported: calling `helperName(args)` creates a Call
   Function node wired to that function's layer, impure bodies chain from the layer's `exec_in`
   boundary pin, and `return` values surface as call-node outputs. USE THEM — a single layer
-  (root, event scope, or one function) is hard-capped at 50 nodes and edits exceeding it are
+  (root, event scope, or one function) is hard-capped at 100 nodes and edits exceeding it are
   rejected, so split big flows into small helper functions with focused responsibilities.
 - The `function` keyword is mandatory for helpers: write
   `function fetchMail(host: string) { ... }`, never bare `fetchMail(...) { ... }`. A helper call is
@@ -3291,7 +3298,7 @@ Data: table, plotlyChart, nivoChart, calendar, gantt, graph (own nodes/edges), o
 Vision: boundingBoxOverlay, imageLabeler, imageHotspot
 Game: canvas2d, sprite, shape, scene3d, model3d, dialogue, characterPortrait, choiceMenu, inventoryGrid, healthBar, miniMap
 Embeds: iframe
-Widgets: widgetInstance
+Widgets: widgetInstance, microWidgetInstance (package-shipped — copy its identifying fields from ui_inspect, never invent them)
 Pick the purpose-built component for the intent (audio recording -> voiceInput, never a button+fileInput imitation); consult the "Choosing the Right Component" table in your system prompt.
 
 THEME COLORS (use these, not hardcoded):
@@ -3492,6 +3499,20 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "appId",
             "inlineWidgetDef",
             "exposedPropValues",
+            "actionBindings",
+            "styleOverride",
+        ]),
+        // Mirrors MicroWidgetInstanceComponent in packages/ui/components/a2ui/types.ts. Every
+        // identifying field comes from `ui_inspect` — none of them can be invented.
+        "microWidgetInstance" => Some(&[
+            "instanceId",
+            "packageId",
+            "widgetId",
+            "packageVersion",
+            "bundleHash",
+            "contract",
+            "props",
+            "preview",
             "actionBindings",
             "styleOverride",
         ]),
@@ -4103,6 +4124,7 @@ fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
         "imageLabeler" => &["src", "labels"],
         "imageHotspot" => &["src", "hotspots"],
         "widgetInstance" => &["instanceId", "widgetId"],
+        "microWidgetInstance" => &["instanceId", "packageId", "widgetId", "packageVersion"],
         "calendar" => &["events"],
         "gantt" => &["tasks"],
         "graph" => &["nodes"],
@@ -4290,6 +4312,14 @@ fn validate_ui_components(
             "overlay" => &["baseComponentId"],
             "popover" => &["contentComponentId"],
             "widgetInstance" => &["instanceId", "widgetId", "appId"],
+            "microWidgetInstance" => &[
+                "instanceId",
+                "packageId",
+                "widgetId",
+                "packageVersion",
+                "bundleHash",
+                "preview",
+            ],
             "link" => &["external", "target", "variant", "underline"],
             _ => &[],
         };

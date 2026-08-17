@@ -596,8 +596,9 @@ export function validateComponents(
 				}
 				// Widget-instance props are raw wiring data (ids, the inline widget definition,
 				// per-instance param/action values) — NOT BoundValue-wrapped component props, so
-				// keep them verbatim instead of coercing.
-				if (type === "widgetInstance") {
+				// keep them verbatim instead of coercing. The same holds for a package widget,
+				// whose contract/props/bundleHash must survive byte-for-byte to render.
+				if (type === "widgetInstance" || type === "microWidgetInstance") {
 					cleaned[key] = value;
 					continue;
 				}

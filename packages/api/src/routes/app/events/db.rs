@@ -13,6 +13,7 @@ use flow_like::app::App;
 use flow_like::flow::event::{
     CanaryEvent, Event as CoreEvent, EventExecutionMode, EventExposure, EventInput, ReleaseNotes,
 };
+use flow_like::flow::variable::Variable;
 use flow_like_types::anyhow;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
@@ -42,6 +43,37 @@ pub fn filter_event_secrets(mut event: CoreEvent) -> CoreEvent {
     }
 
     event
+}
+
+/// Restore secret variable values the client had no way to send back.
+///
+/// `filter_event_secrets` blanks secret `default_value`s on the way out, so a client
+/// round-tripping an event returns them as `None`. Without this merge every save from
+/// the events UI would erase the stored secret. A secret the client does send is a
+/// deliberate change and wins.
+pub fn preserve_event_secrets(incoming: &mut CoreEvent, existing: &CoreEvent) {
+    restore_secret_values(&mut incoming.variables, &existing.variables);
+
+    if let (Some(canary), Some(existing_canary)) =
+        (incoming.canary.as_mut(), existing.canary.as_ref())
+    {
+        restore_secret_values(&mut canary.variables, &existing_canary.variables);
+    }
+}
+
+fn restore_secret_values(
+    incoming: &mut HashMap<String, Variable>,
+    existing: &HashMap<String, Variable>,
+) {
+    for (variable_id, variable) in incoming.iter_mut() {
+        if !variable.secret || variable.default_value.is_some() {
+            continue;
+        }
+
+        if let Some(stored) = existing.get(variable_id) {
+            variable.default_value = stored.default_value.clone();
+        }
+    }
 }
 
 pub fn filter_event_list_execution(mut event: CoreEvent) -> CoreEvent {
@@ -903,4 +935,135 @@ pub async fn get_default_event_with_fallback(
     }
 
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like::flow::pin::ValueType;
+    use flow_like::flow::variable::VariableType;
+
+    fn secret(name: &str, value: Option<&str>) -> Variable {
+        let mut variable = Variable::new(name, VariableType::String, ValueType::Normal);
+        variable.secret = true;
+        variable.default_value = value.map(|v| v.as_bytes().to_vec());
+        variable
+    }
+
+    fn event_with(variables: HashMap<String, Variable>) -> CoreEvent {
+        CoreEvent {
+            id: "evt-1".to_string(),
+            name: "Nightly sync".to_string(),
+            description: String::new(),
+            board_id: "board-1".to_string(),
+            board_version: None,
+            node_id: "node-1".to_string(),
+            variables,
+            config: Vec::new(),
+            active: true,
+            canary: None,
+            priority: 0,
+            event_type: "cron".to_string(),
+            notes: None,
+            event_version: (1, 0, 0),
+            created_at: std::time::SystemTime::UNIX_EPOCH,
+            updated_at: std::time::SystemTime::UNIX_EPOCH,
+            default_page_id: None,
+            inputs: Vec::new(),
+            route: None,
+            is_default: false,
+            execution_mode: EventExecutionMode::default(),
+            exposure: EventExposure::default(),
+            correlation_mappings: None,
+        }
+    }
+
+    fn value_of(event: &CoreEvent, id: &str) -> Option<String> {
+        event.variables[id]
+            .default_value
+            .as_ref()
+            .map(|bytes| String::from_utf8(bytes.clone()).unwrap())
+    }
+
+    /// The round trip that used to erase secrets: read blanks the value, so the
+    /// client sends it back empty and the save wrote that emptiness through.
+    #[test]
+    fn blank_secret_from_a_round_trip_keeps_the_stored_value() {
+        let existing = event_with(HashMap::from([(
+            "v1".to_string(),
+            secret("TOKEN", Some("stored")),
+        )]));
+        let mut incoming = filter_event_secrets(existing.clone());
+        assert_eq!(value_of(&incoming, "v1"), None);
+
+        preserve_event_secrets(&mut incoming, &existing);
+
+        assert_eq!(value_of(&incoming, "v1"), Some("stored".to_string()));
+    }
+
+    #[test]
+    fn a_secret_the_client_sends_is_a_deliberate_change() {
+        let existing = event_with(HashMap::from([(
+            "v1".to_string(),
+            secret("TOKEN", Some("stored")),
+        )]));
+        let mut incoming = event_with(HashMap::from([(
+            "v1".to_string(),
+            secret("TOKEN", Some("rotated")),
+        )]));
+
+        preserve_event_secrets(&mut incoming, &existing);
+
+        assert_eq!(value_of(&incoming, "v1"), Some("rotated".to_string()));
+    }
+
+    #[test]
+    fn non_secret_variables_are_left_alone() {
+        let mut plain = Variable::new("LIMIT", VariableType::String, ValueType::Normal);
+        plain.default_value = Some(b"10".to_vec());
+        let existing = event_with(HashMap::from([("v1".to_string(), plain.clone())]));
+
+        let mut cleared = plain.clone();
+        cleared.default_value = None;
+        let mut incoming = event_with(HashMap::from([("v1".to_string(), cleared)]));
+
+        preserve_event_secrets(&mut incoming, &existing);
+
+        assert_eq!(value_of(&incoming, "v1"), None);
+    }
+
+    #[test]
+    fn a_newly_added_secret_has_nothing_to_restore() {
+        let existing = event_with(HashMap::new());
+        let mut incoming = event_with(HashMap::from([("v1".to_string(), secret("TOKEN", None))]));
+
+        preserve_event_secrets(&mut incoming, &existing);
+
+        assert_eq!(value_of(&incoming, "v1"), None);
+    }
+
+    #[test]
+    fn canary_secrets_are_preserved_too() {
+        let canary = |value: Option<&str>| CanaryEvent {
+            weight: 0.5,
+            variables: HashMap::from([("v1".to_string(), secret("TOKEN", value))]),
+            board_id: "board-1".to_string(),
+            board_version: None,
+            node_id: "node-1".to_string(),
+            created_at: std::time::SystemTime::UNIX_EPOCH,
+            updated_at: std::time::SystemTime::UNIX_EPOCH,
+        };
+
+        let mut existing = event_with(HashMap::new());
+        existing.canary = Some(canary(Some("stored")));
+        let mut incoming = event_with(HashMap::new());
+        incoming.canary = Some(canary(None));
+
+        preserve_event_secrets(&mut incoming, &existing);
+
+        let restored = incoming.canary.unwrap().variables["v1"]
+            .default_value
+            .clone();
+        assert_eq!(restored, Some(b"stored".to_vec()));
+    }
 }

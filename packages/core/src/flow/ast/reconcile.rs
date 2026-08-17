@@ -1549,7 +1549,7 @@ fn binary_operator_call(
 /// Hard ceiling on nodes per layer (root, event scope, or one function layer). Oversized layers
 /// make boards unreadable; reconcile rejects edits that would exceed it so the agent splits the
 /// work into function layers instead.
-pub const MAX_NODES_PER_LAYER: usize = 50;
+pub const MAX_NODES_PER_LAYER: usize = 100;
 
 fn function_layer_pins(
     func: &FnDecl,
@@ -18664,10 +18664,10 @@ eventsSimple() {
             .expect("one genuinely new Function node must exceed the limit");
         assert_eq!(diagnostics.len(), 1);
         assert!(
-            diagnostics[0].contains("51 nodes"),
+            diagnostics[0].contains(&format!("{} nodes", MAX_NODES_PER_LAYER + 1)),
             "the diagnostic must report the unique post-edit population: {diagnostics:?}"
         );
-        assert!(!diagnostics[0].contains("101 nodes"));
+        assert!(!diagnostics[0].contains(&format!("{} nodes", MAX_NODES_PER_LAYER * 2 + 1)));
     }
 
     #[test]
@@ -18686,7 +18686,10 @@ eventsSimple() {
 
         let diagnostics = layer_node_limit_violations(&board, &root_adds)
             .expect("empty layer ids and explicit root additions share one budget");
-        assert!(diagnostics[0].contains("the root layer with 51 nodes"));
+        assert!(diagnostics[0].contains(&format!(
+            "the root layer with {} nodes",
+            MAX_NODES_PER_LAYER + 1
+        )));
     }
 
     #[test]
@@ -18725,7 +18728,7 @@ eventsSimple() {
             result
                 .diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.contains("max 50")),
+                .any(|diagnostic| diagnostic.contains(&format!("max {MAX_NODES_PER_LAYER}"))),
             "{:?}",
             result.diagnostics
         );

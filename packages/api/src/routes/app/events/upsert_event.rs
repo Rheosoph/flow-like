@@ -67,9 +67,10 @@ pub async fn upsert_event(
 
     let mut event = params.event;
     event.id = event_id.clone();
+    let saved_event = super::db::get_event_from_db_opt(&state.db, &event_id, &app_id).await?;
     if event.event_type == "ontology_action"
-        || super::db::get_event_from_db_opt(&state.db, &event_id, &app_id)
-            .await?
+        || saved_event
+            .as_ref()
             .is_some_and(|saved| saved.event_type == "ontology_action")
     {
         return Err(ApiError::forbidden(
@@ -77,17 +78,19 @@ pub async fn upsert_event(
         ));
     }
 
+    // Secret overrides are blanked on read, so the client sends them back empty.
+    // Carry the stored values across or saving the event would wipe them.
+    if let Some(saved) = saved_event.as_ref() {
+        super::db::preserve_event_secrets(&mut event, saved);
+    }
+
     // For rest/mcp events we need to know whether this upsert is a fresh
     // create (in which case a failed setup should roll back the whole
     // thing, leaving no half-broken event behind) or an update to an
     // already-working event (in which case inbound traffic keeps
     // routing to the prior `last_setup_version`).
-    let existed_before = matches!(event.event_type.as_str(), "rest" | "mcp")
-        && super::db::get_event_from_db_opt(&state.db, &event_id, &app_id)
-            .await
-            .ok()
-            .flatten()
-            .is_some();
+    let existed_before =
+        matches!(event.event_type.as_str(), "rest" | "mcp") && saved_event.is_some();
 
     validate_event_schedule(&state, &event)
         .await

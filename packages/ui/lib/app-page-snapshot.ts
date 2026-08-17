@@ -264,7 +264,18 @@ export async function captureInlineAppPageSnapshots(
 			totalHeight: 0,
 			failureReason: `The embedded page did not finish rendering within ${Math.round(timeoutMs / 1000)}s (its on-load workflow may still be running, or the inline page card is not mounted).`,
 		};
+	return capturePageElementSnapshots(element, appId, eventId);
+}
 
+/**
+ * Rasterize one exact page container. interact_app_page uses this with the DRIVEN instance's own
+ * element so the evidence can never come from a different live render of the same page.
+ */
+export async function capturePageElementSnapshots(
+	element: HTMLElement,
+	appId: string,
+	eventId?: string,
+): Promise<AppPageSnapshotResult> {
 	try {
 		const { default: html2canvas } = await import("html2canvas-pro");
 		const width = Math.max(element.scrollWidth, element.clientWidth, 1);

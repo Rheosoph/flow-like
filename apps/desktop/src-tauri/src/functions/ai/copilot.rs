@@ -3033,6 +3033,33 @@ fn resolve_copilot_app_id(
     Ok(resolved.map(str::to_string))
 }
 
+/// App scope for the copilot's node catalog.
+///
+/// A detached nested specialist carries its scope on `tool_context`, but panel runs identify the
+/// app only through the request's own `app_id`/run/action context. Resolving just one of those
+/// silently downgrades the catalog to builtin nodes, hiding every installed-package node from the
+/// model with no error. Unlike [`resolve_copilot_app_id`] this takes the first candidate rather
+/// than rejecting disagreement: catalog scope is a visibility concern, and a genuine conflict
+/// still fails the request at the usage-attribution boundary.
+fn resolve_catalog_app_id(
+    tool_context_app_id: Option<&str>,
+    explicit_app_id: Option<&str>,
+    run_context_app_id: Option<&str>,
+    action_context_app_id: Option<&str>,
+) -> Option<String> {
+    [
+        tool_context_app_id,
+        explicit_app_id,
+        run_context_app_id,
+        action_context_app_id,
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .find(|app_id| !app_id.is_empty())
+    .map(str::to_string)
+}
+
 /// The active profile, with the user's WHOLE custom-model library hydrated
 /// instead of only the bits the profile activated. The model pickers offer that
 /// library independent of profile membership, so an explicitly selected model
@@ -3156,13 +3183,17 @@ pub async fn copilot_chat(
     // Resolve the live app package catalog from the native registry for every board agent path.
     let _renderer_catalog_nodes = catalog_nodes;
     let catalog_nodes = if matches!(scope, CopilotScope::Board | CopilotScope::Both) {
-        authoritative_app_catalog_nodes(
-            &app_handle,
+        let catalog_app_id = resolve_catalog_app_id(
             tool_context
                 .as_ref()
                 .and_then(|context| context.app_id.as_deref()),
-        )
-        .await
+            app_id.as_deref(),
+            run_context.as_ref().map(|context| context.app_id.as_str()),
+            action_context
+                .as_ref()
+                .map(|context| context.app_id.as_str()),
+        );
+        authoritative_app_catalog_nodes(&app_handle, catalog_app_id.as_deref()).await
     } else {
         None
     };
@@ -25407,7 +25438,15 @@ eventsSimple() {
             FlowPilotAgentCapabilitySet::shared_for(CopilotScope::Frontend, false, false);
         assert_eq!(
             frontend.tool_names,
-            vec!["emit_ui".to_string(), "get_component_schema".to_string()]
+            vec![
+                "call_app_chat".to_string(),
+                "emit_ui".to_string(),
+                "execute_event".to_string(),
+                "get_component_schema".to_string(),
+                "interact_app_page".to_string(),
+                "query_execution_logs".to_string(),
+                "ui_inspect".to_string(),
+            ]
         );
 
         let board = FlowPilotAgentCapabilitySet::shared_for(CopilotScope::Board, true, true);
@@ -25569,6 +25608,8 @@ eventsSimple() {
         for tool in [
             "execute_event",
             "execute_node",
+            "interact_app_page",
+            "call_app_chat",
             "emit_commands",
             "write_flowscript",
             "patch_flowscript",

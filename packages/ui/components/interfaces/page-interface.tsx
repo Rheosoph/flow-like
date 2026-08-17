@@ -457,6 +457,7 @@ function PageInterfaceInner({
 	// Use ref to access current surface without creating dependency cycles
 	const surfaceRef = useRef(surface);
 	surfaceRef.current = surface;
+	const pageContainerRef = useRef<HTMLDivElement | null>(null);
 
 	// Build elements from surface components for the workflow payload
 	// Uses ref to avoid dependency on surface changing
@@ -795,6 +796,7 @@ function PageInterfaceInner({
 				scopeSelector={`[data-page-id="${pageContainerId}"]`}
 			/>
 			<div
+				ref={pageContainerRef}
 				data-page-id={pageContainerId}
 				data-flowpilot-page-event-id={activePageEvent?.id ?? ""}
 				data-flowpilot-page-loading={isLoadEventRunning ? "true" : "false"}
@@ -821,6 +823,7 @@ function PageInterfaceInner({
 									pageId={activeSurface.id}
 									eventId={activePageEvent?.id}
 									getSurface={() => surfaceRef.current}
+									getContainer={() => pageContainerRef.current}
 									applyServerMessage={handleA2UIMessage}
 									loading={isLoadEventRunning}
 								/>

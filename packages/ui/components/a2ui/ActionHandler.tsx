@@ -33,11 +33,11 @@ import { useExecutionServiceOptional } from "../../state/execution-service-conte
 import { useRouteDialogSafe } from "./RouteDialogProvider";
 import { resolveEventActions } from "./event-handlers";
 import { useElementStorage } from "./hooks/use-element-storage";
-import { notifyLivePageRun } from "./live-page-registry";
 import {
 	resolveWidgetInstanceEventRoute,
 	useWidgetInstance,
 } from "./layout/A2UIWidgetInstance";
+import { notifyLivePageRun } from "./live-page-registry";
 import { collectMicroWidgetValueKeys } from "./micro-widget-host";
 import type {
 	A2UIClientMessage,
@@ -990,8 +990,14 @@ export function useExecuteAction() {
 					const message =
 						typeof payload?.message === "string"
 							? payload.message
-							: i18next.t('theWorkflowCouldNotBeCompleted', 'The workflow could not be completed.');
-					toast.error(i18next.t('workflowExecutionFailed', 'Workflow execution failed'), { description: message });
+							: i18next.t(
+									"theWorkflowCouldNotBeCompleted",
+									"The workflow could not be completed.",
+								);
+					toast.error(
+						i18next.t("workflowExecutionFailed", "Workflow execution failed"),
+						{ description: message },
+					);
 					continue;
 				}
 
@@ -1364,7 +1370,7 @@ export function useExecuteAction() {
 						const successMessage =
 							typeof context.successMessage === "string"
 								? context.successMessage
-								: i18next.t('thanksForTheFeedback', 'Thanks for the feedback.');
+								: i18next.t("thanksForTheFeedback", "Thanks for the feedback.");
 						toast.success(successMessage);
 						break;
 					}
@@ -1521,14 +1527,30 @@ export function useExecuteAction() {
 									},
 									handleA2UIEvents, // callback for A2UI events
 								);
+								// No metadata AND no run_initiated means nothing executed (e.g. the
+								// execution service resolved undefined after a declined consent) —
+								// that must never read as a successful run. A run that dispatched but
+								// logged Error/Fatal is reported as failed, not ok.
+								const runStarted =
+									runMeta !== undefined || capturedRunId !== undefined;
 								notifyLivePageRun(surfaceId, {
-									status: "ok",
+									status: !runStarted
+										? "not_executed"
+										: (runMeta?.log_level ?? 0) >= 3
+											? "failed"
+											: "ok",
 									runId: runMeta?.run_id ?? capturedRunId,
 									componentId: triggeringComponentId ?? undefined,
 									nodeId,
 									appId: effectiveAppId,
 									boardId: effectiveBoardId,
 									logMeta: runMeta,
+									...(runStarted
+										? {}
+										: {
+												errorMessage:
+													"The workflow run did not start (execution was declined or unavailable).",
+											}),
 									endedAtMs: Date.now(),
 								});
 							} catch (error) {
@@ -1543,12 +1565,21 @@ export function useExecuteAction() {
 										error instanceof Error ? error.message : String(error),
 									endedAtMs: Date.now(),
 								});
-								toast.error(i18next.t('workflowExecutionFailed', 'Workflow execution failed'), {
-									description:
-										error instanceof Error
-											? error.message
-											: i18next.t('theWorkflowCouldNotBeStarted', 'The workflow could not be started.'),
-								});
+								toast.error(
+									i18next.t(
+										"workflowExecutionFailed",
+										"Workflow execution failed",
+									),
+									{
+										description:
+											error instanceof Error
+												? error.message
+												: i18next.t(
+														"theWorkflowCouldNotBeStarted",
+														"The workflow could not be started.",
+													),
+									},
+								);
 							}
 						} else {
 							console.warn("Missing required context for workflow_event:", {
@@ -1602,9 +1633,16 @@ export function useExecuteAction() {
 								widgetInstance?.actionBindings,
 							);
 							toast.warning(
-								i18next.t('widgetActionActionidIsNotBoundToAWorkflowval', 'Widget action \'{{actionId}}\' is not bound to a workflow{{val}}', { actionId, val: available.length
-										? ` (bound: ${available.join(", ")})`
-										: ". Reference a Widget Action Event from the Instantiate Widget node, then re-run the flow so a fresh widget is pushed." }),
+								i18next.t(
+									"widgetActionActionidIsNotBoundToAWorkflowval",
+									"Widget action '{{actionId}}' is not bound to a workflow{{val}}",
+									{
+										actionId,
+										val: available.length
+											? ` (bound: ${available.join(", ")})`
+											: ". Reference a Widget Action Event from the Instantiate Widget node, then re-run the flow so a fresh widget is pushed.",
+									},
+								),
 							);
 							break;
 						}
@@ -1618,7 +1656,11 @@ export function useExecuteAction() {
 								binding,
 							);
 							toast.warning(
-								i18next.t('widgetActionActionidHasANonworkflowBindingAndCannotRunHere', 'Widget action \'{{actionId}}\' has a non-workflow binding and cannot run here.', { actionId }),
+								i18next.t(
+									"widgetActionActionidHasANonworkflowBindingAndCannotRunHere",
+									"Widget action '{{actionId}}' has a non-workflow binding and cannot run here.",
+									{ actionId },
+								),
 							);
 							break;
 						}
@@ -1727,12 +1769,22 @@ export function useExecuteAction() {
 								);
 							} catch (error) {
 								console.error("[A2UI] Failed to execute widget event:", error);
-								toast.error(i18next.t('widgetActionActionidFailed', 'Widget action \'{{actionId}}\' failed', { actionId }), {
-									description:
-										error instanceof Error
-											? error.message
-											: i18next.t('theWidgetWorkflowCouldNotBeStarted', 'The widget workflow could not be started.'),
-								});
+								toast.error(
+									i18next.t(
+										"widgetActionActionidFailed",
+										"Widget action '{{actionId}}' failed",
+										{ actionId },
+									),
+									{
+										description:
+											error instanceof Error
+												? error.message
+												: i18next.t(
+														"theWidgetWorkflowCouldNotBeStarted",
+														"The widget workflow could not be started.",
+													),
+									},
+								);
 							}
 						} else {
 							console.warn(
@@ -1743,7 +1795,10 @@ export function useExecuteAction() {
 								},
 							);
 							toast.warning(
-								i18next.t('widgetActionCannotRunMissingAppOrBoardContext', 'Widget action cannot run: missing app or board context.'),
+								i18next.t(
+									"widgetActionCannotRunMissingAppOrBoardContext",
+									"Widget action cannot run: missing app or board context.",
+								),
 							);
 						}
 						break;

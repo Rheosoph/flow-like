@@ -98,6 +98,13 @@ pub const COMPONENT_CATALOG: &str = r##"
 
 ### Widget System
 - `widgetInstance` - Reusable widget component instance
+- `microWidgetInstance` - An instance of a widget shipped by an installed PACKAGE (rendered in a
+  sandboxed iframe). Requires `instanceId` plus `packageId`, `widgetId` and `packageVersion`; pass
+  `bundleHash` and `contract` through as well, and set input values on `props`. Every one of those
+  fields except `instanceId` MUST be copied verbatim from `ui_inspect` (operation `list`/`widgets`
+  returns them under `package_widgets`) — they cannot be guessed, and a wrong or missing
+  `bundleHash` renders nothing on desktop. Bind the contract's declared events through
+  `actionBindings`, exactly as for `widgetInstance`.
 - An INTERACTIVE widget (rows/cards with buttons the user acts on) MUST declare its named actions
   at the WIDGET level inside its `inlineWidgetDef` — a widget with an empty `actions` list cannot
   be bound to any workflow. Use the exact action names the request asks for as the action ids:

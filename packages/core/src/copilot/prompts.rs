@@ -913,13 +913,16 @@ and instantiate its **widgets**. A board does NOT contain those element ids — 
 page/widget definitions — so you must look them up, not guess.
 
 GROUND YOURSELF FIRST: before writing or editing ANY `a2ui*` call, call `ui_inspect` (read-only, no
-approval). `ui_inspect` with operation `list` returns every page (with `element_refs`) and widget
-(with `selector`); `page`/`widget` return the full detail for one. Never invent an `elementRef` or a
+approval). `ui_inspect` with operation `list` returns every page (with `element_refs`), every
+project widget (with `selector`), and every widget shipped by an installed package under
+`package_widgets`; `page`/`widget` return the full detail for one. Never invent an `elementRef` or a
 `widgetSelector` — if `ui_inspect` does not list it, it does not exist.
 
 Reference conventions:
 - An element reference is `"<page_id>/<element_id>"`, exactly as returned by `ui_inspect`.
-- A widget selector is the widget's name (its `selector` from `ui_inspect`).
+- A widget selector is the widget's name (its `selector` from `ui_inspect`). A PACKAGE widget's
+  selector is instead the `pkg:{package_id}/{widget_id}` string `ui_inspect` reports for it — pass
+  that verbatim to `a2uiInstantiateWidget`; its `dyn*` input pins come from the widget's contract.
 
 Common a2ui calls (confirm exact signatures with `get_declarations`):
 - Read/write elements: `a2uiSetElementText({ elementRef, text })`,
@@ -1051,12 +1054,12 @@ signatures before writing.
 /// Board size/organization contract shared by board prompts. Mirrored by a reconcile-time
 /// diagnostic (`MAX_NODES_PER_LAYER`) so oversized layers are rejected, not just discouraged.
 pub const BOARD_ORGANIZATION_GUIDANCE: &str = r#"
-## BOARD ORGANIZATION (HARD LIMIT: 50 NODES PER LAYER)
-A single layer — the root, an event body, or one function layer — must never hold more than 50
+## BOARD ORGANIZATION (HARD LIMIT: 100 NODES PER LAYER)
+A single layer — the root, an event body, or one function layer — must never hold more than 100
 nodes. `check_flowscript` REJECTS source that would exceed this, so design within it from the start:
 
 - Decompose by responsibility: one entry function per event/page plus small helper `function`
-  declarations (each becomes its own Function layer with its own 50-node budget).
+  declarations (each becomes its own Function layer with its own 100-node budget).
 - Factor repeated patterns (fetch+parse, query+render, per-row assembly) into ONE helper function
   called from each site instead of duplicating chains.
 - Around 30 nodes in one function, start splitting; a function that reads as more than one
@@ -1346,7 +1349,7 @@ eventsGeneric(payload: Struct) {
 ```
 
 #### Loop bodies, impure continuation, and layer decomposition
-Aim for 20–30 nodes per helper and split before the hard 50-node layer limit. The statement after
+Aim for 20–30 nodes per helper and split before the hard 100-node layer limit. The statement after
 the loop runs from its `done` output; the statement after `processBatch` continues from the helper's
 Function `exec_out` boundary.
 ```flowscript-verified
@@ -3099,7 +3102,8 @@ mod tests {
             assert!(
                 prompt.contains("Never inspect, author, validate, submit, or explain FlowScript")
             );
-            assert!(prompt.contains("Never mutate app data"));
+            assert!(prompt.contains("Never author app data"));
+            assert!(prompt.contains("Runtime VERIFICATION of persisted work is in scope"));
             assert!(prompt.contains("Board specialist must handle workflow wiring."));
             assert!(prompt.contains("Do not claim that fetching"));
 

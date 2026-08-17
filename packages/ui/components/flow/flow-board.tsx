@@ -827,7 +827,7 @@ export function FlowBoard({
 		[nodes, pinCache],
 	);
 
-	const { saveViewport } = useViewportManager({
+	const { saveViewport, holdViewport } = useViewportManager({
 		appId,
 		boardId,
 		layerPath,
@@ -840,6 +840,7 @@ export function FlowBoard({
 		setCurrentLayer,
 		setLayerPath,
 		saveViewport,
+		holdViewport,
 		fitView,
 		getNodes,
 	});
@@ -936,8 +937,10 @@ export function FlowBoard({
 			const peerLayer = (state?.layerPath as string) ?? "root";
 			const myLayer = layerPath ?? "root";
 
-			// Navigate to peer's layer if different
+			// Navigate to peer's layer if different. Held while the layer swaps so the
+			// per-layer viewport restore does not overwrite the peer's viewport below.
 			if (peerLayer !== myLayer) {
+				const release = holdViewport();
 				if (peerLayer === "root" || !peerLayer) {
 					setLayerPath(undefined);
 					setCurrentLayer(undefined);
@@ -946,6 +949,7 @@ export function FlowBoard({
 					const segments = peerLayer.split("/");
 					setCurrentLayer(segments[segments.length - 1]);
 				}
+				setTimeout(release, 600);
 			}
 
 			// Snap to peer's viewport
@@ -973,6 +977,7 @@ export function FlowBoard({
 			layerPath,
 			setViewport,
 			getViewport,
+			holdViewport,
 			setLayerPath,
 			setCurrentLayer,
 		],

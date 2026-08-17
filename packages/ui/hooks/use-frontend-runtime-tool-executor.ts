@@ -18,6 +18,10 @@ import {
 	interactWithAppPage,
 	parseInteractActions,
 } from "../lib/interact-app-page";
+import {
+	encodePackageWidgetRef,
+	listAppPackageWidgets,
+} from "../lib/package-widgets";
 import { type IBackendState, useBackend } from "../state/backend-state";
 import type { IBoardState } from "../state/backend-state/board-state";
 import { IIndexType } from "../state/backend-state/db-state";
@@ -61,6 +65,54 @@ function nonEmptyMetadataText(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const trimmed = value.trim();
 	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * A package-shipped widget as `ui_inspect` reports it. The model cannot invent any of these
+ * fields — `microWidgetInstance` needs them verbatim, and desktop serves the bundle by
+ * `bundle_hash` — so the summary carries everything needed to place one.
+ */
+type UiInspectPackageWidget = {
+	selector: string;
+	package_id: string;
+	widget_id: string;
+	package_version: string;
+	bundle_hash?: string;
+	name: string;
+	description?: string;
+	contract: unknown;
+};
+
+/**
+ * Package widgets of the app, resolved from installed manifests. Returns an empty list on hosts
+ * without per-app package listing (web) and never throws: a widget-source failure must not take
+ * down the page/widget inspection the model actually asked for.
+ */
+async function loadUiInspectPackageWidgets(
+	backend: IBackendState,
+	appId: string,
+): Promise<UiInspectPackageWidget[]> {
+	try {
+		const packageWidgets = await listAppPackageWidgets(
+			{
+				listPackages: backend.appState.listPackages?.bind(backend.appState),
+				getPackage: (packageId) => backend.registryState.getPackage(packageId),
+			},
+			appId,
+		);
+		return packageWidgets.map((entry) => ({
+			selector: encodePackageWidgetRef(entry.packageId, entry.widget.id),
+			package_id: entry.packageId,
+			widget_id: entry.widget.id,
+			package_version: entry.packageVersion,
+			bundle_hash: entry.bundleHash,
+			name: entry.widget.name,
+			description: nonEmptyMetadataText(entry.widget.description),
+			contract: entry.widget.contract,
+		}));
+	} catch {
+		return [];
+	}
 }
 
 /** @internal Exported only so tuple normalization and lookup stay regression-tested. */
@@ -363,6 +415,32 @@ function resolveToolAppId(
 		);
 	}
 	return appId;
+}
+
+/**
+ * A scoped session may target another app only when that app is visible in the current
+ * profile — the same gate the global assistant applies before app-runtime tools.
+ */
+async function assertAppVisibleForRuntime(
+	backend: IBackendState,
+	appId: string,
+	defaultAppId?: string,
+): Promise<void> {
+	if (!appId || appId === defaultAppId) return;
+	let visible = false;
+	try {
+		const profile = await backend.userState.getSettingsProfile();
+		visible = (profile?.hub_profile?.apps ?? []).some(
+			(entry) => entry.app_id === appId,
+		);
+	} catch {
+		throw new Error(
+			`Could not verify that app '${appId}' is visible in the current profile; cross-app execution was not started.`,
+		);
+	}
+	if (!visible) {
+		throw new Error(`App '${appId}' is not visible in the current profile.`);
+	}
 }
 
 /**
@@ -1619,6 +1697,7 @@ export function useFrontendRuntimeToolExecutor(
 						throw new Error(
 							"interact_app_page requires a non-empty actions array of {action: 'set_value'|'trigger', component_id, value?, event?}.",
 						);
+					await assertAppVisibleForRuntime(backend, toolAppId, defaultAppId);
 					return interactWithAppPage(backend, {
 						appId: toolAppId,
 						eventId: getArgString(args, "event_id", "eventId"),
@@ -1637,6 +1716,15 @@ export function useFrontendRuntimeToolExecutor(
 					const message =
 						getArgString(args, "message") ?? getArgString(args, "prompt");
 					if (!message) throw new Error("call_app_chat requires a message.");
+					if (
+						Array.isArray(args.forward_files) &&
+						args.forward_files.length > 0
+					) {
+						throw new Error(
+							"Attachment forwarding (forward_files) is only available in the global assistant chat; this session has no user-turn attachments. Retry without forward_files.",
+						);
+					}
+					await assertAppVisibleForRuntime(backend, toolAppId, defaultAppId);
 					return runAppChatMessage(backend, {
 						appId: toolAppId,
 						eventId: getArgString(args, "event_id", "eventId"),
@@ -1675,9 +1763,30 @@ export function useFrontendRuntimeToolExecutor(
 									"ui_inspect operation 'widget' requires widget_selector.",
 								);
 							}
-							const list = await backend.widgetState.getWidgets(toolAppId);
+							const [list, packageWidgets] = await Promise.all([
+								backend.widgetState.getWidgets(toolAppId),
+								loadUiInspectPackageWidgets(backend, toolAppId),
+							]);
+							const normalizedSelector = selector.trim();
+							// A `pkg:` selector is unambiguous, so resolve it directly. A bare name
+							// stays project-first: a package widget must never shadow a project
+							// widget that already answered to that name.
+							const packageRef = packageWidgets.find(
+								(entry) => entry.selector === normalizedSelector,
+							);
+							if (packageRef) {
+								return { status: "ok", package_widget: packageRef };
+							}
 							const { match } = resolveUiInspectWidgetEntries(list, selector);
-							if (!match) throw new Error(`Widget '${selector}' not found.`);
+							if (!match) {
+								const namedPackageWidget = packageWidgets.find(
+									(entry) => entry.name === normalizedSelector,
+								);
+								if (namedPackageWidget) {
+									return { status: "ok", package_widget: namedPackageWidget };
+								}
+								throw new Error(`Widget '${selector}' not found.`);
+							}
 							const widget = await backend.widgetState.getWidget(
 								toolAppId,
 								match.widgetId,
@@ -1685,7 +1794,10 @@ export function useFrontendRuntimeToolExecutor(
 							return { status: "ok", widget: summarizeWidget(widget) };
 						}
 						case "widgets": {
-							const list = await backend.widgetState.getWidgets(toolAppId);
+							const [list, packageWidgets] = await Promise.all([
+								backend.widgetState.getWidgets(toolAppId),
+								loadUiInspectPackageWidgets(backend, toolAppId),
+							]);
 							const { entries } = resolveUiInspectWidgetEntries(list);
 							const widgets = await Promise.all(
 								entries.map(async ({ widgetId, selector }) => {
@@ -1704,12 +1816,13 @@ export function useFrontendRuntimeToolExecutor(
 									}
 								}),
 							);
-							return { status: "ok", widgets };
+							return { status: "ok", widgets, package_widgets: packageWidgets };
 						}
 						default: {
-							const [pageList, widgetList] = await Promise.all([
+							const [pageList, widgetList, packageWidgets] = await Promise.all([
 								backend.pageState.getPages(toolAppId, boardId),
 								backend.widgetState.getWidgets(toolAppId),
+								loadUiInspectPackageWidgets(backend, toolAppId),
 							]);
 							const pages = await Promise.all(
 								pageList.map(async (item) => {
@@ -1741,6 +1854,7 @@ export function useFrontendRuntimeToolExecutor(
 										description,
 									}),
 								),
+								package_widgets: packageWidgets,
 							};
 						}
 					}

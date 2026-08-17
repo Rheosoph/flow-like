@@ -144,13 +144,13 @@ const BUILD_PLAYBOOK: &str = r#"## BUILD
 Before creating a new app or workflow from scratch, call `project_scout`; skip it only for a small edit to an existing target or a foundation the user already selected. Scout is read-only. Execute its plan dependency-first:
 - Run the base `fork_app`, `acquire_app`, or `create_app` step first.
 - After `fork_app`, retarget every source board reference through the returned `board_id_map`; never send a source board ID to the fork.
-- Route each scout part by `source.kind`: FlowScript/board/Event/template parts to `flowpilot_board`, data-schema parts to `data_studio_agent`. Pass its `locator` unchanged so the specialist can fetch the referenced source.
+- Route scout parts by `source.kind`: FlowScript/board/Event/template → `flowpilot_board`, data-schema → `data_studio_agent`, passing `locator` unchanged so the specialist fetches the source itself.
 - Dispatch every ready independent part in one wave to its owning specialist; serialize only parts that mutate the same board.
 - Report unresolved plan `changes` and `blockers`. For paid acquisition show the checkout link; never imply payment or access succeeded.
 
 After create/fork, pin the returned destination `app_id` for the entire build. A transient error never authorizes switching to an older similarly named app.
 
-For a multi-surface build, declare one shared contract before dispatch: app/board IDs, page ID/route, widget/element/action IDs, and physical table/field names. For a new additional board, choose its `board_id` up front and pass it to `flowpilot_board` with `create_new_board=true`. Pass the same contract to `flowpilot_widget`, `data_studio_agent`, and `flowpilot_board`, and run independent specialists together. Sequence only identities that truly must be returned first. Propagate data tools' authoritative physical identifiers into workflow instructions. For a newly designed temporal field shared by storage and workflow, pair Lance `timestamp:ms:UTC` with FlowScript `Date`; an existing schema remains authoritative.
+For a multi-surface build, declare one shared contract before dispatch: app/board IDs, page ID/route, widget/element/action IDs, and snake_case physical table/field names. For a new additional board, choose its `board_id` up front and pass it to `flowpilot_board` with `create_new_board=true`. Pass the same contract to every dispatched specialist and run independent specialists together. Sequence only identities that truly must be returned first — contract table/field names are not among them: tables are created on the workflow's first write, so never hold `flowpilot_board`/`flowpilot_widget` back for `data_studio_agent`. Dispatch `data_studio_agent` only for work only it can do (overlays for genuinely graph-shaped data, indexes, migrations, seeding, existing-schema discovery), never to pre-create simple tables. Propagate an EXISTING schema's authoritative identifiers into workflow instructions. For a newly designed temporal field shared by storage and workflow, pair Lance `timestamp:ms:UTC` with FlowScript `Date`; an existing schema remains authoritative.
 
 UI scaffolding is not workflow logic. Requested behavior is incomplete until `flowpilot_board` edit succeeds. Preserve the full workflow acceptance contract across every retry; never substitute a smoke test, reduced slice, empty Event, or diagnostic workflow unless the user explicitly requests a partial prototype.
 
@@ -160,11 +160,11 @@ Board recovery:
 - A reported retained candidate/draft is the authoritative recovery workspace. Retry the same conversation with the original acceptance contract, exact draft ID/revision, and diagnostics. Only `FLOWSCRIPT_BASE_REVISION_CONFLICT` permits a fresh draft.
 - A result with no recoverable candidate and zero source/check/commit progress gets at most one retry, using a materially different segmented strategy. Never launch a third equivalent attempt.
 - `segments_remaining` means continue the same retained workspace and full acceptance contract until those segments are applied or the tool explicitly makes them manual.
-- `manual_steps` or stubs mean partial completion. State exactly what the user must implement; do not restart an otherwise successful whole build merely to replace intentional manual work.
+- `manual_steps` or stubs mean partial completion. State exactly what the user must implement; do not restart an otherwise successful build to replace intentional manual work.
 
-Workflow Events are staged. First persist the entry with `flowpilot_board`; only a later assistant round may call `upsert_event` using an exact compatible returned `event_node`. Never register a workflow Event from a failed or same-round board call. When several `event_nodes` are returned, preserve them and create/update every requested Event separately; never collapse multiple triggers or interfaces into one. A page needs its own page Event to be reachable, and page-load wiring must use exact persisted IDs.
+Workflow Events are staged. First persist the entry with `flowpilot_board`; only a later assistant round may call `upsert_event` using an exact compatible returned `event_node` — never from a failed or same-round board call. When several `event_nodes` are returned, create/update every requested Event separately; never collapse multiple triggers or interfaces into one. A page needs its own page Event to be reachable, and page-load wiring must use exact persisted IDs.
 
-When safe, execute the exact persisted entry, inspect its logs, and verify exposed Events/interfaces after registration. Verify each interface the way its users will reach it: `call_app_event` for headless Events, `call_app_chat` for chat Events, and `interact_app_page` for pages — fill the page's inputs, trigger its buttons, and read the returned runs, element state, and screenshots (follow a failing run with `query_execution_logs`). If execution or logs reveal a defect, send that evidence to `flowpilot_board` for a focused repair and run verification again. Structural success is not runtime proof. Skip unsafe or irreversible real-world execution and state that verification remains outstanding.
+When safe, execute the exact persisted entry, inspect its logs, and verify exposed Events/interfaces after registration — each one as its users reach it: `call_app_event` (headless), `call_app_chat` (chat), `interact_app_page` (pages: set inputs, trigger buttons, read the returned runs, elements, and screenshots). If execution or logs reveal a defect, send that evidence to `flowpilot_board` for a focused repair and run verification again. Structural success is not runtime proof. Skip unsafe or irreversible real-world execution and state that verification remains outstanding.
 
 BUILD is complete only when every requested surface is applied, required Events are registered, safe verification passed or is explicitly outstanding, and all partial/manual work is disclosed."#;
 
@@ -615,8 +615,10 @@ mod tests {
         assert!(prompt.contains("one shared contract"));
         assert!(prompt.contains("`create_new_board=true`"));
         assert!(prompt.contains("run independent specialists together"));
-        assert!(prompt.contains("Route each scout part by `source.kind`"));
-        assert!(prompt.contains("Pass its `locator` unchanged"));
+        assert!(prompt.contains("Route scout parts by `source.kind`"));
+        assert!(prompt.contains("passing `locator` unchanged"));
+        assert!(prompt.contains("never hold `flowpilot_board`/`flowpilot_widget` back"));
+        assert!(prompt.contains("never to pre-create simple tables"));
         assert!(prompt.contains("`timestamp:ms:UTC`"));
         assert!(prompt.contains("FlowScript `Date`"));
         assert!(prompt.contains("checkout link"));
@@ -654,9 +656,12 @@ mod tests {
             first, second,
             "runtime context must not mutate the stable prompt"
         );
+        // Reviewed 2026-08-14: +~0.3 KB for the BUILD data-lane ordering rule (data setup is
+        // best-effort and must never gate the board/widget lanes) and runtime-verification
+        // consumer routing (call_app_event / call_app_chat / interact_app_page).
         assert!(
-            first.len() <= 12_000,
-            "standard prompt grew beyond the reviewed 12 KB budget: {} bytes",
+            first.len() <= 12_500,
+            "standard prompt grew beyond the reviewed 12.5 KB budget: {} bytes",
             first.len()
         );
         assert!(
