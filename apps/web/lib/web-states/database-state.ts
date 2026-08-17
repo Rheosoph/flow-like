@@ -77,8 +77,8 @@ export class WebDatabaseState implements IDatabaseState {
 		items: any[],
 		userScoped?: boolean,
 	): Promise<void> {
-		await apiPost(
-			`apps/${appId}/db/${tableName}/items${this.scopeQuery(userScoped)}`,
+		await apiPut(
+			`apps/${appId}/db/${encodeURIComponent(tableName)}${this.scopeQuery(userScoped)}`,
 			{ items },
 			this.backend.auth,
 		);
@@ -90,10 +90,10 @@ export class WebDatabaseState implements IDatabaseState {
 		query: string,
 		userScoped?: boolean,
 	): Promise<void> {
-		await apiPost(
-			`apps/${appId}/db/${tableName}/delete${this.scopeQuery(userScoped)}`,
-			{ query },
+		await apiDelete(
+			`apps/${appId}/db/${encodeURIComponent(tableName)}${this.scopeQuery(userScoped)}`,
 			this.backend.auth,
+			{ query },
 		);
 	}
 

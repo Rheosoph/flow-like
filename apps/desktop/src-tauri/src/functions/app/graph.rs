@@ -1558,6 +1558,9 @@ pub async fn graph_overlay_children(
 #[serde(rename_all = "camelCase")]
 pub struct SqlPayload {
     pub query: String,
+    /// Values for the query's `$placeholders`, keyed by placeholder name without the `$`.
+    #[serde(default)]
+    pub params: serde_json::Value,
     pub limit: Option<usize>,
 }
 
@@ -1575,6 +1578,7 @@ pub async fn graph_sql(
     let result = store
         .sql(
             &payload.query,
+            payload.params,
             Some(payload.limit.unwrap_or(DEFAULT_GRAPH_QUERY_LIMIT)),
         )
         .await?;

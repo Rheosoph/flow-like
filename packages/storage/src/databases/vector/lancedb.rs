@@ -1,5 +1,6 @@
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Schema};
+use datafusion::catalog::TableProvider;
 use datafusion::prelude::*;
 use flow_like_types::Cacheable;
 use flow_like_types::async_trait;
@@ -32,6 +33,7 @@ use crate::arrow_utils::{
     ValueBatchReader, value_to_batch_reader_with_fields,
     value_to_batch_reader_with_utc_timestamp_inference,
 };
+use crate::databases::df_provider::zero_column_safe;
 
 use super::VectorStore;
 
@@ -312,7 +314,7 @@ impl LanceDBVectorStore {
         Ok(())
     }
 
-    pub async fn to_datafusion(&self) -> Result<lancedb::table::datafusion::BaseTableAdapter> {
+    pub async fn to_datafusion(&self) -> Result<Arc<dyn TableProvider>> {
         let table = self
             .table
             .clone()
@@ -320,7 +322,7 @@ impl LanceDBVectorStore {
         let df_table = table.base_table();
         let adapter =
             lancedb::table::datafusion::BaseTableAdapter::try_new(df_table.clone()).await?;
-        Ok(adapter)
+        Ok(zero_column_safe(Arc::new(adapter)))
     }
 
     pub async fn raw(&self) -> Result<Table> {
@@ -338,7 +340,7 @@ impl LanceDBVectorStore {
     ) -> Result<datafusion::dataframe::DataFrame> {
         let table = self.to_datafusion().await?;
         let ctx = SessionContext::new();
-        ctx.register_table(table_name, Arc::new(table))?;
+        ctx.register_table(table_name, table)?;
         let results = ctx.sql(sql).await?;
 
         Ok(results)
@@ -817,6 +819,7 @@ impl VectorStore for LanceDBVectorStore {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::*;
@@ -974,6 +977,113 @@ mod tests {
                 .data_type(),
             &DataType::Timestamp(TimeUnit::Millisecond, None)
         );
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_filters_match_serialized_row_values_by_column_type() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "row_identity".to_string()).await?;
+        db.insert(vec![
+            json!({ "created_at": "2026-08-16T12:00:00.000Z", "label": "it's a", "score": 1.5, "flag": true, "note": null }),
+            json!({ "created_at": "2026-08-17T12:00:00.000Z", "label": "b", "score": 2.5, "flag": false, "note": "x" }),
+        ])
+        .await?;
+        assert_eq!(
+            db.schema()
+                .await?
+                .field_with_name("created_at")?
+                .data_type(),
+            &DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()))
+        );
+
+        let rows = db.list(None, 10, 0).await?;
+        let first = rows
+            .iter()
+            .find(|row| row["label"] == "it's a")
+            .expect("row a should be listed");
+        let created_at = first["created_at"]
+            .as_i64()
+            .expect("timestamps are serialized as native-unit integers");
+        assert_eq!(created_at, 1_786_881_600_000);
+
+        let bare_literal = db
+            .update(
+                &format!("created_at = {created_at}"),
+                HashMap::from([("label".to_string(), json!("bare"))]),
+            )
+            .await;
+        assert!(
+            bare_literal.is_err(),
+            "bare integer literals do not coerce to timestamps"
+        );
+
+        let filter = format!(
+            "created_at = CAST({created_at} AS TIMESTAMP(3)) AND label = 'it''s a' AND score = 1.5 AND flag = true AND note IS NULL"
+        );
+        db.update(
+            &filter,
+            HashMap::from([("label".to_string(), json!("updated"))]),
+        )
+        .await?;
+
+        let rows = db.list(None, 10, 0).await?;
+        let labels: Vec<&str> = rows
+            .iter()
+            .filter_map(|row| row["label"].as_str())
+            .collect();
+        assert!(labels.contains(&"updated"), "labels: {labels:?}");
+        assert!(labels.contains(&"b"), "labels: {labels:?}");
+        assert!(!labels.contains(&"it's a"), "labels: {labels:?}");
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sql_supports_queries_that_project_no_columns() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "count_star".to_string()).await?;
+        db.insert(vec![
+            json!({ "id": 1, "name": "a" }),
+            json!({ "id": 2, "name": "b" }),
+            json!({ "id": 3, "name": "c" }),
+        ])
+        .await?;
+
+        let batches = db
+            .sql("count_star", "SELECT COUNT(*) AS cnt FROM count_star")
+            .await?
+            .collect()
+            .await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["cnt"], json!(3));
+
+        let batches = db
+            .sql(
+                "count_star",
+                "SELECT COUNT(*) AS cnt FROM count_star WHERE id > 1",
+            )
+            .await?
+            .collect()
+            .await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(rows[0]["cnt"], json!(2));
 
         std::fs::remove_dir_all(&test_path)?;
         Ok(())

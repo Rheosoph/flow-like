@@ -193,8 +193,10 @@ fn excluded_col(column: telemetry_session::Column) -> SimpleExpr {
     Expr::col((Alias::new("excluded"), column)).into()
 }
 
+// Inside `ON CONFLICT DO UPDATE` a bare column name is ambiguous between the
+// target row and `excluded`, so the stored side must be table-qualified.
 fn stored_col(column: telemetry_session::Column) -> SimpleExpr {
-    Expr::col(column).into()
+    Expr::col((telemetry_session::Entity, column)).into()
 }
 
 fn status_rank_expr(column: SimpleExpr) -> SimpleExpr {
@@ -615,17 +617,25 @@ mod tests {
             sql
         );
         assert!(
-            sql.contains(r#"WHEN ("status" = 'crashed') THEN 3"#),
+            sql.contains(r#"WHEN ("TelemetrySession"."status" = 'crashed') THEN 3"#),
             "{}",
             sql
         );
         assert!(
-            sql.contains(r#"THEN "excluded"."status" ELSE "status" END)"#),
+            sql.contains(r#"THEN "excluded"."status" ELSE "TelemetrySession"."status" END)"#),
             "{}",
             sql
         );
         assert!(
-            sql.contains(r#""durationMs" = GREATEST("excluded"."durationMs", "durationMs")"#),
+            sql.contains(
+                r#""durationMs" = GREATEST("excluded"."durationMs", "TelemetrySession"."durationMs")"#
+            ),
+            "{}",
+            sql
+        );
+        // Postgres rejects a bare column in DO UPDATE SET as ambiguous with `excluded`.
+        assert!(
+            !sql.contains(r#"ELSE "status" END"#) && !sql.contains(r#", "durationMs")"#),
             "{}",
             sql
         );

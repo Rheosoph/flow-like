@@ -81,7 +81,7 @@ export class WebStorageState implements IStorageState {
 
 				xhr.addEventListener("error", () => {
 					reject(
-						new Error(`Upload failed: Network error (possible CORS issue)`),
+						new Error("Upload failed: Network error (possible CORS issue)"),
 					);
 				});
 
@@ -102,34 +102,28 @@ export class WebStorageState implements IStorageState {
 		onProgress?.(100);
 	}
 
+	// Failures propagate: swallowing them into an empty array makes a denied or
+	// broken listing indistinguishable from an empty folder.
 	async listStorageItems(
 		appId: string,
 		prefix: string,
 	): Promise<IStorageItem[]> {
-		try {
-			return await apiPost<IStorageItem[]>(
-				`apps/${appId}/data/list`,
-				{ prefix },
-				this.backend.auth,
-			);
-		} catch {
-			return [];
-		}
+		return await apiPost<IStorageItem[]>(
+			`apps/${appId}/data/list`,
+			{ prefix },
+			this.backend.auth,
+		);
 	}
 
 	async listStorageItemsUser(
 		appId: string,
 		prefix: string,
 	): Promise<IStorageItem[]> {
-		try {
-			return await apiPost<IStorageItem[]>(
-				`apps/${appId}/data/user/list`,
-				{ prefix },
-				this.backend.auth,
-			);
-		} catch {
-			return [];
-		}
+		return await apiPost<IStorageItem[]>(
+			`apps/${appId}/data/user/list`,
+			{ prefix },
+			this.backend.auth,
+		);
 	}
 
 	async deleteStorageItems(appId: string, prefixes: string[]): Promise<void> {

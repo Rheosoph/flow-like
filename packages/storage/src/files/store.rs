@@ -28,6 +28,25 @@ pub struct StorageItem {
     pub is_dir: bool,
 }
 
+impl StorageItem {
+    /// Object stores hand back the full key (`apps/{app_id}/upload/logo.jpg`),
+    /// but every prefix accepted by the storage APIs is relative to that base.
+    /// Re-bases the location so a listed item can be fed straight back in as a
+    /// prefix without the base being prepended twice.
+    pub fn relative_to(mut self, base: &Path) -> Self {
+        let relative = self
+            .location
+            .strip_prefix(base.as_ref())
+            .map(|rest| rest.trim_start_matches('/').to_string());
+
+        if let Some(relative) = relative {
+            self.location = relative;
+        }
+
+        self
+    }
+}
+
 impl From<ObjectMeta> for StorageItem {
     fn from(meta: ObjectMeta) -> Self {
         Self {
@@ -368,6 +387,40 @@ mod tests {
     use super::*;
 
     const TTL: Duration = Duration::from_secs(86_400);
+
+    #[test]
+    fn relative_to_strips_the_app_base_and_keeps_nested_paths() {
+        let base = Path::from("apps").child("app-1").child("upload");
+
+        let file = StorageItem::from(Path::from("apps/app-1/upload/logo.jpg")).relative_to(&base);
+        assert_eq!(file.location, "logo.jpg");
+
+        let nested =
+            StorageItem::from(Path::from("apps/app-1/upload/media/inner/logo.jpg")).relative_to(&base);
+        assert_eq!(nested.location, "media/inner/logo.jpg");
+
+        let user_base = Path::from("users")
+            .child("sub-1")
+            .child("apps")
+            .child("app-1");
+        let user_file =
+            StorageItem::from(Path::from("users/sub-1/apps/app-1/media/logo.jpg")).relative_to(&user_base);
+        assert_eq!(user_file.location, "media/logo.jpg");
+    }
+
+    #[test]
+    fn relative_to_leaves_unrelated_locations_untouched() {
+        let base = Path::from("apps").child("app-1").child("upload");
+
+        let other = StorageItem::from(Path::from("apps/app-2/upload/logo.jpg")).relative_to(&base);
+        assert_eq!(other.location, "apps/app-2/upload/logo.jpg");
+
+        let already_relative = StorageItem::from(Path::from("media/logo.jpg")).relative_to(&base);
+        assert_eq!(already_relative.location, "media/logo.jpg");
+
+        let base_itself = StorageItem::from(Path::from("apps/app-1/upload")).relative_to(&base);
+        assert_eq!(base_itself.location, "");
+    }
 
     #[test]
     fn unquote_etag_strips_quotes_and_weak_prefix() {

@@ -146,42 +146,68 @@ export function formatAbsoluteDateTime(dateInput: DateValue, fallback = "") {
 	});
 }
 
+/** The epoch units Arrow ships instants in, plus Date32's day count. */
+export type TemporalUnit =
+	| "day"
+	| "second"
+	| "millisecond"
+	| "microsecond"
+	| "nanosecond";
+
+/** Milliseconds per unit, kept as a ratio so sub-millisecond units divide exactly. */
+const UNIT_MILLIS: Record<TemporalUnit, readonly [number, number]> = {
+	day: [86_400_000, 1],
+	second: [1000, 1],
+	millisecond: [1, 1],
+	microsecond: [1, 1000],
+	nanosecond: [1, 1_000_000],
+};
+
 /** Below this a number is a day count (chrono/Arrow Date32), not an instant. */
 const MAX_EPOCH_DAYS = 100_000;
 const MAX_EPOCH_SECONDS = 1e11;
 const MAX_EPOCH_MILLIS = 1e14;
 const MAX_EPOCH_MICROS = 1e17;
 
-function parseEpochNumber(value: number): Date | null {
+/** The unit a bare epoch number was most likely written in. */
+export function detectEpochUnit(value: number): TemporalUnit {
+	const magnitude = Math.abs(value);
+	if (magnitude < MAX_EPOCH_DAYS) return "day";
+	if (magnitude < MAX_EPOCH_SECONDS) return "second";
+	if (magnitude < MAX_EPOCH_MILLIS) return "millisecond";
+	if (magnitude < MAX_EPOCH_MICROS) return "microsecond";
+	return "nanosecond";
+}
+
+function parseEpochNumber(value: number, unit?: TemporalUnit): Date | null {
 	if (!Number.isFinite(value)) return null;
 
-	const magnitude = Math.abs(value);
-	const milliseconds =
-		magnitude < MAX_EPOCH_DAYS
-			? value * 86_400_000
-			: magnitude < MAX_EPOCH_SECONDS
-				? value * 1000
-				: magnitude < MAX_EPOCH_MILLIS
-					? value
-					: magnitude < MAX_EPOCH_MICROS
-						? value / 1000
-						: value / 1_000_000;
-
-	const parsed = new Date(milliseconds);
+	const [millis, per] = UNIT_MILLIS[unit ?? detectEpochUnit(value)];
+	const parsed = new Date((value * millis) / per);
 	return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** The counterpart of {@link parseTemporalValue}, for writing an edit back. */
+export function toEpochNumber(date: Date, unit: TemporalUnit): number {
+	const [millis, per] = UNIT_MILLIS[unit];
+	return Math.round((date.getTime() * per) / millis);
 }
 
 /**
  * Parses a value a column has already been *declared* temporal — only then is a
- * bare number an instant rather than a quantity, and the magnitude decides which
- * epoch unit a backend meant (Arrow ships days, seconds, millis, micros and nanos).
+ * bare number an instant rather than a quantity. Pass `unit` when the schema
+ * names it (Arrow ships days, seconds, millis, micros and nanos); without one
+ * the magnitude decides, which misreads instants outside the usual ranges.
  *
  * Numeric strings stay with the string parser: `"2026"` is a year to every reader
  * and a day count to this ladder.
  */
-export function parseTemporalValue(value: unknown): Date | null {
-	if (typeof value === "bigint") return parseEpochNumber(Number(value));
-	if (typeof value === "number") return parseEpochNumber(value);
+export function parseTemporalValue(
+	value: unknown,
+	unit?: TemporalUnit,
+): Date | null {
+	if (typeof value === "bigint") return parseEpochNumber(Number(value), unit);
+	if (typeof value === "number") return parseEpochNumber(value, unit);
 	if (
 		typeof value === "string" ||
 		typeof value === "object" ||
@@ -190,6 +216,84 @@ export function parseTemporalValue(value: unknown): Date | null {
 		return parseDateValue(value as DateValue);
 	}
 	return null;
+}
+
+const DATE_TIME_INPUT_PATTERN =
+	/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d{1,3}))?)?$/;
+
+const pad = (value: number, width = 2) => String(value).padStart(width, "0");
+
+/**
+ * `<input type="datetime-local">` speaks wall-clock time in the viewer's zone
+ * with no offset, so both directions go through the local getters rather than
+ * through ISO strings, which would silently shift by the offset.
+ */
+export function toDateTimeInputValue(
+	date: Date,
+	precision: "minute" | "second" = "second",
+): string {
+	const day = `${pad(date.getFullYear(), 4)}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+	const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+	return precision === "minute"
+		? `${day}T${time}`
+		: `${day}T${time}:${pad(date.getSeconds())}`;
+}
+
+export function fromDateTimeInputValue(value: string): Date | null {
+	const match = value.trim().match(DATE_TIME_INPUT_PATTERN);
+	if (!match) return null;
+
+	const [, year, month, day, hours, minutes, seconds, millis] = match;
+	const parsed = new Date(
+		Number(year),
+		Number(month) - 1,
+		Number(day),
+		Number(hours ?? 0),
+		Number(minutes ?? 0),
+		Number(seconds ?? 0),
+		Number((millis ?? "").padEnd(3, "0") || 0),
+	);
+	return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
+ * Day counts (Arrow Date32) carry no time and no zone, so their whole round trip
+ * stays on UTC midnight — reading them through the local getters would move the
+ * calendar day for every viewer west of Greenwich.
+ */
+export function toDateInputValue(date: Date): string {
+	return `${pad(date.getUTCFullYear(), 4)}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
+export function fromDateInputValue(value: string): Date | null {
+	const match = value.trim().match(DATE_TIME_INPUT_PATTERN);
+	if (!match) return null;
+
+	const [, year, month, day] = match;
+	const parsed = new Date(
+		Date.UTC(Number(year), Number(month) - 1, Number(day)),
+	);
+	return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** A day-precision value read in the zone it was written in: UTC. */
+export function formatCalendarDate(
+	dateInput: DateValue,
+	dateStyle: "medium" | "full" = "medium",
+	fallback = "",
+) {
+	const parsed = parseDateValue(dateInput);
+	if (!parsed) return fallback;
+	return parsed.toLocaleDateString(undefined, { dateStyle, timeZone: "UTC" });
+}
+
+/** The zone the editor is implicitly writing in, for a hint next to the input. */
+export function localTimeZoneLabel(): string {
+	try {
+		return Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
+	} catch {
+		return "";
+	}
 }
 
 /** Trailing words that make a column an instant rather than a measurement. */

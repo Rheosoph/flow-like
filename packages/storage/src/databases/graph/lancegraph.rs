@@ -8,6 +8,8 @@ use super::{
     GraphStore, SubgraphEdge, SubgraphNode, SubgraphResult, TraversalDirection,
 };
 use crate::arrow_utils::record_batch_to_value;
+use crate::databases::df_provider::zero_column_safe;
+use datafusion::catalog::TableProvider;
 use datafusion::prelude::SessionContext;
 use flow_like_types::{Result, Value, anyhow, async_trait};
 use futures::TryStreamExt;
@@ -505,7 +507,7 @@ impl GraphStore for LanceGraphStore {
         record_batch_to_value(&batch)
     }
 
-    async fn sql(&self, query: &str, limit: Option<usize>) -> Result<Vec<Value>> {
+    async fn sql(&self, query: &str, params: Value, limit: Option<usize>) -> Result<Vec<Value>> {
         let limit = self.enforce_limit(limit);
         let _permit = self
             .semaphore
@@ -514,12 +516,14 @@ impl GraphStore for LanceGraphStore {
             .map_err(|e| anyhow!("Semaphore acquire failed: {}", e))?;
 
         validate_readonly_sql(query)?;
+        let param_values = crate::databases::sql_params::bind_params(&params)?;
         let timeout = std::time::Duration::from_millis(self.safety.timeout_ms);
         let ctx = self.build_query_context(true).await?;
 
         let df = tokio::time::timeout(timeout, ctx.sql(query))
             .await
             .map_err(|_| anyhow!("SQL planning timed out after {}ms", self.safety.timeout_ms))??
+            .with_param_values(param_values)?
             .limit(0, Some(limit))?;
         let batches = tokio::time::timeout(timeout, df.collect())
             .await
@@ -842,8 +846,8 @@ impl LanceGraphStore {
     async fn table_adapter(
         &self,
         table_name: &str,
-        cache: &mut HashMap<String, Arc<BaseTableAdapter>>,
-    ) -> Result<Arc<BaseTableAdapter>> {
+        cache: &mut HashMap<String, Arc<dyn TableProvider>>,
+    ) -> Result<Arc<dyn TableProvider>> {
         if let Some(adapter) = cache.get(table_name) {
             return Ok(adapter.clone());
         }
@@ -855,7 +859,7 @@ impl LanceGraphStore {
 
     async fn build_cypher_context(&self) -> Result<SessionContext> {
         let ctx = SessionContext::new();
-        let mut adapters: HashMap<String, Arc<BaseTableAdapter>> = HashMap::new();
+        let mut adapters: HashMap<String, Arc<dyn TableProvider>> = HashMap::new();
         let mut registered_labels = HashSet::new();
 
         for node in &self.overlay.nodes {
@@ -890,7 +894,7 @@ impl LanceGraphStore {
 
     async fn build_query_context(&self, include_edges: bool) -> Result<SessionContext> {
         let ctx = SessionContext::new();
-        let mut adapters: HashMap<String, Arc<BaseTableAdapter>> = HashMap::new();
+        let mut adapters: HashMap<String, Arc<dyn TableProvider>> = HashMap::new();
         let mut registered_tables = HashSet::new();
 
         for table_name in self.overlay.nodes.iter().map(|node| &node.table) {
@@ -1276,7 +1280,7 @@ fn preflight_cypher(
 pub(crate) async fn open_table_adapter(
     connection: &Connection,
     table_name: &str,
-) -> Result<Arc<BaseTableAdapter>> {
+) -> Result<Arc<dyn TableProvider>> {
     let table = connection
         .open_table(table_name)
         .execute()
@@ -1292,7 +1296,7 @@ pub(crate) async fn open_table_adapter(
                 e
             )
         })?;
-    Ok(Arc::new(adapter))
+    Ok(zero_column_safe(Arc::new(adapter)))
 }
 
 pub(crate) fn validate_readonly_sql(query: &str) -> Result<()> {

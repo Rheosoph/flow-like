@@ -50,6 +50,7 @@ import type {
 	EdgeLabelMapping,
 	GraphOverlay,
 } from "@flow-like/flow-like-ui/state/backend-state/graph-state";
+import { useRequestFabBubble } from "@flow-like/flow-like-ui/state/fab-bubble";
 import {
 	AlertTriangle,
 	ArrowDownAZ,
@@ -148,6 +149,10 @@ export const ExploreDataPage: React.FC<ExploreDataPageProps> = ({ appId }) => {
 		});
 		return () => setDataStudioSurface(null);
 	}, [appId, overlayParam, table, setDataStudioSurface]);
+
+	// The ontology and table views are what FlowPilot actually works on here, so they get the
+	// launcher; DatabaseOverview decides for itself per tab.
+	useRequestFabBubble(!!overlayParam || !!table);
 
 	if (overlayParam) {
 		return (
@@ -473,6 +478,10 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	useEffect(() => {
 		setActiveViewState(urlView);
 	}, [urlView]);
+
+	// The overview tab is a landing page with its own primary actions — the launcher only crowds it.
+	useRequestFabBubble(activeView !== "overview");
+
 	const [actionBoardsRequested, setActionBoardsRequested] = useState(false);
 	const tables = useInvoke(backend.dbState.listTables, backend.dbState, [
 		appId,

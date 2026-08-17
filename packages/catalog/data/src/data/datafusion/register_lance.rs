@@ -57,10 +57,9 @@ impl DeferredMount for LanceTableMount {
         let _ = session
             .ctx
             .deregister_table(TableReference::bare(table_name.clone()));
-        session.ctx.register_table(
-            TableReference::bare(table_name.clone()),
-            Arc::new(df_adapter),
-        )?;
+        session
+            .ctx
+            .register_table(TableReference::bare(table_name.clone()), df_adapter)?;
         session
             .track_lance_table(table_name, self.database.clone(), generation)
             .await;

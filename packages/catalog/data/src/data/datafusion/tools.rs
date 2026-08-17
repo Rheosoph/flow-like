@@ -1,7 +1,9 @@
+use crate::data::datafusion::params;
 use crate::data::datafusion::query::batches_to_csv_table;
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::excel::CSVTable;
 use flow_like::flow::{
+    board::Board,
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::ValueType,
@@ -302,10 +304,12 @@ impl NodeLogic for ExecuteSqlNode {
         node.add_input_pin(
             "query",
             "Query",
-            "SQL query to execute",
+            "SQL query to execute. Use $placeholders for values that come from the flow (SELECT * FROM users WHERE id = $user_id) — each one adds an input pin to wire the value into. Placeholders stand for values only; table and column names cannot be parameterized.",
             VariableType::String,
         )
         .set_default_value(Some(json!("SELECT * FROM data LIMIT 10")));
+
+        params::add_params_pin(&mut node);
 
         node.add_output_pin(
             "exec_out",
@@ -348,17 +352,24 @@ impl NodeLogic for ExecuteSqlNode {
         node
     }
 
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        node.error = None;
+        params::sync_param_pins(node, "query", board);
+    }
+
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: DataFusionSession = context.evaluate_pin("session").await?;
         let query: String = context.evaluate_pin("query").await?;
+        let query_params = params::resolve_params(context, &query).await?;
 
         let cached_session = session.load(context).await?;
 
         context.log_message(&format!("Executing SQL: {}", query), LogLevel::Debug);
 
         let df = cached_session.ctx.sql(&query).await?;
+        let df = params::bind(df, &query_params)?;
         let batches = df.collect().await?;
 
         let csv_table = batches_to_csv_table(&batches)?;

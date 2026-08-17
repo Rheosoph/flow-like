@@ -25,6 +25,10 @@ import {
 	captureInlineAppPageSnapshots,
 	uploadPageSnapshots,
 } from "../../lib/app-page-snapshot";
+import {
+	type AskUserAnswerPayload,
+	parseAskUserArguments,
+} from "../../lib/ask-user";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import { getErrorMessage } from "../../lib/error-message";
 import { EVENT_CONFIG, isChatEventType } from "../../lib/event-config";
@@ -70,7 +74,6 @@ import {
 import {
 	type GlobalChatAgentSelection,
 	type GlobalToolAsk,
-	type GlobalToolAskChoice,
 	type GlobalToolPrompt,
 	type GlobalToolPromptResolution,
 	SUB_STEP_PREFIX,
@@ -474,24 +477,9 @@ function argObject(
 		: undefined;
 }
 
-/** Parse the `ask_user` arguments into the choice metadata that drives the inline prompt. */
+/** Parse the `ask_user` arguments into the question form that drives the inline prompt. */
 function parseAsk(args: Record<string, unknown>): GlobalToolAsk {
-	const rawMode = argString(args, "mode");
-	const mode =
-		rawMode === "single_choice" || rawMode === "multiple_choice"
-			? rawMode
-			: "freeform";
-	const choices = Array.isArray(args.choices)
-		? (args.choices as GlobalToolAskChoice[]).filter(
-				(choice) => choice && typeof choice.label === "string",
-			)
-		: [];
-	return {
-		mode: mode === "freeform" || choices.length > 0 ? mode : "freeform",
-		choices,
-		defaultValue: args.default_value ?? args.defaultValue,
-		placeholder: argString(args, "placeholder") || undefined,
-	};
+	return parseAskUserArguments(args);
 }
 
 /**
@@ -1198,19 +1186,25 @@ function promptForDialog(
 	const promptId = createId();
 	const bound = (value: GlobalToolPromptResolution) => respond(value, promptId);
 	if (dialog.type === "ask") {
+		const ask = parseAsk(request.arguments);
 		return {
 			id: promptId,
 			kind: "ask" as const,
 			toolName: request.toolName,
 			title: i18next.t("flowpilotNeedsInput", "FlowPilot needs input"),
+			// A lone question reads best as the card's own subtitle; a batched intake form labels
+			// each of its questions itself, so repeating one here would just duplicate it.
 			description:
-				argString(request.arguments, "question") ||
-				argString(request.arguments, "prompt") ||
-				i18next.t(
-					"pleaseProvideTheRequestedInformation",
-					"Please provide the requested information.",
-				),
-			ask: parseAsk(request.arguments),
+				ask.questions.length === 1
+					? ask.questions[0].question
+					: ask.questions.length > 1
+						? undefined
+						: argString(request.arguments, "prompt") ||
+							i18next.t(
+								"pleaseProvideTheRequestedInformation",
+								"Please provide the requested information.",
+							),
+			ask,
 			respond: bound,
 		};
 	}
@@ -2180,7 +2174,14 @@ export function GlobalToolBridge() {
 					let config = parseUint8ArrayToJson(event.config) ?? {};
 					const serialized = JSON.stringify(config);
 					if (serialized.length > 12_000) {
-						config = { truncated: true, preview: serialized.slice(0, 12_000) };
+						// Label the cut: an unexplained boundary around a config that carries the
+						// interface stylesheet reads to the model as a platform size limit.
+						config = {
+							truncated: true,
+							truncated_note:
+								"Context preview only — this is not a limit on the stored configuration.",
+							preview: serialized.slice(0, 12_000),
+						};
 					}
 					const kind = classifyAppEventInterface(event);
 					const consumerTool = consumerToolForEventKind(kind);
@@ -5597,7 +5598,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 							}
 							if (event.type === "canvas_settings") {
 								canvasSettings =
-									validateCanvasSettings(event.data) ?? canvasSettings;
+									validateCanvasSettings(event.data, warnings) ??
+									canvasSettings;
 								continue;
 							}
 							if (event.type === "usage_stat") {
@@ -5741,7 +5743,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 					const components =
 						finalComponents.length > 0 ? finalComponents : streamedComponents;
 					canvasSettings =
-						validateCanvasSettings(response.canvas_settings) ?? canvasSettings;
+						validateCanvasSettings(response.canvas_settings, warnings) ??
+						canvasSettings;
 
 					if (components.length === 0)
 						return finishWidgetRun({
@@ -6546,6 +6549,20 @@ Completion contract: build complete helper logic first and add the Event entry l
 			try {
 				assertRequestActive(request, "approval handling");
 				if (request.toolName === "ask_user") {
+					// An empty form would show a card with nothing to answer, so tell the model how
+					// to fix its call instead of trapping the user in an unanswerable prompt.
+					if (parseAsk(request.arguments).questions.length === 0)
+						return {
+							requestId: request.requestId,
+							approved: true,
+							result: {
+								status: "error",
+								code: "ask_user_no_question",
+								next_action:
+									"Retry with a non-empty `questions` array; each entry needs an `id` and a `question`.",
+								message: "ask_user was called without a question to ask.",
+							},
+						};
 					const resolution = await openDialog({ type: "ask", request });
 					assertRequestActive(request, "question response");
 					if (!resolution || !("answer" in resolution))
@@ -6554,10 +6571,15 @@ Completion contract: build complete helper logic first and add the Event entry l
 							approved: false,
 							error: "User dismissed the question.",
 						};
+					// The card resolves with the whole payload: `{ answer }` for a lone question,
+					// `{ answers: { [id]: value } }` for a batched intake form.
 					return {
 						requestId: request.requestId,
 						approved: true,
-						result: { status: "ok", answer: resolution.answer },
+						result: {
+							status: "ok",
+							...(resolution.answer as AskUserAnswerPayload),
+						},
 					};
 				}
 

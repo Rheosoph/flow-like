@@ -1,10 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import {
+	detectEpochUnit,
 	formatAbsoluteDateTime,
+	formatCalendarDate,
 	formatRelativeTime,
+	fromDateInputValue,
+	fromDateTimeInputValue,
 	inferTemporalValue,
 	looksLikeTemporalName,
 	parseTemporalValue,
+	toDateInputValue,
+	toDateTimeInputValue,
+	toEpochNumber,
 } from "./date";
 
 const DAY_MS = 86_400_000;
@@ -79,6 +86,78 @@ describe("parseTemporalValue", () => {
 		expect(parseTemporalValue(Number.NaN)).toBeNull();
 		expect(parseTemporalValue(true)).toBeNull();
 		expect(parseTemporalValue(null)).toBeNull();
+	});
+
+	test("obeys a declared unit instead of guessing from the magnitude", () => {
+		// A second count small enough that the ladder would read it as days.
+		expect(parseTemporalValue(86_400, "second")?.toISOString()).toBe(
+			"1970-01-02T00:00:00.000Z",
+		);
+		expect(parseTemporalValue(86_400)?.toISOString()).toBe(
+			"2206-07-23T00:00:00.000Z",
+		);
+	});
+});
+
+describe("epoch round trips", () => {
+	test("writes back the unit it read", () => {
+		for (const unit of [
+			"day",
+			"second",
+			"millisecond",
+			"microsecond",
+		] as const) {
+			const date = parseTemporalValue(
+				toEpochNumber(new Date("2026-08-14T00:00:00.000Z"), unit),
+				unit,
+			);
+			expect(date?.toISOString()).toBe("2026-08-14T00:00:00.000Z");
+		}
+	});
+
+	test("names the unit a bare number counts in", () => {
+		expect(detectEpochUnit(20_679)).toBe("day");
+		expect(detectEpochUnit(1_786_665_600)).toBe("second");
+		expect(detectEpochUnit(1_786_665_600_000)).toBe("millisecond");
+		expect(detectEpochUnit(1_786_665_600_000_000)).toBe("microsecond");
+		expect(detectEpochUnit(1_786_665_600_000_000_000)).toBe("nanosecond");
+	});
+});
+
+describe("date input values", () => {
+	test("round trips wall-clock time through the viewer's zone", () => {
+		const date = new Date(2026, 7, 14, 10, 30, 15);
+		expect(toDateTimeInputValue(date)).toBe("2026-08-14T10:30:15");
+		expect(toDateTimeInputValue(date, "minute")).toBe("2026-08-14T10:30");
+		expect(fromDateTimeInputValue("2026-08-14T10:30:15")?.getTime()).toBe(
+			date.getTime(),
+		);
+	});
+
+	test("keeps day-precision values on UTC midnight", () => {
+		const day = new Date(Date.UTC(2026, 7, 14));
+		expect(toDateInputValue(day)).toBe("2026-08-14");
+		expect(fromDateInputValue("2026-08-14")?.toISOString()).toBe(
+			"2026-08-14T00:00:00.000Z",
+		);
+		expect(toEpochNumber(fromDateInputValue("2026-08-14") as Date, "day")).toBe(
+			20_679,
+		);
+	});
+
+	test("rejects input the pickers cannot produce", () => {
+		expect(fromDateTimeInputValue("")).toBeNull();
+		expect(fromDateTimeInputValue("14.08.2026")).toBeNull();
+		expect(fromDateInputValue("not a date")).toBeNull();
+	});
+});
+
+describe("formatCalendarDate", () => {
+	test("reads a day count in the zone it was written in", () => {
+		expect(formatCalendarDate(new Date("2026-08-14T00:00:00.000Z"))).toBe(
+			formatCalendarDate(new Date(20_679 * 86_400_000)),
+		);
+		expect(formatCalendarDate("not a date", "medium", "—")).toBe("—");
 	});
 });
 

@@ -6,6 +6,7 @@ use flow_like::{
     flow_like_storage::{
         Path,
         arrow_schema::Schema,
+        databases::sql_params::bind_params,
         databases::table_cascade::prune_table_references,
         databases::vector::{
             VectorStore,
@@ -328,6 +329,10 @@ pub struct VectorQueryPayload {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct QueryTablePayload {
     sql: Option<String>,
+    /// Values for the `sql` field's `$placeholders`, keyed by placeholder name without the
+    /// `$`. Bound by the planner, so a caller never has to build a value into the statement.
+    #[serde(default)]
+    sql_params: flow_like_types::Value,
     vector_query: Option<VectorQueryPayload>,
     filter: Option<String>,
     fts_term: Option<String>,
@@ -362,9 +367,15 @@ pub async fn db_query(
         let context = SessionContext::new();
         let fusion = db.to_datafusion().await?;
         context
-            .register_table(table_name, Arc::new(fusion))
+            .register_table(table_name, fusion)
             .map_err(|e| anyhow!(e))?;
-        let df = context.sql(&sql).await.map_err(|e| anyhow!(e))?;
+        let param_values = bind_params(&payload.sql_params)?;
+        let df = context
+            .sql(&sql)
+            .await
+            .map_err(|e| anyhow!(e))?
+            .with_param_values(param_values)
+            .map_err(|e| anyhow!(e))?;
         let items = df.collect().await.map_err(|e| anyhow!(e))?;
         let items = record_batches_to_vec(Some(items))?;
         return Ok(items);

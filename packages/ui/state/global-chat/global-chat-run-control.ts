@@ -37,6 +37,33 @@ export function getGlobalChatRunControl(
 }
 
 /**
+ * The id the BACKEND knows a live run by, keyed by the client run id callers hold. Only the web
+ * transport writes here: the server mints its own run id, and anything addressing that run on the
+ * wire — a nested specialist posting tool results, for one — needs the server's id, not the
+ * assistant message id the frontend minted.
+ */
+const transportRunIds = new Map<string, string>();
+
+export function registerGlobalChatTransportRunId(
+	clientRunId: string,
+	transportRunId: string,
+) {
+	transportRunIds.set(clientRunId, transportRunId);
+}
+
+export function unregisterGlobalChatTransportRunId(clientRunId: string) {
+	transportRunIds.delete(clientRunId);
+}
+
+/**
+ * Address a run on the wire. Falls back to the client id, which is the correct answer on the
+ * desktop, where the id the frontend minted is the one Rust registered.
+ */
+export function globalChatTransportRunId(clientRunId: string): string {
+	return transportRunIds.get(clientRunId) ?? clientRunId;
+}
+
+/**
  * Instructions a finished run never folded in — it ended before reaching a round/idle boundary, or
  * an external CLI run never restarted a phase. The caller re-sends them as their own turn so a
  * steering message the user watched get accepted is never silently swallowed.

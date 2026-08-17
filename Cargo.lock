@@ -7939,6 +7939,7 @@ dependencies = [
  "datafusion-table-providers",
  "dirs-next",
  "flow-like",
+ "flow-like-ast",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
  "flow-like-catalog-macros",
@@ -8350,7 +8351,6 @@ dependencies = [
  "window-vibrancy",
  "windows 0.61.3",
  "xcap",
- "zbus",
 ]
 
 [[package]]
@@ -24033,7 +24033,6 @@ dependencies = [
  "signal-hook-registry",
  "socket2 0.6.3",
  "tokio-macros",
- "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -28046,7 +28045,6 @@ dependencies = [
  "rustix 1.1.4",
  "serde",
  "serde_repr",
- "tokio",
  "tracing",
  "uds_windows",
  "uuid 1.23.1",

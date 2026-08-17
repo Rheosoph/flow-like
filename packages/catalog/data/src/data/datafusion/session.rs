@@ -180,7 +180,7 @@ impl CachedDataFusionSession {
             self.ctx
                 .deregister_table(TableReference::bare(table_name.clone()))?;
             self.ctx
-                .register_table(TableReference::bare(table_name.clone()), Arc::new(adapter))?;
+                .register_table(TableReference::bare(table_name.clone()), adapter)?;
             registration.generation = generation;
         }
         Ok(())

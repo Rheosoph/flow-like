@@ -18,7 +18,9 @@ import type {
 import type { IAgentDebugEvent } from "./agent-debug-report";
 import {
 	registerGlobalChatRunControl,
+	registerGlobalChatTransportRunId,
 	unregisterGlobalChatRunControl,
+	unregisterGlobalChatTransportRunId,
 } from "./global-chat-run-control";
 
 // The desktop and browser tool contracts are identical; reuse the canonical bridge types so a single
@@ -420,6 +422,40 @@ async function dispatchToolRequest(
 }
 
 /**
+ * Execute one `tool_request` frame that arrived on a nested specialist's own SSE stream
+ * (`/ai/copilot/chat` with a Data Studio / Scout scope) and POST its result back.
+ *
+ * A specialist rides the owning chat run's id, so the result goes to the very same
+ * `/ai/global-chat/{runId}/tool-result` endpoint the orchestrator's tools use — only the stream the
+ * request travelled down differs.
+ */
+export async function dispatchSpecialistToolRequest(params: {
+	baseUrl: string;
+	token?: string;
+	runId: string;
+	data: string;
+	onToolRequest: (request: WebToolRequest) => Promise<WebToolResponse>;
+	onToolCancel?: WebGlobalChatOptions["onToolCancel"];
+}): Promise<void> {
+	const options: WebGlobalChatOptions = {
+		baseUrl: params.baseUrl,
+		token: params.token,
+		body: {},
+		onToolRequest: params.onToolRequest,
+		onToolCancel: params.onToolCancel,
+	};
+	const authHeaders: Record<string, string> = params.token
+		? { authorization: `Bearer ${params.token}` }
+		: {};
+	await dispatchToolRequest(
+		options,
+		authHeaders,
+		params.runId,
+		parseToolRequest(params.data),
+	);
+}
+
+/**
  * Build a `start(onChunk)` transport for {@link driveGlobalChatStream} that talks to the browser API.
  * Forwards `token` frames to `onChunk`, dispatches `tool_request` frames to `onToolRequest` and POSTs
  * the result back keyed by the run id, and resolves with the final `UnifiedCopilotResponse`.
@@ -551,6 +587,11 @@ export function webGlobalChatStart(options: WebGlobalChatOptions) {
 						// The run is addressable from here on — the control registered above starts
 						// reaching the server instead of only aborting locally.
 						serverRunId = nextRunId;
+						// Nested specialist runs are separate HTTP requests that still post their
+						// tool results to THIS run, so they need the server's id too.
+						if (options.clientRunId) {
+							registerGlobalChatTransportRunId(options.clientRunId, nextRunId);
+						}
 						emitLifecycle(
 							options,
 							bridgeEvent("web:protocol:run", "run_frame_received", "done"),
@@ -768,6 +809,7 @@ export function webGlobalChatStart(options: WebGlobalChatOptions) {
 		} finally {
 			if (options.clientRunId) {
 				unregisterGlobalChatRunControl(options.clientRunId);
+				unregisterGlobalChatTransportRunId(options.clientRunId);
 			}
 		}
 	};

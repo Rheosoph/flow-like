@@ -81,7 +81,27 @@ type UiInspectPackageWidget = {
 	name: string;
 	description?: string;
 	contract: unknown;
+	/**
+	 * The `dynIn<Key>` pins `a2ui_instantiate_widget` mints for this package widget's
+	 * contract inputs. Derived here rather than left to the model: the `dyn_in_` prefix is not
+	 * inferable from the contract, and a guessed pin name fails only at apply time.
+	 */
+	instantiate_pins: { pin: string; input: string; optional?: boolean }[];
 };
+
+/** The `dynIn<Key>` pin per contract input, in contract order. */
+function packageContractPins(
+	contract: unknown,
+): { pin: string; input: string; optional?: boolean }[] {
+	const inputs = (contract as { inputs?: Record<string, unknown> } | undefined)
+		?.inputs;
+	if (!inputs || typeof inputs !== "object") return [];
+	return Object.entries(inputs).map(([key, value]) => ({
+		pin: widgetInstantiatePin("in", key),
+		input: key,
+		optional: (value as { optional?: boolean } | undefined)?.optional,
+	}));
+}
 
 /**
  * Package widgets of the app, resolved from installed manifests. Returns an empty list on hosts
@@ -109,6 +129,7 @@ async function loadUiInspectPackageWidgets(
 			name: entry.widget.name,
 			description: nonEmptyMetadataText(entry.widget.description),
 			contract: entry.widget.contract,
+			instantiate_pins: packageContractPins(entry.widget.contract),
 		}));
 	} catch {
 		return [];
@@ -470,7 +491,7 @@ function toCamelCase(value: string): string {
 }
 
 function widgetInstantiatePin(
-	kind: "path" | "prop" | "cust",
+	kind: "path" | "prop" | "cust" | "in" | "arg",
 	key: string,
 ): string {
 	return toCamelCase(`dyn_${kind}_${key}`);
@@ -519,6 +540,9 @@ function summarizeWidget(widget: IWidget) {
 		selector: widget.name,
 		widget_id: widget.id,
 		description: widget.description,
+		// Every pin `a2ui_instantiate_widget`'s on_update mints for this widget. Anything
+		// omitted here is undiscoverable: the model has no other source for these names, and
+		// guessing one produces a binding that fails at apply time.
 		instantiate_pins: [
 			...collectBoundPaths(widget.components ?? []).map((path) => ({
 				pin: widgetInstantiatePin("path", path),
@@ -528,6 +552,11 @@ function summarizeWidget(widget: IWidget) {
 				pin: widgetInstantiatePin("prop", prop.id),
 				label: prop.label,
 				property_path: prop.propertyPath,
+			})),
+			...(widget.customizationOptions ?? []).map((option) => ({
+				pin: widgetInstantiatePin("cust", option.id),
+				label: option.label,
+				customization: option.id,
 			})),
 		],
 		// Actions are persisted with `id` — that is also the string an events_widget_action node
@@ -1855,6 +1884,10 @@ export function useFrontendRuntimeToolExecutor(
 									}),
 								),
 								package_widgets: packageWidgets,
+								// The listing carries selectors only. Say so, because a caller
+								// that stops here has no `dyn*` pin names and the failure of a
+								// guessed one only surfaces when the board is applied.
+								note: "This listing does not include widget binding pins. Call ui_inspect with operation 'widget' for a widget's instantiate_pins before authoring any dyn* argument.",
 							};
 						}
 					}

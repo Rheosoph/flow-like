@@ -13,6 +13,10 @@ use utoipa::ToSchema;
 #[derive(Debug, serde::Deserialize, ToSchema)]
 pub struct SqlPayload {
     pub query: String,
+    /// Values for the query's `$placeholders`, keyed by placeholder name without the `$`.
+    /// Bound by the planner, so a value never has to be built into the statement text.
+    #[serde(default)]
+    pub params: flow_like_types::Value,
     pub limit: Option<usize>,
 }
 
@@ -65,6 +69,7 @@ pub async fn run_sql(
     let results = store
         .sql(
             &payload.query,
+            payload.params,
             Some(payload.limit.unwrap_or(DEFAULT_GRAPH_QUERY_LIMIT)),
         )
         .await?;
