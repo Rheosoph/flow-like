@@ -34,6 +34,7 @@ import { useBackend } from "../../state/backend-state";
 import type { IWidgetRef } from "../../state/backend-state/page-state";
 import type { IWidget } from "../../state/backend-state/widget-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
+import { useRequestFabBubble } from "../../state/fab-bubble";
 import { A2UIRenderer } from "../a2ui/A2UIRenderer";
 import { applyA2UIMessage } from "../a2ui/apply-a2ui-message";
 import type {
@@ -205,6 +206,9 @@ export function WidgetBuilder({
 	onPageChange,
 	externalAssistant = false,
 }: WidgetBuilderProps) {
+	// Without an in-interface FlowPilot button the floating bubble is this builder's only way into
+	// the assistant, so ask for it exactly when we drop our own.
+	useRequestFabBubble(externalAssistant);
 	const [mode, setMode] = useState<"edit" | "preview">("edit");
 	const [leftTab, setLeftTab] = useState<"palette" | "hierarchy">("palette");
 	const [copilotOpen, setCopilotOpen] = useState(false);
