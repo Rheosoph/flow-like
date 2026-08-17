@@ -355,6 +355,10 @@ export interface FlowPilotProps {
 	/** Current UI components on the surface (UI mode) */
 	currentComponents?: SurfaceComponent[];
 
+	/** The surface's live canvasSettings, customCss included (UI mode). Supplying it is what lets
+	 * the copilot edit an existing stylesheet instead of replacing one it cannot see. */
+	currentCanvasSettings?: CanvasSettings;
+
 	/** Selected component IDs (UI mode) */
 	selectedComponentIds?: string[];
 

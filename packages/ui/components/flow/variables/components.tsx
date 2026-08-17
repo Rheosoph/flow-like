@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { EllipsisVerticalIcon, GripIcon, ListIcon } from "lucide-react";
 import { IValueType, type IVariable, type IVariableType } from "../../../lib";
 import { Badge, Label } from "../../ui";
@@ -109,6 +110,7 @@ function VariableTypeBadge({
 	type: IValueType;
 	valueType: IVariableType;
 }>) {
+	const { t } = useTranslation("flow");
 	const getTypeLabel = () => {
 		switch (type) {
 			case IValueType.Array:

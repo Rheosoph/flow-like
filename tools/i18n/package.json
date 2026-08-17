@@ -1,0 +1,10 @@
+{
+	"name": "flow-like-i18n-tools",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Isolated install for i18next-cli. Lives outside the workspace so the root `overrides` (glob 10 / minimatch 3) cannot break the CLI's own dependency tree.",
+	"devDependencies": {
+		"i18next-cli": "1.67.9"
+	}
+}

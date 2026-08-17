@@ -27,7 +27,10 @@ futures-util = "0.3.31"
 urlencoding.workspace = true
 schemars.workspace = true
 base64.workspace = true
-datafusion = { version = "=52.5.0", default-features = false, features = ["recursive_protection", "regex_expressions", "string_expressions", "unicode_expressions", "array_expressions", "nested_expressions", "math_expressions", "datetime_expressions", "parquet"] }
+# `sql` is required for `ctx.sql`, `DFParser` and the `sqlparser` re-export this crate
+# parses placeholders with. It was previously only present because `lance` happens to
+# enable it; declaring it here keeps a Lance bump from silently breaking the build.
+datafusion = { version = "=52.5.0", default-features = false, features = ["sql", "recursive_protection", "regex_expressions", "string_expressions", "unicode_expressions", "array_expressions", "nested_expressions", "math_expressions", "datetime_expressions", "parquet"] }
 num_cpus = "1.16"
 percent-encoding.workspace = true
 infer = "0.19.0"
@@ -54,6 +57,11 @@ iceberg-datafusion = { version = "=0.9.0", optional = true }
 
 [target.'cfg(all(any(target_os = "macos", target_os = "linux"), any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
 lancedb = { version = "=0.27.2", features = ["fp16kernels"] }
+
+[dev-dependencies]
+# `tokio` is only a regular dependency under `graph`, but the parameter-binding tests
+# execute real DataFusion queries and must run without that feature too.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [features]
 tauri = []

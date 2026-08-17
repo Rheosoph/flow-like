@@ -347,6 +347,184 @@
 	line-height: 1.5;
 }
 
+/* University lessons use the shared Plate renderer, but need a calmer reading
+   surface than compact editor or chat contexts. Text stays at a book-like
+   measure while screenshots and diagrams may use the wider article canvas. */
+.fl-lesson-article {
+	container-type: inline-size;
+}
+
+/*
+ * Lesson bodies read as long-form, so the running text is set in the serif and
+ * the headings stay in the display sans — the same split the rest of University
+ * uses (serif for prose, sans for chrome, mono for labels).
+ */
+.fl-lesson-prose {
+	width: min(100%, 66ch);
+	margin-inline: auto;
+	color: var(--foreground);
+	font-family: var(--font-serif);
+	font-size: 1.0625rem;
+	line-height: 1.68;
+}
+
+@media (min-width: 48rem) {
+	.fl-lesson-prose {
+		font-size: 1.125rem;
+	}
+}
+
+.fl-lesson-prose :is(code, kbd, samp, pre) {
+	font-family: var(--font-mono);
+}
+
+.fl-lesson-prose [data-slate-editor] > p {
+	margin-block: 0 1rem;
+	padding-block: 0;
+}
+
+.fl-lesson-prose [data-slate-editor] > :is(h1, h2, h3) {
+	margin-inline: 0;
+	font-family: var(--font-sans);
+	line-height: 1.25;
+	text-wrap: balance;
+}
+
+.fl-lesson-prose [data-slate-editor] > h1 {
+	margin-block: 2.25rem 0.75rem;
+	font-size: clamp(1.625rem, 4cqi, 2rem);
+}
+
+.fl-lesson-prose [data-slate-editor] > h2 {
+	margin-block: 2rem 0.625rem;
+	font-size: 1.375rem;
+}
+
+.fl-lesson-prose [data-slate-editor] > h3 {
+	margin-block: 1.625rem 0.5rem;
+	font-size: 1.1875rem;
+}
+
+.fl-lesson-prose [data-slate-editor] > :is(h1, h2, h3):first-child {
+	margin-top: 0;
+}
+
+.fl-lesson-prose :is(ul, ol) {
+	margin-block: 0.875rem 1.125rem;
+	padding-left: 1.5rem;
+}
+
+.fl-lesson-prose li {
+	padding-left: 0.125rem;
+}
+
+.fl-lesson-prose li + li {
+	margin-top: 0.35rem;
+}
+
+.fl-lesson-prose li > p {
+	margin: 0;
+	padding: 0;
+}
+
+.fl-lesson-prose blockquote {
+	margin-block: 1.25rem;
+	padding-block: 0.125rem;
+}
+
+.fl-lesson-prose :is(pre, table) {
+	margin-block: 1.5rem;
+}
+
+.fl-lesson-prose hr {
+	margin-block: 2rem;
+}
+
+.fl-lesson-prose a {
+	font-weight: 500;
+	color: var(--primary);
+	text-decoration: underline;
+	text-underline-offset: 0.2em;
+}
+
+/*
+ * Figures break out of the 66ch reading column to the full article width. The
+ * editor writes the stored resize width onto the figure as an inline style,
+ * which outranks `width` here — `max-width` is what actually keeps a wide image
+ * inside the column, so it must stay a real cap and never `none`.
+ */
+.fl-lesson-prose figure {
+	position: relative;
+	left: 50%;
+	display: block;
+	width: min(56rem, 100cqi);
+	max-width: min(56rem, 100cqi);
+	margin-block: 1.75rem;
+	margin-inline: 0;
+	transform: translateX(-50%);
+	text-align: center;
+}
+
+/* Media that never made it into a figure still has to respect the column. */
+.fl-lesson-prose :is(img, video, canvas, iframe) {
+	max-width: 100%;
+	height: auto;
+}
+
+.fl-lesson-prose figure > div {
+	width: 100%;
+	min-width: 0;
+}
+
+.fl-lesson-prose figure img {
+	display: block;
+	width: 100%;
+	height: auto;
+	max-height: min(70vh, 52rem);
+	margin-inline: auto;
+	object-fit: contain;
+	border: 1px solid color-mix(in oklch, var(--border) 75%, transparent);
+	border-radius: var(--radius-lg);
+	background: color-mix(in oklch, var(--muted) 35%, transparent);
+}
+
+.fl-lesson-prose figcaption,
+.fl-lesson-prose figure[data-lesson-media-caption]::after {
+	display: block;
+	height: auto;
+	max-width: 66ch;
+	margin: 0.625rem auto 0;
+	color: var(--muted-foreground);
+	font-size: 0.8125rem;
+	line-height: 1.45;
+}
+
+.fl-lesson-prose figure[data-lesson-media-caption]::after {
+	content: attr(data-lesson-media-caption);
+}
+
+.fl-lesson-prose figure[data-lesson-media-failed="true"] {
+	display: flex;
+	min-height: 10rem;
+	align-items: center;
+	justify-content: center;
+	padding: 2rem;
+	transform: translateX(-50%);
+	border: 1px dashed var(--border);
+	border-radius: var(--radius-lg);
+	background: color-mix(in oklch, var(--muted) 35%, transparent);
+	color: var(--muted-foreground);
+	font-size: 0.875rem;
+}
+
+.fl-lesson-prose figure[data-lesson-media-failed="true"]::before {
+	content: attr(aria-label);
+}
+
+.fl-lesson-prose figure[data-lesson-media-failed="true"] > * {
+	display: none;
+}
+
 /* Background art needs local contrast, not one heavy wash over the whole image. These
    values remain CSS variables so event-level custom CSS can tune the treatment. */
 .fl-chat-root:where([data-fl-chat-has-background="true"]) {

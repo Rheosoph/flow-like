@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { Plus, SearchIcon, Shield } from "lucide-react";
 import { useSearchParams } from "next/navigation";
@@ -31,6 +32,7 @@ function emptyRole(appId: string, template: RoleTemplate): IBackendRole {
 }
 
 export function RolesPage() {
+	const { t } = useTranslation("settings");
 	const searchParams = useSearchParams();
 	const appId = searchParams.get("id") ?? "";
 	const backend = useBackend();
@@ -166,7 +168,7 @@ export function RolesPage() {
 			await backend.roleState.upsertRole(appId, {
 				...role,
 				id: createId(),
-				name: `${role.name} (Copy)`,
+				name: t('nameCopy', '{{name}} (Copy)', { name: role.name }),
 				permissions: cleaned.toBigInt(),
 			});
 			closeDraft();
@@ -206,17 +208,16 @@ export function RolesPage() {
 				<div className="max-w-5xl mx-auto flex flex-col gap-5 p-4 pb-8">
 					<div className="flex items-start justify-between gap-6 flex-wrap">
 						<div>
-							<h1 className="text-2xl font-bold tracking-tight">Roles</h1>
+							<h1 className="text-2xl font-bold tracking-tight">{t('roles', 'Roles')}</h1>
 							<p className="text-sm text-muted-foreground max-w-prose">
-								Set how far each role reaches into a part of the app. Every
-								level maps to real permissions — open Advanced to see them.
+								{t('setHowFarEachRoleReachesIntoAPartOfTheAppEveryLevelMapsToRealPermissionsOpenAdvancedToSeeThem', "Set how far each role reaches into a part of the app. Every level maps to real permissions — open Advanced to see them.")}
 							</p>
 						</div>
 						<div className="flex items-center gap-2">
 							<div className="relative">
 								<SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
 								<Input
-									placeholder="Search roles"
+									placeholder={t('searchRoles', 'Search roles')}
 									value={searchTerm}
 									onChange={(event) => setSearchTerm(event.target.value)}
 									className="pl-8 w-44"
@@ -224,7 +225,7 @@ export function RolesPage() {
 							</div>
 							<Button onClick={() => setShowTemplates(true)}>
 								<Plus className="h-4 w-4 mr-2" />
-								New role
+								{t('newRole', 'New role')}
 							</Button>
 						</div>
 					</div>
@@ -273,11 +274,11 @@ export function RolesPage() {
 					{visibleRoles.length === 0 && (
 						<div className="text-center py-12">
 							<Shield className="h-8 w-8 mx-auto text-muted-foreground mb-3" />
-							<h3 className="text-base font-semibold mb-1">No roles found</h3>
+							<h3 className="text-base font-semibold mb-1">{t('noRolesFound', 'No roles found')}</h3>
 							<p className="text-sm text-muted-foreground mb-4">
 								{searchTerm
-									? "Try a different search term."
-									: "Create your first role to get started."}
+									? t('tryADifferentSearchTerm', 'Try a different search term.')
+									: t('createYourFirstRoleToGetStarted', 'Create your first role to get started.')}
 							</p>
 							{!searchTerm && (
 								<Button
@@ -286,7 +287,7 @@ export function RolesPage() {
 									onClick={() => setShowTemplates(true)}
 								>
 									<Plus className="h-4 w-4 mr-2" />
-									New role
+									{t('newRole', 'New role')}
 								</Button>
 							)}
 						</div>
@@ -298,24 +299,25 @@ export function RolesPage() {
 				<div className="flex items-center gap-3 px-4 py-2.5 border-t bg-card">
 					<p className="flex-1 text-sm text-muted-foreground">
 						<span className="inline-block w-1.5 h-1.5 rounded-full bg-primary mr-2 align-middle" />
-						{isNewRole ? "New role " : "Unsaved changes to "}
+						{isNewRole ? t('newRole2', "New role") : t('unsavedChangesTo', "Unsaved changes to")}{" "}
 						<strong className="text-foreground">
 							{draft.name.trim() || "Untitled role"}
 						</strong>
 						{!isNewRole && memberCounts !== undefined && (
 							<>
-								{" — affects "}
-								<strong className="text-foreground">{affected}</strong>
-								{affected === 1 ? " member" : " members"}
+								{" "}
+								{t('affects', "— affects")}{" "}
+								<strong className="text-foreground">{affected}</strong>{" "}
+								{t('members', { defaultValue_one: "member", defaultValue_other: "members", count: affected })}
 							</>
 						)}
 						.
 					</p>
 					<Button variant="ghost" size="sm" onClick={closeDraft}>
-						Discard
+						{t('discard', 'Discard')}
 					</Button>
 					<Button size="sm" onClick={handleSave} disabled={!draft.name.trim()}>
-						{isNewRole ? "Create role" : "Save role"}
+						{isNewRole ? t('createRole', 'Create role') : t('saveRole', 'Save role')}
 					</Button>
 				</div>
 			)}

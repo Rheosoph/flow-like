@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	Dialog,
@@ -22,12 +23,13 @@ export function CommentDialog({
 	comment: string;
 	onUpsert: (comment: string) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent>
 				<DialogHeader>
-					<DialogTitle>Comment</DialogTitle>
-					<DialogDescription>Add a comment to the node.</DialogDescription>
+					<DialogTitle>{t('comment', 'Comment')}</DialogTitle>
+					<DialogDescription>{t('addACommentToTheNode', 'Add a comment to the node.')}</DialogDescription>
 				</DialogHeader>
 				<DialogDescription>
 					<Textarea
@@ -43,7 +45,7 @@ export function CommentDialog({
 							onOpenChange(false);
 						}}
 					>
-						Save
+						{t('save', 'Save')}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

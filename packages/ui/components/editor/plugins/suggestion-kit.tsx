@@ -45,7 +45,7 @@ export const suggestionPlugin = toTPlatePlugin<SuggestionConfig>(
 			let isSet = false;
 
 			const unsetActiveSuggestion = () => {
-				setOption("activeId", null);
+				setOption(`activeId`, null);
 				isSet = true;
 			};
 
@@ -67,7 +67,7 @@ export const suggestionPlugin = toTPlatePlugin<SuggestionConfig>(
 
 					const id = api.suggestion!.nodeId(suggestionEntry[0]);
 
-					setOption("activeId", id ?? null);
+					setOption(`activeId`, id ?? null);
 					isSet = true;
 
 					break;

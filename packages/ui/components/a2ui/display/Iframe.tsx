@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
@@ -20,6 +21,7 @@ export function A2UIIframe({
 	component,
 	style,
 }: ComponentProps<IframeComponent>) {
+	const { t } = useTranslation("common");
 	const src = useResolved<string>(component.src);
 	const srcdoc = useResolved<string>(component.srcdoc);
 	const width = useResolved<string>(component.width) ?? "100%";
@@ -45,7 +47,7 @@ export function A2UIIframe({
 				)}
 				style={{ ...resolveInlineStyle(style), width, height }}
 			>
-				No content provided
+				{t('noContentProvided', 'No content provided')}
 			</div>
 		);
 	}

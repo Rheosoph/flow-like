@@ -1,0 +1,834 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-movghjic-8jog",
+		"name": "Apps For Builders",
+		"language": "en",
+		"slug": "apps-for-builders",
+		"difficulty": "BEGINNER",
+		"category": "GENERAL",
+		"estimatedMinutes": 65,
+		"isPublished": true,
+		"tags": ["apps", "architecture", "events", "data", "deployment"],
+		"position": 2,
+		"description": "Turn a working flow into a product people can open: draw the app boundary, decide where runs happen, wire routes and data, and ship pinned versions users can trust.",
+		"longDescription": "You architect the Customer Support Copilot decision by decision: create the app shell, choose offline or online with intent, expose the flow through a chat route and a triage Quick Action, give files, cases, and credentials their right homes, and release pinned versions with a rollback plan. Then the table flips: in the final review you audit another team's flawed Field Service Hub design and catch every risk before launch.",
+		"media": {
+			"icon": "media/app-logo.webp",
+			"banner": "assets/course-banner.webp"
+		},
+		"assets": [
+			{
+				"name": "AppArchitecture",
+				"file": "assets/FlowLikeAppAnatomy.webp",
+				"mimeType": "image/webp",
+				"filename": "FlowLikeAppAnatomy.webp",
+				"replace": true
+			},
+			{
+				"name": "CreateAppDialog",
+				"file": "assets/CreateApp.webp",
+				"replace": true
+			},
+			{
+				"name": "EventWorkspace",
+				"file": "assets/AppEvents.webp",
+				"replace": true
+			},
+			{
+				"name": "StructuredData",
+				"file": "assets/DataStudioOverview.webp",
+				"replace": true
+			},
+			{
+				"name": "FlowVersions",
+				"file": "assets/BoardVersions.webp",
+				"replace": true
+			}
+		],
+		"modules": [
+			{
+				"id": "mod-app-builders-boundary",
+				"title": "Design the App Boundary",
+				"description": "Create the Customer Support Copilot's shell, then choose connectivity and execution deliberately.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "les-app-builders-architecture",
+						"title": "Draw the App Boundary",
+						"contentFile": "content/01-architect-an-app.md",
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-builders-hub",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Look at @AppArchitecture. What sits at the center of the diagram, with everything else hanging off it?",
+								"explanation": "The App is the hub: Flows, Experiences, Data, Reuse, and Delivery all hang off it. The tempting answer is the Flow — flows do hold the logic, but they are one of five concerns the App organizes. Putting the Flow at the center is exactly the mental model that turns routes, data, and releases into afterthoughts.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "the-app",
+											"label": "The App — Customer Support Copilot, the project boundary"
+										},
+										{
+											"id": "a-flow",
+											"label": "A Flow — the executable graph that everything else serves"
+										},
+										{
+											"id": "the-library",
+											"label": "The Library, which contains all of your projects"
+										},
+										{
+											"id": "data-studio",
+											"label": "Data Studio, because a product is built around its data"
+										}
+									],
+									"correct": ["the-app"]
+								}
+							},
+							{
+								"id": "challenge-builders-app-level",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which of these live at the App level of Customer Support Copilot — outside any single Flow's graph?",
+								"explanation": "Apply the rewrite test: routes, shared files, and access control would all survive a rewrite of the graph, so they live at the App level. The Branch node is executable behavior and the draft-reply variable is per-run state — both belong inside the Flow. The route is the one people most often misplace: it feels like part of the logic, but it is delivery.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "chat-route",
+											"label": "The /chat route that exposes the support assistant"
+										},
+										{
+											"id": "policy-storage",
+											"label": "The shared Storage folder holding the refund policy PDF"
+										},
+										{
+											"id": "team-roles",
+											"label": "Roles and invitations for the support team"
+										},
+										{
+											"id": "confidence-branch",
+											"label": "The Branch node that checks a draft's confidence score"
+										},
+										{
+											"id": "draft-variable",
+											"label": "The variable holding one run's draft reply text"
+										}
+									],
+									"correct": ["chat-route", "policy-storage", "team-roles"]
+								}
+							},
+							{
+								"id": "challenge-builders-split-flows",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The reply-drafting board is getting crowded, and the team now also wants a nightly summary of resolved cases. What earns its own Flow?",
+								"explanation": "A distinct trigger (a schedule instead of a chat message) with its own lifecycle and failure story is what earns a second Flow. Crowdedness is the tempting reason — but the fix for a big canvas is layers and functions inside the same Flow. Splitting one process across boards creates coordination problems without adding clarity, and one App happily holds many Flows.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "nightly-summary",
+											"label": "The nightly summary — it has its own trigger, lifecycle, and failure story"
+										},
+										{
+											"id": "both-crowded",
+											"label": "Both — a board that looks crowded should be split into smaller Flows"
+										},
+										{
+											"id": "neither-shared",
+											"label": "Neither — keeping one Flow lets both features share run variables"
+										},
+										{
+											"id": "separate-app",
+											"label": "The summary needs its own App, since one App holds one Flow"
+										}
+									],
+									"correct": ["nightly-summary"]
+								}
+							}
+						]
+					},
+					{
+						"id": "les-app-builders-connectivity",
+						"title": "Where Does This Thing Actually Run?",
+						"contentFile": "content/02-connectivity-and-execution.md",
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-builders-case-browser",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Design case 1: a private browser automation you launch by hand on one laptop, whose data must never leave that machine. Which setup fits?",
+								"explanation": "Data that must stay on the machine points offline, and browser control is a device capability, so every run is local anyway. The 'backup Remote Event' cannot exist: an offline App has no backend copy for anything to invoke. And Hybrid never offloads part of a run — one invocation, one host.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "offline-local",
+											"label": "An offline App, executed locally, invoked manually from Desktop"
+										},
+										{
+											"id": "online-remote",
+											"label": "An online App with a Remote Event, so it also runs while the laptop is closed"
+										},
+										{
+											"id": "offline-remote-event",
+											"label": "An offline App plus a Remote Event as a backup invocation path"
+										},
+										{
+											"id": "hybrid-offload",
+											"label": "An online App in Hybrid mode, so browser nodes run locally and the rest offloads to the server"
+										}
+									],
+									"correct": ["offline-local"]
+								}
+							},
+							{
+								"id": "challenge-builders-case-api",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Design case 2: a team API that must answer another system's calls continuously — nights, weekends, laptops closed. Which setup fits?",
+								"explanation": "Continuous availability without a Desktop means the backend must both host the App (online) and execute the runs (a remote-compatible Flow behind a Remote API Event). The office-desktop answer is the tempting one — it works right up until a reboot, an update, or a locked screen. And Hybrid selects a host per invocation; it never hands a running invocation from one machine to another.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "online-remote-api",
+											"label": "An online App, a remote-compatible Flow, and a Remote API Event"
+										},
+										{
+											"id": "online-local-api",
+											"label": "An online App with a Local API Event on the office desktop that never sleeps"
+										},
+										{
+											"id": "offline-copies",
+											"label": "An offline App exported to every teammate, so someone can always run it"
+										},
+										{
+											"id": "hybrid-handover",
+											"label": "An online App in Hybrid mode, so the backend takes over any run the desktop drops"
+										}
+									],
+									"correct": ["online-remote-api"]
+								}
+							},
+							{
+								"id": "challenge-builders-case-hybrid",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Design case 3: an online App whose Flow contains no local-only nodes and is set to Hybrid. Which statements are true?",
+								"explanation": "Hybrid picks the host per invocation: runs started from Desktop execute locally, runs started from the web execute remotely, and either way every node executes in one place. The migration option is the classic trap — once a run starts, it never changes hosts; a closed lid kills a local run rather than handing it to the server. And 'online means remote' confuses where the App lives with where a run happens.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "desktop-local",
+											"label": "Started from Desktop, the run executes on that machine"
+										},
+										{
+											"id": "web-remote",
+											"label": "Started from the web app, the run executes on the backend"
+										},
+										{
+											"id": "one-host",
+											"label": "Either way, the whole run executes on a single host"
+										},
+										{
+											"id": "migrates",
+											"label": "A long run migrates from laptop to server if the laptop shuts down mid-run"
+										},
+										{
+											"id": "online-means-remote",
+											"label": "Because the App is online, every run actually executes on the backend"
+										}
+									],
+									"correct": ["desktop-local", "web-remote", "one-host"]
+								}
+							}
+						]
+					}
+				]
+			},
+			{
+				"id": "mod-app-builders-surfaces",
+				"title": "Connect Experiences and Data",
+				"description": "Expose the flow through routes people can open, and give every file, row, and credential its right home.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "les-app-builders-events-interfaces",
+						"title": "Give Your Flow a Front Door",
+						"contentFile": "content/03-events-and-interfaces.md",
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-builders-family-match",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which of these pairings respect the entry-node contract?",
+								"explanation": "The node family fixes the menu: Chat backs Chat UI, Discord, and Telegram; Generic backs Generic Form, API, and Deeplink; Simple backs Quick Action, API, Cron, and friends. Mail-to-Chat is the tempting one — both deal in messages — but the contract follows the node family, not the vibe of the payload. Same for Chat-to-Cron: a schedule needs a Simple Event node.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "chat-chatui",
+											"label": "A Chat Event node backing the /chat Chat UI"
+										},
+										{
+											"id": "simple-quick",
+											"label": "A Simple Event node backing the /triage Quick Action"
+										},
+										{
+											"id": "generic-form",
+											"label": "A Generic Event node backing a Generic Form"
+										},
+										{
+											"id": "mail-chatui",
+											"label": "A Mail Event node backing a Chat UI"
+										},
+										{
+											"id": "chat-cron",
+											"label": "A Chat Event node backing a nightly Cron schedule"
+										}
+									],
+									"correct": ["chat-chatui", "simple-quick", "generic-form"]
+								}
+							},
+							{
+								"id": "challenge-builders-triage-surface",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The support lead wants a button that asks for a ticket ID and runs triage on demand. What's the smallest suitable surface?",
+								"explanation": "Quick Action is exactly this shape: manually triggered, collects the exposed variables, fires the event node. A Page would work but is the top of the ladder — a full A2UI component tree for a one-field form. Chat turns a deterministic action into a conversation, and polling turns 'on demand' into a schedule that runs whether anyone asked or not.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "quick-action",
+											"label": "A Quick Action whose form collects the exposed ticket-ID variable"
+										},
+										{
+											"id": "page-form",
+											"label": "A Page with a form component wired to a workflow_event action"
+										},
+										{
+											"id": "chat-ui",
+											"label": "A Chat UI — the lead can type the ticket ID into chat"
+										},
+										{
+											"id": "cron-poll",
+											"label": "A Cron Event that polls for new ticket IDs every minute"
+										}
+									],
+									"correct": ["quick-action"]
+								}
+							},
+							{
+								"id": "challenge-builders-route-test",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The flow runs green in Studio, but a teammate's /chat request fails. What's the right next move?",
+								"explanation": "The Event adds moving parts the Studio run never touches: the selected Flow version, the location, exposed variables, and route configuration. The green dot only shows the Event is active, not that the end-to-end path behaves. And whether any Desktop is involved depends on execution mode and Event location from lesson 2 — a remote-compatible flow answers without your machine.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "invoke-route",
+											"label": "Invoke the real /chat route and check the Event's version, location, and configuration — each can differ from your Studio session"
+										},
+										{
+											"id": "studio-proves",
+											"label": "Nothing — Studio executes the same graph, so the route is proven"
+										},
+										{
+											"id": "green-dot",
+											"label": "Confirm the Event's status dot is green in the Events list — that means the route works"
+										},
+										{
+											"id": "your-desktop",
+											"label": "Check whether your Desktop is running — teammates' chat runs execute on your machine"
+										}
+									],
+									"correct": ["invoke-route"]
+								}
+							}
+						]
+					},
+					{
+						"id": "les-app-builders-data-runtime",
+						"title": "Right Data, Right Home",
+						"contentFile": "content/04-data-files-and-runtime.md",
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-builders-policy-home",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Where should refund-policy.pdf live so every teammate's run can ground its answers on it?",
+								"explanation": "A file that every runner must resolve is a shared App resource: Storage, with a stable path your release check verifies. User Storage is the exact bug from the lesson's opening — private per user, invisible to teammates' runs. A Flow variable holds one run's in-memory state, and Pages render interfaces; neither is a document store.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "app-storage",
+											"label": "Shared App Storage, at a stable path like /reference/refund-policy.pdf"
+										},
+										{
+											"id": "user-storage",
+											"label": "Your User Storage — you maintain the policy, so it should follow your account"
+										},
+										{
+											"id": "flow-variable",
+											"label": "A Flow variable initialized with the PDF's text, so runs skip file access"
+										},
+										{
+											"id": "page-attachment",
+											"label": "Attached to the Page, so it ships with the interface"
+										}
+									],
+									"correct": ["app-storage"]
+								}
+							},
+							{
+								"id": "challenge-builders-resource-sort",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which placements are correct for the Customer Support Copilot?",
+								"explanation": "Four of five are right homes: durable rows in a table, per-run state in a variable, shared files in Storage, personal files in User Storage. The API key is the one to catch — a default value lives inside the Flow definition, which syncs and exports with the App. Credentials belong in Runtime Variables (and, for remote runs, the deployment's server-side mechanism), never in the graph.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "cases-table",
+											"label": "Closed support cases → a native Data Studio table"
+										},
+										{
+											"id": "caseid-variable",
+											"label": "current_case_id during one run → a Flow variable"
+										},
+										{
+											"id": "handbook-storage",
+											"label": "The support handbook → shared App Storage"
+										},
+										{
+											"id": "notes-user-storage",
+											"label": "An agent's personal draft notes → their User Storage"
+										},
+										{
+											"id": "key-default",
+											"label": "The provider API key → the variable's default value in the Flow definition"
+										}
+									],
+									"correct": [
+										"cases-table",
+										"caseid-variable",
+										"handbook-storage",
+										"notes-user-storage"
+									]
+								}
+							},
+							{
+								"id": "challenge-builders-secret-remote",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The draft-reply flow calls a paid LLM provider. Today runs are local from your Desktop; soon the /chat Event goes remote for the web team. What's the right credential plan?",
+								"explanation": "Secret exists precisely to keep the value out of remote execution payloads, so remote runs must get credentials server-side. The tempting fix — dropping Secret so the key travels — 'works' by shipping your credential inside run payloads, the exact exposure the flag prevents. Syncing it as a default writes it into the App definition, and pinning runs to your laptop turns your machine into the team's single point of failure.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "server-side",
+											"label": "Runtime Configured + Secret for your device, plus the deployment's server-side credential mechanism for remote runs"
+										},
+										{
+											"id": "drop-secret",
+											"label": "Mark the key Runtime Configured but not Secret, so remote runs receive it"
+										},
+										{
+											"id": "sync-default",
+											"label": "Save the key as the variable's default so it syncs to every runner automatically"
+										},
+										{
+											"id": "pin-desktop",
+											"label": "Keep every run pinned to your Desktop so the key never has to move"
+										}
+									],
+									"correct": ["server-side"]
+								}
+							}
+						]
+					}
+				]
+			},
+			{
+				"id": "mod-app-builders-delivery",
+				"title": "Release with Confidence",
+				"description": "Freeze what works, pin what users touch, and prove you can review a whole app design.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "les-app-builders-version-operate",
+						"title": "Ship Without Breaking Production",
+						"contentFile": "content/05-version-release-operate.md",
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-builders-create-version",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In @FlowVersions, you click Create Version and choose Patch. What happens?",
+								"explanation": "Create Version freezes the draft into a read-only numbered snapshot while Latest remains your working line. Nothing repoints automatically — pinning consumers is your explicit second step, and that's what makes it safe: you decide when each Event moves. The App's version label is unrelated bookkeeping; it never tracks or creates Flow versions.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "snapshot",
+											"label": "The current draft is saved as an immutable numbered snapshot, and Latest stays editable"
+										},
+										{
+											"id": "app-label",
+											"label": "The App's free-form version label increments to match"
+										},
+										{
+											"id": "locks-latest",
+											"label": "Latest locks against edits until the release is approved"
+										},
+										{
+											"id": "auto-repoint",
+											"label": "Every Event pointing at this flow switches to the new version automatically"
+										}
+									],
+									"correct": ["snapshot"]
+								}
+							},
+							{
+								"id": "challenge-builders-latest-live",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Mid-refactor, users report the production chat 'suddenly' misbehaving. What's the most likely cause?",
+								"explanation": "An Event on Latest serves whatever the draft is right now, tested or not. Version drift is the giveaway distractor once you know the model: numbered versions are immutable, so a pinned Event cannot pick up draft edits — which is exactly why pinning is the fix. The label changes nothing, and runs never switch hosts mid-flight.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "follows-latest",
+											"label": "/chat follows Latest, so your half-finished draft is serving users — pin it to the last tested version"
+										},
+										{
+											"id": "stale-label",
+											"label": "The App version label wasn't updated after the last release"
+										},
+										{
+											"id": "version-drift",
+											"label": "The pinned numbered version drifted as the draft changed"
+										},
+										{
+											"id": "host-switch",
+											"label": "The conversation's run moved from your Desktop to the backend mid-refactor"
+										}
+									],
+									"correct": ["follows-latest"]
+								}
+							},
+							{
+								"id": "challenge-builders-release-steps",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which steps belong in the Copilot's next release?",
+								"explanation": "Test the real routes, freeze, pin, and keep a way back — that's the ritual. The label bump snapshots nothing; it's release notes, not a release. And numbered versions are read-only by design: a hot-fix happens on Latest, becomes a patch version, gets retested, and only then gets repinned.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "test-real-routes",
+											"label": "Test Latest end to end through the real /chat and /triage routes"
+										},
+										{
+											"id": "pin-events",
+											"label": "Create a numbered version and repoint the production Events to it"
+										},
+										{
+											"id": "keep-previous",
+											"label": "Keep the previous tested version available as the rollback target"
+										},
+										{
+											"id": "label-snapshot",
+											"label": "Bump the App version label to snapshot the whole App in one step"
+										},
+										{
+											"id": "edit-pinned",
+											"label": "Hot-fix any bugs directly inside the pinned numbered version"
+										}
+									],
+									"correct": ["test-real-routes", "pin-events", "keep-previous"]
+								}
+							}
+						]
+					},
+					{
+						"id": "les-app-builders-final",
+						"title": "Final Review: Field Service Hub",
+						"contentFile": "content/06-final-assessment.md",
+						"estimatedMinutes": 15,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-builders-boundaries",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Risk 1: all behavior lives in one large Flow with several unrelated entry nodes. Which changes move Field Service Hub toward sound boundaries?",
+								"explanation": "Split by invocation responsibility: the nightly summary and the job API have their own triggers, lifecycles, and operational contracts, so they earn their own clearly named Flows, while Page behavior stays with the Flow that owns the Page. Inside a Flow, layers and functions handle reuse and canvas size. The node-count rule is the trap — splitting to make canvases shorter scatters one process across boards and creates coordination problems.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "split-nightly",
+											"label": "Give the nightly summary its own Flow — its trigger and lifecycle differ from everything else"
+										},
+										{
+											"id": "split-api",
+											"label": "Give the job-creation API its own Flow with its own entry contract"
+										},
+										{
+											"id": "keep-page",
+											"label": "Keep the Page's behavior in the Flow that owns the Page"
+										},
+										{
+											"id": "split-by-size",
+											"label": "Split the remaining graph into one Flow per fifteen nodes to keep every canvas small"
+										},
+										{
+											"id": "layers-inside",
+											"label": "Use layers and functions for reusable logic inside a Flow instead of extracting more Flows"
+										}
+									],
+									"correct": [
+										"split-nightly",
+										"split-api",
+										"keep-page",
+										"layers-inside"
+									]
+								}
+							},
+							{
+								"id": "challenge-builders-data-home",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Risks 2 and 3: job records live in a Flow variable, and shared repair manuals sit in one developer's User Storage. Which statements describe the correct homes?",
+								"explanation": "Durable rows go in a Data Studio table — an ontology is an optional layer you add when object relationships and governed actions improve the domain contract, never a prerequisite. Team-wide manuals and photos go in shared Storage with intentional paths and permissions; User Storage is for private per-user files, and copying shared documents into private areas creates drift with every policy update. A Flow variable dies with its run — which is why the job records currently vanish.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "jobs-table",
+											"label": "Job records belong in a native Data Studio table"
+										},
+										{
+											"id": "manuals-storage",
+											"label": "Manuals and job photos belong in shared App Storage at intentional paths"
+										},
+										{
+											"id": "variables-per-run",
+											"label": "Flow variables should hold only state that belongs to a single run"
+										},
+										{
+											"id": "ontology-first",
+											"label": "An ontology must be modeled before any table can store job rows"
+										},
+										{
+											"id": "copy-per-user",
+											"label": "Copying the manuals into every technician's User Storage gives each run a local copy"
+										}
+									],
+									"correct": [
+										"jobs-table",
+										"manuals-storage",
+										"variables-per-run"
+									]
+								}
+							},
+							{
+								"id": "challenge-builders-event-contract",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which entry-node pairings would actually work for Field Service Hub's four surfaces?",
+								"explanation": "Quick Actions target Simple Event nodes and can collect exposed variables; the API targets a Generic or Simple Event node depending on its contract; the Page is exposed through a Page-target UI Event whose components fire workflow_event at deliberate nodes. The nightly summary needs a Simple Event node behind a Cron — 'the output is text, so Chat' follows the payload's vibe instead of the node family. And the route never overrides the entry-node contract; test each real route rather than assuming a green Studio run proves the interface.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "quick-simple",
+											"label": "The device-check Quick Action → a Simple Event node"
+										},
+										{
+											"id": "api-generic-simple",
+											"label": "The job-creation API → a Generic or Simple Event node, per the chosen API contract"
+										},
+										{
+											"id": "page-ui-event",
+											"label": "The jobs Page → a Page-target UI Event, with buttons firing workflow_event at deliberate node IDs"
+										},
+										{
+											"id": "cron-chat",
+											"label": "The nightly summary → a Chat Event node, since the summary is text"
+										},
+										{
+											"id": "any-fits",
+											"label": "Any event node fits any surface once the route is configured"
+										}
+									],
+									"correct": [
+										"quick-simple",
+										"api-generic-simple",
+										"page-ui-event"
+									]
+								}
+							},
+							{
+								"id": "challenge-builders-offline-online",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Risk 4: the nightly Cron Event is Local, and no Desktop stays online overnight. What does the summary actually need?",
+								"explanation": "An unattended schedule needs the backend end to end: an online App, a Flow with no local-only nodes, and a Remote Cron Event. A sacrificial laptop fails on the first reboot or update. Hybrid never splits one run between hosts — every invocation executes in exactly one place. And a Page interval only fires while someone has the Page open, which turns a nightly guarantee into a coincidence.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "remote-cron",
+											"label": "A Remote Cron Event backed by a remote-compatible Flow in the online App"
+										},
+										{
+											"id": "leave-laptop",
+											"label": "Keep the Local Cron and ask a technician to leave a laptop running overnight"
+										},
+										{
+											"id": "hybrid-split",
+											"label": "Hybrid mode, so the schedule runs on the server while device-bound nodes stay local"
+										},
+										{
+											"id": "page-interval",
+											"label": "Trigger the summary from the jobs Page's interval event instead"
+										}
+									],
+									"correct": ["remote-cron"]
+								}
+							},
+							{
+								"id": "challenge-builders-local-check",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The device-check Quick Action uses desktop-only input capabilities, and the App is online. What's true when a technician triggers it?",
+								"explanation": "Flow-Like analyzes the complete graph, nested layers included: one local-only node makes the entire run require local execution. Nothing is offloaded piecemeal, and no Event setting overrides what the graph can do. 'Online' describes where the App lives, not where runs happen — an online App runs desktop-capability flows locally all day. The local device check is the one part of Field Service Hub that is correctly local.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "whole-run-local",
+											"label": "The entire run executes locally on that technician's Desktop — one local-only node pins the whole invocation"
+										},
+										{
+											"id": "node-offload",
+											"label": "Only the desktop-input node runs locally; the rest offloads to the backend"
+										},
+										{
+											"id": "fails-remote",
+											"label": "Online Apps execute on the backend, so the desktop-input node simply fails"
+										},
+										{
+											"id": "event-overrides",
+											"label": "Setting the Event to Remote overrides the node's constraint"
+										}
+									],
+									"correct": ["whole-run-local"]
+								}
+							},
+							{
+								"id": "challenge-builders-runtime-secret",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Risk 5: the API flow reads a provider secret saved only in one laptop's Runtime Variables, but it must run remotely with no Desktop attached. Where must the credential come from?",
+								"explanation": "Secret values are excluded from remote execution payloads by design, so an unattended remote run can never receive a credential that lives on someone's desktop — it must come from the deployment's supported server-side mechanism. Both 'make it travel' options work by converting your credential into transmitted or synced data, exactly the exposure the Secret flag prevents. A second laptop changes nothing: remote runs have no Desktop attached at all.",
+								"points": 10,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "server-mechanism",
+											"label": "The deployment's supported server-side credential mechanism"
+										},
+										{
+											"id": "unmark-secret",
+											"label": "Remove the Secret flag so the local value travels inside remote payloads"
+										},
+										{
+											"id": "default-sync",
+											"label": "Save the key as the variable's default so it syncs to the backend with the App definition"
+										},
+										{
+											"id": "second-laptop",
+											"label": "Configure the same Runtime Variable on a second laptop for redundancy"
+										}
+									],
+									"correct": ["server-mechanism"]
+								}
+							},
+							{
+								"id": "challenge-builders-release",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Risks 6 and 7: both production Events follow Latest, and the team 'released' by setting the App version label to 1.0. Which steps produce a real, reversible release?",
+								"explanation": "Test with representative inputs while inspecting the matching runs, create numbered versions from the tested drafts, pin the production Events to those snapshots, and record the rollback path — that's a release. The App's free-form version label snapshots nothing: not Flows, not Events, not storage. It's useful as human-readable metadata describing the tested collection, but with Events on Latest the 'released' app still changes with every draft edit.",
+								"points": 10,
+								"position": 6,
+								"payload": {
+									"options": [
+										{
+											"id": "test-drafts",
+											"label": "Test each draft end to end through its real route, inspecting runs and logs"
+										},
+										{
+											"id": "create-versions",
+											"label": "Create numbered Flow versions from the tested drafts"
+										},
+										{
+											"id": "pin-production",
+											"label": "Pin both production Events to those tested snapshots"
+										},
+										{
+											"id": "label-froze",
+											"label": "Nothing further — the label change already froze the Flows under the 1.0 name"
+										},
+										{
+											"id": "record-rollback",
+											"label": "Record the previous tested versions and a rollback trigger before launch"
+										}
+									],
+									"correct": [
+										"test-drafts",
+										"create-versions",
+										"pin-production",
+										"record-rollback"
+									]
+								}
+							}
+						]
+					}
+				]
+			}
+		]
+	}
+}

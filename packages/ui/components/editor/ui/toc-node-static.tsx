@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { SlateEditor, SlateElementProps, TElement } from "platejs";
 
 import { BaseTocPlugin, type Heading, isHeading } from "@platejs/toc";
@@ -22,6 +23,7 @@ const headingItemVariants = cva(
 );
 
 export function TocElementStatic(props: SlateElementProps) {
+	const { t } = useTranslation("common");
 	const { editor } = props;
 	const headingList = getHeadingList(editor);
 
@@ -42,7 +44,7 @@ export function TocElementStatic(props: SlateElementProps) {
 					))
 				) : (
 					<div className="text-sm text-gray-500">
-						Create a heading to display the table of contents.
+						{t('createAHeadingToDisplayTheTableOfContents', 'Create a heading to display the table of contents.')}
 					</div>
 				)}
 			</div>

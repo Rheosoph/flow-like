@@ -1549,7 +1549,7 @@ fn binary_operator_call(
 /// Hard ceiling on nodes per layer (root, event scope, or one function layer). Oversized layers
 /// make boards unreadable; reconcile rejects edits that would exceed it so the agent splits the
 /// work into function layers instead.
-pub const MAX_NODES_PER_LAYER: usize = 50;
+pub const MAX_NODES_PER_LAYER: usize = 100;
 
 fn function_layer_pins(
     func: &FnDecl,
@@ -2253,8 +2253,23 @@ pub(crate) fn dynamic_placeholder_config_pin(node_type: &str) -> Option<&'static
     match node_type {
         "string_format" => Some("format_string"),
         "string_render_template" => Some("template"),
+        node_type if sql_param_node(node_type) => Some("query"),
         _ => None,
     }
+}
+
+/// Nodes that derive one input pin per `$placeholder` in their SQL literal. Kept in one
+/// place because the same list gates prediction here, enrichment in `apply`, and the
+/// required-input lint in `executability`.
+pub(crate) fn sql_param_node(node_type: &str) -> bool {
+    matches!(
+        node_type,
+        "df_sql_query"
+            | "df_sql_query_cached"
+            | "df_execute_sql"
+            | "df_write_delta"
+            | "graph_sql_query"
+    )
 }
 
 /// Placeholder tokens in a template string, matching `string_format`'s `\{([a-zA-Z0-9_]+)\}`.
@@ -2286,6 +2301,21 @@ fn format_string_placeholders(template: &str) -> Vec<String> {
 
 fn dynamic_template_placeholders(node_type: &str, template: &str) -> Option<Vec<String>> {
     match node_type {
+        // The pin names, not the bare placeholders: these are matched against the argument
+        // the call requests, and a SQL node names its pins `param_<placeholder>`.
+        //
+        // Discovery goes through the same tokenizer DataFusion parses with, so prediction
+        // here and the pins the node actually mints cannot disagree — unlike the
+        // hand-rolled `format_string` mirror above, which has to be kept in sync by eye.
+        node_type if sql_param_node(node_type) => Some(
+            flow_like_storage::databases::sql_params::declared_placeholders(template)
+                .unwrap_or_default()
+                .iter()
+                .map(|placeholder| {
+                    flow_like_storage::databases::sql_params::param_pin_name(placeholder)
+                })
+                .collect(),
+        ),
         "string_format" => Some(format_string_placeholders(template)),
         "string_render_template" => {
             let mut environment = flow_like_types::minijinja::Environment::new();
@@ -2361,6 +2391,9 @@ fn synthesize_dynamic_input_pin(
 ) -> Option<PinMetadata> {
     if let Some(pin) = synthesize_chart_mode_input_pin(meta, call, arg, entity, existing) {
         return Some(pin);
+    }
+    if widget_dynamic_pin_node(&meta.name) && is_widget_dynamic_binding_arg(&arg.name) {
+        return Some(generic_input_pin_metadata(&arg.name));
     }
     let config_pin = dynamic_placeholder_config_pin(&meta.name)?;
     let template = placeholder_template_value(meta, call, entity, existing, config_pin)?;
@@ -2441,15 +2474,37 @@ pub(crate) fn synthesize_dynamic_input_pin_from_template(
         .then(|| generic_input_pin_metadata(requested_pin))
 }
 
-/// Whether an arg name refers to a widget's dynamic data-binding pin (`dyn_path_*` / `dyn_prop_*` /
-/// `dyn_cust_*`, in either snake_case or the camelCase form the UI surfaces use). These pins exist
-/// only after the widget is persisted, so a miss here has a specific, fixable cause worth naming.
-fn is_widget_dynamic_binding_arg(name: &str) -> bool {
-    const KINDS: [&str; 3] = ["path", "prop", "cust"];
+/// Whether an arg name refers to a widget's dynamic data-binding pin, in either snake_case or
+/// the camelCase form the UI surfaces use. Covers every prefix the widget nodes mint:
+/// `dyn_path_*` / `dyn_prop_*` / `dyn_cust_*` (declarative widgets), `dyn_in_*` (package
+/// contract inputs) and `dyn_arg_*` (widget queries).
+pub(crate) fn is_widget_dynamic_binding_arg(name: &str) -> bool {
+    const KINDS: [&str; 5] = ["path", "prop", "cust", "in", "arg"];
     KINDS.iter().any(|kind| {
         name.starts_with(&format!("dyn_{kind}_"))
             || name.starts_with(&to_camel_case(&format!("dyn_{kind}_")))
     })
+}
+
+/// Nodes whose dynamic input pins come from a persisted widget named by a **literal** on the
+/// same call.
+///
+/// Reconcile has no handle to app storage, so unlike the placeholder nodes it cannot
+/// enumerate these pins to check a name against. It accepts a well-formed `dyn*` argument and
+/// lets apply resolve it after `on_update` has run — which is where the pin genuinely exists.
+/// Refusing to plan the command instead is what used to make a *correct* widget binding on a
+/// NEW node fail the whole batch.
+///
+/// This is deliberately only `a2ui_instantiate_widget`. Its pins derive from the
+/// `widget_selector` literal, which apply writes in the setup phase — so `on_update` has
+/// minted the pins by the time the deferred writes and connections run. The sibling nodes
+/// (`a2ui_widget_update_inputs`, `a2ui_widget_query`) derive their pins from a *connected*
+/// `element_ref` instead, and connections are the last commands in the batch, so their pins
+/// cannot exist in time. Predicting for them would turn a recoverable check-time diagnostic
+/// into an apply-time rollback; they get [`is_widget_dynamic_binding_arg`]'s diagnostic
+/// naming the real cause instead.
+pub(crate) fn widget_dynamic_pin_node(node_type: &str) -> bool {
+    matches!(node_type, "a2ui_instantiate_widget")
 }
 
 /// Whether `arg` targets a dynamic input pin the node's `on_update` will mint (one not yet live on
@@ -6409,84 +6464,90 @@ impl<'a> StructuralPlanner<'a> {
             // node, so they must be predicted from the call's own config args. `synthesized_pin`
             // backs the `&PinMetadata` borrow for such a predicted dynamic pin.
             let synthesized_pin;
-            let (input, target_occurrence) =
-                match metadata_input_pin_at(meta, &arg.name, occurrence) {
-                    Some(pin) => (pin, occurrence),
-                    None => {
-                        if let Some((name, alias_occurrence)) =
-                            input_arg_alias_target(&meta.name, call, arg_index)
-                            && let Some(pin) = metadata_input_pin_at(meta, name, alias_occurrence)
-                        {
-                            let matching_pin_count = meta
-                                .inputs
-                                .iter()
-                                .filter(|candidate| {
-                                    candidate.data_type != "Execution"
-                                        && metadata_pin_name_matches(candidate, &pin.name)
-                                })
-                                .count();
-                            self.result.corrections.push(input_arg_alias_correction(
-                                call,
-                                arg,
-                                &pin.name,
-                                alias_occurrence,
-                                matching_pin_count,
-                            ));
-                            (pin, alias_occurrence)
-                        } else {
-                            // `tools:`/`fnRefs:` carry a node's function references, not pin values —
-                            // they are not board pins. For a NEWLY added node, materialize them as a
-                            // `SetNodeFunctionRefs` command (the applier resolves each named target once
-                            // the referenced functions/events exist). For an EXISTING node, leave its
-                            // references untouched: an unchanged document round-trips to a clean no-op,
-                            // and rewriting them would need exact ref→entry-node resolution against the
-                            // live board.
-                            if is_synthetic_fn_ref_arg(arg) {
-                                if let NodeEntity::New { .. } = entity {
-                                    let refs = synthetic_fn_ref_targets(arg);
-                                    if !refs.is_empty() {
-                                        self.fn_ref_commands.push(
-                                            BoardCommand::SetNodeFunctionRefs {
-                                                node_id: entity.node_ref(),
-                                                fn_refs: refs,
-                                                summary: Some(format!(
-                                                    "Register {} on {}",
-                                                    arg.name, meta.friendly_name
-                                                )),
-                                            },
-                                        );
-                                    }
+            let (input, target_occurrence) = match metadata_input_pin_at(
+                meta, &arg.name, occurrence,
+            ) {
+                Some(pin) => (pin, occurrence),
+                None => {
+                    if let Some((name, alias_occurrence)) =
+                        input_arg_alias_target(&meta.name, call, arg_index)
+                        && let Some(pin) = metadata_input_pin_at(meta, name, alias_occurrence)
+                    {
+                        let matching_pin_count = meta
+                            .inputs
+                            .iter()
+                            .filter(|candidate| {
+                                candidate.data_type != "Execution"
+                                    && metadata_pin_name_matches(candidate, &pin.name)
+                            })
+                            .count();
+                        self.result.corrections.push(input_arg_alias_correction(
+                            call,
+                            arg,
+                            &pin.name,
+                            alias_occurrence,
+                            matching_pin_count,
+                        ));
+                        (pin, alias_occurrence)
+                    } else {
+                        // `tools:`/`fnRefs:` carry a node's function references, not pin values —
+                        // they are not board pins. For a NEWLY added node, materialize them as a
+                        // `SetNodeFunctionRefs` command (the applier resolves each named target once
+                        // the referenced functions/events exist). For an EXISTING node, leave its
+                        // references untouched: an unchanged document round-trips to a clean no-op,
+                        // and rewriting them would need exact ref→entry-node resolution against the
+                        // live board.
+                        if is_synthetic_fn_ref_arg(arg) {
+                            if let NodeEntity::New { .. } = entity {
+                                let refs = synthetic_fn_ref_targets(arg);
+                                if !refs.is_empty() {
+                                    self.fn_ref_commands
+                                        .push(BoardCommand::SetNodeFunctionRefs {
+                                            node_id: entity.node_ref(),
+                                            fn_refs: refs,
+                                            summary: Some(format!(
+                                                "Register {} on {}",
+                                                arg.name, meta.friendly_name
+                                            )),
+                                        });
                                 }
+                            }
+                            continue;
+                        }
+                        // A dynamic pin the node's `on_update` will add from its config (for example
+                        // a `string_format` placeholder that appears in the format string):
+                        // synthesize a permissive Generic pin so its value/connection is still
+                        // planned. Apply sets the config pin first, runs `on_update`, then resolves
+                        // the wire against the now-live pin (see `plan()`'s
+                        // update-before-connect ordering).
+                        match synthesize_dynamic_input_pin(meta, call, arg, entity, self.existing) {
+                            Some(pin) => {
+                                synthesized_pin = pin;
+                                (&synthesized_pin, occurrence)
+                            }
+                            None if is_widget_dynamic_binding_arg(&arg.name) => {
+                                // A widget binding on a node that derives its pins from a
+                                // connected `element_ref` rather than from a literal. The
+                                // generic wording sends the model hunting for a typo; the
+                                // actual cause is that these pins only exist once the
+                                // widget is persisted and the instance is wired up.
+                                self.result.diagnostics.push(format!(
+                                        "node `{}` has no input pin named `{}`. Widget binding pins come from the persisted widget, and on this node they appear only once its `elementRef` input is connected to a live instance. Set the inputs on `a2uiInstantiateWidget` itself, or split the update into a later call once the instance exists. `ui_inspect` with operation `widget` lists a widget's exact pin names.",
+                                        call.display, arg.name
+                                    ));
                                 continue;
                             }
-                            // A dynamic pin the node's `on_update` will add from its config (for example
-                            // a `string_format` placeholder that appears in the format string):
-                            // synthesize a permissive Generic pin so its value/connection is still
-                            // planned. Apply sets the config pin first, runs `on_update`, then resolves
-                            // the wire against the now-live pin (see `plan()`'s
-                            // update-before-connect ordering).
-                            match synthesize_dynamic_input_pin(
-                                meta,
-                                call,
-                                arg,
-                                entity,
-                                self.existing,
-                            ) {
-                                Some(pin) => {
-                                    synthesized_pin = pin;
-                                    (&synthesized_pin, occurrence)
-                                }
-                                None => {
-                                    self.result.diagnostics.push(format!(
+                            None => {
+                                self.result.diagnostics.push(format!(
                                     "node `{}` has no input pin named `{}`; skipped that argument",
                                     call.display, arg.name
                                 ));
-                                    continue;
-                                }
+                                continue;
                             }
                         }
                     }
-                };
+                }
+            };
             // Catalog pin ids are randomized by AddNodeCommand, so same-named inputs on a NEW
             // node cannot be addressed by their catalog ids. Carry their stable occurrence in
             // the command pin ref; apply resolves it after the node exists.
@@ -18664,10 +18725,10 @@ eventsSimple() {
             .expect("one genuinely new Function node must exceed the limit");
         assert_eq!(diagnostics.len(), 1);
         assert!(
-            diagnostics[0].contains("51 nodes"),
+            diagnostics[0].contains(&format!("{} nodes", MAX_NODES_PER_LAYER + 1)),
             "the diagnostic must report the unique post-edit population: {diagnostics:?}"
         );
-        assert!(!diagnostics[0].contains("101 nodes"));
+        assert!(!diagnostics[0].contains(&format!("{} nodes", MAX_NODES_PER_LAYER * 2 + 1)));
     }
 
     #[test]
@@ -18686,7 +18747,10 @@ eventsSimple() {
 
         let diagnostics = layer_node_limit_violations(&board, &root_adds)
             .expect("empty layer ids and explicit root additions share one budget");
-        assert!(diagnostics[0].contains("the root layer with 51 nodes"));
+        assert!(diagnostics[0].contains(&format!(
+            "the root layer with {} nodes",
+            MAX_NODES_PER_LAYER + 1
+        )));
     }
 
     #[test]
@@ -18725,7 +18789,7 @@ eventsSimple() {
             result
                 .diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.contains("max 50")),
+                .any(|diagnostic| diagnostic.contains(&format!("max {MAX_NODES_PER_LAYER}"))),
             "{:?}",
             result.diagnostics
         );
@@ -18839,6 +18903,228 @@ eventsSimple() {
             "an arg that is not a template placeholder must not be synthesized: {:?}",
             result.diagnostics
         );
+    }
+
+    fn sql_query_dynamic_catalog() -> Vec<NodeMetadata> {
+        vec![catalog_meta(
+            "df_sql_query",
+            "SQL Query",
+            vec![
+                pin_meta("session", "Struct", PinType::Input),
+                pin_meta("query", "String", PinType::Input),
+                pin_meta("params", "Struct", PinType::Input),
+            ],
+            vec![pin_meta("rows", "Struct", PinType::Output)],
+        )]
+    }
+
+    #[test]
+    fn sql_placeholder_pins_are_predicted_from_the_query_literal() {
+        // `paramOrgId` exists only after `on_update` reads the query, so without prediction the
+        // whole batch is rejected and the only way to author this is string concatenation.
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function load(orgId: string): (rows: struct) {
+    const result = dfSqlQuery({ query: "SELECT * FROM users WHERE org = $org_id", paramOrgId: orgId })
+    return result.rows
+}
+"#,
+            &sql_query_dynamic_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_pin, to_pin, .. }
+                    if from_pin == "orgId" && to_pin == "paramOrgId"
+            )),
+            "the parameter value should wire into the predicted pin: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn sql_numbered_placeholder_pin_is_predicted() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function load(): (rows: struct) {
+    const result = dfSqlQuery({ query: "SELECT * FROM users WHERE id = $1", param1: 7 })
+    return result.rows
+}
+"#,
+            &sql_query_dynamic_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn sql_arg_without_a_matching_placeholder_still_diagnoses() {
+        // The query declares `$org_id`, so `paramTeamId` is a typo, not a parameter. Catching
+        // it here is the whole reason prediction is driven by the literal.
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function load(): (rows: struct) {
+    const result = dfSqlQuery({ query: "SELECT * FROM users WHERE org = $org_id", paramTeamId: "x" })
+    return result.rows
+}
+"#,
+            &sql_query_dynamic_catalog(),
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("no input pin named `paramTeamId`")),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn sql_placeholder_inside_a_string_literal_is_not_a_parameter() {
+        // `'$5.00'` is data. Predicting `param5` here would accept an argument the node never
+        // mints, turning a check-time typo into an apply-time rollback.
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function load(): (rows: struct) {
+    const result = dfSqlQuery({ query: "SELECT * FROM t WHERE price = '$5.00'", param5: 1 })
+    return result.rows
+}
+"#,
+            &sql_query_dynamic_catalog(),
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("no input pin named `param5`")),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+    }
+
+    fn instantiate_widget_catalog() -> Vec<NodeMetadata> {
+        vec![catalog_meta(
+            "a2ui_instantiate_widget",
+            "Instantiate Widget",
+            vec![
+                pin_meta("widget_selector", "String", PinType::Input),
+                pin_meta("instance_id", "String", PinType::Input),
+            ],
+            vec![pin_meta("element_ref", "Struct", PinType::Output)],
+        )]
+    }
+
+    #[test]
+    fn widget_binding_pins_are_accepted_on_a_new_node() {
+        // These pins come from the persisted widget, which reconcile cannot read. Refusing to
+        // plan the command used to fail the entire board build for a *correct* binding, even
+        // though apply resolves it fine once `on_update` has run.
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function render(title: string): (element: struct) {
+    const instance = a2uiInstantiateWidget({ widgetSelector: "Article", instanceId: "a1", dynPathTitle: title, dynPropTone: "muted", dynCustDensity: "compact", dynInHeading: title })
+    return instance.elementRef
+}
+"#,
+            &instantiate_widget_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { to_pin, .. } if to_pin == "dynPathTitle"
+            )),
+            "the wired binding should be planned: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn non_binding_args_on_a_widget_node_still_diagnose() {
+        // Permissive prediction is scoped to the `dyn*` prefixes; an ordinary typo on the same
+        // node must still be caught at check time.
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function render(): (element: struct) {
+    const instance = a2uiInstantiateWidget({ widgetSelector: "Article", instanceId: "a1", widgetSelektor: "typo" })
+    return instance.elementRef
+}
+"#,
+            &instantiate_widget_catalog(),
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("widgetSelektor")),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn connection_derived_widget_bindings_diagnose_with_their_real_cause() {
+        // `a2ui_widget_update_inputs` derives its `dyn_in_*` pins from a connected
+        // `element_ref`, and connections are the last commands apply runs — so the pin cannot
+        // exist in time no matter what reconcile predicts. Failing here with the cause named
+        // beats planning a command that can only end in an apply-time rollback.
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function patch(title: string): (done: bool) {
+    a2uiWidgetUpdateInputs({ dynInHeading: title })
+    return true
+}
+"#,
+            &vec![catalog_meta(
+                "a2ui_widget_update_inputs",
+                "Update Widget Inputs",
+                vec![pin_meta("element_ref", "Struct", PinType::Input)],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            )],
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("`elementRef` input is connected")),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn widget_binding_prefixes_cover_every_kind_the_nodes_mint() {
+        for name in [
+            "dyn_path_title",
+            "dynPathTitle",
+            "dyn_prop_tone",
+            "dynPropTone",
+            "dyn_cust_density",
+            "dynCustDensity",
+            "dyn_in_heading",
+            "dynInHeading",
+            "dyn_arg_limit",
+            "dynArgLimit",
+        ] {
+            assert!(
+                is_widget_dynamic_binding_arg(name),
+                "{name} should be recognized as a widget binding"
+            );
+        }
+        for name in ["widget_selector", "instance_id", "dynamic", "dyn"] {
+            assert!(
+                !is_widget_dynamic_binding_arg(name),
+                "{name} must not be treated as a widget binding"
+            );
+        }
     }
 
     #[test]

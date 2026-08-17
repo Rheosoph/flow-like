@@ -1,21 +1,25 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Check,
 	ChevronDown,
 	ChevronsDownUp,
 	Copy,
+	Crosshair,
 	Expand,
 	Eye,
 	EyeOff,
 	Filter,
 	ListTree,
 	Route,
+	SlidersHorizontal,
 	Workflow,
 	X,
 } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { inferTemporalValue } from "../../../lib/date";
 import type {
 	GraphOverlay,
 	NodeLabelMapping,
@@ -26,6 +30,7 @@ import { Badge } from "../badge";
 import { Button } from "../button";
 import { Checkbox } from "../checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "../popover";
+import { RelativeTime } from "../relative-time";
 import { ScrollArea } from "../scroll-area";
 import { getGraphIcon } from "./icons";
 
@@ -42,6 +47,11 @@ export interface GraphNodeInspectorProps {
 	connections?: ConnectionInfo[];
 	onClose: () => void;
 	onExpand?: (depth: number) => void;
+	/** Opens the expansion guard, where relationships and a ceiling are chosen. */
+	onGuidedExpand?: () => void;
+	/** Restricts the canvas to this object's neighborhood; null leaves focus. */
+	onFocus?: (depth: number | null) => void;
+	focused?: boolean;
 	hasChildren?: boolean;
 	childrenExpanded?: boolean;
 	onExpandChildren?: () => void;
@@ -74,10 +84,21 @@ export type ValueKind =
 
 export { inferValueKind, PropertyValue, FieldFilter, CopyButton };
 
-function inferValueKind(value: unknown): { kind: ValueKind; dims?: number } {
+/**
+ * `propKey` is what makes an epoch integer readable: an ontology property is
+ * untyped by the time it reaches here, so a `created_at` holding 1786353300000
+ * is indistinguishable from a quantity without its name.
+ */
+function inferValueKind(
+	value: unknown,
+	propKey?: string,
+): { kind: ValueKind; dims?: number } {
 	if (value === null || value === undefined) return { kind: "unknown" };
 	if (typeof value === "boolean") return { kind: "boolean" };
-	if (typeof value === "number") return { kind: "number" };
+	if (typeof value === "number" || typeof value === "bigint") {
+		if (propKey && inferTemporalValue(propKey, value)) return { kind: "date" };
+		return { kind: "number" };
+	}
 	if (Array.isArray(value)) {
 		if (
 			value.length > 0 &&
@@ -100,6 +121,7 @@ function inferValueKind(value: unknown): { kind: ValueKind; dims?: number } {
 		) {
 			return { kind: "date" };
 		}
+		if (propKey && inferTemporalValue(propKey, value)) return { kind: "date" };
 		return { kind: "string" };
 	}
 	return { kind: "unknown" };
@@ -157,17 +179,9 @@ const Sparkline: React.FC<{
 	return <canvas ref={ref} aria-label="sparkline" />;
 };
 
-function formatDate(v: unknown): string {
-	try {
-		const d = new Date(v as string);
-		if (Number.isNaN(d.getTime())) return String(v);
-		return d.toLocaleString();
-	} catch {
-		return String(v);
-	}
-}
 
 function CopyButton({ text }: { text: string }) {
+	const { t } = useTranslation("common");
 	const [copied, setCopied] = useState(false);
 	const handleCopy = useCallback(() => {
 		navigator.clipboard.writeText(text);
@@ -180,7 +194,7 @@ function CopyButton({ text }: { text: string }) {
 			type="button"
 			onClick={handleCopy}
 			className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-accent shrink-0"
-			title="Copy value"
+			title={t('copyValue', 'Copy value')}
 		>
 			{copied ? (
 				<Check className="h-3 w-3 text-green-500" />
@@ -195,7 +209,8 @@ function PropertyValue({
 	value,
 	propKey,
 }: { value: unknown; propKey: string }) {
-	const { kind, dims } = inferValueKind(value);
+	const { t } = useTranslation("common");
+	const { kind, dims } = inferValueKind(value, propKey);
 	const display =
 		typeof value === "object"
 			? JSON.stringify(value, null, 2)
@@ -218,9 +233,7 @@ function PropertyValue({
 			return (
 				<div className="group space-y-1.5">
 					<div className="flex items-center justify-between">
-						<Badge variant="outline" className="text-[10px] px-1.5 py-0">
-							{dims}d vector
-						</Badge>
+						<Badge variant="outline" className="text-[10px] px-1.5 py-0">{t('dimsdVector', '{{dims}}d vector', { dims })}</Badge>
 						<CopyButton text={display} />
 					</div>
 					<Sparkline data={arr.slice(0, 128)} />
@@ -241,7 +254,7 @@ function PropertyValue({
 		case "date":
 			return (
 				<div className="group flex items-center justify-between">
-					<span className="text-sm">{formatDate(value)}</span>
+					<RelativeTime value={value} className="text-sm" />
 					<CopyButton text={String(value)} />
 				</div>
 			);
@@ -287,6 +300,7 @@ function FieldFilter({
 	hiddenFields: Set<string>;
 	onToggle: (field: string) => void;
 }) {
+	const { t } = useTranslation("common");
 	return (
 		<Popover>
 			<PopoverTrigger asChild>
@@ -294,7 +308,7 @@ function FieldFilter({
 					variant="ghost"
 					size="icon"
 					className="h-7 w-7"
-					title="Filter visible fields"
+					title={t('filterVisibleFields', 'Filter visible fields')}
 				>
 					<Filter className="h-4 w-4" />
 					{hiddenFields.size > 0 && (
@@ -306,7 +320,7 @@ function FieldFilter({
 			</PopoverTrigger>
 			<PopoverContent className="w-56 p-2" align="end">
 				<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-2 px-1">
-					Visible fields
+					{t('visibleFields', 'Visible fields')}
 				</p>
 				<div className="space-y-1 max-h-60 overflow-y-auto">
 					{allFields.map((field) => (
@@ -346,7 +360,7 @@ function PropertyRow({ propKey, value }: { propKey: string; value: unknown }) {
 					{propKey}
 				</p>
 				<span className="text-[9px] text-muted-foreground/60">
-					{inferValueKind(value).kind}
+					{inferValueKind(value, propKey).kind}
 				</span>
 			</div>
 			<PropertyValue value={value} propKey={propKey} />
@@ -360,6 +374,9 @@ export function GraphNodeInspector({
 	connections,
 	onClose,
 	onExpand,
+	onGuidedExpand,
+	focused = false,
+	onFocus,
 	hasChildren,
 	childrenExpanded,
 	onExpandChildren,
@@ -368,6 +385,7 @@ export function GraphNodeInspector({
 	onFindPath,
 	onRunAction,
 }: GraphNodeInspectorProps) {
+	const { t } = useTranslation("common");
 	const [hiddenFields, setHiddenFields] = useState<Set<string>>(new Set());
 	const [showAllProps, setShowAllProps] = useState(false);
 
@@ -475,18 +493,49 @@ export function GraphNodeInspector({
 					{/* Explore actions */}
 					{(onExpand ||
 						onFindPath ||
+						onFocus ||
 						(hasChildren && (onExpandChildren || onCollapseChildren))) && (
 						<div className="flex flex-wrap gap-1.5">
+							{onFocus && (
+								<Button
+									variant={focused ? "default" : "outline"}
+									size="sm"
+									className="h-7 gap-1.5 text-xs"
+									onClick={() => onFocus(focused ? null : 1)}
+									title={t(
+										"showOnlyThisObjectAndItsNeighbors",
+										"Show only this object and its neighbors",
+									)}
+								>
+									<Crosshair className="h-3.5 w-3.5" />
+									{focused ? t("exitFocus", "Exit focus") : t("focus", "Focus")}
+								</Button>
+							)}
+							{onFocus && focused && (
+								<Button
+									variant="outline"
+									size="sm"
+									className="h-7 gap-1.5 text-xs"
+									onClick={() => onFocus(2)}
+									title={t(
+										"widenTheFocusToTwoHops",
+										"Widen the focus to two hops",
+									)}
+								>
+									<Crosshair className="h-3.5 w-3.5" />
+									{t("2Hops", "2 hops")}
+								</Button>
+							)}
 							{onExpand && (
 								<Button
 									variant="outline"
 									size="sm"
 									className="h-7 gap-1.5 text-xs"
 									onClick={() => onExpand(1)}
-									title="Expand neighbors (Shift+Click)"
+									title={t('expandNeighborsShiftclick', 'Expand neighbors (Shift+Click)')}
 								>
 									<Expand className="h-3.5 w-3.5" />
-									Expand
+									{t('expand', 'Expand')}
 								</Button>
 							)}
 							{onExpand && (
@@ -495,9 +544,24 @@ export function GraphNodeInspector({
 									size="sm"
 									className="h-7 gap-1.5 text-xs"
 									onClick={() => onExpand(2)}
-									title="Expand neighbors up to 2 hops away"
+									title={t('expandNeighborsUpTo2HopsAway', 'Expand neighbors up to 2 hops away')}
 								>
-									<Expand className="h-3.5 w-3.5" />2 hops
+									<Expand className="h-3.5 w-3.5" />{t('2Hops', '2 hops')}
+								</Button>
+							)}
+							{onGuidedExpand && (
+								<Button
+									variant="outline"
+									size="sm"
+									className="h-7 gap-1.5 text-xs"
+									onClick={onGuidedExpand}
+									title={t(
+										"chooseRelationshipsAndALimitBeforeExpanding",
+										"Choose relationships and a limit before expanding",
+									)}
+								>
+									<SlidersHorizontal className="h-3.5 w-3.5" />
+									{t("expandWith", "Expand with…")}
 								</Button>
 							)}
 							{hasChildren && onExpandChildren && !childrenExpanded && (
@@ -506,10 +570,10 @@ export function GraphNodeInspector({
 									size="sm"
 									className="h-7 gap-1.5 text-xs"
 									onClick={onExpandChildren}
-									title="Expand containment children"
+									title={t('expandContainmentChildren', 'Expand containment children')}
 								>
 									<ListTree className="h-3.5 w-3.5" />
-									Expand children
+									{t('expandChildren', 'Expand children')}
 								</Button>
 							)}
 							{hasChildren && onCollapseChildren && childrenExpanded && (
@@ -518,10 +582,10 @@ export function GraphNodeInspector({
 									size="sm"
 									className="h-7 gap-1.5 text-xs"
 									onClick={onCollapseChildren}
-									title="Collapse containment children"
+									title={t('collapseContainmentChildren', 'Collapse containment children')}
 								>
 									<ChevronsDownUp className="h-3.5 w-3.5" />
-									Collapse
+									{t('collapse', 'Collapse')}
 								</Button>
 							)}
 							{onFindPath && (
@@ -530,10 +594,10 @@ export function GraphNodeInspector({
 									size="sm"
 									className="h-7 gap-1.5 text-xs"
 									onClick={() => onFindPath(node)}
-									title="Find a path from this object to another"
+									title={`Find a path from this object to another`}
 								>
 									<Route className="h-3.5 w-3.5" />
-									Find path from here
+									{`Find path from here`}
 								</Button>
 							)}
 						</div>
@@ -543,7 +607,7 @@ export function GraphNodeInspector({
 					{onRunAction && actions.length > 0 && (
 						<div>
 							<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
-								Actions
+								{t('actions', 'Actions')}
 							</p>
 							<div className="flex flex-wrap gap-1.5">
 								{actions.map((action) => (
@@ -575,12 +639,10 @@ export function GraphNodeInspector({
 						<div>
 							<div className="flex items-center justify-between mb-2">
 								<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-									Properties
+									{t('properties', 'Properties')}
 								</p>
 								{hiddenFields.size > 0 && (
-									<span className="text-[10px] text-muted-foreground">
-										{hiddenFields.size} hidden
-									</span>
+									<span className="text-[10px] text-muted-foreground">{t('sizeHidden', '{{size}} hidden', { size: hiddenFields.size })}</span>
 								)}
 							</div>
 							<div className="space-y-2">
@@ -598,29 +660,25 @@ export function GraphNodeInspector({
 									className="mt-2 flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
 									onClick={() => setShowAllProps(true)}
 								>
-									<ChevronDown className="h-3.5 w-3.5" />
-									Show all properties ({otherEntries.length})
-								</button>
+									<ChevronDown className="h-3.5 w-3.5" />{t('showAllPropertiesLength', 'Show all properties ({{length}})', { length: otherEntries.length })}</button>
 							)}
 						</div>
 					)}
 					{propEntries.length === 0 && (
 						<p className="text-xs text-muted-foreground italic">
-							No properties available
+							{t('noPropertiesAvailable', 'No properties available')}
 						</p>
 					)}
 					{propEntries.length > 0 && visibleEntries.length === 0 && (
 						<p className="text-xs text-muted-foreground italic">
-							All fields hidden — use the filter to show them
+							{t('allFieldsHiddenUseTheFilterToShowThem', 'All fields hidden — use the filter to show them')}
 						</p>
 					)}
 
 					{/* Connections section */}
 					{connections && connections.length > 0 && (
 						<div>
-							<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
-								Connections ({connections.length})
-							</p>
+							<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-2">{t('connectionsLength', 'Connections ({{length}})', { length: connections.length })}</p>
 							<div className="space-y-1">
 								{connections.map((conn, i) => (
 									<button

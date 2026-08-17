@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	DndContext,
 	type DragEndEvent,
@@ -122,7 +123,7 @@ async function downloadCSV(
 
 			const filePath = await save({
 				canCreateDirectories: true,
-				title: "Save CSV",
+				title: i18next.t('saveCsv', 'Save CSV'),
 				defaultPath: filename,
 				filters: [{ name: "CSV", extensions: ["csv"] }],
 			});
@@ -158,6 +159,7 @@ function SortableColumnItem({
 	isHidden: boolean;
 	onToggleVisibility: () => void;
 }) {
+	const { t } = useTranslation("common");
 	const {
 		attributes,
 		listeners,
@@ -197,9 +199,9 @@ function SortableColumnItem({
 			<label
 				htmlFor={`col-visibility-${colIdx}`}
 				className="text-xs flex-1 truncate cursor-pointer"
-				title={header || `Column ${colIdx + 1}`}
+				title={header || t('columnVal', 'Column {{val}}', { val: colIdx + 1 })}
 			>
-				{header || `Column ${colIdx + 1}`}
+				{header || t('columnVal', 'Column {{val}}', { val: colIdx + 1 })}
 			</label>
 			{isHidden ? (
 				<EyeOffIcon className="h-3 w-3 text-muted-foreground shrink-0" />
@@ -227,6 +229,7 @@ function SortableHeaderCell({
 	sortable: boolean;
 	align?: string;
 }) {
+	const { t } = useTranslation("common");
 	const {
 		attributes,
 		listeners,
@@ -269,7 +272,7 @@ function SortableHeaderCell({
 					className={cn("truncate max-w-[200px]", sortable && "cursor-pointer")}
 					onClick={() => sortable && onSort(colIdx)}
 				>
-					{header || `Column ${colIdx + 1}`}
+					{header || t('columnVal', 'Column {{val}}', { val: colIdx + 1 })}
 				</span>
 				{sortable &&
 					(sortColumn === colIdx ? (
@@ -293,6 +296,7 @@ export function A2UITable({
 	style,
 	componentId,
 }: ComponentProps<TableComponent>) {
+	const { t } = useTranslation("common");
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const columns = useResolved<TableColumn[]>(component.columns) ?? [];
 	const data = useResolved<Record<string, unknown>[]>(component.data) ?? [];
@@ -702,7 +706,7 @@ export function A2UITable({
 								className="h-7 px-2 text-xs"
 							>
 								<FilterIcon className="h-3 w-3 mr-1" />
-								Filter
+								{t('filter', 'Filter')}
 								{columnFilters.length > 0 && (
 									<span className="ml-1 bg-primary text-primary-foreground rounded-full px-1.5 text-[10px]">
 										{columnFilters.length}
@@ -713,12 +717,12 @@ export function A2UITable({
 						<PopoverContent className="w-64 p-3" align="start">
 							<div className="space-y-2">
 								<div className="text-xs font-medium text-muted-foreground mb-2">
-									Filter by column
+									{t('filterByColumn', 'Filter by column')}
 								</div>
 								{headers.map((header, idx) => (
 									<div key={idx} className="flex items-center gap-2">
 										<span className="text-xs w-20 truncate" title={header}>
-											{header || `Col ${idx + 1}`}
+											{header || t('colVal', 'Col {{val}}', { val: idx + 1 })}
 										</span>
 										<Input
 											type="text"
@@ -743,7 +747,7 @@ export function A2UITable({
 								className="h-7 px-2 text-xs"
 							>
 								<ColumnsIcon className="h-3 w-3 mr-1" />
-								Columns
+								{t('columns', 'Columns')}
 								{hiddenColumns.size > 0 && (
 									<span className="ml-1 bg-muted-foreground text-muted rounded-full px-1.5 text-[10px]">
 										{columns.length - hiddenColumns.size}/{columns.length}
@@ -755,7 +759,7 @@ export function A2UITable({
 							<div className="space-y-1">
 								<div className="flex items-center justify-between mb-2">
 									<span className="text-xs font-medium text-muted-foreground">
-										Show/hide & reorder
+										{t('showhideReorder', 'Show/hide & reorder')}
 									</span>
 									{hasColumnChanges && (
 										<Button
@@ -764,7 +768,7 @@ export function A2UITable({
 											className="h-5 px-1 text-[10px]"
 											onClick={resetColumns}
 										>
-											Reset
+											{t('reset', 'Reset')}
 										</Button>
 									)}
 								</div>
@@ -803,7 +807,7 @@ export function A2UITable({
 							className="h-7 px-2 text-xs text-muted-foreground"
 							onClick={clearFilters}
 						>
-							Clear filters
+							{t('clearFilters', 'Clear filters')}
 						</Button>
 					)}
 
@@ -822,7 +826,7 @@ export function A2UITable({
 								)}
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>Copy as CSV</TooltipContent>
+						<TooltipContent>{t('copyAsCsv', 'Copy as CSV')}</TooltipContent>
 					</Tooltip>
 
 					<Tooltip>
@@ -836,7 +840,7 @@ export function A2UITable({
 								<DownloadIcon className="h-3 w-3" />
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>Download CSV</TooltipContent>
+						<TooltipContent>{t('downloadCsv', 'Download CSV')}</TooltipContent>
 					</Tooltip>
 				</div>
 			)}
@@ -959,7 +963,7 @@ export function A2UITable({
 									colSpan={visibleColumns.length + (selectable ? 1 : 0)}
 									className="text-center py-8 text-muted-foreground"
 								>
-									No data available
+									{t('noDataAvailable', 'No data available')}
 								</td>
 							</tr>
 						)}
@@ -970,7 +974,7 @@ export function A2UITable({
 			{paginated && totalPages > 1 && (
 				<div className="flex items-center justify-between mt-2 text-xs text-muted-foreground">
 					<span>
-						Showing {currentPage * pageSize + 1}-
+						{t('showing', 'Showing')} {currentPage * pageSize + 1}-
 						{Math.min((currentPage + 1) * pageSize, sortedRows.length)} of{" "}
 						{sortedRows.length}
 					</span>
@@ -982,10 +986,10 @@ export function A2UITable({
 							disabled={currentPage === 0}
 							onClick={() => setCurrentPage((p) => p - 1)}
 						>
-							Previous
+							{t('previous', 'Previous')}
 						</Button>
 						<span className="px-2">
-							Page {currentPage + 1} of {totalPages}
+							{t('pageOfTotal', 'Page {{page}} of {{total}}', { page: currentPage + 1, total: totalPages })}
 						</span>
 						<Button
 							variant="outline"
@@ -994,7 +998,7 @@ export function A2UITable({
 							disabled={currentPage >= totalPages - 1}
 							onClick={() => setCurrentPage((p) => p + 1)}
 						>
-							Next
+							{t('next', 'Next')}
 						</Button>
 					</div>
 				</div>

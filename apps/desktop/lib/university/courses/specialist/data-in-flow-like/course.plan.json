@@ -1,0 +1,1008 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-movg553k-3drd",
+		"name": "Data in Flow-Like",
+		"language": "en",
+		"slug": "data-in-flow-like",
+		"difficulty": "INTERMEDIATE",
+		"category": "DATA",
+		"estimatedMinutes": 75,
+		"isPublished": true,
+		"iconUrl": null,
+		"bannerUrl": null,
+		"tags": [
+			"storage",
+			"database",
+			"sql",
+			"rag",
+			"ontology"
+		],
+		"position": 3,
+		"description": "Give a support copilot its data: files, tables, SQL, retrieval, and a semantic graph \u2014 each in the right home, every import safe to run twice.",
+		"longDescription": "You're building a Customer Support Copilot, and its data has to live somewhere. This course walks the five homes Flow-Like offers \u2014 typed pin values, file Storage, native tables, DataFusion SQL sessions, and the ontology layer \u2014 through one running scenario: ingest archived tickets idempotently, debug a join that doubles your numbers, index the refund policy for grounded retrieval, and map customers, tickets, and agents into an explorable graph. The finale is a design review of a partner team's flawed RAG assistant \u2014 you name exactly what broke, and what it should have done instead.",
+		"media": {
+			"icon": "assets/course-icon.webp",
+			"banner": "assets/data-studio-overview.webp"
+		},
+		"assets": [
+			{
+				"name": "AppStorage",
+				"file": "assets/app-storage.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "app-storage.webp",
+				"replace": true
+			},
+			{
+				"name": "AppDatabases",
+				"file": "assets/app-databases.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "app-databases.webp",
+				"replace": true
+			},
+			{
+				"name": "DataStudioOverview",
+				"file": "assets/data-studio-overview.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "data-studio-overview.webp",
+				"replace": true
+			},
+			{
+				"name": "RAGOverview",
+				"file": "assets/rag-overview.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "rag-overview.webp",
+				"replace": true
+			},
+			{
+				"name": "OntologyOverview",
+				"file": "assets/ontology-overview.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "ontology-overview.webp",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "mod-movg5igw-z3r",
+				"title": "Overview",
+				"description": "Move from data boundaries through storage, tables, SQL, retrieval, and semantic graph modeling.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "les-movg6wj7-c1r",
+						"title": "Five Homes for One Question",
+						"language": "en",
+						"contentFile": "content/types-of-data.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-data-types-pin-home",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The copilot is mid-run, and Avery's question text ('Can I still get a refund?') is flowing between nodes. Where does it live right now?",
+								"explanation": "Mid-run values are transient typed pin values \u2014 they exist while the run executes and vanish with it. A table row is the tempting answer, but nothing lands in a table until a node explicitly writes it there; persistence in Flow-Like is always a deliberate act, never a side effect of a run finishing.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "pin-value",
+											"label": "As a typed value on a pin, gone when the run ends"
+										},
+										{
+											"id": "table-row",
+											"label": "As a row in the tickets table, written automatically when the event fired"
+										},
+										{
+											"id": "user-file",
+											"label": "As a text file in the customer's User Storage"
+										},
+										{
+											"id": "session-table",
+											"label": "As a registered table in the run's DataFusion session"
+										}
+									],
+									"correct": [
+										"pin-value"
+									]
+								}
+							},
+							{
+								"id": "challenge-data-types-placement",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "You're sketching the copilot's data map. Which placements fit the boundaries this lesson drew?",
+								"explanation": "Shared policy documents belong in project Storage, ticket facts belong in native table rows, and 'Ticket belongs to Customer' is ontology metadata over those tables. Keeping chunks 'permanently' in a DataFusion session fails because sessions vanish with the run \u2014 they coordinate sources, they don't store anything. Encoding status in filenames is the subtler trap: it feels visible and convenient, but row facts in filenames can't be filtered, updated, or indexed without brittle renames.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "policy-storage",
+											"label": "refund-policy.md in the app's shared project Storage"
+										},
+										{
+											"id": "ticket-rows",
+											"label": "Ticket status, owner, and timestamps as rows in a native table"
+										},
+										{
+											"id": "ontology-link",
+											"label": "'Ticket belongs to Customer' as an ontology link over the tables"
+										},
+										{
+											"id": "session-chunks",
+											"label": "Chunk text kept permanently in a DataFusion session so queries stay fast"
+										},
+										{
+											"id": "status-filenames",
+											"label": "Ticket status encoded in filenames like ticket-1042-open.md so it's visible in Storage"
+										}
+									],
+									"correct": [
+										"policy-storage",
+										"ticket-rows",
+										"ontology-link"
+									]
+								}
+							},
+							{
+								"id": "challenge-data-types-session-morning",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Last night a flow registered the archived-tickets CSVs in a DataFusion session, computed a summary, and ended. This morning a colleague asks where the summary table is. What's true?",
+								"explanation": "A session coordinates sources for one run; durability stays with the sources or with a result the flow explicitly writes. Nothing was written, so nothing survived. The near-miss is thinking registration imports data \u2014 registering a CSV under a table name makes it queryable in that session, it doesn't copy anything into a native table.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "nothing-durable",
+											"label": "Nothing durable exists \u2014 the flow never wrote the result anywhere"
+										},
+										{
+											"id": "auto-import",
+											"label": "The CSVs became native tables when they were registered, so the summary can be re-run in Data Studio"
+										},
+										{
+											"id": "session-reopen",
+											"label": "The result is cached in the session and can be reopened by session name"
+										},
+										{
+											"id": "storage-auto",
+											"label": "The summary was saved to Storage under the run's ID automatically"
+										}
+									],
+									"correct": [
+										"nothing-durable"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "les-movg7amc-fww",
+						"title": "File Storage: Scope Is Access",
+						"language": "en",
+						"contentFile": "content/file-storage.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-data-files-scope",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Look at @AppStorage: refund-policy.md sits in Storage, not User Storage. What does that placement mean?",
+								"explanation": "Storage is the app's shared scope \u2014 any teammate or flow authorized on the app can read the policy, which is exactly right for a document the whole support team answers from. It is not private to the uploader (that's User Storage), and nothing gets indexed for retrieval until you build that pipeline yourself in lesson 5.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "team-readable",
+											"label": "Any flow or teammate authorized on the app can read it"
+										},
+										{
+											"id": "uploader-only",
+											"label": "Only the person who uploaded it can open it"
+										},
+										{
+											"id": "local-disk",
+											"label": "It lives unmanaged on the uploader's local disk"
+										},
+										{
+											"id": "auto-indexed",
+											"label": "It's automatically indexed so the copilot can cite it"
+										}
+									],
+									"correct": [
+										"team-readable"
+									]
+								}
+							},
+							{
+								"id": "challenge-data-files-move-order",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A teammate's import moves each CSV into archived-tickets/processed/ first, then parses it and writes rows. Parsing fails at row 500. What state is the app in?",
+								"explanation": "The file is already archived and zero rows were written \u2014 the pipeline looks finished and isn't, and a retry won't find the file where it expects it. That's why the ingestion order is validate, persist, then move. There's no automatic rollback: moving a file is a completed storage operation, not part of a transaction with your parsing step.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "half-finished",
+											"label": "The file sits in the archive with no rows written \u2014 a state that looks done and isn't"
+										},
+										{
+											"id": "auto-rollback",
+											"label": "The move is rolled back automatically when the flow errors"
+										},
+										{
+											"id": "no-harm",
+											"label": "Nothing is wrong \u2014 the file's content is unchanged, so the pipeline is still consistent"
+										},
+										{
+											"id": "old-path",
+											"label": "A retry will find the file at its original path and continue from row 500"
+										}
+									],
+									"correct": [
+										"half-finished"
+									]
+								}
+							},
+							{
+								"id": "challenge-data-files-version-identity",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "tickets-export.csv gets re-uploaded after a failed run. Which pieces of information let your pipeline recognize it as the same version and skip or replace instead of duplicating?",
+								"explanation": "A content hash pins the exact bytes and a stable source ID pins the logical source \u2014 together they identify 'this version of this file' across retries. The filename is the classic trap: it's a label two different versions can share. The upload timestamp fails the other way \u2014 it differs on every retry of the identical file, so it can never say 'same version'.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "content-hash",
+											"label": "The file's content hash recorded in the manifest"
+										},
+										{
+											"id": "source-id",
+											"label": "A stable source ID assigned to the export"
+										},
+										{
+											"id": "filename",
+											"label": "The original filename"
+										},
+										{
+											"id": "upload-time",
+											"label": "The upload timestamp"
+										},
+										{
+											"id": "uploader",
+											"label": "The uploading user's ID"
+										}
+									],
+									"correct": [
+										"content-hash",
+										"source-id"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "les-movg7gwy-gn0",
+						"title": "Native Tables: Run It Twice",
+						"language": "en",
+						"contentFile": "content/the-database.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 2,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-data-db-rerun-count",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You import 1,200 archived tickets using Insert with randomly generated IDs. The run fails at row 800, and you run the whole import again. What does the table hold?",
+								"explanation": "Random IDs make the retry's rows look like brand-new records, so the first 800 exist twice \u2014 roughly 2,000 rows. Insert can't skip 'rows that already exist' because with fresh random IDs nothing collides; there's no identity to match on. Deterministic IDs plus upsert is what turns a retry into 'the same data again'.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "duplicated",
+											"label": "About 2,000 rows \u2014 the first 800 now exist twice"
+										},
+										{
+											"id": "insert-skips",
+											"label": "Exactly 1,200 \u2014 Insert skips rows that already exist"
+										},
+										{
+											"id": "rollback",
+											"label": "Exactly 1,200 \u2014 the failed run's rows were rolled back automatically"
+										},
+										{
+											"id": "refuses",
+											"label": "800 \u2014 the re-run refuses to start while partial data exists"
+										}
+									],
+									"correct": [
+										"duplicated"
+									]
+								}
+							},
+							{
+								"id": "challenge-data-db-safe-import",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which choices make the archived-tickets import safe to re-run?",
+								"explanation": "Deterministic identity (the helpdesk's own ticket number), upsert semantics, and a manifest recording hash and version are the repeatability kit \u2014 retries update the same logical records and you can prove which file produced which rows. Log-and-skip around Insert is the tempting near-miss: it silences duplicate-key errors instead of applying updates, so changed rows never land. Delete-and-reimport 'works' but destroys lineage and briefly serves readers an empty table.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "stable-key",
+											"label": "Derive each row's ID from the export's own stable ticket number"
+										},
+										{
+											"id": "upsert-retry",
+											"label": "Write with upsert so a retry updates the same logical record"
+										},
+										{
+											"id": "insert-catch",
+											"label": "Write with Insert and route duplicate-key errors to a log-and-skip branch"
+										},
+										{
+											"id": "manifest",
+											"label": "Record the source file's hash and version in a manifest table"
+										},
+										{
+											"id": "truncate-reload",
+											"label": "Delete all rows at the start of every run and reimport from scratch"
+										}
+									],
+									"correct": [
+										"stable-key",
+										"upsert-retry",
+										"manifest"
+									]
+								}
+							},
+							{
+								"id": "challenge-data-db-zero-count",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Right after batch-upserting, your verification Count returns 0 \u2014 yet the rows appear in Data Studio a moment later. What happened?",
+								"explanation": "Writes buffer in batches for throughput; the Count ran before the buffer became durable. Flush Database is the boundary \u2014 flush before anything verifies, reads, or reports success. No index is needed to count rows, and an upsert that 'failed silently and retried' isn't a mechanism that exists; the data was simply still in the buffer.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "not-flushed",
+											"label": "The writes were still buffered \u2014 nothing flushed before the count"
+										},
+										{
+											"id": "same-run-invisible",
+											"label": "Count can't see rows written in the same run by design"
+										},
+										{
+											"id": "silent-retry",
+											"label": "The upsert failed silently and was retried in the background"
+										},
+										{
+											"id": "needs-index",
+											"label": "Counting requires an index, which didn't exist yet"
+										}
+									],
+									"correct": [
+										"not-flushed"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "les-movg7n0b-ig8",
+						"title": "SQL: Two Surfaces, One Grain Rule",
+						"language": "en",
+						"contentFile": "content/sql.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 3,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-data-sql-surface",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "One run must join the archived-tickets CSV, the customers native table, and a billing PostgreSQL table. Which approach fits?",
+								"explanation": "A DataFusion session exists precisely for one-run federation: register all three sources under table names and join them with SQL. Importing everything into native tables first is the tempting near-miss \u2014 it works, but it creates two permanent copies (and their sync and deletion problems) to answer a one-run question. Row-by-row matching in nodes redoes the join engine's work slowly, and pasting three result sets into a prompt hands a set operation to a model.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "datafusion-session",
+											"label": "Create one DataFusion session and register all three sources under table names"
+										},
+										{
+											"id": "import-first",
+											"label": "Import the CSV and the Postgres table into native tables first, then use Data Studio Queries"
+										},
+										{
+											"id": "node-loop",
+											"label": "Loop over rows with nodes and match customer IDs in memory"
+										},
+										{
+											"id": "prompt-merge",
+											"label": "Run three separate queries and let the model combine the results in its context"
+										}
+									],
+									"correct": [
+										"datafusion-session"
+									]
+								}
+							},
+							{
+								"id": "challenge-data-sql-doubled-join",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The July dashboard reports every ticket count doubled after joining tickets to customers. What's the most likely cause?",
+								"explanation": "If customers holds two rows per customer_id, the join matches every ticket twice \u2014 a valid join at the wrong grain multiplies instead of erroring. That's why you verify key uniqueness at the grain you assume before trusting an aggregate. GROUP BY doesn't deduplicate join matches, DISTINCT would mask the symptom rather than fix the data, and WHERE placement changes which rows qualify, not how many times each one matches.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "duplicate-keys",
+											"label": "customer_id isn't unique in customers \u2014 the join key breaks the assumed grain"
+										},
+										{
+											"id": "orderby-dedupe",
+											"label": "GROUP BY needs an ORDER BY to deduplicate matches"
+										},
+										{
+											"id": "needs-distinct",
+											"label": "Joins double-count unless DISTINCT is set on the aggregate"
+										},
+										{
+											"id": "where-late",
+											"label": "The WHERE filter ran after the join, doubling the matched rows"
+										}
+									],
+									"correct": [
+										"duplicate-keys"
+									]
+								}
+							},
+							{
+								"id": "challenge-data-sql-missing-rows",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In one run you batch-upsert new tickets, then register the tickets table in a session and query it \u2014 but the new rows are missing from the result. What do you fix first?",
+								"explanation": "Lesson 3's boundary, resurfacing inside SQL: the upserts were still buffered, so the query read pre-write state. Flush the database connection before querying. Re-registering under another name reads the same un-flushed table, and neither LIMIT nor an index changes which rows are durable yet.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "flush-first",
+											"label": "Flush the database connection before the query step"
+										},
+										{
+											"id": "reregister",
+											"label": "Register the table again under a different name"
+										},
+										{
+											"id": "add-limit",
+											"label": "Add a LIMIT to force a fresh scan"
+										},
+										{
+											"id": "add-index",
+											"label": "Create an index on ticket_id so the query sees new rows"
+										}
+									],
+									"correct": [
+										"flush-first"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "les-movg7uf1-jrl",
+						"title": "RAG: Index Once, Answer Every Question",
+						"language": "en",
+						"contentFile": "content/rag.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 4,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-data-rag-same-model",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In @RAGOverview, the answer lane's Embed step is labeled 'Same model'. Why does that matter?",
+								"explanation": "Nearest-neighbor search compares the question's vector against the index's vectors \u2014 that comparison is only meaningful if both were produced by the same embedding model and configuration, in the same vector space. It has nothing to do with answer wording (a different model generates the answer) and nothing to do with chunk size, which was fixed at indexing time.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "same-space",
+											"label": "Query vectors must live in the same embedding space as the index, or similarity scores are meaningless"
+										},
+										{
+											"id": "same-wording",
+											"label": "Using one model keeps the answer wording consistent across questions"
+										},
+										{
+											"id": "chunk-size",
+											"label": "A different embedding model would change the chunk sizes in the index"
+										},
+										{
+											"id": "cost-saving",
+											"label": "Reusing the model halves embedding cost, which is the main concern"
+										}
+									],
+									"correct": [
+										"same-space"
+									]
+								}
+							},
+							{
+								"id": "challenge-data-rag-search-mode",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Support agents ask for exact codes ('What is REF-201?') and paraphrases ('money back on annual plans?'). What's the strongest starting retrieval setup?",
+								"explanation": "Hybrid search runs full-text and vector retrieval and fuses the candidates, covering both question styles; metadata filters narrow version and document type on top. Full-text-only is the tempting pick because the codes really are exact identifiers \u2014 but it has no answer for paraphrases, which is half the traffic. Vector-only trades the failure the other way: codes usually still match, but less reliably than exact search. Sending the whole corpus ignores the context budget and drowns the evidence.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "hybrid",
+											"label": "Hybrid search with metadata filters"
+										},
+										{
+											"id": "fulltext-only",
+											"label": "Full-text only, because policy codes are exact identifiers"
+										},
+										{
+											"id": "vector-only",
+											"label": "Vector only \u2014 semantic search finds the codes too, since they appear in the text"
+										},
+										{
+											"id": "send-all",
+											"label": "Skip retrieval ranking and send the full corpus as context so nothing is missed"
+										}
+									],
+									"correct": [
+										"hybrid"
+									]
+								}
+							},
+							{
+								"id": "challenge-data-rag-new-version",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "A new version of refund-policy.md lands in Storage. Which steps must the copilot take?",
+								"explanation": "The index lane re-runs for that source, and version reconciliation retires or replaces every old chunk so stale refund windows can't surface. Re-embedding the whole corpus is unnecessary \u2014 other sources' vectors are untouched and still comparable. Random chunk IDs 'to avoid collisions' would break the very mechanism that makes replacement work: deterministic IDs from source version and location are how a re-index addresses the same logical chunk. And the query workflow doesn't change at all \u2014 that's the payoff of keeping the lanes separate.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "reindex-source",
+											"label": "Re-extract, re-chunk, and re-embed that source"
+										},
+										{
+											"id": "retire-old",
+											"label": "Replace or retire every old chunk belonging to that source"
+										},
+										{
+											"id": "reembed-corpus",
+											"label": "Re-embed the entire corpus so all vectors stay comparable"
+										},
+										{
+											"id": "random-ids",
+											"label": "Switch to freshly generated chunk IDs so old and new chunks can't collide"
+										},
+										{
+											"id": "redeploy-query",
+											"label": "Update and redeploy the query workflow"
+										}
+									],
+									"correct": [
+										"reindex-source",
+										"retire-old"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "les-movg7zr7-ys0",
+						"title": "Graphs Without Copies: The Ontology",
+						"language": "en",
+						"contentFile": "content/graph-databases.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 5,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-data-graph-metadata-only",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "@OntologyOverview's callout reads 'Metadata only'. You create the Customer Operations ontology over customers, tickets, and agents. What happened to the rows in those tables?",
+								"explanation": "Nothing \u2014 the overlay stores mappings (object types, link types, actions) next to the tables, and the tables remain authoritative. No copy is made at creation, and none is made later: traversal reads through the mappings at query time. 'Copied into a synced graph store' is exactly the architecture the ontology exists to avoid.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "nothing-copied",
+											"label": "Nothing \u2014 the ontology stores mappings, and the tables stay authoritative"
+										},
+										{
+											"id": "synced-copy",
+											"label": "They were copied into an internal graph store that's kept in sync"
+										},
+										{
+											"id": "vectorized",
+											"label": "They were embedded into vectors to power graph search"
+										},
+										{
+											"id": "copy-on-traverse",
+											"label": "Nothing yet \u2014 rows are copied lazily the first time someone traverses them"
+										}
+									],
+									"correct": [
+										"nothing-copied"
+									]
+								}
+							},
+							{
+								"id": "challenge-data-graph-facts",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements about Flow-Like ontologies are accurate?",
+								"explanation": "Object types map a table to a business entity through a unique-ID column, several overlays can interpret the same tables for different audiences, and deleting an overlay removes definitions while leaving tables untouched \u2014 overlay lifecycle and table lifecycle are separate. The trap is the access claim: mapping a table into an overlay never grants overlay viewers read access to that table. Semantic visibility and data authorization are different systems, and links map existing rows \u2014 nothing is copied first.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "object-mapping",
+											"label": "An object type maps a table to a business entity via a unique-ID column"
+										},
+										{
+											"id": "multiple-overlays",
+											"label": "The same tables can serve multiple overlays for different audiences"
+										},
+										{
+											"id": "grants-access",
+											"label": "Mapping a table into an overlay grants overlay viewers read access to that table"
+										},
+										{
+											"id": "delete-keeps-tables",
+											"label": "Deleting an overlay removes its definitions but leaves the tables intact"
+										},
+										{
+											"id": "links-copy",
+											"label": "Link types require both tables to be copied into the overlay first"
+										}
+									],
+									"correct": [
+										"object-mapping",
+										"multiple-overlays",
+										"delete-keeps-tables"
+									]
+								}
+							},
+							{
+								"id": "challenge-data-graph-merged-tickets",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Exploring the ontology, customer CUS-1027's page shows tickets that belong to two different people, merged together. What's the most likely cause?",
+								"explanation": "Traversal resolves objects through the identity column; if customer_id holds duplicates \u2014 say, from a non-idempotent import back in lesson 3 \u2014 one ID resolves to multiple rows and their relationships merge. That's why you verify uniqueness before declaring an identity column. The flush option is a lesson-3 concept misapplied: flushing governs when buffered writes become visible, and overlay definitions aren't buffered table writes.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "duplicate-identity",
+											"label": "The identity column contains duplicate customer_id values, so one object resolves to multiple rows"
+										},
+										{
+											"id": "link-direction",
+											"label": "The Customer\u2192Ticket link type points in the wrong direction"
+										},
+										{
+											"id": "overlay-flush",
+											"label": "The overlay wasn't flushed after creation"
+										},
+										{
+											"id": "user-scoped",
+											"label": "The tickets table was created user-scoped instead of project-scoped"
+										}
+									],
+									"correct": [
+										"duplicate-identity"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "mod-movg5y5r-es8",
+				"title": "Challenge",
+				"description": "Review PolicyPal, a partner team's flawed RAG assistant: trace every symptom to the invariant it breaks.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "les-movg65xg-m9z",
+						"title": "The PolicyPal Design Review",
+						"language": "en",
+						"contentFile": "content/build-a-rag-agent.md",
+						"videoUrl": null,
+						"estimatedMinutes": 15,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "course-movg553k-3drd.challenge.data-boundaries",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "S1: every answer takes ~90 seconds, and cost grows each time a document is added. Which invariant does the as-built design break?",
+								"explanation": "As-built note 2 merges the two lanes: every question re-extracts and re-embeds the whole corpus, so latency and cost scale with corpus size. The reference design runs an indexing workflow when sources change and an answer workflow per question \u2014 the answer lane only embeds the question and retrieves. The other options are real invariants that explain nothing here: one merged workflow trivially uses the same model in both roles, and neither flush timing nor search mode grows with the number of documents.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "lane-separation",
+											"label": "Indexing must run when sources change, not on every question"
+										},
+										{
+											"id": "same-model",
+											"label": "Index and query must use the same embedding model"
+										},
+										{
+											"id": "flush-before-ready",
+											"label": "Buffered writes must flush before the index is declared ready"
+										},
+										{
+											"id": "hybrid-needed",
+											"label": "Retrieval should combine full-text and vector candidates"
+										}
+									],
+									"correct": [
+										"lane-separation"
+									]
+								}
+							},
+							{
+								"id": "course-movg553k-3drd.challenge.idempotent-writes",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "S2, first half: after a failed indexing run was retried, passages appear twice in answers. Which two as-built choices combined to cause the duplicates?",
+								"explanation": "Run-stamped chunk IDs mean every retry mints entirely new identities, and Insert appends whatever it's given \u2014 together they turn 'the same data again' into 'more data'. The reference fix is lesson 3 applied to chunks: derive chunk_id from source ID + version + location and write with batch upsert, so a retry updates the same logical chunks. The log-and-continue wiring is the tempting third pick, but with brand-new IDs there were no duplicate-key errors to swallow \u2014 its real offense is hiding failures, not creating rows.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "run-stamped-ids",
+											"label": "Chunk IDs built from the run's timestamp, so every run mints new identities"
+										},
+										{
+											"id": "insert-for-retry",
+											"label": "Insert used where a retry means 'the same data again'"
+										},
+										{
+											"id": "log-and-continue",
+											"label": "The write node's error pin routed to log-and-continue"
+										},
+										{
+											"id": "one-folder",
+											"label": "All documents stored in a single Storage folder"
+										},
+										{
+											"id": "nightly-copy",
+											"label": "The nightly copy into graph_chunks"
+										}
+									],
+									"correct": [
+										"run-stamped-ids",
+										"insert-for-retry"
+									]
+								}
+							},
+							{
+								"id": "course-movg553k-3drd.challenge.sql-surface",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "S2, second half: 'index ready' went out, but the count behind it was the previous run's total, and a question seconds later found none of the new content. Which discipline was skipped?",
+								"explanation": "Writes buffer in batches; without a flush between the upserts and the count, the count read pre-write state \u2014 the previous run's total \u2014 and retrieval saw the same stale index. The reference sequence is upsert \u2192 flush \u2192 count \u2192 report: a successful flush is part of the transaction boundary. Re-embedding the corpus and adding an index change nothing about durability timing, and moving the count into a session would read through the same un-flushed state.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "flush-before-count",
+											"label": "Flush the buffered writes before counting and reporting readiness"
+										},
+										{
+											"id": "reembed-all",
+											"label": "Re-embed the corpus so the count matches the new total"
+										},
+										{
+											"id": "index-column",
+											"label": "Create an index on the chunk table before counting"
+										},
+										{
+											"id": "count-in-session",
+											"label": "Run the count in a DataFusion session instead of a table node"
+										}
+									],
+									"correct": [
+										"flush-before-count"
+									]
+								}
+							},
+							{
+								"id": "course-movg553k-3drd.challenge.rag-invariants",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "S4: a trial-tier caller quoted figures that exist only in the enterprise pricing addendum \u2014 though its title never appeared in the answer. Where must access control move?",
+								"explanation": "Stripping titles after generation can't unsay what the model already read: the restricted chunk was in context, so its numbers surfaced without its name. Authorization is enforced outside the model, at retrieval time \u2014 chunks carry access metadata (derived files inherit their source's sensitivity, lesson 2), and the caller's entitlements filter candidates before context is built. Prompt instructions are advice, not enforcement; moving the file to someone's User Storage breaks the legitimate enterprise path while the already-indexed chunks keep leaking; deeper redaction is an arms race against paraphrase.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "retrieval-filter",
+											"label": "Into retrieval \u2014 filter candidates by the caller's entitlements before context is built"
+										},
+										{
+											"id": "prompt-guard",
+											"label": "Into the prompt \u2014 instruct the model never to reveal restricted content"
+										},
+										{
+											"id": "user-storage-move",
+											"label": "Into Storage \u2014 move the addendum to the enterprise lead's User Storage"
+										},
+										{
+											"id": "deeper-redaction",
+											"label": "Into post-processing \u2014 strip figures as well as titles from answers"
+										}
+									],
+									"correct": [
+										"retrieval-filter"
+									]
+								}
+							},
+							{
+								"id": "course-movg553k-3drd.challenge.search-mode",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "S3: 'What is REF-201?' answers perfectly, while 'Can I get money back on an annual plan?' finds nothing. What should PolicyPal's retrieval do instead?",
+								"explanation": "Full-text search can't bridge synonyms \u2014 'money back' never literally appears next to 'refund window' \u2014 so paraphrases return nothing however you tune thresholds or chunk sizes. The reference fix is hybrid retrieval: full-text for the exact codes it already handles, vector search for meaning, fused candidate lists, metadata filters on top. Vector-only is the over-correction: it fixes paraphrases but makes exact-code lookups, PolicyPal's one working feature, less reliable.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "go-hybrid",
+											"label": "Hybrid retrieval \u2014 full-text and vector candidates fused, with metadata filters"
+										},
+										{
+											"id": "go-vector-only",
+											"label": "Switch to vector-only search, since semantic matching covers codes too"
+										},
+										{
+											"id": "bigger-chunks",
+											"label": "Increase chunk size so each chunk contains more matchable words"
+										},
+										{
+											"id": "lower-threshold",
+											"label": "Lower the full-text match threshold until paraphrases start matching"
+										}
+									],
+									"correct": [
+										"go-hybrid"
+									]
+								}
+							},
+							{
+								"id": "course-movg553k-3drd.challenge.ontology-facts",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "S5 and as-built note 8: chunks are copied nightly into graph_chunks 'so the ontology doesn't touch production data', and stale refund windows survive even after deleting rows there. Which review findings are correct?",
+								"explanation": "An overlay is metadata over authoritative tables \u2014 map the real chunk table and you get exploration with zero copies and one deletion path. S5 is the copy's textbook failure: the team deleted from graph_chunks, but answers come from the real chunk table, where v1 chunks were never retired (the version-reconciliation rule). And lineage-driven deletion \u2014 removing a source removes every row derived from it, wherever it lives \u2014 is the rule that would have made the cleanup complete. 'Right in principle, just sync faster' is the tempting distractor: no schedule fixes an architecture with two sources of truth.",
+								"points": 10,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "map-real-table",
+											"label": "The ontology should map the actual chunk table \u2014 overlays store metadata, not copied rows"
+										},
+										{
+											"id": "wrong-table-deleted",
+											"label": "S5 fits the copy: answers read the real index, where v2 never retired the old chunks \u2014 deleting from graph_chunks touched the wrong store"
+										},
+										{
+											"id": "lineage-delete",
+											"label": "Deleting a source must delete every row derived from it, in whichever table it lives"
+										},
+										{
+											"id": "sync-faster",
+											"label": "The copy was right in principle \u2014 it just needed a faster sync schedule"
+										},
+										{
+											"id": "overlay-exposes",
+											"label": "Mapping the chunk table into an overlay would have exposed restricted chunks to all viewers"
+										}
+									],
+									"correct": [
+										"map-real-table",
+										"wrong-table-deleted",
+										"lineage-delete"
+									]
+								}
+							},
+							{
+								"id": "course-movg553k-3drd.challenge.evaluation",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Rebuild QA's sign-off (as-built note 9: ten questions rated on fluency). Which test cases would have caught PolicyPal's defects before launch?",
+								"explanation": "Each case targets a symptom: a paraphrase question exposes full-text-only retrieval (S3), running the indexing workflow twice and comparing counts is lesson 3's idempotence proof applied to chunks (S2), and a restricted caller fails loudly when access filtering happens after generation (S4). Fluency is the one property PolicyPal never lacked \u2014 which is exactly why rating it caught nothing. A single blended score is the subtler mistake: it hides whether retrieval or generation failed, and the whole point of the evaluation design is measuring them separately. A complete suite adds stale-version and explicit no-answer cases on top.",
+								"points": 10,
+								"position": 6,
+								"payload": {
+									"options": [
+										{
+											"id": "paraphrase-case",
+											"label": "A paraphrased question whose answer exists in the corpus"
+										},
+										{
+											"id": "double-run-count",
+											"label": "Run the indexing workflow twice and compare chunk counts"
+										},
+										{
+											"id": "restricted-caller",
+											"label": "A caller without addendum access asking about enterprise discounts"
+										},
+										{
+											"id": "fluency-panel",
+											"label": "A larger reviewer panel rating answer fluency"
+										},
+										{
+											"id": "single-score",
+											"label": "One combined end-to-end quality score per question"
+										}
+									],
+									"correct": [
+										"paraphrase-case",
+										"double-run-count",
+										"restricted-caller"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		]
+	}
+}

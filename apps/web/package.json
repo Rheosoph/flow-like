@@ -49,6 +49,7 @@
 		"@tanstack/query-async-storage-persister": "^5.62.16",
 		"@tanstack/react-table": "^8.20.6",
 		"@flow-like/flow-like-ui": "workspace:*",
+		"@flow-like/locales": "workspace:*",
 		"@udecode/cmdk": "^0.2.1",
 		"@udecode/cn": "^49.0.15",
 		"@uidotdev/usehooks": "^2.4.1",

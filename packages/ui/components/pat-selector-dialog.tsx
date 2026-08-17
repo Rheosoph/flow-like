@@ -25,7 +25,7 @@ import {
 	useInvoke,
 } from "@flow-like/flow-like-ui";
 import { cn } from "@flow-like/flow-like-ui/lib/utils";
-import { format } from "date-fns";
+import { useTranslation } from "@flow-like/locales";
 import {
 	CalendarIcon,
 	CheckIcon,
@@ -43,12 +43,6 @@ interface PAT {
 	valid_until: string | null;
 	permission: number;
 }
-
-const permissionLevels = [
-	{ value: 1, label: "Read Only", description: "View access only" },
-	{ value: 2, label: "Read & Write", description: "View and modify access" },
-	{ value: 4, label: "Admin", description: "Full administrative access" },
-];
 
 const STORAGE_KEY = "flow-like-selected-pat";
 
@@ -71,9 +65,40 @@ export function PatSelectorDialog({
 	open,
 	onOpenChange,
 	onPatSelected,
-	title = "Select or Create Personal Access Token",
-	description = "Choose an existing token or create a new one for this event sink.",
+	title,
+	description,
 }: Readonly<PatSelectorDialogProps>) {
+	const { t, i18n } = useTranslation("common");
+	const language = i18n.resolvedLanguage ?? i18n.language;
+	const resolvedTitle =
+		title ??
+		t(
+			"selectOrCreatePersonalAccessToken",
+			"Select or Create Personal Access Token",
+		);
+	const resolvedDescription =
+		description ??
+		t(
+			"chooseAnExistingTokenOrCreateANewOneForThisEventSink",
+			"Choose an existing token or create a new one for this event sink.",
+		);
+	const permissionLevels = [
+		{
+			value: 1,
+			label: t("readOnly", "Read Only"),
+			description: t("viewAccessOnly", "View access only"),
+		},
+		{
+			value: 2,
+			label: t("readWrite", "Read & Write"),
+			description: t("viewAndModifyAccess", "View and modify access"),
+		},
+		{
+			value: 4,
+			label: t("admin", "Admin"),
+			description: t("fullAdministrativeAccess", "Full administrative access"),
+		},
+	];
 	const backend = useBackend();
 	const pats = useInvoke(
 		backend.userState.getPATs,
@@ -120,19 +145,22 @@ export function PatSelectorDialog({
 
 		// No stored PAT - inform user they need to create a new one
 		toast.error(
-			"No stored token available. Please create a new token to continue.",
+			t(
+				"noStoredTokenAvailablePleaseCreateANewTokenToContinue",
+				"No stored token available. Please create a new token to continue.",
+			),
 		);
 		setMode("create");
 	};
 
 	const handleCreateToken = async () => {
 		if (!tokenName.trim()) {
-			toast.error("Please enter a token name");
+			toast.error(t("pleaseEnterATokenName", "Please enter a token name"));
 			return;
 		}
 
 		if (!backend) {
-			toast.error("Backend not available");
+			toast.error(t("backendNotAvailable", "Backend not available"));
 			return;
 		}
 
@@ -154,9 +182,11 @@ export function PatSelectorDialog({
 
 			// Reload PATs list
 			await pats.refetch();
-			toast.success("Token created successfully!");
+			toast.success(
+				t("tokenCreatedSuccessfully", "Token created successfully!"),
+			);
 		} catch (error) {
-			toast.error("Failed to create token");
+			toast.error(t("failedToCreateToken", "Failed to create token"));
 			console.error(error);
 		} finally {
 			setCreating(false);
@@ -176,12 +206,15 @@ export function PatSelectorDialog({
 	};
 
 	const formatDate = (dateString: string) => {
-		return format(new Date(dateString), "MMM dd, yyyy");
+		return new Intl.DateTimeFormat(language, { dateStyle: "medium" }).format(
+			new Date(dateString),
+		);
 	};
 
 	const getPermissionLabel = (permission: number) => {
 		return (
-			permissionLevels.find((p) => p.value === permission)?.label || "Unknown"
+			permissionLevels.find((p) => p.value === permission)?.label ||
+			t("unknown", "Unknown")
 		);
 	};
 
@@ -197,9 +230,9 @@ export function PatSelectorDialog({
 					<DialogHeader>
 						<DialogTitle className="flex items-center gap-2">
 							<KeyRoundIcon className="h-5 w-5" />
-							{title}
+							{resolvedTitle}
 						</DialogTitle>
-						<DialogDescription>{description}</DialogDescription>
+						<DialogDescription>{resolvedDescription}</DialogDescription>
 					</DialogHeader>
 
 					<div className="space-y-6">
@@ -210,11 +243,13 @@ export function PatSelectorDialog({
 										<CheckIcon className="h-5 w-5 text-green-600 dark:text-green-400 mt-0.5" />
 										<div className="flex-1">
 											<p className="text-sm font-medium text-green-900 dark:text-green-100">
-												Stored Token Available
+												{t("storedTokenAvailable", "Stored Token Available")}
 											</p>
 											<p className="text-xs text-green-700 dark:text-green-300 mt-1">
-												You have a previously created token stored. You can use
-												it or create a new one.
+												{t(
+													"youHaveAPreviouslyCreatedTokenStoredYouCanUseItOrCreateANewOne",
+													"You have a previously created token stored. You can use it or create a new one.",
+												)}
 											</p>
 										</div>
 									</div>
@@ -228,13 +263,13 @@ export function PatSelectorDialog({
 							<div className="flex items-center space-x-2">
 								<RadioGroupItem value="select" id="select" />
 								<Label htmlFor="select" className="cursor-pointer">
-									Use Stored Token
+									{t("useStoredToken", "Use Stored Token")}
 								</Label>
 							</div>
 							<div className="flex items-center space-x-2">
 								<RadioGroupItem value="create" id="create" />
 								<Label htmlFor="create" className="cursor-pointer">
-									Create New Token
+									{t("createNewToken", "Create New Token")}
 								</Label>
 							</div>
 						</RadioGroup>
@@ -248,22 +283,28 @@ export function PatSelectorDialog({
 									<div className="text-center py-8">
 										<KeyRoundIcon className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
 										<p className="text-muted-foreground mb-4">
-											No stored token available. Create a new one to continue.
+											{t(
+												"noStoredTokenAvailableCreateANewOneToContinue",
+												"No stored token available. Create a new one to continue.",
+											)}
 										</p>
 										<Button onClick={() => setMode("create")} className="gap-2">
 											<PlusIcon className="h-4 w-4" />
-											Create New Token
+											{t("createNewToken", "Create New Token")}
 										</Button>
 									</div>
 								) : pats.isLoading ? (
 									<div className="text-center py-8 text-muted-foreground">
-										Loading tokens...
+										{t("loadingTokens", "Loading tokens...")}
 									</div>
 								) : pats.data?.length === 0 ? (
 									<div className="text-center py-8">
 										<KeyRoundIcon className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
 										<p className="text-muted-foreground mb-4">
-											No tokens available. Create a new one to continue.
+											{t(
+												"noTokensAvailableCreateANewOneToContinue",
+												"No tokens available. Create a new one to continue.",
+											)}
 										</p>
 										<Button
 											onClick={() => setMode("create")}
@@ -271,7 +312,7 @@ export function PatSelectorDialog({
 											className="gap-2"
 										>
 											<PlusIcon className="h-4 w-4" />
-											Create Token
+											{t("createToken", "Create Token")}
 										</Button>
 									</div>
 								) : (
@@ -281,10 +322,10 @@ export function PatSelectorDialog({
 												variant="outline"
 												onClick={() => onOpenChange(false)}
 											>
-												Cancel
+												{t("cancel", "Cancel")}
 											</Button>
 											<Button onClick={handleSelectExisting}>
-												Use Stored Token
+												{t("useStoredToken", "Use Stored Token")}
 											</Button>
 										</div>
 									</>
@@ -294,24 +335,29 @@ export function PatSelectorDialog({
 							<div className="space-y-5">
 								<div className="space-y-2">
 									<Label htmlFor="token-name" className="text-sm font-medium">
-										Token Name *
+										{t("tokenName", "Token Name *")}
 									</Label>
 									<Input
 										id="token-name"
-										placeholder="e.g., Event Sink Token, Production API"
+										placeholder={t(
+											"egEventSinkTokenProductionApi",
+											"e.g., Event Sink Token, Production API",
+										)}
 										value={tokenName}
 										onChange={(e) => setTokenName(e.target.value)}
 										className="w-full"
 									/>
 									<p className="text-xs text-muted-foreground">
-										Choose a descriptive name to identify this token&apos;s
-										purpose.
+										{t(
+											"chooseADescriptiveNameToIdentifyThisTokenapossPurpose",
+											"Choose a descriptive name to identify this token's purpose.",
+										)}
 									</p>
 								</div>
 
 								<div className="space-y-2">
 									<Label className="text-sm font-medium">
-										Permission Level *
+										{t("permissionLevel", "Permission Level *")}
 									</Label>
 									<Select
 										value={selectedPermission.toString()}
@@ -320,7 +366,12 @@ export function PatSelectorDialog({
 										}
 									>
 										<SelectTrigger className="w-full">
-											<SelectValue placeholder="Select permission level" />
+											<SelectValue
+												placeholder={t(
+													"selectPermissionLevel",
+													"Select permission level",
+												)}
+											/>
 										</SelectTrigger>
 										<SelectContent>
 											{permissionLevels.map((level) => (
@@ -342,7 +393,7 @@ export function PatSelectorDialog({
 
 								<div className="space-y-2">
 									<Label className="text-sm font-medium">
-										Expiration Date (Optional)
+										{t("expirationDateOptional", "Expiration Date (Optional)")}
 									</Label>
 									<Popover>
 										<PopoverTrigger asChild>
@@ -355,9 +406,11 @@ export function PatSelectorDialog({
 											>
 												<CalendarIcon className="mr-2 h-4 w-4" />
 												{expirationDate ? (
-													format(expirationDate, "PPP")
+													new Intl.DateTimeFormat(language, {
+														dateStyle: "long",
+													}).format(expirationDate)
 												) : (
-													<span>No expiration</span>
+													<span>{t("noExpiration", "No expiration")}</span>
 												)}
 											</Button>
 										</PopoverTrigger>
@@ -372,13 +425,16 @@ export function PatSelectorDialog({
 										</PopoverContent>
 									</Popover>
 									<p className="text-xs text-muted-foreground">
-										Leave blank for a token that never expires.
+										{t(
+											"leaveBlankForATokenThatNeverExpires",
+											"Leave blank for a token that never expires.",
+										)}
 									</p>
 								</div>
 
 								<div className="flex justify-end gap-2">
 									<Button variant="outline" onClick={() => onOpenChange(false)}>
-										Cancel
+										{t("cancel", "Cancel")}
 									</Button>
 									<Button
 										onClick={handleCreateToken}
@@ -386,11 +442,11 @@ export function PatSelectorDialog({
 										className="gap-2"
 									>
 										{creating ? (
-											"Creating..."
+											t("creating", "Creating...")
 										) : (
 											<>
 												<PlusIcon className="h-4 w-4" />
-												Create Token
+												{t("createToken", "Create Token")}
 											</>
 										)}
 									</Button>
@@ -411,11 +467,13 @@ export function PatSelectorDialog({
 							</div>
 							<div className="flex-1">
 								<h2 className="text-2xl font-bold mb-2">
-									Token Created Successfully!
+									{t("tokenCreatedSuccessfully", "Token created successfully!")}
 								</h2>
 								<p className="text-muted-foreground">
-									Your personal access token has been generated. Make sure to
-									copy it now as you won&apos;t be able to see it again.
+									{t(
+										"yourPersonalAccessTokenHasBeenGeneratedMakeSureToCopyItNowAsYouWonapostBeAbleToSeeItAgain",
+										"Your personal access token has been generated. Make sure to copy it now as you won't be able to see it again.",
+									)}
 								</p>
 							</div>
 						</div>
@@ -425,7 +483,7 @@ export function PatSelectorDialog({
 						<div className="space-y-4">
 							<div className="p-4 rounded-lg bg-muted/50 border-2 border-dashed border-primary/30">
 								<Label className="text-xs font-medium text-muted-foreground mb-2 block">
-									YOUR TOKEN
+									{t("yourToken", "YOUR TOKEN")}
 								</Label>
 								<div className="flex items-center gap-2 mb-3">
 									<code className="flex-1 p-3 rounded bg-background border font-mono text-sm break-all select-all">
@@ -437,37 +495,50 @@ export function PatSelectorDialog({
 									size="sm"
 									onClick={() => {
 										navigator.clipboard.writeText(newToken);
-										toast.success("Token copied to clipboard!");
+										toast.success(
+											t("tokenCopiedToClipboard", "Token copied to clipboard"),
+										);
 									}}
 									className="w-full gap-2"
 								>
 									<CopyIcon className="h-4 w-4" />
-									Copy to Clipboard
+									{t("copyToClipboard", "Copy to Clipboard")}
 								</Button>
 							</div>
 
 							<div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4">
 								<h3 className="font-semibold mb-2 text-destructive">
-									⚠️ Important Security Information
+									{t(
+										"importantSecurityInformation",
+										"⚠️ Important Security Information",
+									)}
 								</h3>
 								<ul className="space-y-2 text-sm text-muted-foreground">
 									<li className="flex gap-2">
 										<span>•</span>
 										<span>
-											This token will only be shown once. Store it securely.
+											{t(
+												"thisTokenWillOnlyBeShownOnceStoreItSecurely",
+												"This token will only be shown once. Store it securely.",
+											)}
 										</span>
 									</li>
 									<li className="flex gap-2">
 										<span>•</span>
 										<span>
-											Treat this token like a password - don&apos;t share it or
-											commit it to version control
+											{t(
+												"treatThisTokenLikeAPasswordDonapostShareItOrCommitItToVersionControl",
+												"Treat this token like a password — don't share it or commit it to version control.",
+											)}
 										</span>
 									</li>
 									<li className="flex gap-2">
 										<span>•</span>
 										<span>
-											If compromised, delete it immediately and create a new one
+											{t(
+												"ifCompromisedDeleteItImmediatelyAndCreateANewOne",
+												"If compromised, delete it immediately and create a new one.",
+											)}
 										</span>
 									</li>
 								</ul>
@@ -481,11 +552,11 @@ export function PatSelectorDialog({
 								variant="outline"
 								onClick={() => setShowTokenDialog(false)}
 							>
-								Cancel
+								{t("cancel", "Cancel")}
 							</Button>
 							<Button onClick={handleUseNewToken} className="gap-2">
 								<CheckIcon className="h-4 w-4" />
-								Use This Token
+								{t("useThisToken", "Use This Token")}
 							</Button>
 						</div>
 					</div>

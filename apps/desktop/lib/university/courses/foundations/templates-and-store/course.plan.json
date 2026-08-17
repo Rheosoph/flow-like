@@ -1,0 +1,825 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-templates-and-store",
+		"name": "Templates, Packages & the Store",
+		"language": "en",
+		"slug": "templates-and-store",
+		"difficulty": "BEGINNER",
+		"category": "GETTING_STARTED",
+		"estimatedMinutes": 65,
+		"isPublished": true,
+		"iconUrl": null,
+		"bannerUrl": null,
+		"tags": ["store", "templates", "packages", "sharing", "forking"],
+		"position": 11,
+		"description": "Don't build from scratch — install, evaluate, fork, template, and publish.",
+		"longDescription": "Your team keeps rebuilding the same three flows for every new client. This course ends that: shop the store and the package registry before you build, read permissions and ratings like a skeptic, freeze proven flows into versioned templates, share apps without losing control of visibility and forks, and finally publish one app through store review. By the end you own a shared template library — and a listing with your name on it.",
+		"media": {
+			"icon": "media/app-logo.webp",
+			"banner": "assets/course-banner.webp"
+		},
+		"assets": [
+			{
+				"name": "CourseBanner",
+				"file": "assets/course-banner.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "course-banner.webp",
+				"replace": true
+			},
+			{
+				"name": "LandingPage",
+				"file": "assets/LandingPage.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "LandingPage.webp",
+				"replace": true
+			},
+			{
+				"name": "ShareApps",
+				"file": "assets/ShareApps.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "ShareApps.webp",
+				"replace": true
+			},
+			{
+				"name": "AppVisibilitySettings",
+				"file": "assets/AppVisibilitySettings.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "AppVisibilitySettings.webp",
+				"replace": true
+			},
+			{
+				"name": "BoardVersions",
+				"file": "assets/BoardVersions.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "BoardVersions.webp",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "module-tstore-dont-rebuild",
+				"title": "Don't Rebuild It",
+				"description": "Shop the store and the package registry — and judge what you find before you trust it.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "lesson-tstore-why-scratch",
+						"title": "Why Build What Someone Already Built?",
+						"language": "en",
+						"contentFile": "content/why-start-from-scratch.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-tstore-find-the-store",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Priya wants to see what community apps and packages already exist before rebuilding the triage flow. Where does she look?",
+								"explanation": "The Explore hub carries both shelves — community apps and the package registry (Packages in its header) — and the home screen previews it with Featured and Top Charts. Developer Tools is the tempting miss: it's where you BUILD packages, not where you discover them.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "explore-hub",
+											"label": "The Explore hub in the sidebar — community apps plus the Packages registry"
+										},
+										{
+											"id": "developer-tools",
+											"label": "Developer Tools — that's where packages live"
+										},
+										{
+											"id": "node-menu",
+											"label": "Any board's node menu — it lists everything installable"
+										},
+										{
+											"id": "settings-registry",
+											"label": "Settings — reuse is configured per device"
+										}
+									],
+									"correct": ["explore-hub"]
+								}
+							},
+							{
+								"id": "challenge-tstore-nodes-missing",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You installed a mail package from the registry, but its nodes don't appear in the client app's catalog. What's the most likely cause?",
+								"explanation": "Installing puts code on the device; only linking (Add Package in the app's own Packages screen) declares the dependency that fills that app's catalog. Reinstalling Flow-Like is the classic wasted afternoon — the device copy was never the problem. Verification status affects trust signals, not whether linked nodes load.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "not-linked",
+											"label": "The package is installed on the device but never linked to this app"
+										},
+										{
+											"id": "reinstall-app",
+											"label": "The Flow-Like installation is corrupted — reinstall it"
+										},
+										{
+											"id": "needs-verified",
+											"label": "Unverified packages can't expose nodes until review completes"
+										},
+										{
+											"id": "publish-first",
+											"label": "The app must be published before third-party nodes activate"
+										}
+									],
+									"correct": ["not-linked"]
+								}
+							},
+							{
+								"id": "challenge-tstore-three-scopes",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements about the three package scopes are true?",
+								"explanation": "Registry, device, and app are deliberately separate: discover in Explore → Packages, manage the device copy in Library → Packages, and declare per-app versions in each app's Packages screen. The tempting wrong pick is the auto-update one — updating the device copy never rewrites an app's linked version, which is exactly why old client apps keep working after a device update.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "registry-explore",
+											"label": "The registry in Explore → Packages is where you discover package versions"
+										},
+										{
+											"id": "device-library",
+											"label": "Library → Packages manages what's installed on this computer"
+										},
+										{
+											"id": "app-declares",
+											"label": "Linking records the package version an app requires, filling its catalog"
+										},
+										{
+											"id": "device-update-rewrites",
+											"label": "Updating the device copy automatically updates every app's linked version"
+										},
+										{
+											"id": "uninstall-removes-link",
+											"label": "Uninstalling from the device also removes the dependency from each app"
+										}
+									],
+									"correct": ["registry-explore", "device-library", "app-declares"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-tstore-evaluate",
+						"title": "Evaluate Before You Trust",
+						"language": "en",
+						"contentFile": "content/evaluate-before-you-trust.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-tstore-shield-meaning",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A package card carries the verification shield. What does that actually tell you?",
+								"explanation": "The shield records that the package completed the registry's review process — a review state, nothing more. The tempting read is \"safe to install without checking\": verification is explicitly not a security warranty and says nothing about future versions, so you still review permissions, author, and source links yourself.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "review-state",
+											"label": "It completed the registry's verification process — a review state, not a warranty"
+										},
+										{
+											"id": "safe-forever",
+											"label": "It's safe to install without reviewing its permissions"
+										},
+										{
+											"id": "official-package",
+											"label": "It was built by the Flow-Like team"
+										},
+										{
+											"id": "no-permissions",
+											"label": "It requests no permissions at all"
+										}
+									],
+									"correct": ["review-state"]
+								}
+							},
+							{
+								"id": "challenge-tstore-permission-audit",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "\"Inbox Wizard\" declares HTTP access to any host plus user-scoped storage. Which moves belong in your evaluation?",
+								"explanation": "The rule is: compare the declaration with what the nodes are supposed to do — which means opening Permissions AND Nodes, then weighing author, source links, and reviews. \"Verified means the declaration was already judged harmless\" is the tempting skip: verification records review state and doesn't pre-answer whether THESE capabilities fit YOUR client app.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "compare-declaration",
+											"label": "Ask whether any-host network access is coherent for what these nodes claim to do"
+										},
+										{
+											"id": "check-nodes-tab",
+											"label": "Open the Nodes tab to see what the package actually exports"
+										},
+										{
+											"id": "check-author-reviews",
+											"label": "Weigh the author, source links, and user reviews on the detail page"
+										},
+										{
+											"id": "verified-preclears",
+											"label": "Skip the check — the verified badge means the permissions were already cleared as harmless"
+										},
+										{
+											"id": "future-same",
+											"label": "Evaluate once and assume future versions keep identical behavior"
+										}
+									],
+									"correct": [
+										"compare-declaration",
+										"check-nodes-tab",
+										"check-author-reviews"
+									]
+								}
+							},
+							{
+								"id": "challenge-tstore-fork-contents",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You fork a public support app to evaluate it. It opens with flows and widgets — but no storage files. Why?",
+								"explanation": "The owner defines the fork policy; the fork dialog only displays what you'll receive, and this owner chose not to ship files. \"Files sync in later\" is the tempting one — a fork is a one-time copy with no ongoing link to the source, so nothing arrives afterwards in either direction.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "owner-policy",
+											"label": "The owner's fork policy excludes files — the dialog showed exactly this result"
+										},
+										{
+											"id": "sync-later",
+											"label": "Storage syncs into the fork over the next hours"
+										},
+										{
+											"id": "fork-bug",
+											"label": "It's a bug — forks copy everything by definition"
+										},
+										{
+											"id": "you-chose-wrong",
+											"label": "You unticked files in the fork dialog — the person forking picks the contents"
+										}
+									],
+									"correct": ["owner-policy"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "module-tstore-share-and-ship",
+				"title": "Share and Ship",
+				"description": "Freeze proven flows into templates, share the app on your terms, and publish it through store review.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "lesson-tstore-templates",
+						"title": "Templates: Your Team's Shortcuts",
+						"language": "en",
+						"contentFile": "content/templates-your-teams-shortcuts.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-tstore-latest-freezes",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You create a template from the triage flow and pick \"Latest\" as the source. What does the template capture?",
+								"explanation": "Latest means \"the draft as it is right now\" — the template freezes that state at creation and stops. The tempting answer is the subscription: templates never keep following later draft edits; that's the exact misconception that produces stale June templates in July.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "draft-frozen-now",
+											"label": "The current draft, frozen at the moment of creation"
+										},
+										{
+											"id": "follows-draft",
+											"label": "A live link — the template keeps following future draft edits"
+										},
+										{
+											"id": "newest-numbered",
+											"label": "The newest numbered version, not the draft"
+										},
+										{
+											"id": "nothing-until-publish",
+											"label": "Nothing yet — templates only fill once the app is published"
+										}
+									],
+									"correct": ["draft-frozen-now"]
+								}
+							},
+							{
+								"id": "challenge-tstore-stale-template",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Priya templated \"Customer Support Automation\" last month, then kept improving the draft. Apps created from the template today lack every improvement. What's the fix?",
+								"explanation": "A template is a snapshot shelf: import the improved flow as another template version, and older versions stay for consumers who want them. Re-saving the draft changes nothing the template can see, and the app's Version field is human-facing release metadata — editing it snapshots nothing.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "import-new-version",
+											"label": "Import the improved flow snapshot as a new template version"
+										},
+										{
+											"id": "resave-draft",
+											"label": "Re-save the draft — the template refreshes on save"
+										},
+										{
+											"id": "bump-app-version",
+											"label": "Bump the app's Version field so the template updates"
+										},
+										{
+											"id": "recreate-app",
+											"label": "Delete and recreate the app from scratch"
+										}
+									],
+									"correct": ["import-new-version"]
+								}
+							},
+							{
+								"id": "challenge-tstore-what-travels",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which of these travel inside a Flow Template?",
+								"explanation": "A template carries the captured flow graph plus its own name, description, and versions — that's the whole cargo. Runtime variables, events, and storage staying behind is the point, not a gap: a template shares one reusable graph, while sharing a full project is what apps (and forks) are for.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "graph-snapshot",
+											"label": "The captured flow graph"
+										},
+										{
+											"id": "template-metadata",
+											"label": "The template's own name, description, and versions"
+										},
+										{
+											"id": "runtime-variables",
+											"label": "The source app's runtime variables and credentials"
+										},
+										{
+											"id": "events",
+											"label": "The source app's events"
+										},
+										{
+											"id": "storage-files",
+											"label": "The source app's storage files"
+										}
+									],
+									"correct": ["graph-snapshot", "template-metadata"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-tstore-sharing",
+						"title": "Share It Without Losing Control",
+						"language": "en",
+						"contentFile": "content/share-it-without-losing-control.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-tstore-minimum-visibility",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Your app is Private and the neighboring team wants in. What's the minimum visibility that lets you invite them?",
+								"explanation": "Private means synced for your account only — no Team page, no invites. Prototype is the sharing threshold: Team appears in the navigation and you can invite collaborators. The public rungs would work too, but they're store levels that go through review — far more than an internal invite needs.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "prototype",
+											"label": "Prototype — invites unlock there"
+										},
+										{
+											"id": "private-enough",
+											"label": "Private — invites work at every online level"
+										},
+										{
+											"id": "public-request",
+											"label": "Public Request — someone must be able to request access first"
+										},
+										{
+											"id": "public-only",
+											"label": "Public — sharing means the store"
+										}
+									],
+									"correct": ["prototype"]
+								}
+							},
+							{
+								"id": "challenge-tstore-fork-policy-facts",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements about the fork policy are true?",
+								"explanation": "The owner sets the policy, the databases choice is genuinely three-way, and every fork gets its own Owner, Admin, and User roles no matter what — that floor can't be turned off. The tempting wrong pick is the forker choosing: the fork dialog only displays the owner's decision, it never offers checkboxes to the person forking.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "owner-decides",
+											"label": "The app's owner defines the policy; the fork dialog only shows the result"
+										},
+										{
+											"id": "db-three-way",
+											"label": "Databases can ship as tables with data, tables only, or not at all"
+										},
+										{
+											"id": "roles-floor",
+											"label": "A fork always gets its own Owner, Admin, and User roles, even when custom roles don't travel"
+										},
+										{
+											"id": "forker-picks",
+											"label": "The person forking ticks which pieces they want to take"
+										},
+										{
+											"id": "fork-live-sync",
+											"label": "A fork keeps a live link, so the owner's future edits flow in"
+										}
+									],
+									"correct": ["owner-decides", "db-three-way", "roles-floor"]
+								}
+							},
+							{
+								"id": "challenge-tstore-downgrade-private",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The app is Prototype with four collaborators, and you switch it to Private. What happens?",
+								"explanation": "Private means your account only, so the downgrade removes all collaborators and they lose access immediately — the switch warns you for exactly this reason. Review only guards the public rungs, and a Prototype app was never store-listed, so there's nothing to delist.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "collaborators-removed",
+											"label": "All four collaborators are removed and lose access immediately"
+										},
+										{
+											"id": "keep-existing",
+											"label": "Existing members stay; only new invites are blocked"
+										},
+										{
+											"id": "review-first",
+											"label": "Nothing yet — the downgrade waits for central review"
+										},
+										{
+											"id": "store-delist",
+											"label": "The app is removed from its store listing"
+										}
+									],
+									"correct": ["collaborators-removed"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-tstore-publish",
+						"title": "Ship It to the Store",
+						"language": "en",
+						"contentFile": "content/publish-to-the-store.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 2,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-tstore-review-gate",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Friday, 16:50: Priya flips the app from Prototype to Public. Is it in the store on Monday morning?",
+								"explanation": "Public transitions submit the app for central review, which takes one to three business days — flipped on Friday evening, Monday is optimistic. \"Instantly listed\" is the tempting answer the review gate exists to prevent; and nothing about submission removes your collaborators.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "review-days",
+											"label": "Probably not — the switch submits it for central review, which takes 1–3 business days"
+										},
+										{
+											"id": "instant-listing",
+											"label": "Yes — Public takes effect the moment it's saved"
+										},
+										{
+											"id": "collaborators-cleared",
+											"label": "Only after her collaborators are removed, which the switch does first"
+										},
+										{
+											"id": "needs-version-bump",
+											"label": "Only if she bumps the app's Version field before flipping"
+										}
+									],
+									"correct": ["review-days"]
+								}
+							},
+							{
+								"id": "challenge-tstore-version-field",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Before submitting, Priya sets the app's Version field to \"2.0\". What did that actually do?",
+								"explanation": "The app Version field is free-form release metadata for people browsing — a label for a tested collection of flow and interface versions. It snapshots nothing: flow versions are created per-board in Manage Board, and events keep whatever target they had. Mixing the two up is how \"versioned\" apps still serve drafts.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "label-only",
+											"label": "Changed a human-facing release label — no snapshot of flows, storage, or events"
+										},
+										{
+											"id": "snapshots-app",
+											"label": "Froze an immutable snapshot of the entire app"
+										},
+										{
+											"id": "creates-flow-versions",
+											"label": "Created version 2.0 of every flow in the app"
+										},
+										{
+											"id": "pins-events",
+											"label": "Pinned all events to their current flow versions"
+										}
+									],
+									"correct": ["label-only"]
+								}
+							},
+							{
+								"id": "challenge-tstore-prelaunch-pass",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which steps belong in the pre-publication pass for the support kit?",
+								"explanation": "A listing needs honest metadata, store-facing events pinned to numbered versions so draft edits never reach strangers, and a deliberate fork policy for what public forkers may take. The tempting extra is the detour rung: Prototype can move straight to Public — routing through Public Request first is a choice, not a requirement.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "polish-metadata",
+											"label": "Write a name and description that tell store visitors what the app does"
+										},
+										{
+											"id": "pin-events",
+											"label": "Pin production-facing events to numbered flow versions instead of Latest"
+										},
+										{
+											"id": "recheck-fork-policy",
+											"label": "Re-decide the fork policy — what should a stranger's fork contain?"
+										},
+										{
+											"id": "must-request-first",
+											"label": "Switch to Public Request first — Prototype can't reach Public directly"
+										},
+										{
+											"id": "version-field-freezes",
+											"label": "Set the app Version field so the release is frozen against edits"
+										}
+									],
+									"correct": [
+										"polish-metadata",
+										"pin-events",
+										"recheck-fork-policy"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "module-tstore-final",
+				"title": "Final Assessment",
+				"description": "One week, four asks, four findings — run the template library like you own it.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "lesson-tstore-final",
+						"title": "The Template Library",
+						"language": "en",
+						"contentFile": "content/final-assessment.md",
+						"videoUrl": null,
+						"estimatedMinutes": 15,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-tstore-final-f1",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Finding F1: the new teammate installed the mail package from Explore → Packages, but its nodes are missing from the client app's catalog. What closes F1?",
+								"explanation": "Install and linkage are separate scopes: the device has the code, but the client app never declared the dependency. Add Package in that app's Packages screen, then reload the flow. Reinstalling attacks the scope that was already fine, and verification state never gates whether a linked package's nodes load.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "link-and-reload",
+											"label": "Link the package in the client app's Packages screen, then reload the flow"
+										},
+										{
+											"id": "reinstall-package",
+											"label": "Uninstall and reinstall the package on the laptop"
+										},
+										{
+											"id": "wait-verification",
+											"label": "Wait for the package's verification review to finish"
+										},
+										{
+											"id": "publish-app-first",
+											"label": "Publish the client app — store review activates third-party nodes"
+										}
+									],
+									"correct": ["link-and-reload"]
+								}
+							},
+							{
+								"id": "challenge-tstore-final-partner-fork",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Ask 3: the partner org evaluates by forking, and client rows must never leave the app. Which fork-policy decisions are right?",
+								"explanation": "\"Tables only\" ships structure without a single client row — exactly compliance's line — and keeping flows and templates on is what makes the evaluation worth anything. The trap options break the model: turning roles off can't strip the Owner/Admin/User floor every fork receives, and a fork has no live link back, so \"revoke later\" revokes nothing already copied.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "schema-only-db",
+											"label": "Set databases to tables only, so structure arrives but client rows don't"
+										},
+										{
+											"id": "keep-flows-templates",
+											"label": "Keep flows and templates enabled so the blueprint is actually evaluable"
+										},
+										{
+											"id": "roles-off-strips-owner",
+											"label": "Toggle roles off so the fork arrives without any Owner or Admin role"
+										},
+										{
+											"id": "revoke-later",
+											"label": "Ship full data — you can revoke the fork's copy remotely after the evaluation"
+										},
+										{
+											"id": "forker-restraint",
+											"label": "Ask the partner to untick databases themselves in the fork dialog"
+										}
+									],
+									"correct": ["schema-only-db", "keep-flows-templates"]
+								}
+							},
+							{
+								"id": "challenge-tstore-final-f4",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Finding F4: apps created from the June template still show the June routing bug, even though the draft was fixed and versioned to 2.1.0 in July. What's the correct move?",
+								"explanation": "The June template froze the draft at creation — \"Latest\" is a moment, not a subscription — so the July fix never entered it. Import the 2.1.0 snapshot as a new template version; the June version stays available for deliberate choice. Re-saving the draft or relabeling the app changes nothing a template consumer receives.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "import-2-1-0",
+											"label": "Import the fixed 2.1.0 snapshot as a new version of the template"
+										},
+										{
+											"id": "resave-follows",
+											"label": "Re-save the triage draft so the June template picks up the fix"
+										},
+										{
+											"id": "app-label-bump",
+											"label": "Bump the app's Version field to signal the template is current"
+										},
+										{
+											"id": "delete-template",
+											"label": "Delete the template — templates can't be updated once created"
+										}
+									],
+									"correct": ["import-2-1-0"]
+								}
+							},
+							{
+								"id": "challenge-tstore-final-friday-demo",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Ask 4: Friday's demo needs the partner to find the store listing and request access. It's Monday and the app is Prototype. What's the plan?",
+								"explanation": "\"Request to join\" is Public Request, and reaching any public rung goes through central review — one to three business days — so the switch must happen today, not Thursday night. Full Public would let everyone join directly, and Prototype is never store-listed no matter how many invite links you mint.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "request-now",
+											"label": "Switch to Public Request today — review can take 1–3 business days"
+										},
+										{
+											"id": "thursday-flip",
+											"label": "Flip it Thursday evening; visibility changes apply instantly"
+										},
+										{
+											"id": "public-direct",
+											"label": "Go full Public — requesting access is the default everywhere"
+										},
+										{
+											"id": "prototype-link",
+											"label": "Stay Prototype and send an invite link — that's what store visitors use"
+										}
+									],
+									"correct": ["request-now"]
+								}
+							},
+							{
+								"id": "challenge-tstore-final-neighbor-graph",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Ask 2: the neighboring team wants the triage graph only — no storage, events, or roles. What do you hand them?",
+								"explanation": "One reusable graph is precisely a Flow Template's cargo: the versioned snapshot travels, and variables, events, storage, and roles all stay behind by design. Inviting them into the app or waiting for the store listing shares a whole project boundary — everything they said they didn't want.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "flow-template",
+											"label": "A Flow Template of the triage flow's proven version"
+										},
+										{
+											"id": "invite-members",
+											"label": "An invite — membership in the Customer Support Copilot app"
+										},
+										{
+											"id": "wait-store",
+											"label": "The store listing, once review completes"
+										},
+										{
+											"id": "fork-full",
+											"label": "A full fork with databases set to tables and data"
+										}
+									],
+									"correct": ["flow-template"]
+								}
+							},
+							{
+								"id": "challenge-tstore-final-f2-f3",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Findings F2 (a device package update broke an older client app) and F3 (a store visitor saw last night's half-finished draft). Which responses actually close them?",
+								"explanation": "F2 is the scope split: each app keeps its own linked version, so device updates get reviewed per app before they're assumed safe. F3 is the pinning rule: store-facing events target numbered versions so drafts stay invisible, and the changelog plus Version label make the eventual update legible. The trap answers re-open the findings — device updates never rewrite app declarations, and dropping to Private \"just for a moment\" evicts every collaborator immediately.",
+								"points": 10,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "review-per-app",
+											"label": "Review each app's Packages screen before applying device-wide updates"
+										},
+										{
+											"id": "pin-store-events",
+											"label": "Pin store-facing events to numbered flow versions so drafts never reach visitors"
+										},
+										{
+											"id": "changelog-label",
+											"label": "Ship the reviewed fix as a new flow version, then update the changelog and Version label"
+										},
+										{
+											"id": "device-covers-apps",
+											"label": "Treat the device update as complete — apps follow the device copy automatically"
+										},
+										{
+											"id": "dip-private",
+											"label": "Drop the app to Private while cleaning up the draft; collaborators keep access meanwhile"
+										}
+									],
+									"correct": [
+										"review-per-app",
+										"pin-store-events",
+										"changelog-label"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		]
+	}
+}

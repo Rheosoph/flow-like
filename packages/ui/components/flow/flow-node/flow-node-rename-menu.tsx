@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { useState } from "react";
 import { Button } from "../../../components/ui/button";
 import {
@@ -28,6 +29,7 @@ export function FlowNodeRenameMenu({
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const { pushCommand } = useUndoRedo(appId, boardId);
 	const invalidate = useInvalidateInvoke();
 	const backend = useBackend();
@@ -62,7 +64,7 @@ export function FlowNodeRenameMenu({
 		>
 			<DialogContent>
 				<DialogHeader>
-					<DialogTitle>Rename Node</DialogTitle>
+					<DialogTitle>{t('renameNode', 'Rename Node')}</DialogTitle>
 				</DialogHeader>
 				<DialogDescription>
 					<Input
@@ -79,7 +81,7 @@ export function FlowNodeRenameMenu({
 						}}
 						variant={"secondary"}
 					>
-						Cancel
+						{t('cancel', 'Cancel')}
 					</Button>
 					<Button onClick={async () => await saveComment()}>Save</Button>
 				</DialogFooter>

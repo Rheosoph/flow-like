@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -33,6 +34,7 @@ export function RpaPermissionDialog({
 	onOpenChange,
 	onPermissionsGranted,
 }: RpaPermissionDialogProps) {
+	const { t } = useTranslation("common");
 	const [permissions, setPermissions] = useState<RpaPermissionStatus | null>(
 		null,
 	);
@@ -107,25 +109,24 @@ export function RpaPermissionDialog({
 				<AlertDialogHeader>
 					<AlertDialogTitle className="flex items-center gap-2">
 						<ShieldAlert className="h-5 w-5 text-orange-500" />
-						Permissions Required
+						{t('permissionsRequired', 'Permissions Required')}
 					</AlertDialogTitle>
 					<AlertDialogDescription>
-						Local computer automation requires system permissions to control the
-						desktop and inspect the screen.
+						{t('localComputerAutomationRequiresSystemPermissionsToControlTheDesktopAndInspectTheScreen', "Local computer automation requires system permissions to control the desktop and inspect the screen.")}
 					</AlertDialogDescription>
 				</AlertDialogHeader>
 
 				<div className="space-y-3 py-4">
 					<PermissionItem
-						title="Accessibility Access"
-						description="Capture UI elements and their properties"
+						title={t('accessibilityAccess', 'Accessibility Access')}
+						description={t('captureUiElementsAndTheirProperties', 'Capture UI elements and their properties')}
 						granted={permissions?.accessibility ?? false}
 						onRequest={() => requestPermission("accessibility")}
 						checking={checking}
 					/>
 					<PermissionItem
-						title="Screen Recording"
-						description="Take screenshots of interaction areas"
+						title={t('screenRecording', 'Screen Recording')}
+						description={t('takeScreenshotsOfInteractionAreas', 'Take screenshots of interaction areas')}
 						granted={permissions?.screen_recording ?? false}
 						onRequest={() => requestPermission("screen_recording")}
 						checking={checking}
@@ -135,14 +136,13 @@ export function RpaPermissionDialog({
 					permissions.executable_path ? (
 						<div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
 							<p className="font-medium text-foreground">
-								macOS is checking this executable:
+								{t('macosIsCheckingThisExecutable', 'macOS is checking this executable:')}
 							</p>
 							<p className="mt-1 break-all font-mono">
 								{permissions.executable_path}
 							</p>
 							<p className="mt-2">
-								If System Settings shows another Flow Like entry, remove the
-								stale entry or add this executable with the + button.
+								{t('ifSystemSettingsShowsAnotherFlowLikeEntryRemoveTheStaleEntryOrAddThisExecutableWithTheButton', "If System Settings shows another Flow Like entry, remove the stale entry or add this executable with the + button.")}
 							</p>
 						</div>
 					) : null}
@@ -150,7 +150,7 @@ export function RpaPermissionDialog({
 						<div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
 							<AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
 							<div>
-								<p className="font-medium">Permission check failed</p>
+								<p className="font-medium">{t('permissionCheckFailed', 'Permission check failed')}</p>
 								<p className="mt-1 break-words">{checkError}</p>
 							</div>
 						</div>
@@ -173,7 +173,7 @@ export function RpaPermissionDialog({
 								onOpenChange(false);
 							}}
 						>
-							Continue
+							{t('continue', 'Continue')}
 						</AlertDialogAction>
 					) : canContinueAnyway ? (
 						<button
@@ -184,11 +184,11 @@ export function RpaPermissionDialog({
 							}}
 							className="rounded-md border px-3 py-2 text-sm font-medium hover:bg-accent"
 						>
-							Continue Anyway
+							{t('continueAnyway', 'Continue Anyway')}
 						</button>
 					) : (
 						<AlertDialogAction disabled>
-							Grant Permissions First
+							{t('grantPermissionsFirst', 'Grant Permissions First')}
 						</AlertDialogAction>
 					)}
 				</AlertDialogFooter>

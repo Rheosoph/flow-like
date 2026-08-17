@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-label="Abstract banner: a flow chain with one failing node under a magnifier, followed by a healthy green node">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#1a1712"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <radialGradient id="glowAmber" cx=".5" cy=".5" r=".5"><stop stop-color="#f59e0b" stop-opacity=".45"/><stop offset="1" stop-color="#f59e0b" stop-opacity="0"/></radialGradient>
+    <radialGradient id="glowGreen" cx=".5" cy=".5" r=".5"><stop stop-color="#34d399" stop-opacity=".4"/><stop offset="1" stop-color="#34d399" stop-opacity="0"/></radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="6"/></filter>
+  </defs>
+  <rect width="1440" height="720" fill="url(#bg)"/><rect width="1440" height="720" fill="url(#grid)"/>
+  <circle cx="700" cy="360" r="330" fill="url(#glowAmber)"/>
+  <circle cx="1220" cy="330" r="260" fill="url(#glowGreen)"/>
+
+  <g>
+    <rect x="160" y="300" width="200" height="92" rx="18" fill="#22252c" stroke="#464c57" stroke-width="2"/>
+    <rect x="160" y="300" width="200" height="30" rx="15" fill="#ff7656" opacity=".85"/>
+    <circle cx="368" cy="348" r="8" fill="#e8e8ec"/>
+    <path d="M376 348 H460" stroke="#e8e8ec" stroke-width="4" stroke-linecap="round"/><circle cx="460" cy="348" r="8" fill="#e8e8ec"/>
+
+    <rect x="468" y="300" width="200" height="92" rx="18" fill="#22252c" stroke="#464c57" stroke-width="2"/>
+    <rect x="468" y="300" width="200" height="30" rx="15" fill="#60a5fa" opacity=".8"/>
+    <circle cx="676" cy="348" r="8" fill="#e8e8ec"/>
+    <path d="M684 348 H768" stroke="#e8e8ec" stroke-width="4" stroke-linecap="round"/><circle cx="768" cy="348" r="8" fill="#e8e8ec"/>
+
+    <rect x="776" y="300" width="200" height="92" rx="18" fill="#241d16" stroke="#f59e0b" stroke-width="3"/>
+    <rect x="776" y="300" width="200" height="30" rx="15" fill="#f59e0b" opacity=".85"/>
+    <circle cx="876" cy="270" r="26" fill="none" stroke="#f59e0b" stroke-width="3" opacity=".55"/>
+    <circle cx="876" cy="270" r="40" fill="none" stroke="#f59e0b" stroke-width="2" opacity=".3"/>
+    <path d="M856 380 l40-40 M856 340 l40 40" stroke="#f59e0b" stroke-width="0" />
+    <circle cx="984" cy="348" r="8" fill="#e8e8ec"/>
+    <path d="M992 348 H1076" stroke="#e8e8ec" stroke-width="4" stroke-linecap="round" stroke-dasharray="10 8"/><circle cx="1076" cy="348" r="8" fill="#e8e8ec"/>
+
+    <rect x="1084" y="300" width="200" height="92" rx="18" fill="#1f2a27" stroke="#34d399" stroke-width="3"/>
+    <path d="M1156 348 l16 16 32-38" fill="none" stroke="#34d399" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <g>
+    <circle cx="900" cy="222" r="74" fill="#191c22" fill-opacity=".55" stroke="#e8e8ec" stroke-width="6"/>
+    <path d="M952 274 L1010 332" stroke="#e8e8ec" stroke-width="14" stroke-linecap="round"/>
+    <path d="M878 200 l44 44 M922 200 l-44 44" stroke="#f59e0b" stroke-width="8" stroke-linecap="round"/>
+  </g>
+
+  <g>
+    <rect x="240" y="480" width="420 " height="90" rx="18" fill="#191c22" stroke="#3a3f4a" stroke-width="2"/>
+    <rect x="266" y="504" width="120" height="14" rx="7" fill="#fca5a5"/>
+    <rect x="266" y="532" width="330" height="12" rx="6" fill="#2c323d"/>
+    <rect x="700" y="480" width="420" height="90" rx="18" fill="#191c22" stroke="#3a3f4a" stroke-width="2"/>
+    <rect x="726" y="504" width="180" height="14" rx="7" fill="#7ee2b8"/>
+    <rect x="726" y="532" width="300" height="12" rx="6" fill="#2c323d"/>
+  </g>
+
+  <g filter="url(#soft)" opacity=".7">
+    <circle cx="200" cy="170" r="5" fill="#f59e0b"/><circle cx="1300" cy="580" r="4" fill="#34d399"/><circle cx="1360" cy="170" r="4" fill="#f59e0b"/><circle cx="140" cy="600" r="4" fill="#60a5fa"/>
+  </g>
+</svg>

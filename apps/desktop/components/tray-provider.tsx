@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	useBackend,
 	useInvoke,
@@ -31,6 +32,7 @@ const pushTrayUpdate = (update: TrayUpdate) =>
 	);
 
 const TrayProvider: React.FC = () => {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const isOnline = useNetworkStatus();
 	const router = useRouter();
@@ -38,7 +40,7 @@ const TrayProvider: React.FC = () => {
 	const syncStatus = useMemo<TraySyncStatus>(
 		() => ({
 			status: isOnline ? "Online" : "Offline",
-			detail: isOnline ? "Cloud sync active" : "Waiting for network",
+			detail: isOnline ? t('cloudSyncActive', 'Cloud sync active') : t('waitingForNetwork', 'Waiting for network'),
 		}),
 		[isOnline],
 	);

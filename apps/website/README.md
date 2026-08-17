@@ -43,6 +43,37 @@ All commands are run from the root of the project, from a terminal:
 | `npm run astro ...`       | Run CLI commands like `astro add`, `astro check` |
 | `npm run astro -- --help` | Get help using the Astro CLI                     |
 
+## 🤖 Markdown for agents
+
+Every prerendered page answers `Accept: text/markdown` with a Markdown
+representation; HTML stays the default for browsers. Appending `.md` to a page
+URL works too (`/pricing.md`), which is handy for humans checking what an agent
+sees.
+
+| Piece | File |
+| :--- | :--- |
+| HTML → Markdown conversion | `scripts/agent-markdown/html-to-markdown.mjs` |
+| Build step writing the twins | `scripts/agent-markdown/generate.mjs` |
+| Accept-header negotiation | `scripts/agent-markdown/markdown-negotiation.mjs` |
+
+`astro build` writes `<page>.md` next to every `<page>.html` in `dist/client`,
+and `scripts/prepare-workers-sites-deploy.mjs` copies the negotiation module
+into the Worker entry so it can serve that twin before Astro handles the
+request. Responses carry `Content-Type: text/markdown; charset=utf-8`, an
+`x-markdown-tokens` estimate, `Vary: Accept`, and a canonical `Link` header.
+
+The on-demand `/store/**` routes have no prebuilt twin and keep serving HTML.
+
+`scripts/agent-markdown/html-to-markdown.mjs` is mirrored in `apps/docs` — keep
+both copies in sync.
+
+```sh
+bun run build
+node ./scripts/prepare-workers-sites-deploy.mjs
+bunx wrangler dev --port 8798
+curl -sD- -o- http://127.0.0.1:8798/pricing/ -H 'Accept: text/markdown' | head
+```
+
 ## 👀 Want to learn more?
 
 Feel free to check [our documentation](https://docs.astro.build) or jump into our [Discord server](https://astro.build/chat).

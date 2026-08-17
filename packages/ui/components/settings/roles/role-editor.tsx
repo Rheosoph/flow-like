@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import { Copy, Plus, Star, Trash2, X } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { RolePermissions } from "../../../lib/permission/role-permission";
@@ -83,6 +84,7 @@ export function RoleEditor({
 	onDelete,
 	onSetDefault,
 }: Readonly<RoleEditorProps>) {
+	const { t } = useTranslation("settings");
 	const permissions = useMemo(
 		() => new RolePermissions(BigInt(role.permissions)),
 		[role.permissions],
@@ -109,7 +111,7 @@ export function RoleEditor({
 							id={`role-name-${role.id}`}
 							value={role.name}
 							readOnly={isOwner}
-							placeholder="e.g. Reviewer"
+							placeholder={t('egReviewer', 'e.g. Reviewer')}
 							onChange={(event) =>
 								onChange({ ...role, name: event.target.value })
 							}
@@ -117,12 +119,12 @@ export function RoleEditor({
 					</div>
 					<div className="flex flex-col gap-1.5">
 						<Label htmlFor={`role-desc-${role.id}`} className="text-xs">
-							Description
+							{t('description', 'Description')}
 						</Label>
 						<Input
 							id={`role-desc-${role.id}`}
 							value={role.description}
-							placeholder="Who is this for?"
+							placeholder={t('whoIsThisFor', 'Who is this for?')}
 							onChange={(event) =>
 								onChange({ ...role, description: event.target.value })
 							}
@@ -179,9 +181,10 @@ function ElevationPicker({
 	disabled: boolean;
 	onSelect: (next: Elevation) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	return (
 		<div className="flex flex-col gap-1.5">
-			<Label className="text-xs">Elevation</Label>
+			<Label className="text-xs">{t('elevation', 'Elevation')}</Label>
 			<div className="flex flex-wrap gap-2">
 				{ELEVATION_OPTIONS.map((option) => {
 					const active = option.value === elevation;
@@ -233,6 +236,7 @@ function LadderControl({
 	elevationLabel: string;
 	onChange: (next: RolePermissions) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const [showAdvanced, setShowAdvanced] = useState(false);
 	const exact = levelOf(permissions, ladder);
 	const shown = effectiveLevel(permissions, ladder);
@@ -258,7 +262,7 @@ function LadderControl({
 				</span>
 				{isCustom && (
 					<span className="text-[10px] font-bold uppercase tracking-wide rounded px-1.5 py-0.5 bg-primary/15 text-primary">
-						Custom
+						{t('custom', 'Custom')}
 					</span>
 				)}
 				<button
@@ -296,18 +300,17 @@ function LadderControl({
 			<p className="text-xs text-muted-foreground mt-1.5">
 				{locked ? (
 					<>
-						Granted through <strong>{elevationLabel}</strong>.
+						{t('grantedThrough', 'Granted through')} <strong>{elevationLabel}</strong>.
 					</>
 				) : isCustom ? (
-					"A mix that doesn't match a level — the exact permissions are below."
+					t('aMixThatDoesntMatchALevelTheExactPermissionsAreBelow', 'A mix that doesn\'t match a level — the exact permissions are below.')
 				) : level?.can ? (
 					<>
-						Members can <strong className="text-foreground">{level.can}</strong>
+						{t('membersCan', 'Members can')} <strong className="text-foreground">{level.can}</strong>
 						.
 					</>
 				) : (
-					<>
-						Members <strong className="text-foreground">cannot</strong>{" "}
+					<><Trans i18nKey="membersStrongClassnametextforegroundcannotstrong">Members <strong className="text-foreground">cannot</strong></Trans>{" "}
 						{level?.cannot}.
 					</>
 				)}
@@ -366,6 +369,7 @@ function AttributesField({
 	knownAttributes: string[];
 	onChange: (next: string[]) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const [draft, setDraft] = useState("");
 	const suggestions = knownAttributes.filter(
 		(attribute) => !attributes.includes(attribute),
@@ -380,15 +384,14 @@ function AttributesField({
 
 	return (
 		<div className="flex flex-col gap-2 pt-3 border-t">
-			<Label className="text-xs">Attributes</Label>
+			<Label className="text-xs">{t('attributes', 'Attributes')}</Label>
 			<p className="text-xs text-muted-foreground">
-				Tags that policy rules and member filters match on. They grant nothing
-				on their own.
+				{t('tagsThatPolicyRulesAndMemberFiltersMatchOnTheyGrantNothingOnTheirOwn', "Tags that policy rules and member filters match on. They grant nothing on their own.")}
 			</p>
 			<div className="flex gap-2">
 				<Input
 					value={draft}
-					placeholder="e.g. region:eu"
+					placeholder={t('egRegioneu', 'e.g. region:eu')}
 					className="flex-1 font-mono text-xs"
 					onChange={(event) => setDraft(event.target.value)}
 					onKeyDown={(event) => {
@@ -403,7 +406,7 @@ function AttributesField({
 					disabled={!draft.trim()}
 					onClick={() => add(draft)}
 				>
-					Add
+					{t('add', 'Add')}
 				</Button>
 			</div>
 			{attributes.length > 0 && (
@@ -416,7 +419,7 @@ function AttributesField({
 							{attribute}
 							<button
 								type="button"
-								aria-label={`Remove ${attribute}`}
+								aria-label={t('removeAttribute', 'Remove {{attribute}}', { attribute })}
 								className="text-muted-foreground hover:text-destructive"
 								onClick={() =>
 									onChange(attributes.filter((item) => item !== attribute))
@@ -430,7 +433,7 @@ function AttributesField({
 			)}
 			{suggestions.length > 0 && (
 				<div className="flex flex-wrap items-center gap-1.5">
-					<span className="text-xs text-muted-foreground">Already in use:</span>
+					<span className="text-xs text-muted-foreground">{t('alreadyInUse', 'Already in use:')}</span>
 					{suggestions.map((attribute) => (
 						<button
 							key={attribute}
@@ -467,6 +470,7 @@ function AccessPreview({
 	onDelete: () => void;
 	onSetDefault: () => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const elevation = elevationOf(permissions);
 	const name = role.name.trim() || "This role";
 	const { can, cannot } = useMemo(
@@ -478,23 +482,23 @@ function AccessPreview({
 	let summary: string;
 	let caveat: string;
 	if (elevation === "owner") {
-		summary = `${name} can do everything, including transferring or deleting the app.`;
-		caveat = "Owner cannot be reduced — move ownership to change it.";
+		summary = t('nameCanDoEverythingIncludingTransferringOrDeletingTheApp', '{{name}} can do everything, including transferring or deleting the app.', { name });
+		caveat = t('ownerCannotBeReducedMoveOwnershipToChangeIt', 'Owner cannot be reduced — move ownership to change it.');
 	} else if (elevation === "admin") {
-		summary = `${name} can do everything except transfer or delete the app.`;
-		caveat = "Individual levels have no effect while Administrator is on.";
+		summary = t('nameCanDoEverythingExceptTransferOrDeleteTheApp', '{{name}} can do everything except transfer or delete the app.', { name });
+		caveat = t('individualLevelsHaveNoEffectWhileAdministratorIsOn', 'Individual levels have no effect while Administrator is on.');
 	} else {
 		summary =
 			can.length > 0
-				? `${name} can ${joinClauses(can)}.`
-				: `${name} has no access to anything in this app.`;
-		caveat = cannot.length > 0 ? `Cannot ${joinClauses(cannot)}.` : "";
+				? t('nameCanVal', '{{name}} can {{val}}.', { name, val: joinClauses(can) })
+				: t('nameHasNoAccessToAnythingInThisApp', '{{name}} has no access to anything in this app.', { name });
+		caveat = cannot.length > 0 ? t('cannotVal', 'Cannot {{val}}.', { val: joinClauses(cannot) }) : "";
 	}
 
 	return (
 		<aside className="flex flex-col gap-3 p-4 bg-muted/30 border-t lg:border-t-0 lg:border-l">
 			<p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-				What this role can do
+				{t('whatThisRoleCanDo', 'What this role can do')}
 			</p>
 			<p className="text-[15px] leading-relaxed">{summary}</p>
 			{caveat && (
@@ -505,13 +509,13 @@ function AccessPreview({
 
 			<dl className="flex flex-col gap-1.5 pt-3 border-t text-sm">
 				<div className="flex items-baseline justify-between gap-3">
-					<dt className="text-muted-foreground">Permissions</dt>
+					<dt className="text-muted-foreground">{t('permissions', 'Permissions')}</dt>
 					<dd className="font-mono tabular-nums">
 						{effectivePermissionCount(permissions)}/{TOTAL_PERMISSION_COUNT}
 					</dd>
 				</div>
 				<div className="flex items-baseline justify-between gap-3">
-					<dt className="text-muted-foreground">Can change data</dt>
+					<dt className="text-muted-foreground">{t('canChangeData', 'Can change data')}</dt>
 					<dd
 						className={cn(
 							"font-mono tabular-nums",
@@ -523,7 +527,7 @@ function AccessPreview({
 				</div>
 				{memberCount !== undefined && (
 					<div className="flex items-baseline justify-between gap-3">
-						<dt className="text-muted-foreground">Members</dt>
+						<dt className="text-muted-foreground">{t('members2', 'Members')}</dt>
 						<dd className="font-mono tabular-nums">{memberCount}</dd>
 					</div>
 				)}
@@ -532,12 +536,12 @@ function AccessPreview({
 			<div className="flex flex-wrap gap-2 pt-3 border-t mt-auto">
 				<Button variant="outline" size="sm" onClick={onDuplicate}>
 					<Copy className="h-3.5 w-3.5 mr-1.5" />
-					Duplicate
+					{t('duplicate', 'Duplicate')}
 				</Button>
 				{!isDefault && !isOwner && (
 					<Button variant="outline" size="sm" onClick={onSetDefault}>
 						<Star className="h-3.5 w-3.5 mr-1.5" />
-						Make default
+						{t('makeDefault', 'Make default')}
 					</Button>
 				)}
 				{!isOwner && (
@@ -549,25 +553,25 @@ function AccessPreview({
 								className="text-destructive hover:text-destructive"
 							>
 								<Trash2 className="h-3.5 w-3.5 mr-1.5" />
-								Delete
+								{t('delete', 'Delete')}
 							</Button>
 						</AlertDialogTrigger>
 						<AlertDialogContent>
 							<AlertDialogHeader>
-								<AlertDialogTitle>Delete role</AlertDialogTitle>
+								<AlertDialogTitle>{t('deleteRole', 'Delete role')}</AlertDialogTitle>
 								<AlertDialogDescription>
 									{memberCount
-										? `${memberCount} ${memberCount === 1 ? "member" : "members"} will be reassigned to the default role.`
-										: "Members with this role will be reassigned to the default role."}
+										? t('membercountValWillBeReassignedToTheDefaultRole', '{{memberCount}} {{val}} will be reassigned to the default role.', { memberCount, val: memberCount === 1 ? "member" : "members" })
+										: t('membersWithThisRoleWillBeReassignedToTheDefaultRole', 'Members with this role will be reassigned to the default role.')}
 								</AlertDialogDescription>
 							</AlertDialogHeader>
 							<AlertDialogFooter>
-								<AlertDialogCancel>Cancel</AlertDialogCancel>
+								<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
 								<AlertDialogAction
 									onClick={onDelete}
 									className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 								>
-									Delete
+									{t('delete', 'Delete')}
 								</AlertDialogAction>
 							</AlertDialogFooter>
 						</AlertDialogContent>

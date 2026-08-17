@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import {
 	Card,
 	CardContent,
@@ -28,6 +29,7 @@ export function DependencyConfiguration({
 	bit: IBit;
 	setBit: Dispatch<SetStateAction<IBit | undefined>>;
 }>) {
+	const { t } = useTranslation("common");
 	const prefillData = useCallback(async () => {
 		if (!bit.download_link) return;
 
@@ -54,14 +56,12 @@ export function DependencyConfiguration({
 		<div className="space-y-6 w-full max-w-screen-lg">
 			<Card className="w-full">
 				<CardHeader>
-					<CardTitle>{name} Configuration</CardTitle>
-					<CardDescription>
-						Configure the {name} download and metadata
-					</CardDescription>
+					<CardTitle>{t('nameConfiguration', '{{name}} Configuration', { name })}</CardTitle>
+					<CardDescription>{t('configureTheNameDownloadAndMetadata', 'Configure the {{name}} download and metadata', { name })}</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="space-y-2">
-						<Label htmlFor="projection-link">{name} Link *</Label>
+						<Label htmlFor="projection-link">{t('nameLink', '{{name}} Link *', { name })}</Label>
 						<Input
 							id="projection-link"
 							value={bit.download_link ?? ""}
@@ -83,12 +83,12 @@ export function DependencyConfiguration({
 									});
 								}
 							}}
-							placeholder="Projection Download Link"
+							placeholder={t('projectionDownloadLink', 'Projection Download Link')}
 							required
 						/>
 					</div>
 					<div className="space-y-2">
-						<Label htmlFor="file-name">Stored File Path</Label>
+						<Label htmlFor="file-name">{t('storedFilePath', 'Stored File Path')}</Label>
 						<Input
 							id="file-name"
 							value={bit.file_name ?? ""}
@@ -98,16 +98,15 @@ export function DependencyConfiguration({
 									file_name: e.target.value.trim(),
 								}));
 							}}
-							placeholder="config.json or weights/model.safetensors"
+							placeholder={t('configjsonOrWeightsmodelsafetensors', 'config.json or weights/model.safetensors')}
 						/>
 						<p className="text-xs text-muted-foreground">
-							Directory-relative paths are preserved for multi-file model
-							bundles.
+							{t('directoryrelativePathsArePreservedForMultifileModelBundles', "Directory-relative paths are preserved for multi-file model bundles.")}
 						</p>
 					</div>
 					{typeof bit.size === "number" && bit.size > 0 && (
 						<div className="space-y-2">
-							<Label className="text-muted-foreground">{name} Size</Label>
+							<Label className="text-muted-foreground">{t('nameSize', '{{name}} Size', { name })}</Label>
 							<div className="text-sm bg-muted px-3 py-2 rounded-md">
 								{humanFileSize(bit.size)}
 							</div>

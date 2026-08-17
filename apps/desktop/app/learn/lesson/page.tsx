@@ -1,41 +1,24 @@
 "use client";
 import {
-	AppGeneralSettings,
-	Badge,
 	Button,
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
 	ChallengeRunner,
-	type FlowLibraryBoardCreationState,
-	FlowLibraryBoardsSection,
-	FlowLibraryHeader,
-	type IApp,
 	type IEvent,
-	IExecutionStage,
-	ILogLevel,
-	type IMetadata,
 	type IOAuthProvider,
 	type IStoredOAuthToken,
 	LessonActionButton,
 	LessonContent,
-	ResizableHandle,
-	ResizablePanel,
-	ResizablePanelGroup,
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger,
-	UsePageContent,
+	LessonWorkspace,
+	type PaneTarget,
 	buildLessonAction,
-	isEqual,
+	paneModeForSubpath,
+	routeLabelForLessonSubpath,
 	useBackend,
-	useFlowBoardParentState,
 	useHub,
 	useInvoke,
+	useIsWideScreen,
+	useLessonWorkspaceLayout,
 } from "@flow-like/flow-like-ui";
+import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import type {
 	BoardSnapshot,
 	Challenge,
@@ -43,165 +26,23 @@ import type {
 	LessonAction,
 	LessonAppRef,
 } from "@flow-like/flow-like-ui";
-import { FlowWrapper } from "@flow-like/flow-like-ui/components/flow/flow-wrapper";
-import EventsPage from "@flow-like/flow-like-ui/components/settings/events/events-page";
-import {
-	type PageData,
-	PagesSection,
-} from "@flow-like/flow-like-ui/components/settings/routes";
 import { BOARD_BRIDGE_NATIVE_EVENT } from "@flow-like/flow-like-ui/lib/learn/board-bridge";
 import {
 	type UserLessonProgress,
 	translateId,
 } from "@flow-like/flow-like-ui/lib/learn/types";
-import { createId } from "@paralleldrive/cuid2";
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import "@xyflow/react/dist/style.css";
-import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
-import {
-	ArrowLeft,
-	BookOpen,
-	CheckCircle2,
-	Columns2,
-	FileText,
-	type LucideIcon,
-	Sparkles,
-	Wrench,
-} from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import {
-	Suspense,
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
-import type {
-	ImperativePanelGroupHandle,
-	ImperativePanelHandle,
-} from "react-resizable-panels";
 import { toast } from "sonner";
 import { learnApi } from "../../../lib/learn-api";
 import { oauthConsentStore, oauthTokenStore } from "../../../lib/oauth-db";
 import { oauthService } from "../../../lib/oauth-service";
-
-type PaneMode = "use" | "flow" | "flows" | "events" | "pages" | "config";
-
-interface PaneTarget {
-	readonly mode: PaneMode;
-	readonly appId: string;
-	readonly boardId?: string;
-	readonly nodeId?: string;
-	readonly version?: [number, number, number];
-	readonly routePath?: string;
-	readonly eventId?: string | null;
-	readonly newEventTemplate?: Partial<IEvent>;
-	readonly label?: string;
-}
-
-function routeLabelForLessonSubpath(subpath: string) {
-	if (subpath === "config") return "Config";
-	if (subpath === "events") return "Events";
-	if (subpath === "pages") return "Pages";
-	if (subpath === "flow") return "Board";
-	if (subpath === "use") return "App";
-	return "App";
-}
-
-function paneModeForSubpath(subpath: string): PaneMode {
-	if (subpath === "events") return "events";
-	if (subpath === "pages") return "pages";
-	if (subpath === "flow") return "flows";
-	if (subpath === "use") return "use";
-	return "config";
-}
-
-type LessonMode = "read" | "split" | "build";
-
-const LESSON_MODE_LAYOUTS: Record<LessonMode, [number, number]> = {
-	read: [100, 0],
-	split: [50, 50],
-	build: [30, 70],
-};
-
-const LESSON_MODES: ReadonlyArray<{
-	readonly id: LessonMode;
-	readonly label: string;
-	readonly description: string;
-	readonly Icon: LucideIcon;
-}> = [
-	{
-		id: "read",
-		label: "Read",
-		description: "Focus on the lesson — hide the workspace.",
-		Icon: BookOpen,
-	},
-	{
-		id: "split",
-		label: "Split",
-		description: "Read alongside the workspace, side by side.",
-		Icon: Columns2,
-	},
-	{
-		id: "build",
-		label: "Build",
-		description: "Give the workspace the spotlight.",
-		Icon: Wrench,
-	},
-];
-
-function useIsWideScreen() {
-	const [isWide, setIsWide] = useState(false);
-	useEffect(() => {
-		if (typeof window === "undefined") return;
-		const mql = window.matchMedia("(min-width: 1024px)");
-		const update = () => setIsWide(mql.matches);
-		update();
-		mql.addEventListener("change", update);
-		return () => mql.removeEventListener("change", update);
-	}, []);
-	return isWide;
-}
-
-function LessonModeToggle({
-	mode,
-	onChange,
-}: {
-	readonly mode: LessonMode;
-	readonly onChange: (mode: LessonMode) => void;
-}) {
-	return (
-		<div className="inline-flex items-center gap-0.5 rounded-full border bg-muted/40 p-0.5">
-			{LESSON_MODES.map((m) => {
-				const active = mode === m.id;
-				return (
-					<Tooltip key={m.id}>
-						<TooltipTrigger asChild>
-							<button
-								type="button"
-								onClick={() => onChange(m.id)}
-								className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-									active
-										? "bg-background text-foreground shadow-sm"
-										: "text-muted-foreground hover:text-foreground"
-								}`}
-								aria-pressed={active}
-								aria-label={`${m.label} layout`}
-							>
-								<m.Icon className="h-3.5 w-3.5" />
-								<span className="hidden sm:inline">{m.label}</span>
-							</button>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">{m.description}</TooltipContent>
-					</Tooltip>
-				);
-			})}
-		</div>
-	);
-}
 
 export default function LessonPage() {
 	return (
@@ -212,6 +53,7 @@ export default function LessonPage() {
 }
 
 function LessonContentPage() {
+	const { t } = useTranslation("common");
 	const auth = useAuth();
 	const { hub } = useHub();
 	const searchParams = useSearchParams();
@@ -249,6 +91,40 @@ function LessonContentPage() {
 		enabled: Boolean(profile && auth.user),
 		queryFn: () => learnApi.myEnrollments(getProfile(), auth),
 	});
+
+	/** Same key as the course page, so arriving from there costs no request. */
+	const structureQuery = useQuery({
+		queryKey: ["learn", "structure", courseId, profileId],
+		enabled: Boolean(profile && courseId),
+		queryFn: () => learnApi.getCourseStructure(getProfile(), auth, courseId),
+	});
+
+	const courseLessons = useMemo(
+		() =>
+			(structureQuery.data?.modules ?? []).flatMap((m) =>
+				m.lessons.map((l) => ({
+					id: l.id,
+					title: l.title,
+					moduleId: m.id,
+				})),
+			),
+		[structureQuery.data],
+	);
+	const lessonIndex = useMemo(
+		() => courseLessons.findIndex((l) => l.id === lessonId),
+		[courseLessons, lessonId],
+	);
+	const previousLesson =
+		lessonIndex > 0 ? courseLessons[lessonIndex - 1] : null;
+	const nextLesson =
+		lessonIndex >= 0 && lessonIndex < courseLessons.length - 1
+			? courseLessons[lessonIndex + 1]
+			: null;
+	const lessonHref = useCallback(
+		(targetModuleId: string, targetLessonId: string) =>
+			`/learn/lesson?learnCourseId=${encodeURIComponent(courseId)}&learnModuleId=${encodeURIComponent(targetModuleId)}&learnLessonId=${encodeURIComponent(targetLessonId)}`,
+		[courseId],
+	);
 
 	const enrollment = useMemo(
 		() => (enrollmentQuery.data ?? []).find((e) => e.course_id === courseId),
@@ -327,9 +203,6 @@ function LessonContentPage() {
 	);
 	const [paneTarget, setPaneTarget] = useState<PaneTarget | null>(null);
 	const [paneTouched, setPaneTouched] = useState(false);
-	const [lessonMode, setLessonMode] = useState<LessonMode>("split");
-	const panelGroupRef = useRef<ImperativePanelGroupHandle>(null);
-	const appPanelRef = useRef<ImperativePanelHandle>(null);
 	const isWideScreen = useIsWideScreen();
 	const uiEventTypes = useMemo(() => {
 		const set = new Set<string>();
@@ -380,7 +253,7 @@ function LessonContentPage() {
 							return {
 								mode: "flows",
 								appId,
-								label: "Flows",
+								label: t("flows", "Flows"),
 							};
 						}
 						const version = params.version
@@ -396,7 +269,7 @@ function LessonContentPage() {
 							boardId,
 							nodeId: params.node ?? params.focus,
 							version,
-							label: "Board",
+							label: t("board", "Board"),
 						};
 					}
 					return {
@@ -422,7 +295,7 @@ function LessonContentPage() {
 						appId,
 						boardId,
 						nodeId,
-						label: "Board",
+						label: t("board", "Board"),
 					};
 				}
 				case "ADD_NODE": {
@@ -436,7 +309,7 @@ function LessonContentPage() {
 						mode: "flow",
 						appId,
 						boardId,
-						label: "Board",
+						label: t("board", "Board"),
 					};
 				}
 				case "CREATE_EVENT": {
@@ -446,7 +319,7 @@ function LessonContentPage() {
 						mode: "events",
 						appId,
 						newEventTemplate: action.template as Partial<IEvent>,
-						label: "Events",
+						label: t("events", "Events"),
 					};
 				}
 				case "OPEN_OR_CLONE_APP": {
@@ -460,7 +333,7 @@ function LessonContentPage() {
 						appId,
 						routePath: "/",
 						eventId: null,
-						label: "App",
+						label: t("app", "App"),
 					};
 				}
 			}
@@ -530,7 +403,7 @@ function LessonContentPage() {
 					mode: "flow",
 					appId,
 					boardId: translatedBoard,
-					label: "Board",
+					label: t("board", "Board"),
 				};
 			}
 		}
@@ -538,6 +411,9 @@ function LessonContentPage() {
 	}, [challenges, resolveAppId, enrollment]);
 
 	const hasAppPane = appRefs.length > 0 || boardDefaultTarget !== null;
+	const showSplitView = hasAppPane && isWideScreen;
+	const { mode, applyMode, revealWorkspace, panelGroupRef, appPanelRef } =
+		useLessonWorkspaceLayout(showSplitView);
 
 	useEffect(() => {
 		setPaneTarget(null);
@@ -578,104 +454,127 @@ function LessonContentPage() {
 		boardDefaultTarget,
 	]);
 
+	const requestBoardSnapshot = useCallback(
+		(timeoutMs: number) =>
+			new Promise<BoardSnapshot>((resolve, reject) => {
+				const timer = window.setTimeout(() => {
+					reject(new Error("Timed out waiting for board state."));
+				}, timeoutMs);
+				window.dispatchEvent(
+					new CustomEvent(BOARD_BRIDGE_NATIVE_EVENT, {
+						detail: {
+							resolve: (snapshot: BoardSnapshot) => {
+								window.clearTimeout(timer);
+								resolve(snapshot);
+							},
+							reject: (error: Error) => {
+								window.clearTimeout(timer);
+								reject(error);
+							},
+						},
+					}),
+				);
+			}),
+		[],
+	);
+
+	/**
+	 * A board challenge reads live board state, so the board has to be open. That
+	 * is something the UI can do on the learner's behalf — opening the pane here
+	 * beats failing the check and telling them to go open it themselves.
+	 */
 	const buildBoardSubmission = useCallback(async (): Promise<BoardSnapshot> => {
-		if (!paneTarget || paneTarget.mode !== "flow") {
+		if (paneTarget?.mode === "flow" && paneTarget.boardId) {
+			return requestBoardSnapshot(5000);
+		}
+
+		if (!boardDefaultTarget) {
 			throw new Error(
-				"Open the board in the side-by-side pane (Edit board) before checking.",
+				t(
+					"thisChallengeNeedsABoardThatIsNotLinkedToTheLesson",
+					"This challenge needs a board, but none is linked to the lesson.",
+				),
 			);
 		}
-		return new Promise<BoardSnapshot>((resolve, reject) => {
-			const timer = window.setTimeout(() => {
-				reject(new Error("Timed out waiting for board state."));
-			}, 5000);
-			window.dispatchEvent(
-				new CustomEvent(BOARD_BRIDGE_NATIVE_EVENT, {
-					detail: {
-						resolve: (snapshot: BoardSnapshot) => {
-							window.clearTimeout(timer);
-							resolve(snapshot);
-						},
-						reject: (error: Error) => {
-							window.clearTimeout(timer);
-							reject(error);
-						},
-					},
-				}),
-			);
-		});
-	}, [paneTarget]);
+
+		setPaneTarget(boardDefaultTarget);
+		setPaneTouched(true);
+		revealWorkspace();
+
+		for (let attempt = 0; attempt < 5; attempt++) {
+			try {
+				return await requestBoardSnapshot(1500);
+			} catch {
+				// The board is still mounting — the bridge answers once it is ready.
+			}
+		}
+		throw new Error(
+			t(
+				"couldNotReadTheBoardOpenItInTheWorkspacePaneAndTryAgain",
+				"Could not read the board. Open it in the workspace pane and try again.",
+			),
+		);
+	}, [
+		paneTarget,
+		boardDefaultTarget,
+		requestBoardSnapshot,
+		revealWorkspace,
+		t,
+	]);
 
 	if (!courseId || !moduleId || !lessonId) {
 		return (
 			<div className="flex-1 overflow-auto">
 				<div className="mx-auto max-w-3xl p-6 md:p-10">
-					<Card>
-						<CardHeader>
-							<CardTitle>Lesson missing</CardTitle>
-							<CardDescription>
-								Open a lesson from a course in the university catalog.
-							</CardDescription>
-						</CardHeader>
-						<CardContent>
-							<Button asChild variant="outline">
-								<Link href="/learn">
-									<ArrowLeft className="mr-2 h-4 w-4" />
-									All courses
-								</Link>
-							</Button>
-						</CardContent>
-					</Card>
+					<div className="rounded-xl border border-border/70 p-6">
+						<h1 className="text-lg font-semibold">
+							{t("lessonMissing", "Lesson missing")}
+						</h1>
+						<p className="mt-1 text-sm text-muted-foreground">
+							{t(
+								"openALessonFromACourseInTheUniversityCatalog",
+								"Open a lesson from a course in the university catalog.",
+							)}
+						</p>
+						<Button asChild variant="outline" className="mt-4">
+							<Link href="/learn">
+								<ArrowLeft className="mr-2 h-4 w-4" />
+								{t("allCourses", "All courses")}
+							</Link>
+						</Button>
+					</div>
 				</div>
 			</div>
 		);
 	}
 
-	const showSplitView = hasAppPane && isWideScreen;
-
-	const applyLessonMode = useCallback(
-		(next: LessonMode) => {
-			setLessonMode(next);
-			if (!showSplitView) return;
-			const appPanel = appPanelRef.current;
-			const group = panelGroupRef.current;
-			if (next === "read") {
-				appPanel?.collapse();
-				return;
-			}
-			if (appPanel?.isCollapsed()) {
-				appPanel.expand();
-			}
-			group?.setLayout([...LESSON_MODE_LAYOUTS[next]]);
-		},
-		[showSplitView],
-	);
-
 	const lessonBody = (
-		<div className="mx-auto w-full max-w-3xl space-y-6 p-6 md:p-8 lg:p-10">
+		<div className="mx-auto w-full max-w-5xl space-y-6 p-6 md:p-8 lg:p-10">
 			{lesson ? (
 				<LessonContent lesson={lesson} assets={assets} />
 			) : (
-				<p className="text-sm text-muted-foreground">Loading…</p>
+				<p className="text-sm text-muted-foreground">
+					{t("loading", "Loading…")}
+				</p>
 			)}
 
 			{appRefs.length > 0 && (
-				<Card className="overflow-hidden border-primary/20 bg-linear-to-br from-primary/6 via-card to-card shadow-sm">
-					<CardHeader className="space-y-1.5 pb-3">
-						<div className="flex items-start gap-3">
-							<div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary ring-1 ring-primary/20">
-								<Sparkles className="h-4 w-4" />
-							</div>
-							<div className="space-y-0.5">
-								<CardTitle className="text-base">
-									Try it in the workspace
-								</CardTitle>
-								<CardDescription className="text-xs">
-									Open the side workspace to apply what you've just learned.
-								</CardDescription>
-							</div>
-						</div>
-					</CardHeader>
-					<CardContent className="flex flex-wrap gap-2">
+				<section className="rounded-lg border border-border/70 border-l-2 border-l-primary bg-card p-4">
+					<p className="font-mono text-[10px] uppercase tracking-wider text-primary">
+						{t("doItInTheWorkspace", "Do it in the workspace")}
+					</p>
+					<p className="mt-1.5 text-sm text-muted-foreground">
+						{showSplitView
+							? t(
+									"theseOpenInThePaneBesideTheLesson",
+									"These open in the pane beside the lesson — nothing leaves this screen.",
+								)
+							: t(
+									"theseOpenTheWorkspaceBelowTheLesson",
+									"These open the workspace below the lesson.",
+								)}
+					</p>
+					<div className="mt-3 flex flex-wrap gap-2">
 						{appRefs.map((r: LessonAppRef) => (
 							<LessonActionButton
 								key={r.id}
@@ -684,8 +583,8 @@ function LessonContentPage() {
 								dispatch={dispatch}
 							/>
 						))}
-					</CardContent>
-				</Card>
+					</div>
+				</section>
 			)}
 
 			{challenges.length > 0 && (
@@ -707,497 +606,73 @@ function LessonContentPage() {
 					})}
 				</div>
 			)}
-		</div>
-	);
 
-	return (
-		<div className="flex-1 flex flex-col h-full overflow-hidden bg-linear-to-b from-muted/20 via-background to-background">
-			<header className="border-b backdrop-blur supports-backdrop-filter:bg-background/70 px-4 py-2.5 flex items-center gap-3">
-				<Link
-					href={`/learn/course?courseId=${encodeURIComponent(courseId)}`}
-					className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-				>
-					<ArrowLeft className="h-3.5 w-3.5" />
-					Back to course
-				</Link>
-				<div className="ml-auto flex items-center gap-3">
-					{showSplitView && (
-						<LessonModeToggle mode={lessonMode} onChange={applyLessonMode} />
+			{(previousLesson || nextLesson) && (
+				<nav className="flex gap-3 border-t pt-5">
+					{previousLesson && (
+						<Link
+							href={lessonHref(previousLesson.moduleId, previousLesson.id)}
+							className="flex-1 rounded-lg border border-border/70 p-3 transition-colors hover:bg-muted/50"
+						>
+							<span className="block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+								{t("previous", "Previous")}
+							</span>
+							<span className="mt-0.5 block truncate text-sm font-semibold">
+								{previousLesson.title}
+							</span>
+						</Link>
 					)}
-					<Button
-						variant={lessonComplete ? "secondary" : "default"}
-						size="sm"
-						disabled={completeMutation.isPending || !lesson || lessonComplete}
-						onClick={() => completeMutation.mutate()}
-						className="gap-1.5"
-					>
-						<CheckCircle2 className="h-3.5 w-3.5" />
-						{lessonComplete ? "Completed" : "Mark complete"}
-					</Button>
-				</div>
-			</header>
-
-			{showSplitView ? (
-				<ResizablePanelGroup
-					ref={panelGroupRef}
-					direction="horizontal"
-					autoSaveId="lesson-workspace-layout"
-					className="flex-1 min-h-0"
-				>
-					<ResizablePanel defaultSize={50} minSize={28} className="min-h-0">
-						<section className="h-full overflow-auto">{lessonBody}</section>
-					</ResizablePanel>
-					<ResizableHandle withHandle className="bg-border/60" />
-					<ResizablePanel
-						ref={appPanelRef}
-						defaultSize={50}
-						minSize={25}
-						collapsible
-						collapsedSize={0}
-						onCollapse={() => setLessonMode("read")}
-						onExpand={() => setLessonMode((m) => (m === "read" ? "split" : m))}
-						className="min-h-0"
-					>
-						<AppPane
-							target={paneTarget}
-							onTargetChange={setPaneTarget}
-							authSub={auth.user?.profile?.sub}
-							hub={hub}
-							uiEventTypes={uiEventTypes}
-							onStartOAuth={handleStartOAuth}
-							onRefreshToken={handleRefreshToken}
-						/>
-					</ResizablePanel>
-				</ResizablePanelGroup>
-			) : (
-				<section className="flex-1 overflow-auto">{lessonBody}</section>
+					{nextLesson && (
+						<Link
+							href={lessonHref(nextLesson.moduleId, nextLesson.id)}
+							className="flex-1 rounded-lg border border-border/70 p-3 text-right transition-colors hover:bg-muted/50"
+						>
+							<span className="block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+								{t("next", "Next")}
+							</span>
+							<span className="mt-0.5 block truncate text-sm font-semibold">
+								{nextLesson.title}
+							</span>
+						</Link>
+					)}
+				</nav>
 			)}
 		</div>
 	);
-}
-
-interface AppPaneProps {
-	readonly target: PaneTarget | null;
-	readonly onTargetChange: (target: PaneTarget) => void;
-	readonly authSub?: string;
-	readonly hub: ReturnType<typeof useHub>["hub"];
-	readonly uiEventTypes: string[];
-	readonly onStartOAuth: (provider: IOAuthProvider) => Promise<void>;
-	readonly onRefreshToken: (
-		provider: IOAuthProvider,
-		token: IStoredOAuthToken,
-	) => Promise<IStoredOAuthToken>;
-}
-
-function AppPane({
-	target,
-	onTargetChange,
-	authSub,
-	hub,
-	uiEventTypes,
-	onStartOAuth,
-	onRefreshToken,
-}: AppPaneProps) {
-	if (!target) {
-		return (
-			<aside className="flex h-full flex-col border-l bg-muted/10 items-center justify-center p-8 text-center">
-				<div className="max-w-sm space-y-3">
-					<div className="rounded-2xl bg-linear-to-br from-primary/10 via-background to-background border p-6 shadow-sm">
-						<Sparkles className="h-8 w-8 mx-auto text-primary" />
-					</div>
-					<h3 className="font-medium">Preparing your workspace</h3>
-					<p className="text-sm text-muted-foreground">
-						The app for this lesson is loading.
-					</p>
-				</div>
-			</aside>
-		);
-	}
 
 	return (
-		<aside className="flex h-full flex-col border-l bg-background overflow-hidden">
-			<div className="flex items-center gap-2 border-b bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-				<Badge variant="outline" className="bg-background">
-					{target.label ?? (target.mode === "flow" ? "Board" : "App")}
-				</Badge>
-				<code className="truncate">
-					{target.mode === "flow" ? target.boardId : target.appId}
-				</code>
-				{target.mode === "flow" && (
-					<Button
-						variant="outline"
-						size="sm"
-						className="ml-auto h-6"
-						onClick={() =>
-							onTargetChange({
-								mode: "use",
-								appId: target.appId,
-								routePath: "/",
-								eventId: null,
-								label: "App",
-							})
-						}
-					>
-						Open app
-					</Button>
-				)}
-			</div>
-			<div className="flex-1 min-h-0 overflow-hidden">
-				<AppPaneContent
-					target={target}
-					onTargetChange={onTargetChange}
-					authSub={authSub}
-					hub={hub}
-					uiEventTypes={uiEventTypes}
-					onStartOAuth={onStartOAuth}
-					onRefreshToken={onRefreshToken}
-				/>
-			</div>
-		</aside>
-	);
-}
-
-interface AppPaneContentProps {
-	readonly target: PaneTarget;
-	readonly onTargetChange: (target: PaneTarget) => void;
-	readonly authSub?: string;
-	readonly hub: ReturnType<typeof useHub>["hub"];
-	readonly uiEventTypes: string[];
-	readonly onStartOAuth: (provider: IOAuthProvider) => Promise<void>;
-	readonly onRefreshToken: (
-		provider: IOAuthProvider,
-		token: IStoredOAuthToken,
-	) => Promise<IStoredOAuthToken>;
-}
-
-function AppPaneContent({
-	target,
-	onTargetChange,
-	authSub,
-	hub,
-	uiEventTypes,
-	onStartOAuth,
-	onRefreshToken,
-}: AppPaneContentProps) {
-	if (target.mode === "use") {
-		return (
-			<UsePageContent
-				eventConfig={EVENT_CONFIG}
-				notFound={<PaneEmpty title="App not found" />}
-				appId={target.appId}
-				routePath={target.routePath ?? "/"}
-				eventId={target.eventId ?? null}
-				embedded
-				onNavigate={(next) =>
-					onTargetChange({
-						...target,
-						routePath: next.routePath ?? target.routePath ?? "/",
-						eventId:
-							next.eventId === undefined
-								? (target.eventId ?? null)
-								: next.eventId,
-					})
-				}
-			/>
-		);
-	}
-
-	if (target.mode === "flow") {
-		if (!target.boardId) {
-			return (
-				<AppFlowsPane appId={target.appId} onTargetChange={onTargetChange} />
-			);
-		}
-		return (
-			<div className="h-full min-h-0">
-				<FlowWrapper
-					boardId={target.boardId}
-					appId={target.appId}
-					nodeId={target.nodeId}
-					version={target.version}
-					sub={authSub}
-					externalAssistant
-				/>
-			</div>
-		);
-	}
-
-	if (target.mode === "flows") {
-		return (
-			<AppFlowsPane appId={target.appId} onTargetChange={onTargetChange} />
-		);
-	}
-
-	if (target.mode === "events") {
-		return (
-			<div className="h-full min-h-0 overflow-auto p-4">
-				<EventsPage
-					eventMapping={EVENT_CONFIG}
-					uiEventTypes={uiEventTypes}
-					tokenStore={oauthTokenStore}
-					consentStore={oauthConsentStore}
-					onStartOAuth={onStartOAuth}
-					onRefreshToken={onRefreshToken}
-					hub={hub}
-					appId={target.appId}
-					eventId={target.eventId ?? null}
-					embedded
-					onEventIdChange={(eventId) => onTargetChange({ ...target, eventId })}
-					onNavigateToFlow={(flow) =>
-						onTargetChange({
-							mode: "flow",
-							appId: flow.appId,
-							boardId: flow.boardId,
-							nodeId: flow.nodeId,
-							version: flow.version,
-							label: "Board",
-						})
-					}
-					newEventTemplate={target.newEventTemplate}
-				/>
-			</div>
-		);
-	}
-
-	if (target.mode === "pages") {
-		return (
-			<AppPagesPane appId={target.appId} onTargetChange={onTargetChange} />
-		);
-	}
-
-	return <AppConfigPane appId={target.appId} />;
-}
-
-function AppConfigPane({ appId }: Readonly<{ appId: string }>) {
-	const backend = useBackend();
-	const app = useInvoke(
-		backend.appState.getApp,
-		backend.appState,
-		[appId],
-		Boolean(appId),
-	);
-	const metadata = useInvoke(
-		backend.appState.getAppMeta,
-		backend.appState,
-		[appId],
-		Boolean(appId),
-	);
-	const [localApp, setLocalApp] = useState<IApp | undefined>();
-	const [localMetadata, setLocalMetadata] = useState<IMetadata | undefined>();
-
-	useEffect(() => {
-		setLocalApp(app.data);
-	}, [app.data]);
-
-	useEffect(() => {
-		setLocalMetadata(metadata.data);
-	}, [metadata.data]);
-
-	const hasChanges = useMemo(
-		() =>
-			Boolean(
-				app.data &&
-					metadata.data &&
-					localApp &&
-					localMetadata &&
-					(!isEqual(localApp, app.data) ||
-						!isEqual(localMetadata, metadata.data)),
-			),
-		[app.data, localApp, localMetadata, metadata.data],
-	);
-
-	const saveChanges = useCallback(async () => {
-		if (!localApp || !localMetadata) return;
-		await backend.appState.pushAppMeta(appId, localMetadata);
-		await backend.appState.updateApp(localApp);
-		await Promise.all([app.refetch(), metadata.refetch()]);
-		toast.success("App config saved");
-	}, [app, appId, backend.appState, localApp, localMetadata, metadata]);
-
-	if (!localApp || !localMetadata) {
-		return <PaneEmpty title="Loading app config..." />;
-	}
-
-	return (
-		<div className="h-full overflow-auto p-4">
-			<AppGeneralSettings
-				app={localApp}
-				metadata={localMetadata}
-				canEdit
-				hasChanges={hasChanges}
-				onAppChange={setLocalApp}
-				onMetadataChange={setLocalMetadata}
-				onSave={saveChanges}
-				onReset={() => {
-					setLocalApp(app.data);
-					setLocalMetadata(metadata.data);
-				}}
-			/>
-		</div>
-	);
-}
-
-function AppPagesPane({
-	appId,
-	onTargetChange,
-}: Readonly<{
-	appId: string;
-	onTargetChange: (target: PaneTarget) => void;
-}>) {
-	const backend = useBackend();
-	const pages = useInvoke(
-		backend.pageState.getPages,
-		backend.pageState,
-		[appId],
-		Boolean(appId),
-		[appId],
-	);
-	const pageData = useMemo<PageData[]>(() => {
-		const timestamp = {
-			secs_since_epoch: Math.floor(Date.now() / 1000),
-			nanos_since_epoch: 0,
-		};
-		return (pages.data ?? []).map((page) => ({
-			appId,
-			pageId: page.pageId,
-			boardId: page.boardId ?? null,
-			metadata: {
-				name: page.name,
-				description: page.description ?? "",
-				preview_media: [],
-				tags: [],
-				created_at: timestamp,
-				updated_at: timestamp,
-			},
-		}));
-	}, [appId, pages.data]);
-
-	const handleDeletePage = useCallback(
-		async (pageId: string, boardId: string | null) => {
-			if (!boardId) return;
-			await backend.pageState.deletePage(appId, pageId, boardId);
-			await pages.refetch();
-		},
-		[appId, backend.pageState, pages],
-	);
-
-	return (
-		<TooltipProvider>
-			<div className="h-full overflow-auto p-6">
-				<PagesSection
-					pages={pageData}
-					onOpenPage={(pageId, boardId) => {
-						const params = new URLSearchParams({
-							id: pageId,
-							app: appId,
-						});
-						if (boardId) params.set("board", boardId);
-						window.location.href = `/page-builder?${params.toString()}`;
-					}}
-					onOpenBoard={async (boardId) =>
-						onTargetChange({
-							mode: "flow",
-							appId,
-							boardId,
-							label: "Board",
-						})
-					}
-					onDelete={handleDeletePage}
-				/>
-			</div>
-		</TooltipProvider>
-	);
-}
-
-function AppFlowsPane({
-	appId,
-	onTargetChange,
-}: Readonly<{
-	appId: string;
-	onTargetChange: (target: PaneTarget) => void;
-}>) {
-	const backend = useBackend();
-	const parentRegister = useFlowBoardParentState();
-	const app = useInvoke(
-		backend.appState.getApp,
-		backend.appState,
-		[appId],
-		Boolean(appId),
-	);
-	const boards = useInvoke(
-		backend.boardState.getBoards,
-		backend.boardState,
-		[appId],
-		Boolean(appId),
-	);
-	const [boardCreation, setBoardCreation] =
-		useState<FlowLibraryBoardCreationState>({
-			open: false,
-			name: "",
-			description: "",
-		});
-
-	useEffect(() => {
-		if (!boards.data) return;
-		boards.data.forEach((board) => {
-			parentRegister?.addBoardParent(
-				board.id,
-				`/learn/lesson?learnPane=flows&learnPaneAppId=${appId}`,
-			);
-		});
-	}, [appId, boards.data, parentRegister]);
-
-	const handleCreateBoard = useCallback(async () => {
-		await backend.boardState.upsertBoard(
-			appId,
-			createId(),
-			boardCreation.name,
-			boardCreation.description,
-			ILogLevel.Debug,
-			IExecutionStage.Dev,
-		);
-		await Promise.allSettled([boards.refetch(), app.refetch()]);
-		setBoardCreation({ open: false, name: "", description: "" });
-	}, [appId, app, backend.boardState, boardCreation, boards]);
-
-	return (
-		<div className="h-full overflow-auto p-6">
-			<div className="flex flex-col gap-4">
-				<FlowLibraryHeader
-					boardCreation={boardCreation}
-					setBoardCreation={setBoardCreation}
-					onCreateBoard={handleCreateBoard}
-				/>
-				<FlowLibraryBoardsSection
-					boards={boards}
-					app={app.data}
-					boardCreation={boardCreation}
-					setBoardCreation={setBoardCreation}
-					onOpenBoard={async (boardId) =>
-						onTargetChange({
-							mode: "flow",
-							appId,
-							boardId,
-							label: "Board",
-						})
-					}
-					onDeleteBoard={async (boardId) => {
-						await backend.boardState.deleteBoard(appId, boardId);
-						await boards.refetch();
-					}}
-				/>
-			</div>
-		</div>
-	);
-}
-
-function PaneEmpty({ title }: Readonly<{ title: string }>) {
-	return (
-		<div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-			<div>
-				<FileText className="mx-auto mb-3 h-8 w-8" />
-				{title}
-			</div>
-		</div>
+		<LessonWorkspace
+			courseHref={`/learn/course?courseId=${encodeURIComponent(courseId)}`}
+			BackLink={({ href, className, children }) => (
+				<Link href={href} className={className}>
+					{children}
+				</Link>
+			)}
+			lessonIndex={lessonIndex}
+			lessonCount={courseLessons.length}
+			estimatedMinutes={lesson?.estimated_minutes}
+			lessonComplete={lessonComplete}
+			completePending={completeMutation.isPending}
+			canComplete={Boolean(lesson)}
+			onMarkComplete={() => completeMutation.mutate()}
+			showSplitView={showSplitView}
+			mode={mode}
+			onModeChange={applyMode}
+			panelGroupRef={panelGroupRef}
+			appPanelRef={appPanelRef}
+			paneTarget={paneTarget}
+			onPaneTargetChange={setPaneTarget}
+			authSub={auth.user?.profile?.sub}
+			hub={hub}
+			uiEventTypes={uiEventTypes}
+			oauth={{
+				tokenStore: oauthTokenStore,
+				consentStore: oauthConsentStore,
+				onStartOAuth: handleStartOAuth,
+				onRefreshToken: handleRefreshToken,
+			}}
+		>
+			{lessonBody}
+		</LessonWorkspace>
 	);
 }

@@ -12,6 +12,7 @@ import type { SurfaceComponent } from "../a2ui/types";
 import {
 	BASE_PROPS,
 	KNOWN_PROPS,
+	MAX_CUSTOM_CSS_CHARS,
 	validateCanvasSettings,
 	validateComponents,
 } from "./validateComponents";
@@ -266,11 +267,27 @@ describe("AI component contract repair", () => {
 	test("preserves large custom CSS without truncating a rule", () => {
 		const customCss = `${".large{color:red}".repeat(800)}.final{display:grid}`;
 		expect(customCss.length).toBeGreaterThan(12_000);
+		expect(customCss.length).toBeLessThan(MAX_CUSTOM_CSS_CHARS);
 
 		const settings = validateCanvasSettings({ customCss });
 
 		expect(settings?.customCss).toBe(customCss);
 		expect(settings?.customCss).toEndWith(".final{display:grid}");
+	});
+
+	test("drops custom CSS past the limit whole instead of cutting it", () => {
+		const customCss = ".x{color:red}".repeat(MAX_CUSTOM_CSS_CHARS);
+		const warnings: string[] = [];
+
+		const settings = validateCanvasSettings(
+			{ padding: "1rem", customCss },
+			warnings,
+		);
+
+		expect(settings?.customCss).toBeUndefined();
+		expect(settings?.padding).toBe("1rem");
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain(`${MAX_CUSTOM_CSS_CHARS}`);
 	});
 
 	test("normalizes compatibility style fields before components reach persistence", () => {

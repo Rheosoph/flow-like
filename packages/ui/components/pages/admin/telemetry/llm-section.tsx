@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import {
 	BrainCircuit,
@@ -239,6 +240,7 @@ function RateBarList({
 }
 
 function ModelTable({ rows }: { readonly rows: ITelemetryLlmModelRow[] }) {
+	const { t } = useTranslation("admin");
 	const sorted = useMemo(
 		() =>
 			[...rows].sort(
@@ -260,12 +262,12 @@ function ModelTable({ rows }: { readonly rows: ITelemetryLlmModelRow[] }) {
 		<Table>
 			<TableHeader>
 				<TableRow>
-					<TableHead>Model</TableHead>
-					<TableHead className="text-right">Calls</TableHead>
-					<TableHead className="text-right">Error rate</TableHead>
-					<TableHead className="text-right">Avg</TableHead>
+					<TableHead>{t('model', 'Model')}</TableHead>
+					<TableHead className="text-right">{t('calls', 'Calls')}</TableHead>
+					<TableHead className="text-right">{t('errorRate', 'Error rate')}</TableHead>
+					<TableHead className="text-right">{t('avg', 'Avg')}</TableHead>
 					<TableHead className="text-right">p95</TableHead>
-					<TableHead className="text-right">Tokens</TableHead>
+					<TableHead className="text-right">{t('tokens', 'Tokens')}</TableHead>
 				</TableRow>
 			</TableHeader>
 			<TableBody>
@@ -317,6 +319,7 @@ export function LlmSection({
 	hours,
 	source,
 }: Readonly<LlmSectionProps>) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 
 	const llm = useQuery<ITelemetryLlmResponse>({
@@ -375,7 +378,7 @@ export function LlmSection({
 		<section className="space-y-4">
 			<h2 className="flex items-center gap-2 text-xl font-semibold">
 				<BrainCircuit className="h-5 w-5 text-primary" />
-				LLM usage
+				{t('llmUsage', 'LLM usage')}
 				<TelemetryGranularityNotice response={llm.data} />
 			</h2>
 
@@ -404,20 +407,20 @@ export function LlmSection({
 							hint={`${modelCount.toLocaleString()} ${modelCount === 1 ? "model" : "models"}`}
 						/>
 						<StatTile
-							label="Error rate"
+							label={t('errorRate', 'Error rate')}
 							value={formatRatePercent(totals.errorRate, 1)}
 							icon={<TriangleAlert className="h-4 w-4" />}
 							extra={<RatingBadge rating={errorRateRating(totals.errorRate)} />}
-							hint={`${totals.errors.toLocaleString()} of ${totals.calls.toLocaleString()} calls failed`}
+							hint={t('valOfVal2CallsFailed', '{{val}} of {{val2}} calls failed', { val: totals.errors.toLocaleString(), val2: totals.calls.toLocaleString() })}
 						/>
 						<StatTile
-							label="Avg duration"
+							label={t('avgDuration', 'Avg duration')}
 							value={formatDurationMs(totals.avgDurationMs)}
 							icon={<Timer className="h-4 w-4" />}
 							hint="Mean call latency"
 						/>
 						<StatTile
-							label="p95 duration"
+							label={t('p95Duration', 'p95 duration')}
 							value={
 								p95Available
 									? approximateValue(
@@ -431,25 +434,24 @@ export function LlmSection({
 								p95Available
 									? daily
 										? DAILY_PERCENTILE_HINT
-										: "95th percentile latency"
+										: t('95thPercentileLatency', '95th percentile latency')
 									: UNAVAILABLE_PERCENTILE_HINT
 							}
 						/>
 						<StatTile
-							label="Total tokens"
+							label={t('totalTokens', 'Total tokens')}
 							value={formatCompactNumber(totals.totalTokens)}
 							icon={<Coins className="h-4 w-4" />}
-							hint={`${formatCompactNumber(totals.promptTokens)} prompt · ${formatCompactNumber(totals.completionTokens)} completion`}
+							hint={t('valPromptVal2Completion', '{{val}} prompt · {{val2}} completion', { val: formatCompactNumber(totals.promptTokens), val2: formatCompactNumber(totals.completionTokens) })}
 						/>
 					</div>
 
 					<Card>
 						<CardHeader className="pb-3">
-							<CardTitle className="text-base">Calls over time</CardTitle>
+							<CardTitle className="text-base">{t('callsOverTime', 'Calls over time')}</CardTitle>
 							<CardDescription>
-								Model calls and failures bucketed by{" "}
-								<span className="font-mono">{bucket}</span> over the selected
-								window.
+								{t('modelCallsAndFailuresBucketedBy', 'Model calls and failures bucketed by')}{" "}
+								<span className="font-mono">{bucket}</span> {t('overTheSelectedWindow', "over the selected window.")}
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -459,9 +461,9 @@ export function LlmSection({
 
 					<Card>
 						<CardHeader className="pb-3">
-							<CardTitle className="text-base">By model</CardTitle>
+							<CardTitle className="text-base">{t('byModel', 'By model')}</CardTitle>
 							<CardDescription>
-								Busiest models first, with latency and token totals per model.
+								{t('busiestModelsFirstWithLatencyAndTokenTotalsPerModel', 'Busiest models first, with latency and token totals per model.')}
 							</CardDescription>
 						</CardHeader>
 						<CardContent className="p-0">
@@ -472,9 +474,9 @@ export function LlmSection({
 					<div className="grid gap-4 lg:grid-cols-3">
 						<Card>
 							<CardHeader className="pb-3">
-								<CardTitle className="text-base">By provider</CardTitle>
+								<CardTitle className="text-base">{t('byProvider', 'By provider')}</CardTitle>
 								<CardDescription>
-									Call volume and error rate per provider.
+									{t('callVolumeAndErrorRatePerProvider', 'Call volume and error rate per provider.')}
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
@@ -486,9 +488,9 @@ export function LlmSection({
 						</Card>
 						<Card>
 							<CardHeader className="pb-3">
-								<CardTitle className="text-base">By operation</CardTitle>
+								<CardTitle className="text-base">{t('byOperation', 'By operation')}</CardTitle>
 								<CardDescription>
-									Chat, embedding and tool calls.
+									{t('chatEmbeddingAndToolCalls', 'Chat, embedding and tool calls.')}
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
@@ -500,9 +502,9 @@ export function LlmSection({
 						</Card>
 						<Card>
 							<CardHeader className="pb-3">
-								<CardTitle className="text-base">Top error kinds</CardTitle>
+								<CardTitle className="text-base">{t('topErrorKinds', 'Top error kinds')}</CardTitle>
 								<CardDescription>
-									Classified failure reasons across all providers.
+									{t('classifiedFailureReasonsAcrossAllProviders', 'Classified failure reasons across all providers.')}
 								</CardDescription>
 							</CardHeader>
 							<CardContent>

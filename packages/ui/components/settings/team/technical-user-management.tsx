@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	AlertTriangleIcon,
 	CalendarIcon,
@@ -72,6 +73,7 @@ interface TechnicalUserManagementProps {
 export function TechnicalUserManagement({
 	appId,
 }: Readonly<TechnicalUserManagementProps>) {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const apiKeys = useInvoke(
@@ -178,9 +180,9 @@ export function TechnicalUserManagement({
 			<TeamSection>
 				<SectionHeading
 					icon={KeyIcon}
-					title="API keys"
+					title={t('apiKeys', 'API keys')}
 					count={apiKeys.data?.length ?? 0}
-					description="For scripts and services. A key acts with the role you give it — nothing more."
+					description={t('forScriptsAndServicesAKeyActsWithTheRoleYouGiveItNothingMore', 'For scripts and services. A key acts with the role you give it — nothing more.')}
 					actions={
 						<Button
 							size="sm"
@@ -188,16 +190,14 @@ export function TechnicalUserManagement({
 							onClick={() => setShowCreateDialog(true)}
 						>
 							<PlusIcon className="size-4" />
-							New key
+							{t('newKey', 'New key')}
 						</Button>
 					}
 				/>
 
 				{expiredCount > 0 && (
 					<TeamCallout icon={ClockIcon} tone="attention">
-						{expiredCount === 1
-							? "1 key has expired. Anything still calling with it is being rejected."
-							: `${expiredCount} keys have expired. Anything still calling with them is being rejected.`}
+						{t('countKeysHaveExpiredAnythingStillCallingWithThemIsBeingRejected', { defaultValue_one: '1 key has expired. Anything still calling with it is being rejected.', defaultValue_other: '{{count}} keys have expired. Anything still calling with them is being rejected.', count: expiredCount })}
 					</TeamCallout>
 				)}
 
@@ -205,8 +205,8 @@ export function TechnicalUserManagement({
 					<EmptyState
 						className="max-w-full"
 						icons={[KeyIcon]}
-						title="No API Keys"
-						description="Create an API key to enable programmatic access to this project."
+						title={t('noApiKeys', 'No API Keys')}
+						description={t('createAnApiKeyToEnableProgrammaticAccessToThisProject', 'Create an API key to enable programmatic access to this project.')}
 					/>
 				) : (
 					<div className="flex flex-col gap-2">
@@ -222,12 +222,11 @@ export function TechnicalUserManagement({
 				)}
 
 				<TeamHint>
-					Keys authenticate with the{" "}
+					{t('keysAuthenticateWithThe', 'Keys authenticate with the')}{" "}
 					<code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
 						x-api-key
 					</code>{" "}
-					header. The secret is shown once when the key is created — it cannot
-					be read again afterwards.
+					{t('headerTheSecretIsShownOnceWhenTheKeyIsCreatedItCannotBeReadAgainAfterwards', "header. The secret is shown once when the key is created — it cannot be read again afterwards.")}
 				</TeamHint>
 			</TeamSection>
 
@@ -239,29 +238,29 @@ export function TechnicalUserManagement({
 							<KeyIcon className="h-6 w-6 text-primary" />
 						</div>
 						<DialogTitle className="text-center text-xl">
-							Create API Key
+							{t('createApiKey', 'Create API Key')}
 						</DialogTitle>
 						<DialogDescription className="text-center">
-							Create a new API key for programmatic access
+							{`Create a new API key for programmatic access`}
 						</DialogDescription>
 					</DialogHeader>
 
 					<div className="space-y-4 py-4">
 						<div className="space-y-2">
-							<Label htmlFor="name">Name *</Label>
+							<Label htmlFor="name">{t('name', 'Name *')}</Label>
 							<Input
 								id="name"
-								placeholder="e.g., CI/CD Pipeline"
+								placeholder={t('egCicdPipeline', 'e.g., CI/CD Pipeline')}
 								value={name}
 								onChange={(e) => setName(e.target.value)}
 							/>
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="description">Description</Label>
+							<Label htmlFor="description">{t('description', 'Description')}</Label>
 							<Textarea
 								id="description"
-								placeholder="What is this API key used for?"
+								placeholder={t('whatIsThisApiKeyUsedFor', 'What is this API key used for?')}
 								value={description}
 								onChange={(e) => setDescription(e.target.value)}
 								className="min-h-20 resize-none"
@@ -272,7 +271,7 @@ export function TechnicalUserManagement({
 							<Label htmlFor="role">Role</Label>
 							<Select value={selectedRoleId} onValueChange={setSelectedRoleId}>
 								<SelectTrigger>
-									<SelectValue placeholder="Select a role (optional)" />
+									<SelectValue placeholder={t('selectARoleOptional', 'Select a role (optional)')} />
 								</SelectTrigger>
 								<SelectContent>
 									{availableRoles.map((role) => (
@@ -283,12 +282,12 @@ export function TechnicalUserManagement({
 								</SelectContent>
 							</Select>
 							<p className="text-xs text-muted-foreground">
-								The role determines what permissions this API key has
+								{t('theRoleDeterminesWhatPermissionsThisApiKeyHas', 'The role determines what permissions this API key has')}
 							</p>
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="validUntil">Expiration Date</Label>
+							<Label htmlFor="validUntil">{t('expirationDate', 'Expiration Date')}</Label>
 							<Input
 								id="validUntil"
 								type="datetime-local"
@@ -296,7 +295,7 @@ export function TechnicalUserManagement({
 								onChange={(e) => setValidUntil(e.target.value)}
 							/>
 							<p className="text-xs text-muted-foreground">
-								Leave empty for no expiration
+								{t('leaveEmptyForNoExpiration', 'Leave empty for no expiration')}
 							</p>
 						</div>
 					</div>
@@ -306,13 +305,13 @@ export function TechnicalUserManagement({
 							variant="outline"
 							onClick={() => setShowCreateDialog(false)}
 						>
-							Cancel
+							{t('cancel', 'Cancel')}
 						</Button>
 						<Button
 							onClick={handleCreate}
 							disabled={isCreating || !name.trim()}
 						>
-							{isCreating ? "Creating..." : "Create API Key"}
+							{isCreating ? "Creating..." : t('createApiKey', 'Create API Key')}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -326,10 +325,10 @@ export function TechnicalUserManagement({
 							<CheckIcon className="h-6 w-6 text-green-600 dark:text-green-400" />
 						</div>
 						<DialogTitle className="text-center text-xl">
-							API Key Created
+							{t('apiKeyCreated', 'API Key Created')}
 						</DialogTitle>
 						<DialogDescription className="text-center">
-							Copy your API key now. You won&apos;t be able to see it again!
+							{t('copyYourApiKeyNowYouWonapostBeAbleToSeeItAgain', "Copy your API key now. You won't be able to see it again!")}
 						</DialogDescription>
 					</DialogHeader>
 
@@ -348,14 +347,13 @@ export function TechnicalUserManagement({
 						<div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/50 dark:bg-amber-900/20">
 							<AlertTriangleIcon className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
 							<div className="text-sm text-amber-800 dark:text-amber-200">
-								<p className="font-medium">Important</p>
+								<p className="font-medium">{t('important', 'Important')}</p>
 								<p>
-									This is the only time you&apos;ll see this API key. Make sure
-									to copy it and store it securely. Use the{" "}
+									{t('thisIsTheOnlyTimeYouaposllSeeThisApiKeyMakeSureToCopyItAndStoreItSecurelyUseThe', "This is the only time you'll see this API key. Make sure to copy it and store it securely. Use the")}{" "}
 									<code className="rounded bg-amber-200/50 px-1 dark:bg-amber-800/50">
 										x-api-key
 									</code>{" "}
-									header to authenticate requests.
+									{t('headerToAuthenticateRequests', 'header to authenticate requests.')}
 								</p>
 							</div>
 						</div>
@@ -369,7 +367,7 @@ export function TechnicalUserManagement({
 								setNewKeyName("");
 							}}
 						>
-							Done
+							{t('done', 'Done')}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -385,6 +383,7 @@ interface ApiKeyCardProps {
 }
 
 function ApiKeyCard({ apiKey, roles, onDelete }: Readonly<ApiKeyCardProps>) {
+	const { t } = useTranslation("settings");
 	const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 	const role = roles.find((r) => r.id === apiKey.role_id);
 
@@ -400,7 +399,7 @@ function ApiKeyCard({ apiKey, roles, onDelete }: Readonly<ApiKeyCardProps>) {
 						<span className="truncate">{apiKey.name}</span>
 						{isExpired && (
 							<StatusChip tone="danger" pip>
-								Expired
+								{t('expired', 'Expired')}
 							</StatusChip>
 						)}
 					</div>
@@ -412,10 +411,10 @@ function ApiKeyCard({ apiKey, roles, onDelete }: Readonly<ApiKeyCardProps>) {
 								? `${isExpired ? "Expired" : "Expires"} ${new Date(
 										apiKey.valid_until * 1000,
 									).toLocaleDateString()}`
-								: "No expiry"}
+								: t('noExpiry', 'No expiry')}
 						</span>
 						<span>
-							Created {new Date(apiKey.created_at * 1000).toLocaleDateString()}
+							{t('created', 'Created')} {new Date(apiKey.created_at * 1000).toLocaleDateString()}
 						</span>
 						<UserProfileLink
 							userId={apiKey.creator_user_id}
@@ -444,7 +443,7 @@ function ApiKeyCard({ apiKey, roles, onDelete }: Readonly<ApiKeyCardProps>) {
 								onClick={() => setShowDeleteDialog(true)}
 							>
 								<Trash2Icon className="size-4" />
-								Delete
+								{t('delete', 'Delete')}
 							</DropdownMenuItem>
 						</DropdownMenuContent>
 					</DropdownMenu>
@@ -454,15 +453,11 @@ function ApiKeyCard({ apiKey, roles, onDelete }: Readonly<ApiKeyCardProps>) {
 			<AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
 				<AlertDialogContent>
 					<AlertDialogHeader>
-						<AlertDialogTitle>Delete API Key</AlertDialogTitle>
-						<AlertDialogDescription>
-							Are you sure you want to delete the API key &quot;{apiKey.name}
-							&quot;? This action cannot be undone and any applications using
-							this key will lose access.
-						</AlertDialogDescription>
+						<AlertDialogTitle>{t('deleteApiKey', 'Delete API Key')}</AlertDialogTitle>
+						<AlertDialogDescription>{t('areYouSureYouWantToDeleteTheApiKeyQuotnameQuotThisActionCannotBeUndoneAndAnyApplicationsUsingThisKeyWillLoseAccess', "Are you sure you want to delete the API key \"{{name}} \"? This action cannot be undone and any applications using this key will lose access.", { name: apiKey.name })}</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
-						<AlertDialogCancel>Cancel</AlertDialogCancel>
+						<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
 						<AlertDialogAction
 							onClick={() => {
 								onDelete(apiKey.id, apiKey.name);
@@ -470,7 +465,7 @@ function ApiKeyCard({ apiKey, roles, onDelete }: Readonly<ApiKeyCardProps>) {
 							}}
 							className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 						>
-							Delete
+							{t('delete', 'Delete')}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>

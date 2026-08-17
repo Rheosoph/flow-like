@@ -10,6 +10,7 @@
 		"@emoji-mart/data": "^1.2.1",
 		"@faker-js/faker": "^9.9.0",
 		"@floating-ui/react": "^0.27.3",
+		"@flow-like/locales": "workspace:*",
 		"@flow-like/widget-sdk": "workspace:*",
 		"@monaco-editor/react": "^4.7.0",
 		"@nivo/bar": "^0.99.0",

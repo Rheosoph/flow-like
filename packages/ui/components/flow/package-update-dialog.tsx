@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { ArrowRight, Package } from "lucide-react";
 import { useState } from "react";
 import type { PackageUpdate } from "../../lib/schema/wasm";
@@ -31,6 +32,7 @@ export function PackageUpdateDialog({
 	onUpdate,
 	loading,
 }: PackageUpdateDialogProps) {
+	const { t } = useTranslation("flow");
 	const [selected, setSelected] = useState<Set<string>>(
 		new Set(updates.map((u) => u.packageId)),
 	);
@@ -56,9 +58,9 @@ export function PackageUpdateDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="max-w-lg">
 				<DialogHeader>
-					<DialogTitle>Package Updates</DialogTitle>
+					<DialogTitle>{t('packageUpdates', 'Package Updates')}</DialogTitle>
 					<DialogDescription>
-						Review and apply available updates for WASM packages.
+						{t('reviewAndApplyAvailableUpdatesForWasmPackages', 'Review and apply available updates for WASM packages.')}
 					</DialogDescription>
 				</DialogHeader>
 				<ScrollArea className="max-h-80">

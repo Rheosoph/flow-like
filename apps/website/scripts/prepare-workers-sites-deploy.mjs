@@ -10,6 +10,7 @@ const clientDir = join(appDir, "dist", "client");
 const wranglerConfigPath = join(serverDir, "wrangler.json");
 const legacyEntryPath = join(serverDir, "entry-workers-sites.mjs");
 const kvAssetHandlerPath = join(serverDir, "kv-asset-handler.mjs");
+const markdownNegotiationPath = join(serverDir, "markdown-negotiation.mjs");
 const require = createRequire(import.meta.url);
 
 function parseHeadersFile(input) {
@@ -54,6 +55,11 @@ await copyFile(
 	kvAssetHandlerPath,
 );
 
+await copyFile(
+	join(scriptDir, "agent-markdown", "markdown-negotiation.mjs"),
+	markdownNegotiationPath,
+);
+
 await writeFile(
 	legacyEntryPath,
 	`globalThis.process ??= {};
@@ -65,6 +71,7 @@ import {
 \tNotFoundError,
 \tgetAssetFromKV,
 } from "./kv-asset-handler.mjs";
+import { serveMarkdown, withVaryAccept } from "./markdown-negotiation.mjs";
 
 const assetManifest = JSON.parse(manifestJSON);
 const headerRules = ${JSON.stringify(headerRules, null, "\t")};
@@ -131,15 +138,19 @@ function createAssetsBinding(baseRequest, env, ctx) {
 }
 
 export default {
-\tfetch(request, env, ctx) {
+\tasync fetch(request, env, ctx) {
 \t\tconst runtimeEnv = {
 \t\t\t...env,
 \t\t\tASSETS: env.ASSETS ?? createAssetsBinding(request, env, ctx),
 \t\t};
 
-\t\treturn astroWorker
-\t\t\t.fetch(request, runtimeEnv, ctx)
-\t\t\t.then((response) => applyResponseHeaders(request, response));
+\t\tconst markdown = await serveMarkdown(request, (path) =>
+\t\t\truntimeEnv.ASSETS.fetch(new URL(path, request.url).toString()),
+\t\t);
+\t\tif (markdown) return applyResponseHeaders(request, markdown);
+
+\t\tconst response = await astroWorker.fetch(request, runtimeEnv, ctx);
+\t\treturn applyResponseHeaders(request, withVaryAccept(response));
 \t},
 };
 `,

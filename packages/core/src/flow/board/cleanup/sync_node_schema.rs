@@ -224,10 +224,17 @@ pub fn sync_node_with_catalog(placed_node: &mut Node, catalog_node: &Node) {
                 // Update schema reference
                 placed_pin.schema = catalog_pin.schema.clone();
             }
-        } else {
+        } else if !crate::flow::node::mints_pins_on_update(&placed_node.name) {
             // Pin no longer exists in catalog - mark for removal
             pins_to_remove.push(pin_id.clone());
         }
+        // Otherwise the node's own `on_update` created this pin, so its absence from the
+        // catalog is the normal case rather than a stale leftover. Removing it here would
+        // drop the pin AND its edges; `on_update` runs immediately after this sync and would
+        // mint a replacement with a fresh id, silently detaching every wire the user made.
+        // Keeping it is safe both ways: these `on_update`s reconcile their pins by name, so
+        // one that is still wanted is adopted (id and edges intact) and one that is not is
+        // removed there.
     }
 
     // Remove pins that no longer exist
@@ -400,6 +407,60 @@ mod tests {
         assert_eq!(placed.pins.len(), 1);
         assert!(placed.get_pin_by_name("keep").is_some());
         assert!(placed.get_pin_by_name("remove").is_none());
+    }
+
+    #[test]
+    fn sync_keeps_on_update_minted_pins_and_their_edges() {
+        // `df_sql_query` derives `param_*` pins in `on_update`, so they are absent from the
+        // catalog by design. Removing them on a version bump would drop the pin *and* its
+        // edges; `on_update` then re-mints one with a fresh id, so the wire is gone for good
+        // and the board looks like it was silently rewired.
+        let mut placed = Node::new("df_sql_query", "SQL Query", "desc", "Data/DataFusion");
+        placed.add_input_pin("query", "Query", "desc", VariableType::String);
+        let derived =
+            placed.add_input_pin("param_org_id", "$org_id", "desc", VariableType::Generic);
+        let derived_id = derived.id.clone();
+        derived.depends_on.insert("upstream_pin".to_string());
+        placed.version = Some(2);
+
+        let mut catalog = Node::new("df_sql_query", "SQL Query", "desc", "Data/DataFusion");
+        catalog.add_input_pin("query", "Query", "desc", VariableType::String);
+        catalog.add_input_pin("params", "Params", "desc", VariableType::Struct);
+        catalog.version = Some(3);
+
+        sync_node_with_catalog(&mut placed, &catalog);
+
+        let kept = placed
+            .get_pin_by_name("param_org_id")
+            .expect("derived pin must survive the version bump");
+        assert_eq!(kept.id, derived_id, "the pin id carries its edges");
+        assert!(kept.depends_on.contains("upstream_pin"));
+        assert!(placed.get_pin_by_name("params").is_some(), "new pin added");
+        assert_eq!(placed.version, Some(3));
+    }
+
+    #[test]
+    fn sync_still_removes_stale_pins_on_ordinary_nodes() {
+        // The preservation above is scoped to nodes that mint their own pins; everywhere else a
+        // pin missing from the catalog is genuinely stale.
+        let mut placed = Node::new("df_register_lance", "Register", "desc", "Data");
+        placed.add_input_pin("keep", "Keep", "desc", VariableType::String);
+        placed.add_input_pin(
+            "param_looks_derived",
+            "Stale",
+            "desc",
+            VariableType::Generic,
+        );
+        placed.version = Some(1);
+
+        let mut catalog = Node::new("df_register_lance", "Register", "desc", "Data");
+        catalog.add_input_pin("keep", "Keep", "desc", VariableType::String);
+        catalog.version = Some(2);
+
+        sync_node_with_catalog(&mut placed, &catalog);
+
+        assert!(placed.get_pin_by_name("param_looks_derived").is_none());
+        assert_eq!(placed.pins.len(), 1);
     }
 
     #[test]

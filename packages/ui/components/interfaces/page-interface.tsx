@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Settings } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -35,6 +36,7 @@ import { useExecutionServiceOptional } from "../../state/execution-service-conte
 // registry, which would pull the 3D scene and the mapping stack into every page load.
 import { A2UIRenderer } from "../a2ui/A2UIRenderer";
 import { DataProvider } from "../a2ui/DataContext";
+import { LivePageAgentBridge } from "../a2ui/LivePageAgentBridge";
 import {
 	RouteDialogProvider,
 	useRouteDialog,
@@ -158,6 +160,7 @@ function PageInterfaceInner({
 	route,
 	page: providedPage,
 }: PageInterfaceProps) {
+	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
 	const router = useRouter();
@@ -454,6 +457,7 @@ function PageInterfaceInner({
 	// Use ref to access current surface without creating dependency cycles
 	const surfaceRef = useRef(surface);
 	surfaceRef.current = surface;
+	const pageContainerRef = useRef<HTMLDivElement | null>(null);
 
 	// Build elements from surface components for the workflow payload
 	// Uses ref to avoid dependency on surface changing
@@ -721,13 +725,18 @@ function PageInterfaceInner({
 	if (!routeMapping && !providedPage) {
 		return (
 			<div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
-				<p>No route configured for this path</p>
+				<p>
+					{t(
+						"noRouteConfiguredForThisPath",
+						"No route configured for this path",
+					)}
+				</p>
 				<Link
 					href={`/library/config/pages?appId=${appId}`}
 					className="flex items-center gap-2 text-sm hover:text-foreground transition-colors"
 				>
 					<Settings className="h-4 w-4" />
-					Configure routes
+					{t("configureRoutes", "Configure routes")}
 				</Link>
 			</div>
 		);
@@ -736,7 +745,12 @@ function PageInterfaceInner({
 	if (routeEvent && !routeEvent.default_page_id) {
 		return (
 			<div className="flex items-center justify-center h-full text-muted-foreground">
-				<p>Event does not have a page target</p>
+				<p>
+					{t(
+						"eventDoesNotHaveAPageTarget",
+						"Event does not have a page target",
+					)}
+				</p>
 			</div>
 		);
 	}
@@ -744,7 +758,7 @@ function PageInterfaceInner({
 	if (!activeSurface) {
 		return (
 			<div className="flex items-center justify-center h-full text-muted-foreground">
-				<p>No content to display</p>
+				<p>{t("noContentToDisplay", "No content to display")}</p>
 			</div>
 		);
 	}
@@ -782,6 +796,7 @@ function PageInterfaceInner({
 				scopeSelector={`[data-page-id="${pageContainerId}"]`}
 			/>
 			<div
+				ref={pageContainerRef}
 				data-page-id={pageContainerId}
 				data-flowpilot-page-event-id={activePageEvent?.id ?? ""}
 				data-flowpilot-page-loading={isLoadEventRunning ? "true" : "false"}
@@ -801,6 +816,19 @@ function PageInterfaceInner({
 						isPreviewMode={true}
 						openDialog={openDialog}
 						closeDialog={closeDialog}
+						agentBridge={
+							appId ? (
+								<LivePageAgentBridge
+									appId={appId}
+									pageId={activeSurface.id}
+									eventId={activePageEvent?.id}
+									getSurface={() => surfaceRef.current}
+									getContainer={() => pageContainerRef.current}
+									applyServerMessage={handleA2UIMessage}
+									loading={isLoadEventRunning}
+								/>
+							) : undefined
+						}
 					/>
 				</DataProvider>
 			</div>

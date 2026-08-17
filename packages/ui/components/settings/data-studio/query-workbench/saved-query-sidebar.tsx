@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Boxes,
 	Copy,
@@ -55,6 +56,7 @@ function QueryGroup({
 	onDelete: (query: SavedQuery) => void;
 	onDuplicate: (query: SavedQuery) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	if (items.length === 0) return null;
 	const headingId = `saved-query-group-${title.replace(/\s+/g, "-").toLowerCase()}`;
 	return (
@@ -103,21 +105,21 @@ function QueryGroup({
 										variant="ghost"
 										size="icon"
 										className="mr-1 h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100"
-										aria-label={`Actions for ${query.name}`}
+										aria-label={t('actionsForName', 'Actions for {{name}}', { name: query.name })}
 									>
 										<MoreHorizontal className="h-3.5 w-3.5" />
 									</Button>
 								</DropdownMenuTrigger>
 								<DropdownMenuContent align="end" className="w-40">
 									<DropdownMenuItem onClick={() => onDuplicate(query)}>
-										<Copy className="h-3.5 w-3.5" /> Duplicate
+										<Copy className="h-3.5 w-3.5" /> {t('duplicate', 'Duplicate')}
 									</DropdownMenuItem>
 									<DropdownMenuSeparator />
 									<DropdownMenuItem
 										variant="destructive"
 										onClick={() => onDelete(query)}
 									>
-										<Trash2 className="h-3.5 w-3.5" /> Delete
+										<Trash2 className="h-3.5 w-3.5" /> {t('delete', 'Delete')}
 									</DropdownMenuItem>
 								</DropdownMenuContent>
 							</DropdownMenu>
@@ -159,6 +161,7 @@ export function SavedQuerySidebar({
 	onDelete: (query: SavedQuery) => Promise<void> | void;
 	onDuplicate: (query: SavedQuery) => Promise<void> | void;
 }>) {
+	const { t } = useTranslation("settings");
 	const [deleteTarget, setDeleteTarget] = useState<SavedQuery | null>(null);
 	const [deleting, setDeleting] = useState(false);
 	const [search, setSearch] = useState("");
@@ -184,16 +187,16 @@ export function SavedQuerySidebar({
 
 	return (
 		<aside
-			aria-label="Saved queries"
+			aria-label={t('savedQueries', 'Saved queries')}
 			className="flex h-full min-h-0 flex-col border-r bg-muted/20"
 		>
 			<div className="flex items-center justify-between gap-2 border-b p-3">
 				<div>
-					<h3 className="text-sm font-semibold">Queries</h3>
-					<p className="text-[11px] text-muted-foreground">Saved &amp; views</p>
+					<h3 className="text-sm font-semibold">{t('queries', 'Queries')}</h3>
+					<p className="text-[11px] text-muted-foreground">{t('savedAmpViews', "Saved & views")}</p>
 				</div>
 				<Button size="sm" onClick={onNew}>
-					<Plus className="h-4 w-4" /> New
+					<Plus className="h-4 w-4" /> {t('new', 'New')}
 				</Button>
 			</div>
 
@@ -204,15 +207,15 @@ export function SavedQuerySidebar({
 						<Input
 							value={search}
 							onChange={(event) => setSearch(event.target.value)}
-							placeholder="Search queries…"
-							aria-label="Search saved queries"
+							placeholder={t('searchQueries', 'Search queries…')}
+							aria-label={t('searchSavedQueries', 'Search saved queries')}
 							className="h-8 pl-8 pr-7 text-xs"
 						/>
 						{search && (
 							<button
 								type="button"
 								onClick={() => setSearch("")}
-								aria-label="Clear search"
+								aria-label={t('clearSearch', 'Clear search')}
 								className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
 							>
 								<X className="h-3.5 w-3.5" />
@@ -231,23 +234,21 @@ export function SavedQuerySidebar({
 							<SquareTerminal className="h-5 w-5" />
 						</div>
 						<div className="space-y-0.5">
-							<p className="text-sm font-medium">No saved queries</p>
+							<p className="text-sm font-medium">{t('noSavedQueries', 'No saved queries')}</p>
 							<p className="text-xs text-muted-foreground">
-								Write SQL and hit Save to keep it here.
+								{t('writeSqlAndHitSaveToKeepItHere', 'Write SQL and hit Save to keep it here.')}
 							</p>
 						</div>
 						<Button variant="outline" size="sm" onClick={onNew}>
-							<Plus className="h-4 w-4" /> New query
+							<Plus className="h-4 w-4" /> {t('newQuery', 'New query')}
 						</Button>
 					</div>
 				) : filtered.length === 0 ? (
-					<p className="px-2 py-8 text-center text-xs text-muted-foreground">
-						No queries match “{search}”.
-					</p>
+					<p className="px-2 py-8 text-center text-xs text-muted-foreground">{t('noQueriesMatchSearch', 'No queries match “{{search}}”.', { search })}</p>
 				) : (
 					<div className="space-y-3 p-2">
 						<QueryGroup
-							title="Stored queries"
+							title={t('storedQueries', 'Stored queries')}
 							icon={SquareTerminal}
 							items={storedQueries}
 							activeId={activeId}
@@ -276,15 +277,15 @@ export function SavedQuerySidebar({
 			>
 				<AlertDialogContent>
 					<AlertDialogHeader>
-						<AlertDialogTitle>Delete {deleteTarget?.name}?</AlertDialogTitle>
+						<AlertDialogTitle>{t('delete', 'Delete')} {deleteTarget?.name}?</AlertDialogTitle>
 						<AlertDialogDescription>
 							{deleteTarget?.kind === "view"
-								? "Queries that reference this view will stop resolving it."
-								: "This removes the saved query. Your data is untouched."}
+								? t('queriesThatReferenceThisViewWillStopResolvingIt', 'Queries that reference this view will stop resolving it.')
+								: t('thisRemovesTheSavedQueryYourDataIsUntouched', 'This removes the saved query. Your data is untouched.')}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
-						<AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+						<AlertDialogCancel disabled={deleting}>{t('cancel', 'Cancel')}</AlertDialogCancel>
 						<AlertDialogAction
 							className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 							disabled={deleting}
@@ -294,7 +295,7 @@ export function SavedQuerySidebar({
 							}}
 						>
 							{deleting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-							Delete
+							{t('delete', 'Delete')}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>

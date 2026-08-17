@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { Database, Eye, FileText, Pencil, Zap } from "lucide-react";
 import { RolePermissions, cn } from "../../..";
 
@@ -56,13 +57,14 @@ export function CapabilityBadges({
 	capabilities,
 	className,
 }: Readonly<{ capabilities: ConnectionCapabilities; className?: string }>) {
+	const { t } = useTranslation("settings");
 	if (!hasConnectionCapabilities(capabilities)) return null;
 	return (
 		<div className={cn("flex flex-wrap items-center gap-1", className)}>
 			{capabilities.events && (
 				<span className="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
 					<Zap className="h-2.5 w-2.5" />
-					Events
+					{t('events', 'Events')}
 				</span>
 			)}
 			{capabilities.database && (

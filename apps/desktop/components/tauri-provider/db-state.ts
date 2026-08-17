@@ -441,7 +441,7 @@ export class DatabaseState implements IDatabaseState {
 					userScoped,
 				),
 				{
-					method: "POST",
+					method: "PUT",
 					body: JSON.stringify({ filter, updates }),
 				},
 				this.backend.auth,

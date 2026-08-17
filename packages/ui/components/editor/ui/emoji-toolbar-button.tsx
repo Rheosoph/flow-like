@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import type { Emoji } from "@emoji-mart/data";
@@ -363,6 +364,7 @@ function EmojiPickerSearchBar({
 }: {
 	children: React.ReactNode;
 } & Pick<UseEmojiPickerType, "i18n" | "searchValue" | "setSearch">) {
+	const { t } = useTranslation("common");
 	return (
 		<div className="flex items-center px-2">
 			<div className="relative flex grow items-center">
@@ -371,7 +373,7 @@ function EmojiPickerSearchBar({
 					value={searchValue}
 					onChange={(event) => setSearch(event.target.value)}
 					placeholder={i18n.search}
-					aria-label="Search"
+					aria-label={t('search2', 'Search')}
 					autoComplete="off"
 					type="text"
 					autoFocus
@@ -387,6 +389,7 @@ function EmojiPickerSearchAndClear({
 	i18n,
 	searchValue,
 }: Pick<UseEmojiPickerType, "clearSearch" | "i18n" | "searchValue">) {
+	const { t } = useTranslation("common");
 	return (
 		<div className="flex items-center text-foreground">
 			<div
@@ -405,7 +408,7 @@ function EmojiPickerSearchAndClear({
 					)}
 					onClick={clearSearch}
 					title={i18n.clear}
-					aria-label="Clear"
+					aria-label={t('clear', 'Clear')}
 					type="button"
 				>
 					{emojiSearchIcons.delete}
@@ -432,7 +435,7 @@ function EmojiPreview({ emoji }: Pick<UseEmojiPickerType, "emoji">) {
 function NoEmoji({ i18n }: Pick<UseEmojiPickerType, "i18n">) {
 	return (
 		<div className="flex h-14 max-h-14 min-h-14 items-center border-t border-muted p-2">
-			<div className="flex items-center justify-center text-2xl">😢</div>
+			<div className="flex items-center justify-center text-2xl">{`😢`}</div>
 			<div className="overflow-hidden pl-2">
 				<div className="truncate text-sm font-bold">
 					{i18n.searchNoResultsTitle}
@@ -446,7 +449,7 @@ function NoEmoji({ i18n }: Pick<UseEmojiPickerType, "i18n">) {
 function PickAnEmoji({ i18n }: Pick<UseEmojiPickerType, "i18n">) {
 	return (
 		<div className="flex h-14 max-h-14 min-h-14 items-center border-t border-muted p-2">
-			<div className="flex items-center justify-center text-2xl">☝️</div>
+			<div className="flex items-center justify-center text-2xl">{`☝️`}</div>
 			<div className="overflow-hidden pl-2">
 				<div className="truncate text-sm font-semibold">{i18n.pick}</div>
 			</div>

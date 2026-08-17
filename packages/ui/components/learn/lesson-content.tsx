@@ -1,127 +1,21 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useMemo } from "react";
+import { type SyntheticEvent, useCallback, useMemo } from "react";
 import type { Lesson, LessonAssetView } from "../../lib/learn/types";
 import { TextEditor } from "../ui/text-editor";
+import {
+	lessonAssetLabel,
+	removeDuplicateLessonTitle,
+	resolveAssetReferences,
+} from "./lesson-content-utils";
 
 const ReactPlayer = dynamic(() => import("react-player"), { ssr: false });
-
-const PLATE_JSON_PREFIX = "plate_json::";
-const MARKDOWN_REF_RE = /(^|[^\w\\])@([A-Za-z_][A-Za-z0-9_-]{0,63})/g;
 
 interface LessonContentProps {
 	readonly lesson: Lesson;
 	readonly assets?: ReadonlyArray<LessonAssetView>;
 	/** Optional click handler for inline `focus_node` marks in the lesson body. */
 	readonly onFocusNode?: (nodeId: string) => void;
-}
-
-interface PlateNode {
-	readonly type?: string;
-	readonly value?: string;
-	readonly children?: ReadonlyArray<PlateNode>;
-	readonly [key: string]: unknown;
-}
-
-function nodeForAsset(asset: LessonAssetView): PlateNode {
-	switch (asset.kind) {
-		case "IMAGE":
-			return {
-				type: "img",
-				url: asset.signed_url,
-				children: [{ text: "" }],
-			};
-		case "VIDEO":
-			return {
-				type: "video",
-				url: asset.signed_url,
-				children: [{ text: "" }],
-			};
-		case "AUDIO":
-			return {
-				type: "audio",
-				url: asset.signed_url,
-				children: [{ text: "" }],
-			};
-		default:
-			return {
-				type: "a",
-				url: asset.signed_url,
-				children: [{ text: asset.name }],
-			};
-	}
-}
-
-function markdownForAsset(asset: LessonAssetView): string {
-	const url = asset.signed_url
-		.replaceAll(" ", "%20")
-		.replaceAll("(", "%28")
-		.replaceAll(")", "%29");
-	const label = asset.name.replaceAll("[", "\\[").replaceAll("]", "\\]");
-	return asset.kind === "IMAGE" ? `![${label}](${url})` : `[${label}](${url})`;
-}
-
-function walkPlateNodes(
-	nodes: ReadonlyArray<PlateNode>,
-	byName: Map<string, LessonAssetView>,
-): PlateNode[] {
-	const out: PlateNode[] = [];
-	for (const node of nodes) {
-		if (node && typeof node === "object") {
-			// Author-inserted asset node: refresh stale signed URL while keeping
-			// any user-applied width/align/caption.
-			const assetName = node.assetName;
-			if (typeof assetName === "string") {
-				const asset = byName.get(assetName);
-				if (asset) {
-					out.push({ ...node, url: asset.signed_url });
-					continue;
-				}
-			}
-			// Legacy mention shape — replace with a media node.
-			if (node.type === "mention" && typeof node.value === "string") {
-				const asset = byName.get(node.value);
-				if (asset) {
-					out.push(nodeForAsset(asset));
-					continue;
-				}
-			}
-		}
-		if (Array.isArray(node?.children)) {
-			out.push({
-				...node,
-				children: walkPlateNodes(node.children, byName),
-			});
-			continue;
-		}
-		out.push(node);
-	}
-	return out;
-}
-
-function resolveAssetReferences(
-	content: string,
-	assets: ReadonlyArray<LessonAssetView>,
-): string {
-	if (!content || assets.length === 0) return content;
-	const byName = new Map(assets.map((a) => [a.name, a]));
-
-	if (content.startsWith(PLATE_JSON_PREFIX)) {
-		try {
-			const parsed = JSON.parse(content.slice(PLATE_JSON_PREFIX.length));
-			if (!Array.isArray(parsed)) return content;
-			const transformed = walkPlateNodes(parsed as PlateNode[], byName);
-			return `${PLATE_JSON_PREFIX}${JSON.stringify(transformed)}`;
-		} catch {
-			return content;
-		}
-	}
-
-	return content.replace(MARKDOWN_REF_RE, (whole, prefix, name) => {
-		const asset = byName.get(name);
-		if (!asset) return whole;
-		return `${prefix}${markdownForAsset(asset)}`;
-	});
 }
 
 /**
@@ -140,21 +34,82 @@ export function LessonContent({
 	onFocusNode,
 }: LessonContentProps) {
 	const resolvedContent = useMemo(
-		() => resolveAssetReferences(lesson.content ?? "", assets ?? []),
-		[lesson.content, assets],
+		() =>
+			resolveAssetReferences(
+				removeDuplicateLessonTitle(lesson.content ?? "", lesson.title),
+				assets ?? [],
+			),
+		[lesson.content, lesson.title, assets],
+	);
+	const assetLabelsByUrl = useMemo(
+		() =>
+			new Map(
+				(assets ?? []).map((asset) => [
+					asset.signed_url,
+					lessonAssetLabel(asset.name),
+				]),
+			),
+		[assets],
+	);
+	const imageDescription = useCallback(
+		(image: HTMLImageElement) =>
+			image.alt.trim() ||
+			assetLabelsByUrl.get(image.getAttribute("src") ?? "") ||
+			"Lesson image",
+		[assetLabelsByUrl],
+	);
+
+	const handleImageError = useCallback(
+		(event: SyntheticEvent<HTMLDivElement>) => {
+			const image = event.target;
+			if (!(image instanceof HTMLImageElement)) return;
+			const figure = image.closest("figure");
+			if (!figure) return;
+
+			const description = imageDescription(image);
+			image.alt = description;
+			image.dataset.lessonMediaFailed = "true";
+			delete figure.dataset.lessonMediaCaption;
+			figure.dataset.lessonMediaFailed = "true";
+			figure.setAttribute("role", "img");
+			figure.setAttribute("aria-label", `${description} could not be loaded.`);
+		},
+		[imageDescription],
+	);
+
+	const handleImageLoad = useCallback(
+		(event: SyntheticEvent<HTMLDivElement>) => {
+			const image = event.target;
+			if (!(image instanceof HTMLImageElement)) return;
+			const figure = image.closest("figure");
+			if (!figure) return;
+			const description = imageDescription(image);
+			image.alt = description;
+
+			delete image.dataset.lessonMediaFailed;
+			delete figure.dataset.lessonMediaFailed;
+			figure.removeAttribute("role");
+			figure.removeAttribute("aria-label");
+			if (!figure.querySelector("figcaption")) {
+				figure.dataset.lessonMediaCaption = description;
+			}
+		},
+		[imageDescription],
 	);
 
 	return (
-		<article className="flex flex-col gap-6">
-			<header className="space-y-1">
-				<h1 className="text-2xl font-semibold">{lesson.title}</h1>
-				<p className="text-xs text-muted-foreground">
+		<article className="fl-lesson-article mx-auto flex w-full max-w-5xl flex-col gap-7 md:gap-8">
+			<header className="mx-auto w-full max-w-[66ch] space-y-2.5">
+				<h1 className="text-balance text-2xl font-semibold tracking-tight md:text-3xl">
+					{lesson.title}
+				</h1>
+				<p className="text-sm text-muted-foreground">
 					{lesson.estimated_minutes} min · {lesson.language.toUpperCase()}
 					{lesson.is_optional ? " · Optional" : ""}
 				</p>
 			</header>
 			{lesson.video_url && (
-				<div className="overflow-hidden rounded-lg bg-black aspect-video">
+				<div className="mx-auto aspect-video w-full max-w-4xl overflow-hidden rounded-lg border bg-black">
 					<ReactPlayer
 						src={lesson.video_url}
 						width="100%"
@@ -163,7 +118,11 @@ export function LessonContent({
 					/>
 				</div>
 			)}
-			<div className="prose prose-sm dark:prose-invert max-w-none">
+			<div
+				onError={handleImageError}
+				onLoad={handleImageLoad}
+				className="fl-lesson-prose"
+			>
 				<TextEditor
 					initialContent={resolvedContent}
 					editable={false}

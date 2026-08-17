@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -220,7 +221,7 @@ async function estimateBrowserStorage(): Promise<StorageCategory> {
 	const estimate = await navigator.storage?.estimate?.().catch(() => undefined);
 	return {
 		key: "browser",
-		label: "Browser storage",
+		label: i18next.t('browserStorage', 'Browser storage'),
 		description: BROWSER_DESCRIPTION,
 		sizeBytes: estimate?.usage ?? 0,
 		itemCount: 0,
@@ -241,7 +242,7 @@ async function inspectBrowserStorage(): Promise<StorageCategory> {
 			items.push({
 				id: `browser:local:${key}`,
 				name: key,
-				detail: "Local preference stored by the Studio WebView",
+				detail: i18next.t('localPreferenceStoredByTheStudioWebview', 'Local preference stored by the Studio WebView'),
 				sizeBytes,
 				fileCount: 1,
 				deletable: false,
@@ -267,7 +268,7 @@ async function inspectBrowserStorage(): Promise<StorageCategory> {
 				items.push({
 					id: `browser:idb:${info.name}`,
 					name: info.name,
-					detail: `IndexedDB · ${measured.stores} ${measured.stores === 1 ? "store" : "stores"} · ${measured.records.toLocaleString()} records`,
+					detail: i18next.t('indexeddbStoresValVal2Records', 'IndexedDB · {{stores}} {{val}} · {{val2}} records', { stores: measured.stores, val: measured.stores === 1 ? "store" : "stores", val2: measured.records.toLocaleString() }),
 					sizeBytes: measured.bytes,
 					fileCount: measured.records,
 					deletable: false,
@@ -276,7 +277,7 @@ async function inspectBrowserStorage(): Promise<StorageCategory> {
 				items.push({
 					id: `browser:idb:${info.name}`,
 					name: info.name,
-					detail: "IndexedDB · currently in use",
+					detail: i18next.t('indexeddbCurrentlyInUse', 'IndexedDB · currently in use'),
 					sizeBytes: 0,
 					fileCount: 0,
 					deletable: false,
@@ -291,8 +292,8 @@ async function inspectBrowserStorage(): Promise<StorageCategory> {
 	if (otherBytes > 0) {
 		items.push({
 			id: "browser:other",
-			name: "Other WebView data",
-			detail: "Browser-managed storage not attributable to one database",
+			name: i18next.t('otherWebviewData', 'Other WebView data'),
+			detail: i18next.t('browsermanagedStorageNotAttributableToOneDatabase', 'Browser-managed storage not attributable to one database'),
 			sizeBytes: otherBytes,
 			fileCount: 0,
 			deletable: false,
@@ -301,7 +302,7 @@ async function inspectBrowserStorage(): Promise<StorageCategory> {
 	items.sort((a, b) => b.sizeBytes - a.sizeBytes);
 	return {
 		key: "browser",
-		label: "Browser storage",
+		label: i18next.t('browserStorage', 'Browser storage'),
 		description: BROWSER_DESCRIPTION,
 		sizeBytes: Math.max(measuredBytes, originUsage),
 		itemCount: items.length,
@@ -340,6 +341,7 @@ function StorageLoading() {
 }
 
 export default function LocalStoragePage() {
+	const { t } = useTranslation("common");
 	const overviewQuery = useTauriInvoke<StorageOverview>(
 		"get_local_storage_overview",
 		{},
@@ -472,18 +474,18 @@ export default function LocalStoragePage() {
 			await refresh();
 			if (result.deletedItems > 0) {
 				toast.success(
-					`Removed ${result.deletedItems} old ${result.deletedItems === 1 ? "run" : "runs"}`,
-					{ description: `${humanFileSize(result.freedBytes)} freed` },
+					t('removedDeleteditemsOldVal', 'Removed {{deletedItems}} old {{val}}', { deletedItems: result.deletedItems, val: result.deletedItems === 1 ? "run" : "runs" }),
+					{ description: t('valFreed', '{{val}} freed', { val: humanFileSize(result.freedBytes) }) },
 				);
 			} else {
 				toast.success(
 					nextEnabled
-						? "Automatic cleanup enabled"
-						: "Automatic cleanup disabled",
+						? t('automaticCleanupEnabled', 'Automatic cleanup enabled')
+						: t('automaticCleanupDisabled', 'Automatic cleanup disabled'),
 				);
 			}
 		} catch (error) {
-			toast.error("Could not update log retention", {
+			toast.error(t('couldNotUpdateLogRetention', 'Could not update log retention'), {
 				description: String(error),
 			});
 		} finally {
@@ -500,21 +502,21 @@ export default function LocalStoragePage() {
 				ids: pendingDelete.map((item) => item.id),
 			});
 			toast.success(
-				`Deleted ${result.deletedItems} ${result.deletedItems === 1 ? "item" : "items"}`,
+				t('deletedDeleteditemsVal', 'Deleted {{deletedItems}} {{val}}', { deletedItems: result.deletedItems, val: result.deletedItems === 1 ? "item" : "items" }),
 				{
 					description: `${humanFileSize(result.freedBytes)} freed from this device`,
 				},
 			);
 			if (result.skippedItems.length) {
 				toast.warning(
-					`${result.skippedItems.length} item(s) could not be deleted`,
+					t('lengthItemsCouldNotBeDeleted', '{{length}} item(s) could not be deleted', { length: result.skippedItems.length }),
 				);
 			}
 			setSelected(new Set());
 			setPendingDelete(null);
 			await refresh();
 		} catch (error) {
-			toast.error("Could not delete the selected files", {
+			toast.error(t('couldNotDeleteTheSelectedFiles', 'Could not delete the selected files'), {
 				description: String(error),
 			});
 		} finally {
@@ -541,13 +543,13 @@ export default function LocalStoragePage() {
 						<div className="mx-auto mb-2 flex size-11 items-center justify-center rounded-full bg-destructive/10 text-destructive">
 							<TriangleAlert className="size-5" />
 						</div>
-						<CardTitle>Storage couldn’t be inspected</CardTitle>
+						<CardTitle>{t('storageCouldntBeInspected', 'Storage couldn’t be inspected')}</CardTitle>
 						<CardDescription>
-							Studio could not read one or more local storage directories.
+							{t('studioCouldNotReadOneOrMoreLocalStorageDirectories', 'Studio could not read one or more local storage directories.')}
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
-						<Button onClick={refresh}>Try again</Button>
+						<Button onClick={refresh}>{t('tryAgain', 'Try again')}</Button>
 					</CardContent>
 				</Card>
 			</div>
@@ -569,7 +571,7 @@ export default function LocalStoragePage() {
 								</div>
 								<div>
 									<p className="text-sm font-medium text-muted-foreground">
-										Used by Flow-Like Studio
+										{t('usedByFlowlikeStudio', 'Used by Flow-Like Studio')}
 									</p>
 									<p className="text-4xl font-semibold tracking-tight md:text-5xl">
 										{humanFileSize(totalBytes)}
@@ -606,7 +608,7 @@ export default function LocalStoragePage() {
 									{categories.reduce((sum, item) => sum + item.itemCount, 0)}
 								</span>
 								<span className="text-xs text-muted-foreground">
-									stored items
+									{t('storedItems', 'stored items')}
 								</span>
 							</div>
 						</div>
@@ -645,9 +647,7 @@ export default function LocalStoragePage() {
 											<p className="text-lg font-semibold tabular-nums">
 												{humanFileSize(entry.sizeBytes)}
 											</p>
-											<p className="text-xs text-muted-foreground">
-												{entry.itemCount} items
-											</p>
+											<p className="text-xs text-muted-foreground">{t('itemcountItems', '{{itemCount}} items', { itemCount: entry.itemCount })}</p>
 										</div>
 									</button>
 								);
@@ -674,7 +674,7 @@ export default function LocalStoragePage() {
 											size="sm"
 											onClick={() => setPendingDelete(selectedItems)}
 										>
-											<Trash2 /> Delete {selectedItems.length} ·{" "}
+											<Trash2 />{`Delete ${selectedItems.length} ·`}{" "}
 											{humanFileSize(selectedBytes)}
 										</Button>
 									)}
@@ -684,7 +684,7 @@ export default function LocalStoragePage() {
 									<Input
 										value={search}
 										onChange={(event) => setSearch(event.target.value)}
-										placeholder={`Search ${category?.label.toLocaleLowerCase() ?? "files"}`}
+										placeholder={t('searchVal', 'Search {{val}}', { val: category?.label.toLocaleLowerCase() ?? "files" })}
 										className="pl-9"
 									/>
 								</div>
@@ -697,9 +697,9 @@ export default function LocalStoragePage() {
 										<div className="mb-3 flex size-11 items-center justify-center rounded-full bg-muted text-muted-foreground">
 											<RefreshCw className="size-5 animate-spin" />
 										</div>
-										<p className="font-medium">Scanning browser storage…</p>
+										<p className="font-medium">{t('scanningBrowserStorage', 'Scanning browser storage…')}</p>
 										<p className="mt-1 text-sm text-muted-foreground">
-											Measuring IndexedDB records in this WebView.
+											{t('measuringIndexeddbRecordsInThisWebview', 'Measuring IndexedDB records in this WebView.')}
 										</p>
 									</div>
 								) : filteredItems.length === 0 ? (
@@ -708,19 +708,19 @@ export default function LocalStoragePage() {
 											<CheckCircle2 className="size-5" />
 										</div>
 										<p className="font-medium">
-											{search ? "No matching items" : "Nothing stored here"}
+											{search ? t('noMatchingItems', 'No matching items') : t('nothingStoredHere', 'Nothing stored here')}
 										</p>
 										<p className="mt-1 text-sm text-muted-foreground">
 											{search
-												? "Try a different search."
-												: "This category is already clean."}
+												? t('tryADifferentSearch', 'Try a different search.')
+												: t('thisCategoryIsAlreadyClean', 'This category is already clean.')}
 										</p>
 									</div>
 								) : (
 									<div className="divide-y">
 										<div className="grid grid-cols-[32px_minmax(0,1fr)_100px_138px_40px] items-center gap-3 px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-muted-foreground max-md:grid-cols-[32px_minmax(0,1fr)_88px_40px]">
 											<Checkbox
-												aria-label="Select all visible items"
+												aria-label={t('selectAllVisibleItems', 'Select all visible items')}
 												checked={
 													filteredItems.filter((item) => item.deletable)
 														.length > 0 &&
@@ -739,10 +739,10 @@ export default function LocalStoragePage() {
 													setSelected(next);
 												}}
 											/>
-											<span>Item</span>
-											<span className="text-right">Size</span>
+											<span>{t('item', 'Item')}</span>
+											<span className="text-right">{t('size', 'Size')}</span>
 											<span className="text-right max-md:hidden">
-												Last changed
+												{t('lastChanged', 'Last changed')}
 											</span>
 											<span />
 										</div>
@@ -816,10 +816,10 @@ export default function LocalStoragePage() {
 										</div>
 										<div>
 											<CardTitle className="text-base">
-												Automatic log cleanup
+												{t('automaticLogCleanup', 'Automatic log cleanup')}
 											</CardTitle>
 											<CardDescription className="mt-1">
-												Keep debug runs from growing unnoticed.
+												{`Keep debug runs from growing unnoticed.`}
 											</CardDescription>
 										</div>
 									</div>
@@ -830,7 +830,7 @@ export default function LocalStoragePage() {
 											setRetentionEnabled(checked);
 											void savePolicy(checked, days);
 										}}
-										aria-label="Automatically delete old run logs"
+										aria-label={t('automaticallyDeleteOldRunLogs', 'Automatically delete old run logs')}
 									/>
 								</div>
 							</CardHeader>
@@ -845,7 +845,7 @@ export default function LocalStoragePage() {
 										htmlFor="retention-days"
 										className="text-sm font-medium"
 									>
-										Delete run logs older than
+										{t('deleteRunLogsOlderThan', 'Delete run logs older than')}
 									</label>
 									<div className="grid grid-cols-4 gap-2">
 										{RETENTION_OPTIONS.slice(0, 4).map((option) => (
@@ -859,9 +859,7 @@ export default function LocalStoragePage() {
 													setRetentionDays(option);
 													void savePolicy(enabled, option);
 												}}
-											>
-												{option}d
-											</Button>
+											>{`${option}d`}</Button>
 										))}
 									</div>
 									<div className="flex items-center gap-2">
@@ -886,20 +884,19 @@ export default function LocalStoragePage() {
 											}
 											onClick={() => savePolicy(enabled, days)}
 										>
-											Save
+											{t('save', 'Save')}
 										</Button>
 									</div>
 								</div>
 								<div className="flex gap-2.5 rounded-lg bg-muted/60 p-3 text-xs text-muted-foreground">
 									<ShieldCheck className="mt-0.5 size-4 shrink-0 text-foreground" />
 									<p>
-										Only completed local run logs are removed. Apps, boards, and
-										active runs are never part of automatic cleanup.
+										{t('onlyCompletedLocalRunLogsAreRemovedAppsBoardsAndActiveRunsAreNeverPartOfAutomaticCleanup', "Only completed local run logs are removed. Apps, boards, and active runs are never part of automatic cleanup.")}
 									</p>
 								</div>
 								{policy?.lastCleanupMs && (
 									<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-										<Clock3 className="size-3.5" /> Last checked{" "}
+										<Clock3 className="size-3.5" /> {t('lastChecked', 'Last checked')}{" "}
 										{formatDate(policy.lastCleanupMs)}
 									</p>
 								)}
@@ -911,11 +908,10 @@ export default function LocalStoragePage() {
 								<Info className="mt-0.5 size-4 shrink-0 text-primary" />
 								<div className="space-y-1">
 									<p className="text-sm font-medium">
-										Everything shown here is local
+										{t('everythingShownHereIsLocal', 'Everything shown here is local')}
 									</p>
 									<p className="text-xs leading-relaxed text-muted-foreground">
-										This page inspects files on this device only. It does not
-										count or delete cloud data.
+										{t('thisPageInspectsFilesOnThisDeviceOnlyItDoesNotCountOrDeleteCloudData', "This page inspects files on this device only. It does not count or delete cloud data.")}
 									</p>
 								</div>
 							</div>
@@ -931,24 +927,22 @@ export default function LocalStoragePage() {
 				<AlertDialogContent>
 					<AlertDialogHeader>
 						<AlertDialogTitle>
-							Delete {pendingDelete?.length ?? 0} local{" "}
-							{pendingDelete?.length === 1 ? "item" : "items"}?
-						</AlertDialogTitle>
+							{t('delete', 'Delete')} {pendingDelete?.length ?? 0} local{" "}{t('items', { defaultValue_one: 'item?', defaultValue_other: 'items?', count: pendingDelete?.length })}</AlertDialogTitle>
 						<AlertDialogDescription>
-							This will permanently remove{" "}
+							{t('thisWillPermanentlyRemove', 'This will permanently remove')}{" "}
 							{humanFileSize(
 								pendingDelete?.reduce((sum, item) => sum + item.sizeBytes, 0) ??
 									0,
 							)}{" "}
-							from this device.
+							{`from this device.`}
 							{activeCategory === "apps" &&
-								" Deleted apps and their local project files cannot be recovered."}
+								t('deletedAppsAndTheirLocalProjectFilesCannotBeRecovered', "Deleted apps and their local project files cannot be recovered.")}
 							{activeCategory === "bits" &&
-								" Downloaded bits can be downloaded again when needed."}
+								t('downloadedBitsCanBeDownloadedAgainWhenNeeded', "Downloaded bits can be downloaded again when needed.")}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
-						<AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+						<AlertDialogCancel disabled={deleting}>{t('cancel', 'Cancel')}</AlertDialogCancel>
 						<AlertDialogAction
 							disabled={deleting}
 							onClick={(event) => {
@@ -957,7 +951,7 @@ export default function LocalStoragePage() {
 							}}
 							className="bg-destructive text-white hover:bg-destructive/90"
 						>
-							{deleting ? "Deleting…" : "Delete permanently"}
+							{deleting ? "Deleting…" : t('deletePermanently', 'Delete permanently')}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>
@@ -973,6 +967,7 @@ function PageHeader({
 	refreshing: boolean;
 	onRefresh: () => void | Promise<void>;
 }) {
+	const { t } = useTranslation("common");
 	return (
 		<div className="flex items-start justify-between gap-4 pt-1">
 			<div>
@@ -980,11 +975,11 @@ function PageHeader({
 					href="/settings"
 					className="mb-2 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
 				>
-					<ArrowLeft className="size-4" /> Settings
+					<ArrowLeft className="size-4" /> {t('settings', 'Settings')}
 				</Link>
-				<h1 className="text-3xl font-bold tracking-tight">Local storage</h1>
+				<h1 className="text-3xl font-bold tracking-tight">{t('localStorage', 'Local storage')}</h1>
 				<p className="mt-1 text-muted-foreground">
-					Understand what Studio keeps on this device and take control of it.
+					{t('understandWhatStudioKeepsOnThisDeviceAndTakeControlOfIt', 'Understand what Studio keeps on this device and take control of it.')}
 				</p>
 			</div>
 			<Button
@@ -993,7 +988,7 @@ function PageHeader({
 				onClick={onRefresh}
 				disabled={refreshing}
 			>
-				<RefreshCw className={cn(refreshing && "animate-spin")} /> Refresh
+				<RefreshCw className={cn(refreshing && "animate-spin")} /> {t('refresh', 'Refresh')}
 			</Button>
 		</div>
 	);

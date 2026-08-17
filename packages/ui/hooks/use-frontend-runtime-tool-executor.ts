@@ -6,6 +6,7 @@ import type { SurfaceComponent } from "../components/a2ui/types";
 import { compactJson, compactLogEvents } from "../components/flowpilot/utils";
 import type { ILog, ILogMetadata, IRunPayload } from "../lib";
 import { ApiResponseError } from "../lib/api-error";
+import { runAppChatMessage } from "../lib/app-chat-run";
 import {
 	getPendingDatabaseSchemas,
 	isExplicitSchemaCreateUnavailable,
@@ -13,6 +14,14 @@ import {
 	retainPendingDatabaseSchema,
 } from "../lib/database-capability-session";
 import { normalizeDatabaseTableIdentifier } from "../lib/database-table-name";
+import {
+	interactWithAppPage,
+	parseInteractActions,
+} from "../lib/interact-app-page";
+import {
+	encodePackageWidgetRef,
+	listAppPackageWidgets,
+} from "../lib/package-widgets";
 import { type IBackendState, useBackend } from "../state/backend-state";
 import type { IBoardState } from "../state/backend-state/board-state";
 import { IIndexType } from "../state/backend-state/db-state";
@@ -58,6 +67,75 @@ function nonEmptyMetadataText(value: unknown): string | undefined {
 	return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/**
+ * A package-shipped widget as `ui_inspect` reports it. The model cannot invent any of these
+ * fields — `microWidgetInstance` needs them verbatim, and desktop serves the bundle by
+ * `bundle_hash` — so the summary carries everything needed to place one.
+ */
+type UiInspectPackageWidget = {
+	selector: string;
+	package_id: string;
+	widget_id: string;
+	package_version: string;
+	bundle_hash?: string;
+	name: string;
+	description?: string;
+	contract: unknown;
+	/**
+	 * The `dynIn<Key>` pins `a2ui_instantiate_widget` mints for this package widget's
+	 * contract inputs. Derived here rather than left to the model: the `dyn_in_` prefix is not
+	 * inferable from the contract, and a guessed pin name fails only at apply time.
+	 */
+	instantiate_pins: { pin: string; input: string; optional?: boolean }[];
+};
+
+/** The `dynIn<Key>` pin per contract input, in contract order. */
+function packageContractPins(
+	contract: unknown,
+): { pin: string; input: string; optional?: boolean }[] {
+	const inputs = (contract as { inputs?: Record<string, unknown> } | undefined)
+		?.inputs;
+	if (!inputs || typeof inputs !== "object") return [];
+	return Object.entries(inputs).map(([key, value]) => ({
+		pin: widgetInstantiatePin("in", key),
+		input: key,
+		optional: (value as { optional?: boolean } | undefined)?.optional,
+	}));
+}
+
+/**
+ * Package widgets of the app, resolved from installed manifests. Returns an empty list on hosts
+ * without per-app package listing (web) and never throws: a widget-source failure must not take
+ * down the page/widget inspection the model actually asked for.
+ */
+async function loadUiInspectPackageWidgets(
+	backend: IBackendState,
+	appId: string,
+): Promise<UiInspectPackageWidget[]> {
+	try {
+		const packageWidgets = await listAppPackageWidgets(
+			{
+				listPackages: backend.appState.listPackages?.bind(backend.appState),
+				getPackage: (packageId) => backend.registryState.getPackage(packageId),
+			},
+			appId,
+		);
+		return packageWidgets.map((entry) => ({
+			selector: encodePackageWidgetRef(entry.packageId, entry.widget.id),
+			package_id: entry.packageId,
+			widget_id: entry.widget.id,
+			package_version: entry.packageVersion,
+			bundle_hash: entry.bundleHash,
+			name: entry.widget.name,
+			description: nonEmptyMetadataText(entry.widget.description),
+			contract: entry.widget.contract,
+			instantiate_pins: packageContractPins(entry.widget.contract),
+		}));
+	} catch {
+		return [];
+	}
+}
+
 /** @internal Exported only so tuple normalization and lookup stay regression-tested. */
 export function resolveUiInspectWidgetEntries(
 	list: readonly UiInspectWidgetListEntry[],
@@ -94,6 +172,8 @@ export const FRONTEND_RUNTIME_TOOL_NAMES = [
 	"execute_event",
 	"execute_node",
 	"query_execution_logs",
+	"interact_app_page",
+	"call_app_chat",
 	"graph_overlay_tool",
 	"graph_query_tool",
 	"graph_element_tool",
@@ -359,6 +439,32 @@ function resolveToolAppId(
 }
 
 /**
+ * A scoped session may target another app only when that app is visible in the current
+ * profile — the same gate the global assistant applies before app-runtime tools.
+ */
+async function assertAppVisibleForRuntime(
+	backend: IBackendState,
+	appId: string,
+	defaultAppId?: string,
+): Promise<void> {
+	if (!appId || appId === defaultAppId) return;
+	let visible = false;
+	try {
+		const profile = await backend.userState.getSettingsProfile();
+		visible = (profile?.hub_profile?.apps ?? []).some(
+			(entry) => entry.app_id === appId,
+		);
+	} catch {
+		throw new Error(
+			`Could not verify that app '${appId}' is visible in the current profile; cross-app execution was not started.`,
+		);
+	}
+	if (!visible) {
+		throw new Error(`App '${appId}' is not visible in the current profile.`);
+	}
+}
+
+/**
  * Mirror of `flow_like_ast::to_camel_case`: every run of non-alphanumeric
  * characters is a separator that is dropped and uppercases the next character.
  */
@@ -385,7 +491,7 @@ function toCamelCase(value: string): string {
 }
 
 function widgetInstantiatePin(
-	kind: "path" | "prop" | "cust",
+	kind: "path" | "prop" | "cust" | "in" | "arg",
 	key: string,
 ): string {
 	return toCamelCase(`dyn_${kind}_${key}`);
@@ -412,12 +518,17 @@ function collectBoundPaths(components: SurfaceComponent[]): string[] {
 }
 
 function summarizePage(page: IPage) {
+	const customCss = page.canvasSettings?.customCss ?? "";
 	return {
 		page_id: page.id,
 		name: page.name,
 		route: page.route,
 		on_load_event_id: page.onLoadEventId,
 		on_interval_event_id: page.onIntervalEventId,
+		// Size only, never the stylesheet itself — this tool feeds the orchestrator, and the UI
+		// specialist receives the full customCss as its own context. Without this signal the
+		// orchestrator cannot tell a styled page from an unstyled one.
+		custom_css_chars: customCss.length,
 		element_refs: (page.components ?? []).map(
 			(component) => `${page.id}/${component.id}`,
 		),
@@ -429,6 +540,9 @@ function summarizeWidget(widget: IWidget) {
 		selector: widget.name,
 		widget_id: widget.id,
 		description: widget.description,
+		// Every pin `a2ui_instantiate_widget`'s on_update mints for this widget. Anything
+		// omitted here is undiscoverable: the model has no other source for these names, and
+		// guessing one produces a binding that fails at apply time.
 		instantiate_pins: [
 			...collectBoundPaths(widget.components ?? []).map((path) => ({
 				pin: widgetInstantiatePin("path", path),
@@ -438,6 +552,11 @@ function summarizeWidget(widget: IWidget) {
 				pin: widgetInstantiatePin("prop", prop.id),
 				label: prop.label,
 				property_path: prop.propertyPath,
+			})),
+			...(widget.customizationOptions ?? []).map((option) => ({
+				pin: widgetInstantiatePin("cust", option.id),
+				label: option.label,
+				customization: option.id,
 			})),
 		],
 		// Actions are persisted with `id` — that is also the string an events_widget_action node
@@ -1531,12 +1650,9 @@ export function useFrontendRuntimeToolExecutor(
 						"streamState",
 						true,
 					);
-					const skipConsentCheck = getArgBool(
-						args,
-						"skip_consent_check",
-						"skipConsentCheck",
-						false,
-					);
+					// OAuth/RPA consent is a user gate; the model must never skip it, so the
+					// former skip_consent_check argument is deliberately not read here.
+					const skipConsentCheck = false;
 					const payload = buildRunPayload(eventId, args.payload);
 					const logs: unknown[] = [];
 					let runId: string | undefined;
@@ -1582,12 +1698,7 @@ export function useFrontendRuntimeToolExecutor(
 						nodeId,
 						payload: args.payload,
 						streamState: getArgBool(args, "stream_state", "streamState", true),
-						skipConsentCheck: getArgBool(
-							args,
-							"skip_consent_check",
-							"skipConsentCheck",
-							false,
-						),
+						skipConsentCheck: false,
 					});
 				}
 
@@ -1606,6 +1717,47 @@ export function useFrontendRuntimeToolExecutor(
 						filter: getArgString(args, "filter") ?? getArgString(args, "query"),
 						offset: getArgNumber(args, "offset", "offset", 0),
 						limit: getArgNumber(args, "limit", "limit", 100),
+					});
+				}
+
+				case "interact_app_page": {
+					const actions = parseInteractActions(args.actions);
+					if (actions.length === 0)
+						throw new Error(
+							"interact_app_page requires a non-empty actions array of {action: 'set_value'|'trigger', component_id, value?, event?}.",
+						);
+					await assertAppVisibleForRuntime(backend, toolAppId, defaultAppId);
+					return interactWithAppPage(backend, {
+						appId: toolAppId,
+						eventId: getArgString(args, "event_id", "eventId"),
+						pageId: getArgString(args, "page_id", "pageId"),
+						actions,
+						captureScreenshots: getArgBool(
+							args,
+							"capture_screenshots",
+							"captureScreenshots",
+							true,
+						),
+					});
+				}
+
+				case "call_app_chat": {
+					const message =
+						getArgString(args, "message") ?? getArgString(args, "prompt");
+					if (!message) throw new Error("call_app_chat requires a message.");
+					if (
+						Array.isArray(args.forward_files) &&
+						args.forward_files.length > 0
+					) {
+						throw new Error(
+							"Attachment forwarding (forward_files) is only available in the global assistant chat; this session has no user-turn attachments. Retry without forward_files.",
+						);
+					}
+					await assertAppVisibleForRuntime(backend, toolAppId, defaultAppId);
+					return runAppChatMessage(backend, {
+						appId: toolAppId,
+						eventId: getArgString(args, "event_id", "eventId"),
+						message,
 					});
 				}
 
@@ -1640,9 +1792,30 @@ export function useFrontendRuntimeToolExecutor(
 									"ui_inspect operation 'widget' requires widget_selector.",
 								);
 							}
-							const list = await backend.widgetState.getWidgets(toolAppId);
+							const [list, packageWidgets] = await Promise.all([
+								backend.widgetState.getWidgets(toolAppId),
+								loadUiInspectPackageWidgets(backend, toolAppId),
+							]);
+							const normalizedSelector = selector.trim();
+							// A `pkg:` selector is unambiguous, so resolve it directly. A bare name
+							// stays project-first: a package widget must never shadow a project
+							// widget that already answered to that name.
+							const packageRef = packageWidgets.find(
+								(entry) => entry.selector === normalizedSelector,
+							);
+							if (packageRef) {
+								return { status: "ok", package_widget: packageRef };
+							}
 							const { match } = resolveUiInspectWidgetEntries(list, selector);
-							if (!match) throw new Error(`Widget '${selector}' not found.`);
+							if (!match) {
+								const namedPackageWidget = packageWidgets.find(
+									(entry) => entry.name === normalizedSelector,
+								);
+								if (namedPackageWidget) {
+									return { status: "ok", package_widget: namedPackageWidget };
+								}
+								throw new Error(`Widget '${selector}' not found.`);
+							}
 							const widget = await backend.widgetState.getWidget(
 								toolAppId,
 								match.widgetId,
@@ -1650,7 +1823,10 @@ export function useFrontendRuntimeToolExecutor(
 							return { status: "ok", widget: summarizeWidget(widget) };
 						}
 						case "widgets": {
-							const list = await backend.widgetState.getWidgets(toolAppId);
+							const [list, packageWidgets] = await Promise.all([
+								backend.widgetState.getWidgets(toolAppId),
+								loadUiInspectPackageWidgets(backend, toolAppId),
+							]);
 							const { entries } = resolveUiInspectWidgetEntries(list);
 							const widgets = await Promise.all(
 								entries.map(async ({ widgetId, selector }) => {
@@ -1669,12 +1845,13 @@ export function useFrontendRuntimeToolExecutor(
 									}
 								}),
 							);
-							return { status: "ok", widgets };
+							return { status: "ok", widgets, package_widgets: packageWidgets };
 						}
 						default: {
-							const [pageList, widgetList] = await Promise.all([
+							const [pageList, widgetList, packageWidgets] = await Promise.all([
 								backend.pageState.getPages(toolAppId, boardId),
 								backend.widgetState.getWidgets(toolAppId),
+								loadUiInspectPackageWidgets(backend, toolAppId),
 							]);
 							const pages = await Promise.all(
 								pageList.map(async (item) => {
@@ -1706,6 +1883,11 @@ export function useFrontendRuntimeToolExecutor(
 										description,
 									}),
 								),
+								package_widgets: packageWidgets,
+								// The listing carries selectors only. Say so, because a caller
+								// that stops here has no `dyn*` pin names and the failure of a
+								// guessed one only surfaces when the board is applied.
+								note: "This listing does not include widget binding pins. Call ui_inspect with operation 'widget' for a widget's instantiate_pins before authoring any dyn* argument.",
 							};
 						}
 					}

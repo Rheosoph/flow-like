@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { GaugeIcon, RouteIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
@@ -49,6 +50,7 @@ function ModeToggle({
 	mode,
 	onSelect,
 }: Readonly<{ mode: DashboardMode; onSelect: (mode: DashboardMode) => void }>) {
+	const { t } = useTranslation("settings");
 	return (
 		<div className="flex items-center gap-1 rounded-full border bg-muted/50 p-0.5">
 			<Tooltip>
@@ -60,11 +62,11 @@ function ModeToggle({
 						onClick={() => onSelect("launch")}
 					>
 						<RouteIcon className="mr-1 h-3 w-3" />
-						Launch
+						{t('launch', 'Launch')}
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent side="bottom">
-					Step-by-step view — what to do next
+					{t('stepbystepViewWhatToDoNext', 'Step-by-step view — what to do next')}
 				</TooltipContent>
 			</Tooltip>
 			<Tooltip>
@@ -76,11 +78,11 @@ function ModeToggle({
 						onClick={() => onSelect("control")}
 					>
 						<GaugeIcon className="mr-1 h-3 w-3" />
-						Operate
+						{t('operate', 'Operate')}
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent side="bottom">
-					Operations view — health, surfaces and activity
+					{t('operationsViewHealthSurfacesAndActivity', 'Operations view — health, surfaces and activity')}
 				</TooltipContent>
 			</Tooltip>
 		</div>

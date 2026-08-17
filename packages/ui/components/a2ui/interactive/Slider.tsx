@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { cn } from "../../../lib/utils";
 import { Label } from "../../ui/label";
 import { Slider } from "../../ui/slider";
@@ -28,6 +29,7 @@ export function A2UISlider({
 	componentId,
 	surfaceId,
 }: ComponentProps<SliderComponent>) {
+	const { t } = useTranslation("common");
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const value = useResolved<number>(component.value);
@@ -73,7 +75,7 @@ export function A2UISlider({
 		>
 			{showValue && (
 				<div className="flex justify-between items-center">
-					<Label>Value</Label>
+					<Label>{t('value2', 'Value')}</Label>
 					<span className="text-sm text-muted-foreground">{value ?? min}</span>
 				</div>
 			)}

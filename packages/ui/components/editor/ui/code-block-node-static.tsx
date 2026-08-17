@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import {
 	NodeApi,
@@ -143,6 +144,7 @@ function CopyButton({
 	React.ComponentProps<typeof Button>,
 	"value"
 >) {
+	const { t } = useTranslation("common");
 	const [hasCopied, setHasCopied] = React.useState(false);
 
 	React.useEffect(() => {
@@ -162,7 +164,7 @@ function CopyButton({
 			}}
 			{...props}
 		>
-			<span className="sr-only">Copy</span>
+			<span className="sr-only">{t('copy', 'Copy')}</span>
 			{hasCopied ? (
 				<CheckIcon className="size-3!" />
 			) : (

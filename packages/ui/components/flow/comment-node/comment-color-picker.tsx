@@ -1,4 +1,5 @@
 "use client";
+import { i18n as i18next } from "@flow-like/locales";
 import { PaletteIcon } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 import { HexAlphaColorPicker } from "react-colorful";
@@ -88,7 +89,7 @@ const CommentColorPicker = memo(
 							flex items-center justify-center"
 						style={{ backgroundColor: parsedValue }}
 					>
-						<span className="sr-only">Pick color</span>
+						<span className="sr-only">{i18next.t('pickColor', 'Pick color')}</span>
 					</button>
 				</PopoverTrigger>
 				<PopoverContent
@@ -104,7 +105,7 @@ const CommentColorPicker = memo(
 									onClick={() => setShowWheel(false)}
 									className="text-[10px] text-zinc-400 hover:text-zinc-200"
 								>
-									← Back
+									{i18next.t('back2', '← Back')}
 								</button>
 							</div>
 							<HexAlphaColorPicker
@@ -150,7 +151,7 @@ const CommentColorPicker = memo(
 										side="bottom"
 										className="text-[10px] px-1.5 py-0.5"
 									>
-										Custom Color
+										{i18next.t('customColor', 'Custom Color')}
 									</TooltipContent>
 								</Tooltip>
 							</div>

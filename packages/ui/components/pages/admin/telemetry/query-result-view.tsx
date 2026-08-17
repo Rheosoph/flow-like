@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { BarChart3, Download, Table2, TriangleAlert } from "lucide-react";
 import { useId, useMemo } from "react";
@@ -139,16 +140,15 @@ export function downloadTelemetryQueryCsv(
 
 /** The row cap silently drops part of the range — say so above the result. */
 function TruncationNotice({ compact }: { readonly compact: boolean }) {
+	const { t } = useTranslation("admin");
 	return (
 		<div className="flex items-start gap-2 rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-amber-700 dark:text-amber-400">
 			<TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
 			<div className={compact ? "text-[11px]" : "text-xs"}>
 				<span className="font-semibold">
-					Capped at {TELEMETRY_QUERY_MAX_ROWS.toLocaleString()} rows.
+					{t('cappedAt', 'Capped at')} {TELEMETRY_QUERY_MAX_ROWS.toLocaleString()} rows.
 				</span>{" "}
-				Part of the selected range is missing from this result and from the CSV
-				export. Narrow the time range, pick a coarser interval, or drop the
-				breakdown.
+				{`Part of the selected range is missing from this result and from the CSV export. Narrow the time range, pick a coarser interval, or drop the breakdown.`}
 			</div>
 		</div>
 	);
@@ -237,6 +237,7 @@ function TimeseriesChart({
 	readonly bucket: TelemetryBucket;
 	readonly height: string;
 }) {
+	const { t } = useTranslation("admin");
 	const gradientId = useId().replace(/:/g, "");
 	const model = useMemo(
 		() => buildTimeseriesModel(response, layout),
@@ -466,6 +467,7 @@ function ScalarResult({
 function ResultTable({
 	response,
 }: { readonly response: ITelemetryQueryResponse }) {
+	const { t } = useTranslation("admin");
 	const rows = response.rows.slice(0, TELEMETRY_QUERY_TABLE_PREVIEW_ROWS);
 	const hidden = response.rows.length - rows.length;
 	const capped = telemetryQueryTruncated(response);
@@ -514,12 +516,10 @@ function ResultTable({
 			</div>
 			{hidden > 0 ? (
 				<p className="text-[11px] text-muted-foreground">
-					Showing the first {rows.length.toLocaleString()} of the{" "}
-					{response.rows.length.toLocaleString()} rows the server returned. The
-					CSV download contains all {response.rows.length.toLocaleString()} of
-					them
+					{t('showingTheFirst', 'Showing the first')} {rows.length.toLocaleString()} {t('ofThe', 'of the')}{" "}
+					{response.rows.length.toLocaleString()} {t('rowsTheServerReturnedTheCsvDownloadContainsAll', "rows the server returned. The CSV download contains all")} {response.rows.length.toLocaleString()} {t('ofThem', "of them")}
 					{capped
-						? " — but the server already capped the query, so neither this table nor the CSV covers the full range."
+						? t('butTheServerAlreadyCappedTheQuerySoNeitherThisTableNorTheCsvCoversTheFullRange', "— but the server already capped the query, so neither this table nor the CSV covers the full range.")
 						: "."}
 				</p>
 			) : null}
@@ -550,6 +550,7 @@ export function TelemetryQueryResultView({
 	compact = false,
 	showToolbar = true,
 }: Readonly<TelemetryQueryResultViewProps>) {
+	const { t } = useTranslation("admin");
 	const layout = useMemo(
 		() => telemetryQueryLayout(request, response),
 		[request, response],
@@ -591,8 +592,8 @@ export function TelemetryQueryResultView({
 			{showToolbar ? (
 				<div className="flex flex-wrap items-center justify-between gap-2">
 					<span className="text-[11px] tabular-nums text-muted-foreground">
-						{response.total.toLocaleString()} rows ·{" "}
-						{response.interval === "none" ? "no buckets" : response.interval}
+						{response.total.toLocaleString()} {t('rows', 'rows ·')}{" "}
+						{response.interval === "none" ? t('noBuckets', 'no buckets') : response.interval}
 					</span>
 					<div className="flex items-center gap-1">
 						{chartable && onViewChange ? (
@@ -603,7 +604,7 @@ export function TelemetryQueryResultView({
 									onClick={() => onViewChange("chart")}
 								>
 									<BarChart3 className="mr-1 h-3.5 w-3.5" />
-									Chart
+									{t('chart', 'Chart')}
 								</Button>
 								<Button
 									variant={view === "table" ? "secondary" : "ghost"}
@@ -611,7 +612,7 @@ export function TelemetryQueryResultView({
 									onClick={() => onViewChange("table")}
 								>
 									<Table2 className="mr-1 h-3.5 w-3.5" />
-									Table
+									{t('table', 'Table')}
 								</Button>
 							</>
 						) : null}

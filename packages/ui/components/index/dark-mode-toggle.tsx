@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 
@@ -13,6 +14,7 @@ import {
 
 export function DarkModeToggle() {
 	const { setTheme } = useTheme();
+	const { t } = useTranslation("settings");
 
 	return (
 		<DropdownMenu>
@@ -20,18 +22,18 @@ export function DarkModeToggle() {
 				<Button variant="outline" size="icon">
 					<Sun className="h-[1.2rem] w-[1.2rem] rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
 					<Moon className="absolute h-[1.2rem] w-[1.2rem] rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-					<span className="sr-only">{"Toggle Theme"}</span>
+					<span className="sr-only">{t("theme.toggle")}</span>
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="center" side="right">
 				<DropdownMenuItem onClick={() => setTheme("light")}>
-					{"Light"}
+					{t("theme.light")}
 				</DropdownMenuItem>
 				<DropdownMenuItem onClick={() => setTheme("dark")}>
-					{"Dark"}
+					{t("theme.dark")}
 				</DropdownMenuItem>
 				<DropdownMenuItem onClick={() => setTheme("system")}>
-					{"System Default"}
+					{t("theme.system")}
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>

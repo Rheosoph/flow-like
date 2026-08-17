@@ -1,10 +1,12 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { SlateElementProps, TDateElement } from "platejs";
 
 import { SlateElement } from "platejs";
 
 export function DateElementStatic(props: SlateElementProps<TDateElement>) {
+	const { t } = useTranslation("common");
 	const { element } = props;
 
 	return (
@@ -37,7 +39,7 @@ export function DateElementStatic(props: SlateElementProps<TDateElement>) {
 						});
 					})()
 				) : (
-					<span>Pick a date</span>
+					<span>{t('pickADate', 'Pick a date')}</span>
 				)}
 			</span>
 			{props.children}

@@ -132,8 +132,8 @@ pub async fn storage_list(
     prefix: String,
 ) -> Result<Vec<StorageItem>, TauriFunctionError> {
     let state = TauriFlowLikeState::construct(&app_handle).await?;
-    let (store, path) = construct_storage(&state, &app_id, &prefix).await?;
-    println!("Listing items in storage at path: {}, {:?}", path, store);
+    let (store, base) = construct_storage(&state, &app_id, "").await?;
+    let (_, path) = construct_storage(&state, &app_id, &prefix).await?;
     let items = store
         .as_generic()
         .list_with_delimiter(Some(&path))
@@ -142,38 +142,14 @@ pub async fn storage_list(
     let folders = items
         .common_prefixes
         .into_iter()
-        .map(|p| {
-            let mut item = StorageItem::from(p);
-            // Split the location, skip the first three parts, and rejoin
-            let stripped_location = item
-                .location
-                .split('/')
-                .skip(3)
-                .collect::<Vec<_>>()
-                .join("/");
-            item.location = stripped_location;
-            item.is_dir = true;
-            item
-        })
+        .map(|p| StorageItem::from(p).relative_to(&base))
         .collect::<Vec<StorageItem>>();
     let mut items: Vec<StorageItem> = items
         .objects
         .into_iter()
-        .map(|object| {
-            let mut item = StorageItem::from(object);
-            // Split the location, skip the first three parts, and rejoin
-            let stripped_location = item
-                .location
-                .split('/')
-                .skip(3)
-                .collect::<Vec<_>>()
-                .join("/");
-            item.location = stripped_location;
-            item
-        })
+        .map(|object| StorageItem::from(object).relative_to(&base))
         .collect();
     items.extend(folders);
-    println!("Listed {} items", items.len());
     Ok(items)
 }
 
@@ -185,11 +161,8 @@ pub async fn storage_user_list(
 ) -> Result<Vec<StorageItem>, TauriFunctionError> {
     let state = TauriFlowLikeState::construct(&app_handle).await?;
     let sub = current_user_sub(&app_handle).await?;
-    let (store, path) = construct_user_storage(&state, &sub, &app_id, &prefix).await?;
-    println!(
-        "Listing user items in storage at path: {}, {:?}",
-        path, store
-    );
+    let (store, base) = construct_user_storage(&state, &sub, &app_id, "").await?;
+    let (_, path) = construct_user_storage(&state, &sub, &app_id, &prefix).await?;
     let items = store
         .as_generic()
         .list_with_delimiter(Some(&path))
@@ -198,36 +171,14 @@ pub async fn storage_user_list(
     let folders = items
         .common_prefixes
         .into_iter()
-        .map(|p| {
-            let mut item = StorageItem::from(p);
-            let stripped_location = item
-                .location
-                .split('/')
-                .skip(4)
-                .collect::<Vec<_>>()
-                .join("/");
-            item.location = stripped_location;
-            item.is_dir = true;
-            item
-        })
+        .map(|p| StorageItem::from(p).relative_to(&base))
         .collect::<Vec<StorageItem>>();
     let mut items: Vec<StorageItem> = items
         .objects
         .into_iter()
-        .map(|object| {
-            let mut item = StorageItem::from(object);
-            let stripped_location = item
-                .location
-                .split('/')
-                .skip(4)
-                .collect::<Vec<_>>()
-                .join("/");
-            item.location = stripped_location;
-            item
-        })
+        .map(|object| StorageItem::from(object).relative_to(&base))
         .collect();
     items.extend(folders);
-    println!("Listed {} user items", items.len());
     Ok(items)
 }
 

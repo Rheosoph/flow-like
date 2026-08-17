@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Loader2, Send } from "lucide-react";
 import { useCallback, useState } from "react";
 import { PackagePermissionBits } from "../../lib/permission/wasm-package-permission";
@@ -34,6 +35,7 @@ export function PackageInviteDialog({
 	onInvite,
 	isSubmitting,
 }: PackageInviteDialogProps) {
+	const { t } = useTranslation("store");
 	const [userId, setUserId] = useState("");
 	const [permissionLevel, setPermissionLevel] = useState<"maintainer" | "user">(
 		"user",
@@ -70,18 +72,18 @@ export function PackageInviteDialog({
 		<Dialog open={open} onOpenChange={handleOpenChange}>
 			<DialogContent className="sm:max-w-md">
 				<DialogHeader>
-					<DialogTitle>Invite User</DialogTitle>
+					<DialogTitle>{t('inviteUser', 'Invite User')}</DialogTitle>
 					<DialogDescription>
-						Add a user to this package by their user ID.
+						{t('addAUserToThisPackageByTheirUserId', 'Add a user to this package by their user ID.')}
 					</DialogDescription>
 				</DialogHeader>
 
 				<div className="grid gap-4 py-4">
 					<div className="grid gap-2">
-						<Label htmlFor="invite-user-id">User ID</Label>
+						<Label htmlFor="invite-user-id">{t('userId', 'User ID')}</Label>
 						<Input
 							id="invite-user-id"
-							placeholder="Enter user ID"
+							placeholder={t('enterUserId', 'Enter user ID')}
 							value={userId}
 							onChange={(e) => setUserId(e.target.value)}
 							disabled={isSubmitting}
@@ -89,7 +91,7 @@ export function PackageInviteDialog({
 					</div>
 
 					<div className="grid gap-2">
-						<Label htmlFor="invite-permission">Permission Level</Label>
+						<Label htmlFor="invite-permission">{t('permissionLevel', 'Permission Level')}</Label>
 						<Select
 							value={permissionLevel}
 							onValueChange={(v) =>
@@ -101,8 +103,8 @@ export function PackageInviteDialog({
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="user">User</SelectItem>
-								<SelectItem value="maintainer">Maintainer</SelectItem>
+								<SelectItem value="user">{t('user', 'User')}</SelectItem>
+								<SelectItem value="maintainer">{t('maintainer', 'Maintainer')}</SelectItem>
 							</SelectContent>
 						</Select>
 					</div>
@@ -114,7 +116,7 @@ export function PackageInviteDialog({
 						onClick={() => handleOpenChange(false)}
 						disabled={isSubmitting}
 					>
-						Cancel
+						{t('cancel', 'Cancel')}
 					</Button>
 					<Button onClick={handleSubmit} disabled={!canSubmit}>
 						{isSubmitting ? (
@@ -122,7 +124,7 @@ export function PackageInviteDialog({
 						) : (
 							<Send className="mr-2 h-4 w-4" />
 						)}
-						Invite
+						{t('invite', 'Invite')}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

@@ -203,16 +203,43 @@ describe("buildClusterModel", () => {
 		).toBe(true);
 	});
 
-	test("declines to group when every edge would cross a group boundary", () => {
+	test("falls back to modularity when by-label grouping crosses every edge", () => {
 		// An undeclared spine with no sampler counts leaves only by-label groups,
-		// and grouping by label would put every edge across a boundary. The force
-		// layout shows that structure better, so the model steps aside.
+		// and grouping by label would put every edge across a boundary. Rather than
+		// stepping aside for a hairball, the model asks the edges where the groups
+		// are: each document and its own chunks stay together.
 		const plain = overlay();
 		plain.edges[0].containment = false;
 
-		expect(buildClusterModel(corpus({ "doc-a": 12, "doc-b": 12 }), plain)).toBe(
-			null,
+		const data = corpus({ "doc-a": 12, "doc-b": 12 });
+		const model = buildClusterModel(data, plain);
+
+		expect(model).not.toBeNull();
+		const crossing = data.edges.filter(
+			(e) =>
+				model?.byNode.get(e.source)?.clusterId !==
+				model?.byNode.get(e.target)?.clusterId,
 		);
+		expect(crossing).toHaveLength(0);
+		expect(model?.byNode.get("doc-a")?.clusterId).not.toBe(
+			model?.byNode.get("doc-b")?.clusterId,
+		);
+	});
+
+	test("a modularity group never claims a fan-out it does not have", () => {
+		// Only a declared parent earns a badge: a community's centre is its label
+		// anchor, and a count beside it would read as "stands for N others".
+		const plain = overlay();
+		plain.edges[0].containment = false;
+
+		const model = buildClusterModel(
+			corpus({ "doc-a": 12, "doc-b": 12 }),
+			plain,
+		);
+		const anchors = [...(model?.byNode.values() ?? [])].filter((a) => a.isHub);
+
+		expect(anchors.length).toBeGreaterThan(0);
+		expect(anchors.every((a) => a.badge === undefined)).toBe(true);
 	});
 
 	test("treats a label the sampler counted as a spine, undeclared or not", () => {

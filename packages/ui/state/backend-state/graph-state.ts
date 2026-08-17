@@ -271,6 +271,8 @@ export interface NeighborsPayload {
 	depth?: number;
 	direction?: "outgoing" | "incoming" | "both";
 	limit?: number;
+	/** Relationship labels to follow. Omit or leave empty to follow all of them. */
+	edge_labels?: string[];
 }
 
 export interface OverlayChildrenPayload {

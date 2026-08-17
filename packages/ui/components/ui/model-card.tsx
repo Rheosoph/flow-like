@@ -1,4 +1,5 @@
 "use client";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
 	ArrowRightIcon,
@@ -79,6 +80,7 @@ export function ModelCard({
 	onEdit,
 	onDelete,
 }: Readonly<ModelCardProps>) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const { hub } = useHub();
 	const download = useDownloadManager((s) => s.download);
@@ -241,7 +243,7 @@ export function ModelCard({
 						})
 					) {
 						toast.error(
-							`This model requires the ${tierInfo.requiredTier} plan.`,
+							t('thisModelRequiresTheRequiredtierPlan', 'This model requires the {{requiredTier}} plan.', { requiredTier: tierInfo.requiredTier }),
 						);
 					}
 					return;
@@ -256,7 +258,7 @@ export function ModelCard({
 			console.error("Failed to update profile models:", error);
 			if (handleUpgradeRequiredError(error, "model-tier")) return;
 			toast.error(
-				error instanceof Error ? error.message : "Failed to update profile",
+				error instanceof Error ? error.message : t('failedToUpdateProfile', 'Failed to update profile'),
 			);
 		}
 	}, [
@@ -387,6 +389,7 @@ function ModelCardGridVariant({
 	onEdit,
 	onDelete,
 }: Readonly<ModelCardVariantProps>) {
+	const { t } = useTranslation("common");
 	const meta = bit.meta.en;
 	if (!meta) return null;
 
@@ -406,14 +409,12 @@ function ModelCardGridVariant({
 					{isQueuedState ? (
 						<div className="flex items-center gap-2">
 							<ClockIcon className="h-4 w-4 animate-pulse text-primary" />
-							<span className="text-sm text-muted-foreground">Queued</span>
+							<span className="text-sm text-muted-foreground">{t('queued', 'Queued')}</span>
 						</div>
 					) : (
 						<div className="flex items-center gap-3">
 							<Progress value={progress} className="h-1.5 w-24" />
-							<span className="text-sm tabular-nums text-muted-foreground">
-								{progress}%
-							</span>
+							<span className="text-sm tabular-nums text-muted-foreground">{`${progress}%`}</span>
 						</div>
 					)}
 				</div>
@@ -433,7 +434,7 @@ function ModelCardGridVariant({
 						{isCustom && (
 							<LockIcon
 								className="h-3 w-3 shrink-0"
-								aria-label="Private to you"
+								aria-label={t('privateToYou', 'Private to you')}
 							/>
 						)}
 					</div>
@@ -476,16 +477,14 @@ function ModelCardGridVariant({
 					<>
 						<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
 						<span className="font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
-							{humanFileSize(bitSize)} on disk
+							{humanFileSize(bitSize)} {t('onDisk', 'on disk')}
 						</span>
 					</>
 				)}
 				{isRestricted && requiredTier && (
 					<>
 						<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
-						<span className="font-semibold text-amber-600 dark:text-amber-400">
-							{requiredTier} plan
-						</span>
+						<span className="font-semibold text-amber-600 dark:text-amber-400">{t('requiredtierPlan', '{{requiredTier}} plan', { requiredTier })}</span>
 					</>
 				)}
 			</div>
@@ -514,7 +513,7 @@ function ModelCardGridVariant({
 				) : (
 					<PlusIcon className="h-3.5 w-3.5" />
 				)}
-				{isInProfile ? "In profile" : "Add to profile"}
+				{isInProfile ? "In profile" : t('addToProfile2', 'Add to profile')}
 			</Button>
 		</article>
 	);
@@ -540,6 +539,7 @@ function ModelCardListVariant({
 	onToggleProfile,
 	onOpenRepository,
 }: Readonly<ModelCardVariantProps>) {
+	const { t } = useTranslation("common");
 	const meta = bit.meta.en;
 	if (!meta) return null;
 
@@ -555,14 +555,12 @@ function ModelCardListVariant({
 					{isQueuedState ? (
 						<div className="flex items-center gap-2">
 							<ClockIcon className="h-4 w-4 text-primary animate-pulse" />
-							<span className="text-sm text-muted-foreground">Queued</span>
+							<span className="text-sm text-muted-foreground">{t('queued', 'Queued')}</span>
 						</div>
 					) : (
 						<div className="flex items-center gap-3">
 							<Progress value={progress} className="w-24 h-1.5" />
-							<span className="text-sm text-muted-foreground tabular-nums">
-								{progress}%
-							</span>
+							<span className="text-sm text-muted-foreground tabular-nums">{`${progress}%`}</span>
 						</div>
 					)}
 				</div>
@@ -607,7 +605,7 @@ function ModelCardListVariant({
 						variant="outline"
 						className="text-[10px] px-1.5 py-0 h-5 bg-cyan-500/10 text-cyan-700 border-cyan-500/30"
 					>
-						Remote
+						{t('remote', 'Remote')}
 					</Badge>
 				)}
 				{isEmbeddingModel && !canRunRemotely && (
@@ -615,7 +613,7 @@ function ModelCardListVariant({
 						variant="outline"
 						className="text-[10px] px-1.5 py-0 h-5 bg-zinc-500/10 text-zinc-600 border-zinc-500/30"
 					>
-						Local only
+						{t('localOnly', 'Local only')}
 					</Badge>
 				)}
 				{isRestricted && requiredTier && (
@@ -666,13 +664,14 @@ function ModelCardDropdown({
 	onEdit,
 	onDelete,
 }: Readonly<ModelCardDropdownProps>) {
+	const { t } = useTranslation("common");
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
 				<Button
 					size="sm"
 					variant="ghost"
-					aria-label="Model actions"
+					aria-label={t('modelActions', 'Model actions')}
 					className="h-7 w-7 shrink-0 p-0 text-muted-foreground/60 transition-colors hover:text-foreground"
 					onClick={(e) => e.stopPropagation()}
 				>
@@ -689,12 +688,12 @@ function ModelCardDropdown({
 					{isInstalled ? (
 						<>
 							<TrashIcon className="h-4 w-4 mr-2" />
-							Remove
+							{t('remove', 'Remove')}
 						</>
 					) : (
 						<>
 							<DownloadCloudIcon className="h-4 w-4 mr-2" />
-							Download ({humanFileSize(bitSize)})
+							{t('downloadWithSize', 'Download ({{size}})', { size: humanFileSize(bitSize) })}
 						</>
 					)}
 				</DropdownMenuItem>
@@ -707,12 +706,12 @@ function ModelCardDropdown({
 					{isInProfile ? (
 						<>
 							<XIcon className="h-4 w-4 mr-2" />
-							Remove from Profile
+							{`Remove from Profile`}
 						</>
 					) : (
 						<>
 							<PlusIcon className="h-4 w-4 mr-2" />
-							Add to Profile
+							{t('addToProfile', 'Add to Profile')}
 						</>
 					)}
 				</DropdownMenuItem>
@@ -726,7 +725,7 @@ function ModelCardDropdown({
 							}}
 						>
 							<ExternalLinkIcon className="h-4 w-4 mr-2" />
-							View Repository
+							{t('viewRepository', 'View Repository')}
 						</DropdownMenuItem>
 					</>
 				)}
@@ -739,7 +738,7 @@ function ModelCardDropdown({
 						}}
 					>
 						<PencilIcon className="h-4 w-4 mr-2" />
-						Edit model
+						{t('editModel', 'Edit model')}
 					</DropdownMenuItem>
 				)}
 				{onDelete && (
@@ -751,7 +750,7 @@ function ModelCardDropdown({
 						}}
 					>
 						<TrashIcon className="h-4 w-4 mr-2" />
-						Delete model
+						{t('deleteModel', 'Delete model')}
 					</DropdownMenuItem>
 				)}
 			</DropdownMenuContent>
@@ -764,13 +763,14 @@ function ModelStatusBadge({
 	isHosted,
 	bitSize,
 }: Readonly<{ isInstalled: boolean; isHosted: boolean; bitSize: number }>) {
+	const { t } = useTranslation("common");
 	if (isHosted) {
 		return (
 			<Badge
 				variant="outline"
 				className="text-[10px] px-1.5 py-0 h-5 bg-sky-500/10 text-sky-600 border-sky-500/30"
 			>
-				Hosted
+				{t('hosted', 'Hosted')}
 			</Badge>
 		);
 	}
@@ -796,6 +796,7 @@ export function ModelTypeIcon({
 	type,
 	className = "",
 }: Readonly<{ type: IBitTypes; className?: string }>): JSX.Element {
+	const { t } = useTranslation("common");
 	const cn = `h-4 w-4 ${className}`;
 	switch (type) {
 		case IBitTypes.Llm:
@@ -818,8 +819,9 @@ export function ModelTypeIcon({
 export function ModalityIcons({
 	type,
 }: Readonly<{ type: IBitTypes }>): JSX.Element {
+	const { t } = useTranslation("common");
 	const iconClass = "h-3 w-3";
-	const arrowClass = "h-2.5 w-2.5 text-foreground";
+	const arrowClass = `h-2.5 w-2.5 text-foreground`;
 
 	switch (type) {
 		case IBitTypes.Llm:
@@ -885,17 +887,17 @@ export function ModalityIcons({
 export function getModelModality(bit: IBit): string {
 	switch (bit.type) {
 		case IBitTypes.Llm:
-			return "Text → Text";
+			return i18next.t('textText', 'Text → Text');
 		case IBitTypes.Vlm:
-			return "Image → Text";
+			return i18next.t('imageText', 'Image → Text');
 		case IBitTypes.Tts:
-			return "Text → Speech";
+			return i18next.t('textSpeech', 'Text → Speech');
 		case IBitTypes.Stt:
-			return "Speech → Text";
+			return i18next.t('speechText', 'Speech → Text');
 		case IBitTypes.Embedding:
-			return "Text → Embedding";
+			return i18next.t('textEmbedding', 'Text → Embedding');
 		case IBitTypes.ImageEmbedding:
-			return "Image → Embedding";
+			return i18next.t('imageEmbedding', 'Image → Embedding');
 		default:
 			return "Unknown";
 	}
@@ -950,9 +952,9 @@ export function supportsRemoteEmbeddingExecution(bit: IBit): boolean {
 }
 
 export function formatContextLength(length: number): string {
-	if (length >= 1_000_000) return `${(length / 1_000_000).toFixed(1)}M ctx`;
-	if (length >= 1000) return `${Math.round(length / 1000)}K ctx`;
-	return `${length} ctx`;
+	if (length >= 1_000_000) return i18next.t('valmCtx', '{{val}}M ctx', { val: (length / 1_000_000).toFixed(1) });
+	if (length >= 1000) return i18next.t('valkCtx', '{{val}}K ctx', { val: Math.round(length / 1000) });
+	return i18next.t('lengthCtx', '{{length}} ctx', { length });
 }
 
 export function getCapabilityIcon(key: string): {
@@ -964,24 +966,24 @@ export function getCapabilityIcon(key: string): {
 		string,
 		{ icon: ReactNode; label: string; color: string }
 	> = {
-		coding: { icon: "💻", label: "Coding", color: "text-blue-500" },
-		cost: { icon: "💰", label: "Cost Efficiency", color: "text-green-500" },
-		creativity: { icon: "🎨", label: "Creativity", color: "text-purple-500" },
-		factuality: { icon: "📚", label: "Factuality", color: "text-amber-500" },
+		coding: { icon: "💻", label: i18next.t('coding', 'Coding'), color: "text-blue-500" },
+		cost: { icon: "💰", label: i18next.t('costEfficiency', 'Cost Efficiency'), color: "text-green-500" },
+		creativity: { icon: "🎨", label: i18next.t('creativity', 'Creativity'), color: "text-purple-500" },
+		factuality: { icon: "📚", label: i18next.t('factuality', 'Factuality'), color: "text-amber-500" },
 		function_calling: {
 			icon: "🔧",
-			label: "Function Calling",
+			label: i18next.t('functionCalling', 'Function Calling'),
 			color: "text-cyan-500",
 		},
 		multilinguality: {
 			icon: "🌍",
-			label: "Multilingual",
+			label: i18next.t('multilingual', 'Multilingual'),
 			color: "text-teal-500",
 		},
-		openness: { icon: "🔓", label: "Openness", color: "text-orange-500" },
-		reasoning: { icon: "🧠", label: "Reasoning", color: "text-pink-500" },
-		safety: { icon: "🛡️", label: "Safety", color: "text-red-500" },
-		speed: { icon: "⚡", label: "Speed", color: "text-yellow-500" },
+		openness: { icon: "🔓", label: i18next.t('openness', 'Openness'), color: "text-orange-500" },
+		reasoning: { icon: "🧠", label: i18next.t('reasoning', 'Reasoning'), color: "text-pink-500" },
+		safety: { icon: "🛡️", label: i18next.t('safety', 'Safety'), color: "text-red-500" },
+		speed: { icon: "⚡", label: i18next.t('speed', 'Speed'), color: "text-yellow-500" },
 	};
 	return icons[key] || { icon: "❓", label: key, color: "text-gray-500" };
 }

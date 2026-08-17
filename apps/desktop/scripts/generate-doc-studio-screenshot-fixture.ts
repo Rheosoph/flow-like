@@ -129,9 +129,6 @@ const onboardingFixture = await readJson<{
 	strict: boolean;
 	responses: Record<string, unknown>;
 }>(resolve(fixturesDirectory, "onboarding.tauri.json"));
-const websiteBoard = await readJson<JsonRecord>(
-	resolve(repositoryRoot, "apps/website/src/assets/site.json"),
-);
 
 const eventNode = makeNode({
 	id: "docs-event-node",
@@ -140,7 +137,7 @@ const eventNode = makeNode({
 	description: "Starts the workflow when a new support request arrives.",
 	category: "Events",
 	icon: "/flow/icons/workflow.svg",
-	coordinates: [820, 55, 0],
+	coordinates: [120, 60, 0],
 	start: true,
 	hash: 10_001,
 	pins: {
@@ -172,7 +169,8 @@ const stringSourceNode = makeNode({
 	friendlyName: "Customer Message",
 	description: "Produces a typed String value for the generic input.",
 	category: "Text",
-	coordinates: [970, 140, 0],
+	icon: "/flow/icons/text.svg",
+	coordinates: [430, 320, 0],
 	hash: 10_002,
 	pins: {
 		"docs-string-out": makePin({
@@ -203,7 +201,8 @@ const genericTargetNode = makeNode({
 	friendlyName: "Format Generic Value",
 	description: "Accepts a generically typed value and returns it unchanged.",
 	category: "Transformation",
-	coordinates: [1260, 140, 0],
+	icon: "/flow/icons/convert.svg",
+	coordinates: [790, 320, 0],
 	hash: 10_003,
 	pins: {
 		"docs-generic-in": makePin({
@@ -321,7 +320,7 @@ const collapsedLayer = {
 	nodes: {},
 	variables: {},
 	comments: {},
-	coordinates: [1110, 55, 0],
+	coordinates: [430, 60, 0],
 	in_coordinates: [35, 190, 0],
 	out_coordinates: [760, 190, 0],
 	pins: {
@@ -359,6 +358,7 @@ const collapsedLayer = {
 			pinType: "Output",
 			dataType: "String",
 			index: 2,
+			connectedTo: ["docs-send-body-in"],
 		}),
 	},
 	comment: "Two implementation steps are grouped into one reusable layer.",
@@ -370,12 +370,12 @@ const collapsedLayer = {
 const placeholderLayer = {
 	id: "docs-placeholder-layer",
 	parent_id: null,
-	name: "Human Review (placeholder)",
+	name: "Human Review",
 	type: "Collapsed",
 	nodes: {},
 	variables: {},
 	comments: {},
-	coordinates: [1425, 55, 0],
+	coordinates: [820, 60, 0],
 	in_coordinates: [35, 180, 0],
 	out_coordinates: [620, 180, 0],
 	pins: {
@@ -395,6 +395,7 @@ const placeholderLayer = {
 			pinType: "Output",
 			dataType: "Execution",
 			index: 1,
+			connectedTo: ["docs-send-exec-in"],
 		}),
 	},
 	comment: "Prototype a future review step before implementing its internals.",
@@ -403,17 +404,105 @@ const placeholderLayer = {
 	hash: 20_002,
 };
 
+const sendReplyNode = makeNode({
+	id: "docs-send-node",
+	name: "mail_send",
+	friendlyName: "Send Reply",
+	description: "Delivers the approved reply to the customer.",
+	category: "Email",
+	icon: "/flow/icons/mail.svg",
+	coordinates: [1170, 60, 0],
+	hash: 10_006,
+	pins: {
+		"docs-send-exec-in": makePin({
+			id: "docs-send-exec-in",
+			name: "exec_in",
+			friendlyName: "Send",
+			pinType: "Input",
+			dataType: "Execution",
+			index: 1,
+			dependsOn: ["docs-placeholder-out"],
+		}),
+		"docs-send-body-in": makePin({
+			id: "docs-send-body-in",
+			name: "body",
+			friendlyName: "Body",
+			pinType: "Input",
+			dataType: "String",
+			index: 2,
+			dependsOn: ["docs-layer-message-out"],
+		}),
+		"docs-send-exec-out": makePin({
+			id: "docs-send-exec-out",
+			name: "exec_out",
+			friendlyName: "Sent",
+			pinType: "Output",
+			dataType: "Execution",
+			index: 1,
+		}),
+	},
+});
+
 const boardNodes = {
-	...(structuredClone(websiteBoard.nodes) as JsonRecord),
 	[eventNode.id as string]: eventNode,
 	[stringSourceNode.id as string]: stringSourceNode,
 	[genericTargetNode.id as string]: genericTargetNode,
 	[layerChildNode.id as string]: layerChildNode,
 	[transformNode.id as string]: transformNode,
+	[sendReplyNode.id as string]: sendReplyNode,
 };
 
+const makeLabelComment = (
+	id: string,
+	text: string,
+	coordinates: [number, number, number],
+	width: number,
+	color: string,
+	hash: number,
+): JsonRecord => ({
+	id,
+	author: "Flow-Like Documentation",
+	content: `plate_json::[{"children":[{"text":"${text}","bold":true}],"type":"p","id":"${id}-p"}]`,
+	comment_type: "Text",
+	timestamp: {
+		secs_since_epoch: 1_785_301_200,
+		nanos_since_epoch: 0,
+	},
+	coordinates,
+	width,
+	height: 44,
+	layer: null,
+	color,
+	z_index: 1,
+	hash,
+	is_locked: true,
+});
+
 const boardComments = {
-	...(structuredClone(websiteBoard.comments) as JsonRecord),
+	"docs-label-listen": makeLabelComment(
+		"docs-label-listen",
+		"1 · Listen for requests",
+		[120, -130, 0],
+		220,
+		"#3b82f622",
+		30_010,
+	),
+	"docs-label-draft": makeLabelComment(
+		"docs-label-draft",
+		"2 · Draft with AI",
+		[430, -130, 0],
+		220,
+		"#3de39d22",
+		30_011,
+	),
+	"docs-label-approve": makeLabelComment(
+		"docs-label-approve",
+		"3 · Approve and send",
+		[820, -130, 0],
+		240,
+		"#f59e0b22",
+		30_012,
+	),
 	"docs-layer-note": {
 		id: "docs-layer-note",
 		author: "Flow-Like Documentation",
@@ -436,11 +525,11 @@ const boardComments = {
 };
 
 const board = {
-	...structuredClone(websiteBoard),
 	id: "docs-board",
 	name: "Customer Support Automation",
 	description:
 		"Classifies support requests, drafts helpful replies, and keeps a human in control.",
+	refs: {},
 	nodes: boardNodes,
 	layers: {
 		"docs-layer": collapsedLayer,
@@ -613,6 +702,34 @@ const catalog = [
 				index: 2,
 			}),
 		},
+	),
+	makeCatalogNode(
+		"docs-catalog-string-template",
+		"string_template",
+		"String Template",
+		"Text",
+		50_005,
+	),
+	makeCatalogNode(
+		"docs-catalog-transform-generic",
+		"transform_generic",
+		"Format Value",
+		"Transformation",
+		50_006,
+	),
+	makeCatalogNode(
+		"docs-catalog-text-normalize",
+		"text_normalize",
+		"Normalize Text",
+		"Text",
+		50_007,
+	),
+	makeCatalogNode(
+		"docs-catalog-ai-draft",
+		"ai_draft_reply",
+		"Draft Reply (AI)",
+		"AI/Generative",
+		50_008,
 	),
 	makeCatalogNode(
 		"docs-mail-copy",

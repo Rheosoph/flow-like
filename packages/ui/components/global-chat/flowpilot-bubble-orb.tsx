@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next } from "@flow-like/locales";
 import { type ComponentPropsWithoutRef, forwardRef } from "react";
 import { useForwardedRef } from "../../lib/use-forwarded-ref";
 import { cn } from "../../lib/utils";
@@ -27,7 +28,7 @@ export const FlowPilotBubbleOrb = forwardRef<
 		type = "button",
 		orbState = "idle",
 		ackNonce = 0,
-		"aria-label": ariaLabel = "Ask FlowPilot",
+		"aria-label": ariaLabel = i18next.t('askFlowpilot', 'Ask FlowPilot'),
 		...props
 	},
 	forwardedRef,

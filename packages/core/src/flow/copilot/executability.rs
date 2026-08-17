@@ -36,15 +36,6 @@ use crate::flow::variable::VariableType;
 
 const MAX_FINDINGS_PER_CHECK: usize = 10;
 const DEFAULT_OUTPUT_PIN_ALIASES: &[&str] = &["result", "value", "output", "out"];
-/// Node types whose `on_update` mints pins or defaults at apply time. Their real requirement
-/// surface is unknowable statically, so the required-input check skips them entirely.
-const DYNAMIC_PIN_NODE_TYPES: &[&str] = &[
-    "string_format",
-    "string_render_template",
-    "a2ui_push_csv_to_chart",
-    "control_call_function",
-    "control_call_reference",
-];
 const VARIABLE_GET_NODE_TYPE: &str = "variable_get";
 const VARIABLE_SET_NODE_TYPE: &str = "variable_set";
 const VARIABLE_REF_PIN: &str = "var_ref";
@@ -1030,7 +1021,9 @@ fn check_missing_required_inputs(
             || node.is_layer
             || !node.is_impure_node()
             || !reachable[index]
-            || DYNAMIC_PIN_NODE_TYPES.contains(&node.node_type.as_str())
+            // Nodes whose `on_update` mints pins have no statically knowable requirement
+            // surface, so a required-input finding on them is always noise.
+            || crate::flow::node::mints_pins_on_update(&node.node_type)
         {
             continue;
         }

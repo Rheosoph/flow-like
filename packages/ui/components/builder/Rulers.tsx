@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useEffect, useMemo, useRef } from "react";
 import { cn } from "../../lib";
 
@@ -30,6 +31,7 @@ export function Rulers({
 	rulerSize = RULER_SIZE,
 	className,
 }: RulersProps) {
+	const { t } = useTranslation("flow");
 	const horizontalCanvasRef = useRef<HTMLCanvasElement>(null);
 	const verticalCanvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -72,7 +74,7 @@ export function Rulers({
 
 		ctx.fillStyle = "#64748b";
 		ctx.strokeStyle = "#94a3b8";
-		ctx.font = "10px system-ui, sans-serif";
+		ctx.font = `10px system-ui, sans-serif`;
 		ctx.textAlign = "center";
 
 		for (let x = startX; x <= endX; x += tickConfig.interval) {
@@ -120,7 +122,7 @@ export function Rulers({
 
 		ctx.fillStyle = "#64748b";
 		ctx.strokeStyle = "#94a3b8";
-		ctx.font = "10px system-ui, sans-serif";
+		ctx.font = `10px system-ui, sans-serif`;
 		ctx.textAlign = "right";
 
 		for (let y = startY; y <= endY; y += tickConfig.interval) {

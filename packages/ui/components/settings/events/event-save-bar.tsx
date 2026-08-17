@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Loader2Icon,
 	SaveIcon,
@@ -34,12 +35,13 @@ export function EventSaveBar({
 	onSave: () => void;
 	onDiscard: () => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const isTop = placement === "top";
 	const status = isSaving
 		? "Saving…"
 		: isDirty
 			? "Unsaved changes"
-			: "Editing mode";
+			: t('editingMode', 'Editing mode');
 
 	return (
 		<div
@@ -76,7 +78,7 @@ export function EventSaveBar({
 						</p>
 						{!error && isDirty && !isSaving && (
 							<p className="hidden truncate text-xs text-muted-foreground sm:block">
-								Your edits are not live until you save.
+								{t('yourEditsAreNotLiveUntilYouSave', 'Your edits are not live until you save.')}
 							</p>
 						)}
 					</div>
@@ -87,11 +89,11 @@ export function EventSaveBar({
 						variant="outline"
 						onClick={onDiscard}
 						disabled={isSaving}
-						aria-label="Discard changes"
+						aria-label={t('discardChanges', 'Discard changes')}
 						className="h-10 sm:h-9"
 					>
 						<Undo2Icon className="h-4 w-4" />
-						<span className="hidden sm:inline">Discard</span>
+						<span className="hidden sm:inline">{t('discard', 'Discard')}</span>
 					</Button>
 					<Button
 						onClick={onSave}
@@ -105,7 +107,7 @@ export function EventSaveBar({
 						)}
 						<span className="sm:hidden">{isSaving ? "Saving…" : "Save"}</span>
 						<span className="hidden sm:inline">
-							{isSaving ? "Saving…" : "Save Changes"}
+							{isSaving ? "Saving…" : t('saveChanges', 'Save Changes')}
 						</span>
 					</Button>
 				</div>

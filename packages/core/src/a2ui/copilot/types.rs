@@ -51,6 +51,10 @@ pub struct A2UIContext {
     pub components: Vec<ComponentContext>,
     pub selected_ids: Vec<String>,
     pub component_count: usize,
+    /// The surface's persisted `canvasSettings`, `customCss` included. Serialized verbatim so the
+    /// model can edit the existing stylesheet instead of overwriting one it never saw.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canvas_settings: Option<serde_json::Value>,
 }
 
 /// Context for a single component

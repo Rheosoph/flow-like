@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-labelledby="title desc">
+  <title id="title">The Flow-Like WASM sandbox capability model</title>
+  <desc id="desc">A custom node runs inside a sandbox. Declared manifest permissions open gates to the network, storage, and models. Anything the manifest does not declare is denied at the boundary.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#17191f"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <marker id="greenArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#34d399"/></marker>
+    <marker id="redStop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#ef4444"/></marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.4px}.heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}.sub{fill:#a7adb8;font-size:17px}.stage{fill:#f7f8fa;font-size:18px;font-weight:700}.note{fill:#8f97a4;font-size:14px}.gate{fill:#7ee2b8;font-size:13px;font-weight:740;letter-spacing:1.2px}.gatered{fill:#fca5a5;font-size:13px;font-weight:740;letter-spacing:1.2px}.mono{fill:#e5e7eb;font-size:16px;font-weight:650;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    </style>
+  </defs>
+  <rect width="1440" height="720" rx="28" fill="url(#bg)"/><rect width="1440" height="720" rx="28" fill="url(#grid)"/>
+  <rect x="64" y="58" width="206" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/><circle cx="84" cy="75" r="5" fill="#ff7656"/><text x="99" y="81" class="kicker">WASM SANDBOX</text>
+  <text x="64" y="136" class="heading">Your node runs in a box it can't leave.</text>
+  <text x="64" y="169" class="sub">Every capability is granted by the manifest — nothing is ambient, nothing leaks in.</text>
+
+  <rect x="64" y="228" width="520" height="404" rx="26" fill="#191c22" stroke="#a78bfa" stroke-width="2" stroke-opacity=".85"/>
+  <rect x="84" y="248" width="120" height="30" rx="15" fill="#a78bfa" opacity=".14"/><text x="144" y="268" text-anchor="middle" class="gate" fill="#c4b5fd">SANDBOX</text>
+
+  <g><rect x="118" y="308" width="412" height="104" rx="18" fill="#22252c" stroke="#464c57"/><text x="146" y="352" class="mono">node.wasm</text><text x="146" y="382" class="note">Your logic, compiled from any of ~18 languages</text></g>
+
+  <g><rect x="118" y="452" width="412" height="140" rx="18" fill="#1c1f26" stroke="#3a3f4a"/>
+    <text x="146" y="486" class="stage" font-size="16">Manifest declares</text>
+    <rect x="146" y="504" width="118" height="28" rx="14" fill="#34d399" opacity=".12" stroke="#34d399" stroke-opacity=".5"/><text x="205" y="523" text-anchor="middle" class="gate">NetworkHttp</text>
+    <rect x="276" y="504" width="112" height="28" rx="14" fill="#34d399" opacity=".12" stroke="#34d399" stroke-opacity=".5"/><text x="332" y="523" text-anchor="middle" class="gate">StorageRead</text>
+    <rect x="400" y="504" width="88" height="28" rx="14" fill="#34d399" opacity=".12" stroke="#34d399" stroke-opacity=".5"/><text x="444" y="523" text-anchor="middle" class="gate">Models</text>
+    <text x="146" y="566" class="note">Reviewed at install time — users see exactly what they grant.</text>
+  </g>
+
+  <path d="M584 330 H700" fill="none" stroke="#34d399" stroke-width="4" stroke-linecap="round"/>
+  <path d="M736 330 H820" fill="none" stroke="#34d399" stroke-width="4" stroke-linecap="round" marker-end="url(#greenArrow)"/>
+  <path d="M584 430 H700" fill="none" stroke="#34d399" stroke-width="4" stroke-linecap="round"/>
+  <path d="M736 430 H820" fill="none" stroke="#34d399" stroke-width="4" stroke-linecap="round" marker-end="url(#greenArrow)"/>
+  <path d="M584 530 H700" fill="none" stroke="#ef4444" stroke-width="4" stroke-linecap="round" stroke-dasharray="8 8" marker-end="url(#redStop)"/>
+
+  <g><circle cx="718" cy="330" r="18" fill="#17191f" stroke="#34d399" stroke-width="2"/><path d="M711 330l5 5 10-12" fill="none" stroke="#34d399" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <g><circle cx="718" cy="430" r="18" fill="#17191f" stroke="#34d399" stroke-width="2"/><path d="M711 430l5 5 10-12" fill="none" stroke="#34d399" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <g><circle cx="718" cy="530" r="18" fill="#17191f" stroke="#ef4444" stroke-width="2"/><path d="M711 523l14 14M725 523l-14 14" fill="none" stroke="#ef4444" stroke-width="3" stroke-linecap="round"/></g>
+  <text x="718" y="378" text-anchor="middle" class="note">gate</text>
+
+  <g><rect x="820" y="288" width="264" height="84" rx="18" fill="#1f2a27" stroke="#34d399" stroke-width="2"/><text x="952" y="323" text-anchor="middle" class="stage">HTTP request</text><text x="952" y="349" text-anchor="middle" class="note">Allowed via NetworkHttp</text></g>
+  <g><rect x="820" y="388" width="264" height="84" rx="18" fill="#1f2a27" stroke="#34d399" stroke-width="2"/><text x="952" y="423" text-anchor="middle" class="stage">App storage</text><text x="952" y="449" text-anchor="middle" class="note">Allowed via StorageRead</text></g>
+  <g><rect x="820" y="488" width="264" height="84" rx="18" fill="#241d20" stroke="#ef4444" stroke-width="2" stroke-opacity=".8"/><text x="952" y="523" text-anchor="middle" class="stage">Raw sockets</text><text x="952" y="549" text-anchor="middle" class="note">Undeclared — call fails safely</text></g>
+
+  <g><rect x="1124" y="288" width="252" height="284" rx="22" fill="#1c1f26" stroke="#3a3f4a"/>
+    <text x="1250" y="330" text-anchor="middle" class="stage" font-size="17">Host guarantees</text>
+    <text x="1250" y="372" text-anchor="middle" class="note">Memory and fuel limits</text>
+    <text x="1250" y="402" text-anchor="middle" class="note">Timeouts on every call</text>
+    <text x="1250" y="432" text-anchor="middle" class="note">Typed pins in and out</text>
+    <text x="1250" y="462" text-anchor="middle" class="note">Logs and run results</text>
+    <text x="1250" y="492" text-anchor="middle" class="note">Same contract for</text>
+    <text x="1250" y="516" text-anchor="middle" class="note">every language</text>
+  </g>
+
+  <text x="720" y="680" text-anchor="middle" class="sub">A crash or an undeclared call ends the node — never the app, never your machine.</text>
+</svg>

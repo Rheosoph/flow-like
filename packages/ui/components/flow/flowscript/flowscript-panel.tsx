@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import Editor, { type Monaco, type OnMount } from "@monaco-editor/react";
 import {
 	AlertTriangleIcon,
@@ -19,7 +20,7 @@ import type {
 	IApplyFlowScriptResponse,
 	IFlowScriptDiagnostic,
 } from "../../../state/backend-state/board-state";
-import { useSuppressFabBubble } from "../../../state/fab-suppression";
+import { useSuppressFabBubble } from "../../../state/fab-bubble";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -105,6 +106,7 @@ export function FlowScriptPanel({
 	onApplyFlowScript,
 	onClose,
 }: Readonly<FlowScriptPanelProps>) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const { resolvedTheme } = useTheme();
 	// This panel's footer (Apply/Reset) sits exactly where the global FlowPilot bubble floats;
@@ -169,7 +171,7 @@ export function FlowScriptPanel({
 			setBoardChangedBehindEdits(false);
 		} catch (error) {
 			setLoadError(
-				error instanceof Error ? error.message : "Failed to render FlowScript",
+				error instanceof Error ? error.message : t('failedToRenderFlowscript', 'Failed to render FlowScript'),
 			);
 		} finally {
 			setLoading(false);
@@ -214,7 +216,7 @@ export function FlowScriptPanel({
 			if (!canApplyFlowScript(applyStateRef.current)) {
 				if (applyStateRef.current.boardChangedBehindEdits) {
 					toast.warning(
-						"The board changed while you were editing. Refresh FlowScript before applying your draft.",
+						t('theBoardChangedWhileYouWereEditingRefreshFlowscriptBeforeApplyingYourDraft', 'The board changed while you were editing. Refresh FlowScript before applying your draft.'),
 					);
 				}
 				return;
@@ -350,16 +352,16 @@ export function FlowScriptPanel({
 			<div className="flex items-center justify-between gap-2 border-b px-3 py-2">
 				<div className="flex min-w-0 items-center gap-2">
 					<FileCode2Icon className="h-4 w-4 shrink-0 text-primary" />
-					<span className="truncate text-sm font-medium">FlowScript</span>
+					<span className="truncate text-sm font-medium">{t('flowscript', 'FlowScript')}</span>
 					{readOnly && (
 						<Badge variant="secondary" className="text-[10px]">
-							v{version?.join(".")} — read-only
+							v{version?.join(".")} {t('readonly2', '— read-only')}
 						</Badge>
 					)}
 					{dirty && !readOnly && (
 						<span
 							className="h-2 w-2 shrink-0 rounded-full bg-primary"
-							title="Unapplied changes"
+							title={t('unappliedChanges', 'Unapplied changes')}
 						/>
 					)}
 				</div>
@@ -375,7 +377,7 @@ export function FlowScriptPanel({
 								<CopyIcon className="h-3.5 w-3.5" />
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>Copy source</TooltipContent>
+						<TooltipContent>{t('copySource', 'Copy source')}</TooltipContent>
 					</Tooltip>
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -389,7 +391,7 @@ export function FlowScriptPanel({
 								<RefreshCcwIcon className="h-3.5 w-3.5" />
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>Re-render from board</TooltipContent>
+						<TooltipContent>{`Re-render from board`}</TooltipContent>
 					</Tooltip>
 					<Button
 						variant="ghost"
@@ -409,8 +411,7 @@ export function FlowScriptPanel({
 				>
 					<span className="flex min-w-0 items-center gap-2">
 						<AlertTriangleIcon className="h-3.5 w-3.5 shrink-0 text-yellow-500" />
-						The board changed while you were editing. Applying is paused until
-						you refresh from the board.
+						{`The board changed while you were editing. Applying is paused until you refresh from the board.`}
 					</span>
 					<div className="flex shrink-0 items-center gap-1.5">
 						<Button
@@ -420,7 +421,7 @@ export function FlowScriptPanel({
 							onClick={() => void handleCopy()}
 						>
 							<CopyIcon className="mr-1 h-3 w-3" />
-							Copy edits
+							{t('copyEdits', 'Copy edits')}
 						</Button>
 						<Button
 							variant="outline"
@@ -430,7 +431,7 @@ export function FlowScriptPanel({
 							onClick={requestReload}
 						>
 							<RefreshCcwIcon className="mr-1 h-3 w-3" />
-							Refresh from board
+							{`Refresh from board`}
 						</Button>
 					</div>
 				</div>
@@ -447,7 +448,7 @@ export function FlowScriptPanel({
 						<AlertTriangleIcon className="h-6 w-6 text-destructive" />
 						<p className="text-sm text-muted-foreground">{loadError}</p>
 						<Button variant="outline" size="sm" onClick={() => void load()}>
-							Retry
+							{t('retry', 'Retry')}
 						</Button>
 					</div>
 				) : (
@@ -487,9 +488,7 @@ export function FlowScriptPanel({
 				<div className="max-h-28 shrink-0 overflow-y-auto border-t px-3 py-2">
 					<div className="mb-1 flex items-center justify-between">
 						<span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-							<AlertTriangleIcon className="h-3 w-3 text-yellow-500" />
-							{diagnostics.length} warning{diagnostics.length === 1 ? "" : "s"}
-						</span>
+							<AlertTriangleIcon className="h-3 w-3 text-yellow-500" />{t('countWarnings', { defaultValue_one: '{{count}} warning', defaultValue_other: '{{count}} warnings', count: diagnostics.length })}</span>
 						<Button
 							variant="ghost"
 							size="icon"
@@ -516,10 +515,10 @@ export function FlowScriptPanel({
 				<div className="flex shrink-0 items-center justify-between gap-2 border-t px-3 py-2">
 					<span className="text-[11px] text-muted-foreground">
 						{boardChangedBehindEdits
-							? "Board changed — refresh before applying"
+							? t('boardChangedRefreshBeforeApplying', 'Board changed — refresh before applying')
 							: dirty
-								? "Unapplied changes — ⌘S to apply"
-								: "In sync with board"}
+								? t('unappliedChangesSToApply', 'Unapplied changes — ⌘S to apply')
+								: t('inSyncWithBoard', 'In sync with board')}
 					</span>
 					<div className="flex items-center gap-2">
 						<Button
@@ -533,7 +532,7 @@ export function FlowScriptPanel({
 							}}
 						>
 							<Undo2Icon className="mr-1 h-3.5 w-3.5" />
-							Reset
+							{t('reset', 'Reset')}
 						</Button>
 						<Button
 							size="sm"
@@ -544,7 +543,7 @@ export function FlowScriptPanel({
 							{applying ? (
 								<Loader2Icon className="mr-1 h-3.5 w-3.5 animate-spin" />
 							) : null}
-							Apply to board
+							{t('applyToBoard', 'Apply to board')}
 						</Button>
 					</div>
 				</div>
@@ -557,19 +556,17 @@ export function FlowScriptPanel({
 				<AlertDialogContent>
 					<AlertDialogHeader>
 						<AlertDialogTitle>
-							Refresh FlowScript from the board?
+							{`Refresh FlowScript from the board?`}
 						</AlertDialogTitle>
 						<AlertDialogDescription>
-							This replaces the current editor text with the latest board state.
-							Copy your edits first if you want to reapply them to the refreshed
-							script.
+							{t('thisReplacesTheCurrentEditorTextWithTheLatestBoardStateCopyYourEditsFirstIfYouWantToReapplyThemToTheRefreshedScript', "This replaces the current editor text with the latest board state. Copy your edits first if you want to reapply them to the refreshed script.")}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
-						<AlertDialogCancel>Keep editing</AlertDialogCancel>
+						<AlertDialogCancel>{t('keepEditing', 'Keep editing')}</AlertDialogCancel>
 						<Button variant="outline" onClick={() => void handleCopy()}>
 							<CopyIcon className="mr-1 h-3.5 w-3.5" />
-							Copy edits
+							{t('copyEdits', 'Copy edits')}
 						</Button>
 						<AlertDialogAction
 							onClick={() => {
@@ -577,7 +574,7 @@ export function FlowScriptPanel({
 								void load();
 							}}
 						>
-							Refresh and replace
+							{t('refreshAndReplace', 'Refresh and replace')}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>
@@ -592,21 +589,21 @@ export function FlowScriptPanel({
 				<AlertDialogContent>
 					<AlertDialogHeader>
 						<AlertDialogTitle>
-							This edit deletes existing board items
+							{t('thisEditDeletesExistingBoardItems', 'This edit deletes existing board items')}
 						</AlertDialogTitle>
 						<AlertDialogDescription className="break-words">
 							{destructiveMessage}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
-						<AlertDialogCancel>Keep everything</AlertDialogCancel>
+						<AlertDialogCancel>{t('keepEverything', 'Keep everything')}</AlertDialogCancel>
 						<AlertDialogAction
 							onClick={() => {
 								setDestructiveMessage(undefined);
 								void runApply(true);
 							}}
 						>
-							Apply with deletions
+							{t('applyWithDeletions', 'Apply with deletions')}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>

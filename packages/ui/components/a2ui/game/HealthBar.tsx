@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
@@ -16,6 +17,7 @@ export function A2UIHealthBar({
 	component,
 	style,
 }: ComponentProps<HealthBarComponent>) {
+	const { t } = useTranslation("common");
 	const value = useResolved<number>(component.value) ?? 0;
 	const maxValue = useResolved<number>(component.maxValue) ?? 100;
 	const label = useResolved<string>(component.label);
@@ -63,9 +65,7 @@ export function A2UIHealthBar({
 					/>
 				</svg>
 				{showValue && (
-					<span className="absolute text-sm font-bold">
-						{value}/{maxValue}
-					</span>
+					<span className="absolute text-sm font-bold">{`${value}/${maxValue}`}</span>
 				)}
 			</div>
 		);
@@ -90,9 +90,7 @@ export function A2UIHealthBar({
 				/>
 			</div>
 			{showValue && (
-				<div className="text-xs text-right mt-0.5">
-					{value}/{maxValue}
-				</div>
+				<div className="text-xs text-right mt-0.5">{`${value}/${maxValue}`}</div>
 			)}
 		</div>
 	);

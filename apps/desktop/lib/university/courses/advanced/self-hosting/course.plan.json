@@ -1,0 +1,817 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-self-hosting",
+		"name": "Self-Hosting Flow-Like",
+		"language": "en",
+		"slug": "self-hosting",
+		"difficulty": "ADVANCED",
+		"category": "DEPLOYMENT",
+		"estimatedMinutes": 65,
+		"isPublished": true,
+		"iconUrl": null,
+		"bannerUrl": null,
+		"tags": ["self-hosting", "docker", "kubernetes", "deployment", "enterprise"],
+		"position": 18,
+		"description": "Run Flow-Like on your own terms — Docker Compose to Kubernetes, with execution backends, upgrades, and ops you can defend.",
+		"longDescription": "The pilot won everyone over — then security asked where the data goes. Take Flow-Like from a laptop Compose stack to a production Kubernetes cluster inside your own VPC: stand up the single-host stack and survive its .env traps, override the Helm chart's k3d defaults, route interactive and background runs to the right execution backend, and rehearse the upgrades, backups, key rotations, and alert routing you'll be grilled on. The final assessment is the go-live review itself.",
+		"media": {
+			"icon": "media/app-logo.webp",
+			"banner": "assets/course-banner.webp"
+		},
+		"assets": [
+			{
+				"name": "CourseBanner",
+				"file": "assets/course-banner.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "course-banner.webp",
+				"replace": true
+			},
+			{
+				"name": "DockerComposeArchitecture",
+				"file": "assets/docker-compose-architecture.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "docker-compose-architecture.webp",
+				"replace": true
+			},
+			{
+				"name": "KubernetesArchitecture",
+				"file": "assets/kubernetes-architecture.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "kubernetes-architecture.webp",
+				"replace": true
+			},
+			{
+				"name": "ExecutionBackends",
+				"file": "assets/execution-backends.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "execution-backends.webp",
+				"replace": true
+			},
+			{
+				"name": "RuntimeVariables",
+				"file": "assets/RuntimeVariables.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "RuntimeVariables.webp",
+				"replace": true
+			},
+			{
+				"name": "AppVisibilitySettings",
+				"file": "assets/AppVisibilitySettings.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "AppVisibilitySettings.webp",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "module-selfhost-pilot-to-vpc",
+				"title": "From Pilot to VPC",
+				"description": "Understand what self-hosting actually swaps, then stand up the complete single-host stack.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "lesson-selfhost-why",
+						"title": "Where Does Your Data Actually Go?",
+						"language": "en",
+						"contentFile": "content/why-self-host.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-selfhost-data-boundary",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Priya asks: after self-hosting, where does a customer record live when a flow processes it?",
+								"explanation": "Self-hosting swaps the backend — API, database, object storage, and executors all run on infrastructure you configure inside the VPC. The tempting slip is \"metadata still syncs to Flow-Like's cloud\": nothing phones home once your backend serves the deployment, because even the store and visibility surfaces come from your own API. And self-hosting is not offline desktop mode — it's a full multi-user backend.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "your-infrastructure",
+											"label": "On the infrastructure you configured — your buckets, your database, your executors inside the VPC"
+										},
+										{
+											"id": "metadata-syncs-cloud",
+											"label": "Flow data stays local but app metadata still syncs to Flow-Like's cloud"
+										},
+										{
+											"id": "each-laptop",
+											"label": "Only on each agent's laptop — self-hosting means every user runs offline"
+										},
+										{
+											"id": "rewritten-flows",
+											"label": "Nowhere yet — flows must first be rewritten against a self-hosted node catalog"
+										}
+									],
+									"correct": ["your-infrastructure"]
+								}
+							},
+							{
+								"id": "challenge-selfhost-desktop-switch",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The support team's desktop apps must talk to the new internal backend. What does that migration require?",
+								"explanation": "One environment variable: FLOW_LIKE_API_URL, set to the full URL of your API before launch — the desktop uses it exactly as provided. Setting it empty is the tempting trap: an explicitly empty value overrides the build-time and hosted defaults and is a configuration error, not a discovery mechanism. Build-time domain settings exist for custom builds but aren't required to repoint the stock app.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "env-var-url",
+											"label": "Set FLOW_LIKE_API_URL to the internal API's full URL before launching the app"
+										},
+										{
+											"id": "empty-string-discovery",
+											"label": "Set FLOW_LIKE_API_URL to an empty string so the app discovers the internal backend"
+										},
+										{
+											"id": "rebuild-from-source",
+											"label": "Rebuild the desktop app from source — the backend URL is compile-time only"
+										},
+										{
+											"id": "special-edition",
+											"label": "Install the separate self-hosted edition of the desktop app"
+										}
+									],
+									"correct": ["env-var-url"]
+								}
+							},
+							{
+								"id": "challenge-selfhost-topology-isolation",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A teammate says: \"Pick Kubernetes over Compose — that way every run gets its own isolated pod.\" What's the correct read?",
+								"explanation": "Topology and execution isolation are separate choices: both Compose and Kubernetes default to warm HTTP executors — long-lived workers shared across runs. The tempting half-truth is the Job dispatcher: the API can create a per-run Kubernetes Job, but the checked-in executor's one-job runner is not implemented, so a fresh pod per run is not something the stock images deliver. Compose doesn't spawn a fresh container per run either.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "separate-choices",
+											"label": "Topology and isolation are separate — both platforms default to warm shared executors, and the per-run Job path isn't operational with stock images"
+										},
+										{
+											"id": "k8s-fresh-pods",
+											"label": "Correct — Kubernetes always executes each run in a fresh pod"
+										},
+										{
+											"id": "compose-fresh-containers",
+											"label": "Backwards — Compose is the one that creates a fresh container per run"
+										},
+										{
+											"id": "desktop-setting",
+											"label": "Neither — isolation is chosen per flow in the desktop app's settings"
+										}
+									],
+									"correct": ["separate-choices"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-selfhost-compose",
+						"title": "Compose Up: The Whole Stack on One Host",
+						"language": "en",
+						"contentFile": "content/docker-compose-up.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-selfhost-port-owner",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Your reverse proxy needs the API entrypoint on staging-01. Which service owns published port 8080?",
+								"explanation": "The published API port belongs to api-gateway — an Nginx load balancer in front of the internal API replicas. The tempting answer is \"an API replica directly\", but the replicas only expose an internal 8080 behind the gateway; that's what lets you scale them without changing the public endpoint. The runtime pool is internal on 9000 and the web app is on 3001.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "api-gateway",
+											"label": "api-gateway — the Nginx load balancer in front of the internal API replicas"
+										},
+										{
+											"id": "api-replica",
+											"label": "The api service — replicas publish 8080 directly to the host"
+										},
+										{
+											"id": "runtime-pool",
+											"label": "The runtime service — execution traffic enters there"
+										},
+										{
+											"id": "web-app",
+											"label": "The web service — it proxies API calls through 8080"
+										}
+									],
+									"correct": ["api-gateway"]
+								}
+							},
+							{
+								"id": "challenge-selfhost-storage-default",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The API restart-loops at startup complaining about an unsupported runtime provider, and .env still says STORAGE_PROVIDER=aws. What's the fix?",
+								"explanation": "The checked-in Compose API image ships Azure, GCP, and R2 runtime-credential support and omits its AWS feature, so the copied template's aws selection is rejected at startup. Switch to a supported provider — or rebuild the API with flow-like-api/aws. Missing buckets would surface as a different store-construction failure, and this error names the provider, not the signing keys. Never reach for down -v: deleting volumes fixes nothing here and destroys local state.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "supported-provider",
+											"label": "Select Azure, GCP, or the R2 configuration — or rebuild the API image with its AWS feature"
+										},
+										{
+											"id": "create-buckets",
+											"label": "Create the three S3 buckets — the error clears once they exist"
+										},
+										{
+											"id": "generate-keys",
+											"label": "Run the key generator — missing BACKEND_KEY values cause this error"
+										},
+										{
+											"id": "down-v-reset",
+											"label": "Run docker compose down -v to reset state, then start again"
+										}
+									],
+									"correct": ["supported-provider"]
+								}
+							},
+							{
+								"id": "challenge-selfhost-env-contract",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements about the Compose template's configuration contract are true?",
+								"explanation": "Two contracts matter: injected values like CDN_BUCKET_NAME count as configured even when empty — nothing falls back — and the trust boundary keeps BACKEND_KEY on the API while runtime and compiler receive only the public key. The tempting distractor is the ambient credential chain: an explicit empty credential field blocks it, it doesn't activate it. The runtime is internal-only (reach 9000 from inside the container), and db-init exiting after success is a completed job, not a crash.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "empty-is-configured",
+											"label": "An explicitly empty CDN_BUCKET_NAME counts as configured — nothing falls back to another value"
+										},
+										{
+											"id": "pubkey-only",
+											"label": "Runtime and compiler receive only the public key; BACKEND_KEY stays with the API"
+										},
+										{
+											"id": "empty-ambient-chain",
+											"label": "Leaving credential fields empty activates the cloud provider's ambient credential chain"
+										},
+										{
+											"id": "runtime-host-port",
+											"label": "You can health-check the runtime from the host at http://localhost:9000"
+										},
+										{
+											"id": "db-init-crash",
+											"label": "db-init showing as exited means the stack crashed and needs a restart"
+										}
+									],
+									"correct": ["empty-is-configured", "pubkey-only"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "module-selfhost-cluster-dispatch",
+				"title": "Cluster and Dispatch",
+				"description": "Move to the Kubernetes chart and decide where every run actually executes.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "lesson-selfhost-kubernetes",
+						"title": "Kubernetes: Same Stack, Real Cluster",
+						"language": "en",
+						"contentFile": "content/kubernetes-for-scale.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-selfhost-imagepull",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You install the chart with default values on the company cluster and every pod sits in ImagePullBackOff. Why?",
+								"explanation": "The default image values target the local k3d registry (k3d-flow-like.localhost:5000) with pullPolicy: Never — a development profile for the bundled k3d script, deliberately not an installable production configuration. Override the images with a registry your cluster can pull, plus imagePullSecrets for a private one. A missing JWT Secret fails at pod startup, not image pull, and a RuntimeClass has nothing to do with pulling images.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "k3d-defaults",
+											"label": "Default images point at the local k3d registry with pullPolicy: Never — override them with images your cluster can pull"
+										},
+										{
+											"id": "missing-jwt-secret",
+											"label": "The backend-JWT Secret is missing, which blocks image pulls"
+										},
+										{
+											"id": "runtimeclass-first",
+											"label": "The kata RuntimeClass must be created before pods can start"
+										},
+										{
+											"id": "create-namespace",
+											"label": "Helm needs --create-namespace or every pod stays pending"
+										}
+									],
+									"correct": ["k3d-defaults"]
+								}
+							},
+							{
+								"id": "challenge-selfhost-database-choice",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "For the production release, a teammate proposes keeping database.type: internal and setting internal.replicas: 3 \"for HA\". What's wrong with that?",
+								"explanation": "The internal database is one CockroachDB pod running start-single-node --insecure — an evaluation setup. Raising replicas makes it worse, not better: independent single-node pods never form a CockroachDB cluster. Production means database.type: external with a Secret carrying DATABASE_URL. Persistence size is irrelevant to the topology problem, and the migration Job doesn't turn an insecure single node into a production database.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "no-cluster-forms",
+											"label": "Everything — independent single-node pods don't form a cluster; production needs database.type: external with a DATABASE_URL Secret"
+										},
+										{
+											"id": "just-bump-size",
+											"label": "Nothing, once persistence.size is raised to match production load"
+										},
+										{
+											"id": "replicas-fine",
+											"label": "Nothing — CockroachDB replicates automatically when replicas increase"
+										},
+										{
+											"id": "migration-fixes",
+											"label": "Only that the migration Job must run first; then internal is production-ready"
+										}
+									],
+									"correct": ["no-cluster-forms"]
+								}
+							},
+							{
+								"id": "challenge-selfhost-values-review",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Reviewing a draft production values file for a chart-only deployment — which lines must change before go-live?",
+								"explanation": "Three blockers: k3d image defaults can't be pulled by a real cluster, the internal single-node insecure database is evaluation-only, and asyncBackend: redis enqueues jobs nothing will consume — the chart's executor-pool binary has no Redis consumer, so a chart-only deployment uses http on both lanes. The two keepers are the point: execution.backend: http IS the operational warm-pool path, and runtimeClass.create: false is correct when no Kata handler exists on the nodes.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "k3d-images",
+											"label": "api.image.repository: k3d-flow-like.localhost:5000/api with pullPolicy: Never"
+										},
+										{
+											"id": "internal-db",
+											"label": "database.type: internal"
+										},
+										{
+											"id": "async-redis",
+											"label": "execution.asyncBackend: redis (with no extra queue consumer deployed)"
+										},
+										{
+											"id": "http-backend",
+											"label": "execution.backend: http"
+										},
+										{
+											"id": "runtimeclass-false",
+											"label": "runtimeClass.create: false"
+										}
+									],
+									"correct": ["k3d-images", "internal-db", "async-redis"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-selfhost-backends",
+						"title": "Where Does a Flow Actually Run?",
+						"language": "en",
+						"contentFile": "content/execution-backends.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-selfhost-interactive-run",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "On staging-01 with the Compose template, a support agent triggers an interactive run. Which process executes the flow?",
+								"explanation": "The template's interactive lane is EXECUTION_BACKEND=http with EXECUTOR_URL=http://runtime:9000, so one of the shared runtime replicas executes the board. The tempting answer is the API replica that received the request — but the API only builds the normalized run request and dispatches it. Nothing creates a fresh container per run, and server-side runs never execute on the agent's machine.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "runtime-replica",
+											"label": "A shared runtime replica, reached over HTTP at runtime:9000"
+										},
+										{
+											"id": "api-pod-itself",
+											"label": "The API replica that received the request runs the board in-process"
+										},
+										{
+											"id": "fresh-container",
+											"label": "A fresh container Compose spins up for that single run"
+										},
+										{
+											"id": "agents-machine",
+											"label": "The agent's own machine — interactive runs are always local"
+										}
+									],
+									"correct": ["runtime-replica"]
+								}
+							},
+							{
+								"id": "challenge-selfhost-k8s-job-trap",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A teammate sets EXECUTION_BACKEND=kubernetes_job on the chart deployment \"for per-run isolation\". What actually happens to runs?",
+								"explanation": "The dispatcher genuinely creates a Kubernetes Job per run — but the checked-in executor's one-job entrypoint is a placeholder that logs unimplemented and exits with status 1, so runs fail. The tempting distractor is the http fallback: only UNKNOWN backend values fall back to http, and kubernetes_job is a known, selectable value — it dispatches for real to a runner that doesn't exist. Creating the kata RuntimeClass object doesn't change that; it installs nothing on the nodes.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "jobs-fail",
+											"label": "Jobs get created, but each pod exits with status 1 — the one-job runner isn't implemented, so runs fail"
+										},
+										{
+											"id": "falls-back-http",
+											"label": "Nothing changes — unsupported backends silently fall back to http"
+										},
+										{
+											"id": "works-after-runtimeclass",
+											"label": "Runs succeed once runtimeClass.create: true adds the kata handler"
+										},
+										{
+											"id": "works-but-slow",
+											"label": "Runs succeed with cold-start latency from the per-run pods"
+										}
+									],
+									"correct": ["jobs-fail"]
+								}
+							},
+							{
+								"id": "challenge-selfhost-dispatch-truths",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements about dispatch will survive Priya's review?",
+								"explanation": "Three survive: unknown backend values silently become http (typos don't fail closed — validate rendered config), a queue is only half a system until a consumer claims and executes jobs, and http describes a protocol — a Lambda Function URL is a legitimate EXECUTOR_URL. The trap options: the chart's executor pool has no Redis consumer, and the diagram's footer says it directly — backend names describe dispatch mechanisms, not automatic security guarantees.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "typo-fallback",
+											"label": "A misspelled backend value silently falls back to http instead of failing at startup"
+										},
+										{
+											"id": "queue-needs-consumer",
+											"label": "Provisioning a Redis or SQS queue is only half the system — a compatible consumer must claim and execute the jobs"
+										},
+										{
+											"id": "lambda-url-ok",
+											"label": "EXECUTOR_URL may legitimately point at a Lambda Function URL through the plain http backend"
+										},
+										{
+											"id": "chart-consumes-redis",
+											"label": "The chart's executor pool consumes the Redis execution list out of the box"
+										},
+										{
+											"id": "heavier-more-secure",
+											"label": "Selecting a heavier-sounding backend adds execution isolation automatically"
+										}
+									],
+									"correct": ["typo-fallback", "queue-needs-consumer", "lambda-url-ok"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "module-selfhost-go-live",
+				"title": "Go-Live",
+				"description": "Upgrades, backups, secrets, and alerting — then defend the whole deployment in review.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "lesson-selfhost-operations",
+						"title": "Operations You Can Defend",
+						"language": "en",
+						"contentFile": "content/operations.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-selfhost-down-v",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "On staging-01, what's the difference between docker compose down and docker compose down -v?",
+								"explanation": "down stops containers and keeps named volumes; down -v additionally deletes the Compose-managed PostgreSQL, Redis, and observability volumes — so back up first. The tempting overreach is the buckets: external object storage is never touched by either command, which also means nothing in the stack backs it up for you. And -v is never part of a normal upgrade; rebuilds don't require deleting volumes.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "v-deletes-volumes",
+											"label": "-v additionally deletes the managed database, Redis, and observability volumes — external buckets stay untouched"
+										},
+										{
+											"id": "v-deletes-buckets",
+											"label": "-v also empties the external object-storage buckets"
+										},
+										{
+											"id": "both-delete",
+											"label": "Both delete volumes; -v just skips the confirmation"
+										},
+										{
+											"id": "v-for-upgrades",
+											"label": "-v is the required flag for picking up new images during upgrades"
+										}
+									],
+									"correct": ["v-deletes-volumes"]
+								}
+							},
+							{
+								"id": "challenge-selfhost-key-rotation",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You've generated a new BACKEND_KEY / BACKEND_PUB / BACKEND_KID trio and updated .env. What completes the rotation?",
+								"explanation": "Recreate the API, runtime, and compiler together — all three participate in the trust boundary, and every token signed by the old key becomes invalid the moment the new key loads, so plan the restart window. Restarting only the API leaves runtime and compiler verifying against a stale public key. Nothing watches .env for changes, and keys don't propagate on any TTL.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "recreate-three",
+											"label": "Recreate API, runtime, and compiler together — and expect tokens signed by the old key to be rejected"
+										},
+										{
+											"id": "api-only",
+											"label": "Restart just the API — runtime and compiler fetch keys from it on demand"
+										},
+										{
+											"id": "env-watched",
+											"label": "Nothing — services watch .env and reload keys automatically"
+										},
+										{
+											"id": "ttl-propagation",
+											"label": "Wait for the old tokens' TTL; the new key propagates on its own"
+										}
+									],
+									"correct": ["recreate-three"]
+								}
+							},
+							{
+								"id": "challenge-selfhost-priya-checklist",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which of these claims can you truthfully put in Thursday's go-live review deck?",
+								"explanation": "Two are true: the bundled Prometheus has an empty Alertmanager list (and the chart deploys none), so alert rules fire in the UI and page nobody until you deploy and route an Alertmanager — and the runtime-variable contract keeps Secret values on the device, never sending them to remote runs, which is why production credentials get provisioned server-side. The traps: no built-in pager exists, a populated dashboard proves provisioning rather than metric health, and docker compose config prints real secret values — it masks nothing.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "alerts-nobody",
+											"label": "Alert rules evaluate in Prometheus, but nobody is paged until an Alertmanager is deployed and a test route validated"
+										},
+										{
+											"id": "secrets-stay-local",
+											"label": "Secret runtime variables never reach remote runs — production credentials are provisioned server-side"
+										},
+										{
+											"id": "builtin-pager",
+											"label": "The monitoring profile ships a configured email pager for on-call"
+										},
+										{
+											"id": "dashboard-proves",
+											"label": "Grafana dashboards rendering panels proves the metrics pipeline is healthy"
+										},
+										{
+											"id": "config-masked",
+											"label": "docker compose config output is safe to attach to tickets since secret values are masked"
+										}
+									],
+									"correct": ["alerts-nobody", "secrets-stay-local"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-selfhost-final",
+						"title": "The Go-Live Review",
+						"language": "en",
+						"contentFile": "content/final-assessment.md",
+						"videoUrl": null,
+						"estimatedMinutes": 15,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-selfhost-final-staging-env",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Artifact A: what unblocks the API on staging-01?",
+								"explanation": "Two compounding template defaults: the checked-in image omits its AWS runtime feature, so STORAGE_PROVIDER=aws is rejected — and the explicitly empty RUNTIME_CREDENTIALS_PROVIDER and CDN_BUCKET_NAME count as configured, blocking any fallback. Switch to Azure, GCP, or R2 with every injected value non-empty (or rebuild with the AWS feature). Creating buckets can't fix a rejected provider, the error names storage rather than signing keys, and down -v just deletes state you'll want back.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "provider-and-values",
+											"label": "Select a supported provider (Azure, GCP, or R2) and set the injected runtime-provider and CDN values non-empty — or rebuild the API with its AWS feature"
+										},
+										{
+											"id": "just-buckets",
+											"label": "Create the three AWS buckets; the provider error clears when they exist"
+										},
+										{
+											"id": "regen-keys",
+											"label": "Regenerate the BACKEND_* trio; the restart loop is a signing-key failure"
+										},
+										{
+											"id": "reset-volumes",
+											"label": "docker compose down -v, then up — the state is corrupted"
+										}
+									],
+									"correct": ["provider-and-values"]
+								}
+							},
+							{
+								"id": "challenge-selfhost-final-values-gate",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Artifact B: which lines in the production values file block go-live for this chart-only deployment?",
+								"explanation": "Three blockers: the k3d image reference with pullPolicy: Never guarantees ImagePullBackOff on a real cluster, database.type: internal is a single-node insecure evaluation database, and asyncBackend: redis enqueues background jobs the chart's executor pool will never consume. The keepers are deliberate: execution.backend: http is the operational warm-pool path, and runtimeClass.create: false is correct — creating the object wouldn't install a Kata handler or add isolation anyway.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "final-k3d-image",
+											"label": "The k3d-flow-like.localhost:5000 image with pullPolicy: Never"
+										},
+										{
+											"id": "final-internal-db",
+											"label": "database.type: internal"
+										},
+										{
+											"id": "final-async-redis",
+											"label": "execution.asyncBackend: redis"
+										},
+										{
+											"id": "final-http",
+											"label": "execution.backend: http"
+										},
+										{
+											"id": "final-runtimeclass",
+											"label": "runtimeClass.create: false"
+										}
+									],
+									"correct": ["final-k3d-image", "final-internal-db", "final-async-redis"]
+								}
+							},
+							{
+								"id": "challenge-selfhost-final-isolation-verdict",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Artifact C: your verdict on switching execution.backend to kubernetes_job for per-tenant isolation?",
+								"explanation": "Reject it: the dispatcher creates real Jobs, but the checked-in executor's one-job entrypoint exits with status 1, so every run fails — it's neither working execution nor a security control. Revisit only with a compatible, validated one-job runner, and even then isolation depends on the container runtime and node configuration, not the backend name. The fallback distractor misapplies a real fact: only unknown values fall back to http, and kubernetes_job is a known value. A RuntimeClass object installs nothing.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "reject-runner-pending",
+											"label": "Reject — Jobs get created but the stock runner exits 1; keep the warm pool and revisit only with a validated one-job runner"
+										},
+										{
+											"id": "approve-hardware",
+											"label": "Approve — a fresh pod per run is hardware-grade tenant isolation"
+										},
+										{
+											"id": "approve-with-kata",
+											"label": "Approve once runtimeClass.create: true registers the kata handler"
+										},
+										{
+											"id": "harmless-fallback",
+											"label": "Harmless — unsupported backends fall back to http, so nothing changes"
+										}
+									],
+									"correct": ["reject-runner-pending"]
+								}
+							},
+							{
+								"id": "challenge-selfhost-final-credential-gap",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Artifact D: why do the pilot team's remote runs fail CRM authentication, and what's the production fix?",
+								"explanation": "The runtime-variable contract: values are stored locally and never uploaded, and remote execution receives only non-secret values — so a Secret CRM_API_TOKEN on one laptop can't follow the flow into the cluster. Provision the credential server-side, where the run actually executes. Re-badging the token as non-secret \"to make it sync\" turns a credential into plainly-shipped run data — the opposite of the contract's point. It's not a clock or storage-feature problem.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "provision-server-side",
+											"label": "Secret runtime variables never leave the device — provision the CRM credential where the remote run executes"
+										},
+										{
+											"id": "unmark-secret",
+											"label": "Re-save the token as a non-secret Runtime value so it syncs to the cluster"
+										},
+										{
+											"id": "clock-skew",
+											"label": "Cluster clock skew is invalidating the execution JWT — sync NTP"
+										},
+										{
+											"id": "aws-feature-rebuild",
+											"label": "The API image needs its AWS feature rebuilt before tokens can transfer"
+										}
+									],
+									"correct": ["provision-server-side"]
+								}
+							},
+							{
+								"id": "challenge-selfhost-final-runbook",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Artifact F: which items belong in the runbook you show Priya?",
+								"explanation": "Three belong: upgrades start by reading the .env.example and hub-config diffs before rebuilding with --remove-orphans; anything destructive to volumes is preceded by a database backup because down -v deletes them; and key rotation is a three-service event that invalidates old-signed tokens, so it gets a planned window. The rejects: down -v is state deletion rather than a routine upgrade step, and loaded alert rules page nobody — the review already established there's no Alertmanager yet.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "review-diffs",
+											"label": "Before rebuilding: review the .env.example diff, hub config template, and release notes, then up -d --build --remove-orphans"
+										},
+										{
+											"id": "backup-before-v",
+											"label": "Back up PostgreSQL and needed monitoring state before any command that deletes volumes"
+										},
+										{
+											"id": "rotation-window",
+											"label": "Rotate signing keys in a planned window: replace the trio, recreate API, runtime, and compiler together"
+										},
+										{
+											"id": "down-v-standard",
+											"label": "Use docker compose down -v as the standard pre-upgrade cleanup"
+										},
+										{
+											"id": "alerts-already-page",
+											"label": "Skip alert-routing work — the bundled rules already page on-call"
+										}
+									],
+									"correct": ["review-diffs", "backup-before-v", "rotation-window"]
+								}
+							},
+							{
+								"id": "challenge-selfhost-final-desktop-rollout",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Artifact E: laptops provisioned by this script can't connect. What does the empty FLOW_LIKE_API_URL actually do, and what's the fix?",
+								"explanation": "An explicitly empty FLOW_LIKE_API_URL overrides the build-time and hosted defaults — it's a configuration error, not a fallback to anything. Fix the templating so the variable carries the full URL of your public API entrypoint (the gateway or Ingress). The \"empty means default cloud\" reading is exactly what the desktop docs refute; runtime:9000 is the internal executor rather than the API; and FLOW_LIKE_CONFIG_DOMAIN is a compile-time option, useless in a launch script.",
+								"points": 10,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "empty-config-error",
+											"label": "Empty overrides the defaults and breaks the app — template the full internal API URL (gateway or Ingress) into the variable"
+										},
+										{
+											"id": "empty-means-cloud",
+											"label": "Empty falls back to the hosted cloud — the laptops connect, just to the wrong backend"
+										},
+										{
+											"id": "point-at-runtime",
+											"label": "Point it at http://runtime:9000 — the desktop talks to executors directly"
+										},
+										{
+											"id": "config-domain-runtime",
+											"label": "Set FLOW_LIKE_CONFIG_DOMAIN in the script instead — it overrides at launch"
+										}
+									],
+									"correct": ["empty-config-error"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		]
+	}
+}

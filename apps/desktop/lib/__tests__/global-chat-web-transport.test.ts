@@ -1,5 +1,7 @@
 import type { IAgentDebugEvent } from "@flow-like/flow-like-ui/state/global-chat/agent-debug-report";
+import { globalChatTransportRunId } from "@flow-like/flow-like-ui/state/global-chat/global-chat-run-control";
 import {
+	dispatchSpecialistToolRequest,
 	parseSseFrame,
 	webGlobalChatStart,
 } from "@flow-like/flow-like-ui/state/global-chat/global-chat-web-transport";
@@ -357,5 +359,87 @@ describe("browser global-chat transport", () => {
 				body: {},
 			})(() => undefined),
 		).rejects.toThrow(/without a final frame/);
+	});
+	test("maps a client run id onto the server's while the run is live", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(
+				sseResponse(
+					frame("run", { runId: "server-run-1" }),
+					frame("token", "hi"),
+					frame("final", { status: "ok" }),
+				),
+			);
+		vi.stubGlobal("fetch", fetchMock);
+		// Before the run frame the client id is all there is to address.
+		expect(globalChatTransportRunId("client-run-1")).toBe("client-run-1");
+		let liveMapping: string | undefined;
+
+		await webGlobalChatStart({
+			baseUrl: "https://flow.example",
+			body: {},
+			clientRunId: "client-run-1",
+		})(() => {
+			liveMapping = globalChatTransportRunId("client-run-1");
+		});
+
+		// A nested specialist resolves the address mid-run; afterwards it falls back to the client
+		// id so a stale mapping can never point at a finished run.
+		expect(liveMapping).toBe("server-run-1");
+		expect(globalChatTransportRunId("client-run-1")).toBe("client-run-1");
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	test("dispatches a nested specialist tool request back to the owning run", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(new Response(null, { status: 204 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const onToolRequest = vi.fn().mockResolvedValue({
+			requestId: "ignored-id",
+			approved: true,
+			result: { status: "ok", tables: [] },
+		});
+
+		await dispatchSpecialistToolRequest({
+			baseUrl: "https://flow.example",
+			token: "jwt-token",
+			runId: "server-run-2",
+			data: JSON.stringify({
+				requestId: "tool-9",
+				toolName: "database_tool",
+				arguments: { operation: "list_tables" },
+			}),
+			onToolRequest,
+		});
+
+		expect(onToolRequest).toHaveBeenCalledTimes(1);
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe(
+			"https://flow.example/api/v1/ai/global-chat/server-run-2/tool-result",
+		);
+		expect((init.headers as Record<string, string>).authorization).toBe(
+			"Bearer jwt-token",
+		);
+		// The specialist is blocked on the id it sent, never on one a handler made up.
+		expect(JSON.parse(String(init.body))).toMatchObject({
+			requestId: "tool-9",
+			approved: true,
+		});
+	});
+
+	test("rejects a malformed specialist tool frame instead of posting a guess", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(
+			dispatchSpecialistToolRequest({
+				baseUrl: "https://flow.example",
+				runId: "server-run-3",
+				data: JSON.stringify({ toolName: "database_tool" }),
+				onToolRequest: vi.fn(),
+			}),
+		).rejects.toThrow(/requestId is missing/);
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });

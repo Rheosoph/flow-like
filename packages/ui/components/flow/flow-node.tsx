@@ -1,4 +1,5 @@
 "use client";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { useDebounce } from "@uidotdev/usehooks";
 import {
@@ -759,7 +760,7 @@ const FlowNodeInner = memo(
 							<button
 								className="bg-background hover:bg-card group/play transition-all rounded-md hover:rounded-lg border p-1"
 								onClick={() => handleLocalExecute()}
-								title="Execute locally"
+								title={i18next.t('executeLocally', 'Execute locally')}
 							>
 								<PlayCircleIcon className="w-3 h-3 group-hover/play:scale-110" />
 							</button>
@@ -768,7 +769,7 @@ const FlowNodeInner = memo(
 							<button
 								className="bg-background hover:bg-card group/play transition-all rounded-md hover:rounded-lg border p-1 relative"
 								onClick={() => handleRemoteExecute()}
-								title="Execute on server"
+								title={i18next.t('executeOnServer', 'Execute on server')}
 							>
 								<CloudCog className="w-3 h-3 group-hover/play:scale-110" />
 							</button>
@@ -786,7 +787,7 @@ const FlowNodeInner = memo(
 							<button
 								className="bg-background hover:bg-card group/play transition-all rounded-md hover:rounded-lg border p-1"
 								title={
-									canLocalExecute ? "Execute locally" : "Execute on server"
+									canLocalExecute ? "Execute locally" : i18next.t('executeOnServer', 'Execute on server')
 								}
 							>
 								{canLocalExecute ? (
@@ -799,9 +800,9 @@ const FlowNodeInner = memo(
 					</DialogTrigger>
 					<DialogContent className="max-w-lg">
 						<DialogHeader>
-							<DialogTitle>Execute {props.data.node.friendly_name}</DialogTitle>
+							<DialogTitle>{i18next.t('executeFriendly_name', 'Execute {{friendly_name}}', { friendly_name: props.data.node.friendly_name })}</DialogTitle>
 							<DialogDescription>
-								Provide input values for the event payload.
+								{i18next.t('provideInputValuesForTheEventPayload', 'Provide input values for the event payload.')}
 							</DialogDescription>
 						</DialogHeader>
 						<EventPayloadForm
@@ -899,9 +900,7 @@ const FlowNodeInner = memo(
 							})}
 						</div>
 						{extraRemoteSelections > 0 && (
-							<div className="rounded-full border border-border bg-background/95 px-1.5 py-0.5 text-[0.5625rem] font-medium leading-none shadow-md">
-								+{extraRemoteSelections}
-							</div>
+							<div className="rounded-full border border-border bg-background/95 px-1.5 py-0.5 text-[0.5625rem] font-medium leading-none shadow-md">{`+${extraRemoteSelections}`}</div>
 						)}
 					</div>
 				)}
@@ -917,7 +916,7 @@ const FlowNodeInner = memo(
 				{props.data.node.only_offline && (
 					<div
 						className="absolute bottom-0 z-10 translate-y-[calc(50%)] translate-x-[calc(-50%)] left-0 text-center bg-background rounded-full"
-						title="This node can only run locally"
+						title={i18next.t('thisNodeCanOnlyRunLocally', 'This node can only run locally')}
 					>
 						<MonitorIcon className="w-2 h-2 text-blue-500" />
 					</div>
@@ -925,7 +924,7 @@ const FlowNodeInner = memo(
 				{isWasmNode && !isReroute && (
 					<div
 						className="absolute bottom-0 z-10 translate-y-[calc(50%)] translate-x-[calc(50%)] right-0 text-center bg-background rounded-full"
-						title={`WASM sandbox node — package: ${props.data.node.wasm?.package_id}`}
+						title={i18next.t('wasmSandboxNodePackageVal', 'WASM sandbox node — package: {{val}}', { val: props.data.node.wasm?.package_id })}
 					>
 						<BoxIcon className="w-2 h-2 text-amber-500" />
 					</div>
@@ -933,7 +932,7 @@ const FlowNodeInner = memo(
 				{props.data.isUnavailable && !isReroute && (
 					<div
 						className="absolute top-0 z-10 translate-y-[calc(-50%)] translate-x-[calc(-50%)] left-1/2 text-center bg-destructive rounded-full p-0.5"
-						title="This node's package is no longer available"
+						title={i18next.t('thisNodesPackageIsNoLongerAvailable', 'This node\'s package is no longer available')}
 					>
 						<TriangleAlertIcon className="w-2 h-2 text-destructive-foreground" />
 					</div>
@@ -963,15 +962,23 @@ const FlowNodeInner = memo(
 						/>
 						<div
 							className="absolute bottom-0 left-0 z-10 flex translate-y-[calc(50%)] translate-x-[calc(-30%)] items-center gap-1"
-							title={`${nodeHeat.visits} ${nodeHeat.visits === 1 ? "run" : "runs"} visited this node${nodeHeat.errors > 0 ? ` · ${nodeHeat.errors} with errors` : ""}`}
+							title={i18next.t('countRunsVisitedThisNode', {
+								defaultValue_one: '{{count}} run visited this Node{{errors}}',
+								defaultValue_other: '{{count}} runs visited this Node{{errors}}',
+								count: nodeHeat.visits,
+								errors:
+									nodeHeat.errors > 0
+										? ` · ${i18next.t('countRunsWithErrors', {
+												defaultValue_one: '{{count}} with an error',
+												defaultValue_other: '{{count}} with errors',
+												count: nodeHeat.errors,
+											})}`
+										: '',
+							})}
 						>
-							<span className="rounded-full bg-primary px-1.5 py-0.5 text-[8px] font-semibold leading-none tabular-nums text-primary-foreground">
-								{nodeHeat.visits}×
-							</span>
+							<span className="rounded-full bg-primary px-1.5 py-0.5 text-[8px] font-semibold leading-none tabular-nums text-primary-foreground">{`${nodeHeat.visits}×`}</span>
 							{nodeHeat.errors > 0 && (
-								<span className="rounded-full bg-destructive px-1.5 py-0.5 text-[8px] font-semibold leading-none tabular-nums text-destructive-foreground">
-									{nodeHeat.errors}!
-								</span>
+								<span className="rounded-full bg-destructive px-1.5 py-0.5 text-[8px] font-semibold leading-none tabular-nums text-destructive-foreground">{`${nodeHeat.errors}!`}</span>
 							)}
 						</div>
 					</>
@@ -1094,6 +1101,7 @@ const FlowNodeInner = memo(
 );
 
 function FlowNode(props: NodeProps<FlowNode>) {
+	const { t } = useTranslation("flow");
 	const [isHovered, setIsHovered] = useState(false);
 	const [commentMenu, setCommentMenu] = useState(false);
 	const [renameMenu, setRenameMenu] = useState(false);
@@ -1159,7 +1167,7 @@ function FlowNode(props: NodeProps<FlowNode>) {
 
 		const newPin: IPin = {
 			name: "auto_handle_error",
-			description: "Handles Node Errors for you.",
+			description: t('handlesNodeErrorsForYou', 'Handles Node Errors for you.'),
 			pin_type: IPinType.Output,
 			value_type: IValueType.Normal,
 			data_type: IVariableType.Execution,
@@ -1173,7 +1181,7 @@ function FlowNode(props: NodeProps<FlowNode>) {
 
 		const stringPin: IPin = {
 			name: "auto_handle_error_string",
-			description: "Handles Node Errors for you.",
+			description: t('handlesNodeErrorsForYou', 'Handles Node Errors for you.'),
 			pin_type: IPinType.Output,
 			value_type: IValueType.Normal,
 			data_type: IVariableType.String,
@@ -1249,7 +1257,7 @@ function FlowNode(props: NodeProps<FlowNode>) {
 					parent_id: (selectedNodes[0].data.node as INode).layer,
 					coordinates: [minX, minY, 0],
 					in_coordinates: undefined,
-					name: "Collapsed",
+					name: t('collapsed', 'Collapsed'),
 					type: ILayerType.Collapsed,
 					variables: {},
 				},

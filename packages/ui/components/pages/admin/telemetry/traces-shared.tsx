@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next } from "@flow-like/locales";
 import { Badge } from "../../../ui";
 import type { ITelemetryPerfRating } from "./types";
 
@@ -64,8 +65,8 @@ export function formatDurationMs(ms: number): string {
 		return `${minutes}m ${seconds}s`;
 	}
 	if (ms >= 1000) return `${(ms / 1000).toFixed(2)} s`;
-	if (ms >= 1) return `${Math.round(ms)} ms`;
-	return `${ms.toFixed(2)} ms`;
+	if (ms >= 1) return i18next.t('valMs', '{{val}} ms', { val: Math.round(ms) });
+	return i18next.t('valMs', '{{val}} ms', { val: ms.toFixed(2) });
 }
 
 export function formatMetricValue(metric: string, value: number): string {

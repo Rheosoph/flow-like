@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type ReactNode,
 	createContext,
@@ -163,6 +164,7 @@ function RouteDialogRenderer({
 	openDialog,
 	closeDialog,
 }: RouteDialogRendererProps) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
 	const auth = useAuth();
@@ -491,8 +493,8 @@ function RouteDialogRenderer({
 					} as unknown as SurfaceComponent["component"],
 				};
 			} else if (
-				updateType === "addOverlayBox" ||
-				updateType === "addLabelerBox"
+				updateType === `addOverlayBox` ||
+				updateType === `addLabelerBox`
 			) {
 				const componentData = component.component as unknown as Record<
 					string,

@@ -354,7 +354,7 @@ const SHARED_SECTIONS: IEventSection[] = [
 		label: "Variable overrides",
 		icon: "code",
 		blurb:
-			"Flow variables this event overrides at run time. Only variables marked exposed on the flow can be overridden.",
+			"Flow variables this event overrides at run time. Variables marked exposed, secret or runtime-configured on the flow can be overridden — runtime-configured ones have to be set here for triggers that run without a user.",
 	},
 	{
 		id: "release",

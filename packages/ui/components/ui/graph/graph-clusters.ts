@@ -3,6 +3,7 @@ import type {
 	SubgraphNode,
 	SubgraphResult,
 } from "../../../state/backend-state/graph-state";
+import { detectCommunities } from "./graph-communities";
 import { hashLayoutSeed } from "./graph-layout";
 
 /** Spine children a node needs before it reads as a parent rather than a peer. */
@@ -11,11 +12,17 @@ export const HUB_MIN_MEMBERS = 3;
 export const MIN_GROUPED_NODES = 24;
 /** Ceiling on groups laid out separately; the smallest by-type ones fold into a tail. */
 export const MAX_CLUSTERS = 400;
+/** Share of edges that must stay inside a grouping for it to beat a force layout. */
+const MIN_WITHIN_GROUP_SHARE = 0.5;
+/** Below this a community is noise, and folds back in with its own object type. */
+const MIN_COMMUNITY_MEMBERS = 3;
+/** How much of a community must share one label before that label names it. */
+const DOMINANT_LABEL_SHARE = 0.6;
 /** Subtitle for a group whose members have no edges in the loaded sample. */
 const NO_CONNECTIONS_SUBTITLE = "no connections in this view";
 const FOLDED_CLUSTER_ID = "type:__more__";
 
-export type ClusterKind = "hub" | "type";
+export type ClusterKind = "hub" | "type" | "community";
 
 export interface GraphCluster {
 	id: string;
@@ -206,12 +213,48 @@ export function buildClusterModel(
 				b.memberIds.length - a.memberIds.length || compareIds(a.id, b.id),
 		);
 
-	const clusters = foldSmallest([...hubClusters, ...typeClusters]);
-	if (clusters.length <= 1) return null;
+	const byType = foldSmallest([...hubClusters, ...typeClusters]);
+	const typeModel = byType.length > 1 ? toModel(byType) : null;
 
+	// Grouping is only worth having when the edges agree with it. On a peer
+	// ontology — no parent-child spine, everything linked across labels — these
+	// groups are blobs joined by stage-crossing lines, strictly worse than the
+	// force layout at showing where the structure is.
+	if (
+		typeModel &&
+		withinGroupShare(data, typeModel) >= MIN_WITHIN_GROUP_SHARE
+	) {
+		return typeModel;
+	}
+
+	// So ask the edges instead of the schema. Modularity finds the groups a peer
+	// ontology actually has, which is the difference between a hairball and a
+	// readable picture on exactly the ontologies the rule above rejects.
+	const communities = buildCommunityClusters(data, byProminence, degree);
+	if (communities.length > 1) {
+		const communityModel = toModel(communities);
+		const share = withinGroupShare(data, communityModel);
+		if (share >= MIN_WITHIN_GROUP_SHARE) return communityModel;
+		// Neither grouping beat the threshold, so take whichever kept more edges
+		// at home rather than dropping to an undifferentiated force layout.
+		if (!typeModel || share > withinGroupShare(data, typeModel)) {
+			return communityModel;
+		}
+	}
+
+	return typeModel && withinGroupShare(data, typeModel) > 0 ? typeModel : null;
+}
+
+function toModel(clusters: GraphCluster[]): ClusterModel {
 	const byNode = new Map<string, ClusterAssignment>();
 	for (const cluster of clusters) {
-		const badge = formatRepresented(cluster.represented, cluster.exact);
+		// Only a real parent gets a badge. A community's centre is its label
+		// anchor, not something the other members belong to, and a fan-out count
+		// beside it would claim a relationship the data never stated.
+		const badge =
+			cluster.kind === "hub"
+				? formatRepresented(cluster.represented, cluster.exact)
+				: undefined;
 		for (const nodeId of cluster.memberIds) {
 			byNode.set(
 				nodeId,
@@ -226,24 +269,122 @@ export function buildClusterModel(
 			);
 		}
 	}
+	return { clusters, byNode, epoch: clusterEpoch(clusters) };
+}
 
-	// Grouping is only worth having when the edges agree with it. On a peer
-	// ontology — no parent-child spine, everything linked across labels — these
-	// groups would be blobs joined by stage-crossing lines, strictly worse than
-	// the force layout at showing where the structure is. Bail and let it run.
-	if (data.edges.length > 0) {
-		let withinGroup = 0;
-		for (const edge of data.edges) {
-			const source = byNode.get(edge.source);
-			const target = byNode.get(edge.target);
-			if (source && target && source.clusterId === target.clusterId) {
-				withinGroup += 1;
-			}
+/** Fraction of edges whose two ends landed in the same group. */
+function withinGroupShare(data: SubgraphResult, model: ClusterModel): number {
+	if (data.edges.length === 0) return 1;
+	let withinGroup = 0;
+	for (const edge of data.edges) {
+		const source = model.byNode.get(edge.source);
+		const target = model.byNode.get(edge.target);
+		if (source && target && source.clusterId === target.clusterId) {
+			withinGroup += 1;
 		}
-		if (withinGroup * 2 < data.edges.length) return null;
+	}
+	return withinGroup / data.edges.length;
+}
+
+/** The label most of a community shares, when most of it shares one. */
+function dominantLabel(
+	memberIds: readonly string[],
+	labelById: ReadonlyMap<string, string>,
+): string | null {
+	const counts = new Map<string, number>();
+	for (const id of memberIds) {
+		const label = labelById.get(id);
+		if (label) counts.set(label, (counts.get(label) ?? 0) + 1);
+	}
+	let best: string | null = null;
+	let bestCount = 0;
+	for (const [label, count] of [...counts].sort(
+		(a, b) => b[1] - a[1] || compareIds(a[0], b[0]),
+	)) {
+		if (count > bestCount) {
+			best = label;
+			bestCount = count;
+		}
+	}
+	return bestCount >= memberIds.length * DOMINANT_LABEL_SHARE ? best : null;
+}
+
+/**
+ * Groups the sample by modularity, then hands the leftovers back to the by-type
+ * grouping.
+ *
+ * A community of one or two is not a finding, it is a node that happened to sit
+ * apart — drawn as its own disc it costs a frame and says nothing. Those rejoin
+ * their object type, so the stage reads as "here are the clusters, and here is
+ * everything else, filed."
+ */
+function buildCommunityClusters(
+	data: SubgraphResult,
+	byProminence: (a: string, b: string) => number,
+	degree: ReadonlyMap<string, number>,
+): GraphCluster[] {
+	const labelById = new Map(data.nodes.map((node) => [node.id, node.label]));
+	const captionById = new Map(
+		data.nodes.map((node) => [node.id, captionOf(node)]),
+	);
+	const { members } = detectCommunities(
+		data.nodes.map((node) => node.id),
+		data.edges,
+	);
+
+	const clusters: GraphCluster[] = [];
+	const loose: string[] = [];
+	for (const bucket of members) {
+		if (bucket.length < MIN_COMMUNITY_MEMBERS) {
+			loose.push(...bucket);
+			continue;
+		}
+		const ordered = [...bucket].sort(byProminence);
+		const anchor = ordered[0];
+		const label = dominantLabel(ordered, labelById);
+		clusters.push({
+			id: `community:${anchor}`,
+			kind: "community",
+			// Named for the object at its centre, like a hub group is — the members
+			// are mixed by construction, so the object type rarely names anything.
+			title: captionById.get(anchor) ?? anchor,
+			subtitle: label ?? `${ordered.length.toLocaleString()} linked objects`,
+			memberIds: ordered,
+			// The most connected member centres the group and carries its caption.
+			hubId: anchor,
+			childIds: ordered.slice(1),
+			represented: ordered.length,
+			exact: true,
+		});
 	}
 
-	return { clusters, byNode, epoch: clusterEpoch(clusters) };
+	const looseByLabel = new Map<string, string[]>();
+	for (const id of loose) {
+		const label = labelById.get(id) ?? "unknown";
+		const bucket = looseByLabel.get(label);
+		if (bucket) bucket.push(id);
+		else looseByLabel.set(label, [id]);
+	}
+	for (const [label, ids] of looseByLabel) {
+		const memberIds = [...ids].sort(byProminence);
+		const connected = memberIds.some((id) => (degree.get(id) ?? 0) > 0);
+		clusters.push({
+			id: `type:${label}`,
+			kind: "type",
+			title: label,
+			subtitle: connected ? undefined : NO_CONNECTIONS_SUBTITLE,
+			memberIds,
+			represented: memberIds.length,
+			exact: true,
+		});
+	}
+
+	return foldSmallest(
+		clusters.sort(
+			(a, b) =>
+				b.memberIds.length - a.memberIds.length || compareIds(a.id, b.id),
+		),
+	);
 }
 
 /**

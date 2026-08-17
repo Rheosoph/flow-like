@@ -143,8 +143,17 @@ pub struct GraphSchemaResult {
 pub trait GraphStore: Send + Sync {
     async fn cypher(&self, query: &str, params: Value, limit: Option<usize>) -> Result<Vec<Value>>;
 
-    async fn sql(&self, query: &str, limit: Option<usize>) -> Result<Vec<Value>>;
+    /// A single read-only SQL statement. `params` is a JSON object keyed by placeholder
+    /// name without the `$`; it is bound by the planner, so a caller never has to build a
+    /// value into the statement text.
+    async fn sql(&self, query: &str, params: Value, limit: Option<usize>) -> Result<Vec<Value>>;
 
+    /// Neighbors of a node. `edge_labels` restricts the traversal to those
+    /// relationship mappings; `None` traverses every mapping in the overlay.
+    ///
+    /// Filtering here rather than in the caller is what makes a bounded expansion
+    /// mean anything: a limit applied after the fact spends its whole budget on
+    /// the relationship the reader did not ask for.
     async fn neighbors(
         &self,
         label: &str,
@@ -152,6 +161,7 @@ pub trait GraphStore: Send + Sync {
         depth: usize,
         direction: TraversalDirection,
         limit: Option<usize>,
+        edge_labels: Option<&[String]>,
     ) -> Result<SubgraphResult>;
 
     async fn subgraph(

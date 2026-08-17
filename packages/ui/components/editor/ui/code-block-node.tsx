@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import { formatCodeBlock, isLangSupported } from "@platejs/code-block";
@@ -58,6 +59,7 @@ function isCustomBlockLanguage(lang: string | undefined): lang is string {
 }
 
 export function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
+	const { t } = useTranslation("common");
 	const { editor, element } = props;
 	const [showChart, setShowChart] = React.useState(true);
 	const lang = element.lang;
@@ -134,7 +136,7 @@ export function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
 							variant="ghost"
 							className="size-6 text-xs"
 							onClick={() => setShowChart(!showChart)}
-							title={showChart ? "Edit code" : "Show chart"}
+							title={showChart ? t('editCode', 'Edit code') : "Show chart"}
 						>
 							{showChart ? (
 								<CodeIcon className="size-3.5! text-muted-foreground" />
@@ -174,7 +176,7 @@ export function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
 							variant="ghost"
 							className="size-6 text-xs"
 							onClick={() => formatCodeBlock(editor, { element })}
-							title="Format code"
+							title={t('formatCode', 'Format code')}
 						>
 							<BracesIcon className="size-3.5! text-muted-foreground" />
 						</Button>
@@ -195,6 +197,7 @@ export function CodeBlockElement(props: PlateElementProps<TCodeBlockElement>) {
 }
 
 function CodeBlockCombobox() {
+	const { t } = useTranslation("common");
 	const [open, setOpen] = React.useState(false);
 	const readOnly = useReadOnly();
 	const editor = useEditorRef();
@@ -237,9 +240,9 @@ function CodeBlockCombobox() {
 						className="h-9"
 						value={searchValue}
 						onValueChange={(value) => setSearchValue(value)}
-						placeholder="Search language..."
+						placeholder={t('searchLanguage', 'Search language...')}
 					/>
-					<CommandEmpty>No language found.</CommandEmpty>
+					<CommandEmpty>{t('noLanguageFound', 'No language found.')}</CommandEmpty>
 
 					<CommandList className="h-[344px] overflow-y-auto">
 						<CommandGroup>
@@ -280,6 +283,7 @@ function CopyButton({
 	React.ComponentProps<typeof Button>,
 	"value"
 >) {
+	const { t } = useTranslation("common");
 	const [hasCopied, setHasCopied] = React.useState(false);
 
 	React.useEffect(() => {
@@ -298,7 +302,7 @@ function CopyButton({
 			}}
 			{...props}
 		>
-			<span className="sr-only">Copy</span>
+			<span className="sr-only">{t('copy', 'Copy')}</span>
 			{hasCopied ? (
 				<CheckIcon className="size-3!" />
 			) : (

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { useLiveQuery } from "dexie-react-hooks";
 import { type RefObject, useCallback, useMemo, useState } from "react";
@@ -23,6 +24,7 @@ export function ChatHistory({
 	onSessionChange,
 	sidebarRef,
 }: Readonly<IChatHistory>) {
+	const { t } = useTranslation("chat");
 	const isMobile = useIsMobile();
 
 	const sessions = useLiveQuery(
@@ -123,7 +125,7 @@ export function ChatHistory({
 			onSearchActiveChange={setSearching}
 			header={
 				entries
-					? `${entries.length} conversation${entries.length === 1 ? "" : "s"}`
+					? t('countConversations', '{{count}} conversation', { count: entries.length })
 					: undefined
 			}
 			emptyDescription="Start a conversation and it will appear here."

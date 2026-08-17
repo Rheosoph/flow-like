@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useEffect, useState } from "react";
 import PuffLoader from "react-spinners/PuffLoader";
 import { useShallow } from "zustand/react/shallow";
@@ -22,21 +23,21 @@ function getStatusColor(status: ActivityStatus): {
 			return {
 				border: "border-green-500/35",
 				bg: "bg-green-500/10",
-				text: "text-green-600 dark:text-green-400",
+				text: `text-green-600 dark:text-green-400`,
 				icon: "text-green-500",
 			};
 		case "warning":
 			return {
 				border: "border-yellow-500/35",
 				bg: "bg-yellow-500/10",
-				text: "text-yellow-600 dark:text-yellow-400",
+				text: `text-yellow-600 dark:text-yellow-400`,
 				icon: "text-yellow-500",
 			};
 		case "stale":
 			return {
 				border: "border-red-500/35",
 				bg: "bg-red-500/10",
-				text: "text-red-600 dark:text-red-400",
+				text: `text-red-600 dark:text-red-400`,
 				icon: "text-red-500",
 			};
 		default:
@@ -61,6 +62,7 @@ function formatDuration(ms: number): string {
 export function BoardActivityIndicator({
 	boardId,
 }: BoardActivityIndicatorProps) {
+	const { t } = useTranslation("flow");
 	const [now, setNow] = useState(Date.now());
 
 	// Subscribe to primitive values to avoid infinite re-renders
@@ -141,13 +143,12 @@ export function BoardActivityIndicator({
 	// Build the node count display - show execution count which properly counts loop iterations
 	const nodeDisplay =
 		currentlyExecuting > 0
-			? `${currentlyExecuting} active` +
-				(totalExecutionsCompleted > 0
-					? ` • ${totalExecutionsCompleted} exec`
-					: "")
+			? totalExecutionsCompleted > 0
+				? t('activeAndCompletedExecutions', '{{active}} active · {{completed}} completed', { active: currentlyExecuting, completed: totalExecutionsCompleted })
+				: t('currentlyexecutingActive', '{{currentlyExecuting}} active', { currentlyExecuting })
 			: totalExecutionsCompleted > 0
-				? `${totalExecutionsCompleted} exec`
-				: "starting...";
+				? t('totalExecutionsCompleted', '{{totalExecutionsCompleted}} completed', { totalExecutionsCompleted })
+				: t('starting', 'Starting…');
 
 	// Only show time after 15 seconds
 	const showTime = timeSinceUpdate >= 15000;
@@ -158,13 +159,12 @@ export function BoardActivityIndicator({
 		>
 			<PuffLoader color="currentColor" size={14} className={colors.icon} />
 			<div className="flex flex-col">
-				<span className={`text-xs font-medium ${colors.text}`}>
-					{activeRunIds.length} run{activeRunIds.length > 1 ? "s" : ""} •{" "}
+				<span className={`text-xs font-medium ${colors.text}`}>{t('countRuns', { defaultValue_one: '{{count}} run', defaultValue_other: '{{count}} runs', count: activeRunIds.length })} •{" "}
 					{nodeDisplay}
 				</span>
 				{showTime && (
 					<span className={`text-[10px] ${colors.text} opacity-75`}>
-						{formatDuration(timeSinceUpdate)} ago
+						{t('durationAgo', '{{duration}} ago', { duration: formatDuration(timeSinceUpdate) })}
 					</span>
 				)}
 			</div>

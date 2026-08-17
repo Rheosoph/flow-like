@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowUpCircle,
@@ -85,6 +86,7 @@ function groupNodesByCategory(nodes: INode[]): Map<string, INode[]> {
 }
 
 export function AppPackagesPage({ appId }: AppPackagesPageProps) {
+	const { t } = useTranslation("store");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const [searchOpen, setSearchOpen] = useState(false);
@@ -200,11 +202,15 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 			return backend.apiState.post(profile.data, `apps/${appId}/packages`, req);
 		},
 		onSuccess: () => {
-			toast.success("Package added");
+			toast.success(t("packageAdded", "Package added"));
 			invalidatePackageQueries();
 		},
 		onError: (err: Error) =>
-			toast.error(`Failed to add package: ${err.message}`),
+			toast.error(
+				t("failedToAddPackageMessage", "Failed to add package: {{message}}", {
+					message: err.message,
+				}),
+			),
 	});
 
 	const removePackage = useMutation({
@@ -220,11 +226,17 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 			);
 		},
 		onSuccess: () => {
-			toast.success("Package removed");
+			toast.success(t("packageRemoved", "Package removed"));
 			invalidatePackageQueries();
 		},
 		onError: (err: Error) =>
-			toast.error(`Failed to remove package: ${err.message}`),
+			toast.error(
+				t(
+					"failedToRemovePackageMessage",
+					"Failed to remove package: {{message}}",
+					{ message: err.message },
+				),
+			),
 	});
 
 	const toggleAutoUpdate = useMutation({
@@ -243,12 +255,18 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		},
 		onSuccess: () => {
 			if (!isOffline.data) {
-				toast.success("Auto-update toggled");
+				toast.success(t("autoUpdateToggled", "Auto-update toggled"));
 				queryClient.invalidateQueries({ queryKey: ["app", appId, "packages"] });
 			}
 		},
 		onError: (err: Error) =>
-			toast.error(`Failed to update package: ${err.message}`),
+			toast.error(
+				t(
+					"failedToUpdatePackageMessage",
+					"Failed to update package: {{message}}",
+					{ message: err.message },
+				),
+			),
 	});
 
 	const reactivatePackage = useMutation({
@@ -261,11 +279,15 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 			);
 		},
 		onSuccess: () => {
-			toast.success("Package reactivated");
+			toast.success(t("packageReactivated", "Package reactivated"));
 			queryClient.invalidateQueries({ queryKey: ["app", appId, "packages"] });
 		},
 		onError: (err: Error) =>
-			toast.error(`Failed to reactivate: ${err.message}`),
+			toast.error(
+				t("failedToReactivateMessage", "Failed to reactivate: {{message}}", {
+					message: err.message,
+				}),
+			),
 	});
 
 	const patchPackageVersion = useCallback(
@@ -285,11 +307,17 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		mutationFn: ({ pkgId, version }: { pkgId: string; version: string }) =>
 			patchPackageVersion(pkgId, version),
 		onSuccess: () => {
-			toast.success("Package updated");
+			toast.success(t("packageUpdated", "Package updated"));
 			invalidatePackageQueries();
 		},
 		onError: (err: Error) =>
-			toast.error(`Failed to update package: ${err.message}`),
+			toast.error(
+				t(
+					"failedToUpdatePackageMessage",
+					"Failed to update package: {{message}}",
+					{ message: err.message },
+				),
+			),
 	});
 
 	const applyAllUpdates = useMutation({
@@ -305,10 +333,16 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		onSuccess: ({ total, failed }) => {
 			if (failed === 0) {
 				toast.success(
-					total === 1 ? "Package updated" : `${total} packages updated`,
+					t("countPackagesUpdated", {
+						defaultValue_one: "Package updated",
+						defaultValue_other: "{{count}} packages updated",
+						count: total,
+					}),
 				);
 			} else {
-				toast.error(`Failed to update ${failed} of ${total} packages`);
+				toast.error(
+					`Failed to update ${failed} of ${total} packages`,
+				);
 			}
 			invalidatePackageQueries();
 		},
@@ -342,8 +376,13 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		<Card>
 			<CardHeader className="flex flex-row items-center justify-between">
 				<div>
-					<CardTitle>Packages</CardTitle>
-					<CardDescription>WASM packages linked to this app</CardDescription>
+					<CardTitle>{t("packages", "Packages")}</CardTitle>
+					<CardDescription>
+						{t(
+							"wasmPackagesLinkedToThisApp",
+							"WASM packages linked to this app",
+						)}
+					</CardDescription>
 				</div>
 				<div className="flex items-center gap-2">
 					{applicableUpdates.length > 0 && !isOffline.data && (
@@ -354,12 +393,14 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 							disabled={applyAllUpdates.isPending || applyUpdate.isPending}
 						>
 							<ArrowUpCircle className="mr-2 h-4 w-4" />
-							Update all ({applicableUpdates.length})
+							{t("updateAllLength", "Update all ({{length}})", {
+								length: applicableUpdates.length,
+							})}
 						</Button>
 					)}
 					<Button size="sm" onClick={() => setSearchOpen(true)}>
 						<Package className="mr-2 h-4 w-4" />
-						Add Package
+						{t("addPackage", "Add Package")}
 					</Button>
 				</div>
 			</CardHeader>
@@ -367,12 +408,17 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 				{staleCount > 0 && !isOffline.data && (
 					<Alert variant="destructive" className="mb-4">
 						<TriangleAlert className="h-4 w-4" />
-						<AlertTitle>Stale packages detected</AlertTitle>
+						<AlertTitle>
+							{t("stalePackagesDetected", "Stale packages detected")}
+						</AlertTitle>
 						<AlertDescription>
-							{staleCount} package{staleCount > 1 ? "s are" : " is"} stale
-							because the member who added {staleCount > 1 ? "them" : "it"} left
-							the project. Stale packages cannot be updated or placed on new
-							boards. An admin with access to the package can reactivate it.
+							{t("stalePackagesWarning", {
+								defaultValue_one:
+									"{{count}} package is stale because the member who added it left the project. Stale packages cannot be updated or placed on new boards. An admin with access to the package can reactivate it.",
+								defaultValue_other:
+									"{{count}} packages are stale because the members who added them left the project. Stale packages cannot be updated or placed on new boards. An admin with access to the package can reactivate them.",
+								count: staleCount,
+							})}
 						</AlertDescription>
 					</Alert>
 				)}
@@ -380,8 +426,11 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 					<EmptyState
 						className="w-full max-w-none grow"
 						icons={[Package]}
-						title="No packages"
-						description="Add a WASM package to get started."
+						title={t("noPackages", "No packages")}
+						description={t(
+							"addAWasmPackageToGetStarted",
+							"Add a WASM package to get started.",
+						)}
 					/>
 				) : (
 					<div className="space-y-3">
@@ -448,6 +497,7 @@ function PackageCard(props: {
 	isReactivating: boolean;
 	isApplyingUpdate: boolean;
 }) {
+	const { t } = useTranslation("store");
 	const { pkg, nodes, update } = props;
 	const [nodesOpen, setNodesOpen] = useState(false);
 	const grouped = useMemo(() => groupNodesByCategory(nodes), [nodes]);
@@ -466,23 +516,32 @@ function PackageCard(props: {
 						<span className="truncate font-medium text-sm">
 							{pkg.packageName ?? pkg.packageId}
 						</span>
-						<Badge variant="secondary" className="shrink-0 text-xs">
-							v{pkg.version}
-						</Badge>
+						<Badge
+							variant="secondary"
+							className="shrink-0 text-xs"
+						>{`v${pkg.version}`}</Badge>
 						{pkg.stale ? (
 							<Badge variant="destructive" className="shrink-0 text-xs">
-								Stale
+								{t("stale", "Stale")}
 							</Badge>
 						) : (
 							<Badge variant="outline" className="shrink-0 text-xs">
-								Active
+								{t("active", "Active")}
 							</Badge>
 						)}
 					</div>
 					{nodes.length > 0 && (
 						<p className="mt-0.5 text-xs text-muted-foreground">
-							{nodes.length} node{nodes.length !== 1 ? "s" : ""} across{" "}
-							{grouped.size} categor{grouped.size !== 1 ? "ies" : "y"}
+							{t("nodeCount", {
+								defaultValue_one: "{{count}} node",
+								defaultValue_other: "{{count}} nodes",
+								count: nodes.length,
+							})}{" "}
+							{t("acrossCategoryCount", {
+								defaultValue_one: "across {{count}} category",
+								defaultValue_other: "across {{count}} categories",
+								count: grouped.size,
+							})}
 						</p>
 					)}
 				</div>
@@ -496,15 +555,19 @@ function PackageCard(props: {
 											checked={pkg.autoUpdate}
 											onCheckedChange={props.onToggleAutoUpdate}
 											disabled={props.isToggling || pkg.stale}
-											aria-label="Toggle auto-update"
+											aria-label={t("toggleAutoupdate", "Toggle auto-update")}
 										/>
 									</div>
 								</TooltipTrigger>
 								<TooltipContent className="max-w-60">
-									<p className="font-medium">Auto-update</p>
+									<p className="font-medium">
+										{t("autoupdate", "Auto-update")}
+									</p>
 									<p className="text-xs text-muted-foreground">
-										Flags this package to track new versions. Apply available
-										updates from the package list.
+										{t(
+											"autoUpdateDescription",
+											"Flags this package to track new versions. Apply available updates from the package list.",
+										)}
 									</p>
 								</TooltipContent>
 							</Tooltip>
@@ -518,7 +581,7 @@ function PackageCard(props: {
 							disabled={props.isReactivating}
 						>
 							<RefreshCw className="mr-1 h-3.5 w-3.5" />
-							Reactivate
+							{t("reactivate", "Reactivate")}
 						</Button>
 					)}
 					<Button
@@ -527,7 +590,7 @@ function PackageCard(props: {
 						className="h-8 w-8"
 						onClick={props.onRemove}
 						disabled={props.isRemoving}
-						aria-label="Remove package"
+						aria-label={t("removePackage", "Remove package")}
 					>
 						<Trash2 className="h-4 w-4 text-destructive" />
 					</Button>
@@ -538,14 +601,10 @@ function PackageCard(props: {
 				<div className="flex items-center gap-2 border-t bg-primary/5 px-4 py-2.5">
 					<ArrowUpCircle className="h-4 w-4 shrink-0 text-primary" />
 					<span className="min-w-0 flex-1 text-xs text-muted-foreground">
-						Update available:{" "}
-						<span className="font-medium text-foreground">
-							v{update.currentVersion}
-						</span>{" "}
+						{t("updateAvailable", "Update available:")}{" "}
+						<span className="font-medium text-foreground">{`v${update.currentVersion}`}</span>{" "}
 						→{" "}
-						<span className="font-medium text-foreground">
-							v{update.latestVersion}
-						</span>
+						<span className="font-medium text-foreground">{`v${update.latestVersion}`}</span>
 					</span>
 					<Button
 						size="sm"
@@ -553,7 +612,7 @@ function PackageCard(props: {
 						disabled={props.isApplyingUpdate}
 					>
 						<ArrowUpCircle className="mr-1 h-3.5 w-3.5" />
-						Apply
+						{t("apply", "Apply")}
 					</Button>
 				</div>
 			)}
@@ -567,7 +626,7 @@ function PackageCard(props: {
 							<ChevronRight className="h-3.5 w-3.5" />
 						)}
 						<Layers className="h-3.5 w-3.5" />
-						<span>Provided Nodes</span>
+						<span>{t("providedNodes", "Provided Nodes")}</span>
 						<Badge variant="secondary" className="ml-auto text-xs px-1.5 py-0">
 							{nodes.length}
 						</Badge>

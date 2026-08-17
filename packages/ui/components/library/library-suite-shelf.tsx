@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { ChevronDown, Layers } from "lucide-react";
 import { useRef, useState } from "react";
 import { useAssetImage } from "../../hooks/use-asset-image";
@@ -32,6 +33,7 @@ interface SuiteShelfProps {
 }
 
 export function SuiteShelf({ suites, ...rowProps }: Readonly<SuiteShelfProps>) {
+	const { t } = useTranslation("common");
 	if (suites.length === 0) return null;
 
 	return (
@@ -39,7 +41,7 @@ export function SuiteShelf({ suites, ...rowProps }: Readonly<SuiteShelfProps>) {
 			<div className="flex items-center gap-2 mb-3">
 				<Layers className="h-3.5 w-3.5 text-muted-foreground/50" />
 				<h2 className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-					Suites
+					{t('suites', 'Suites')}
 				</h2>
 				<span className="text-xs text-muted-foreground/30">
 					{suites.length}
@@ -65,6 +67,7 @@ function SuiteRow({
 	onToggleVisibility,
 	isMobile = false,
 }: Readonly<{ suite: SuiteGroup } & Omit<SuiteShelfProps, "suites">>) {
+	const { t } = useTranslation("common");
 	const { group, items } = suite;
 	const [expanded, setExpanded] = useState(false);
 	const banner = useAssetImage(group.banner);
@@ -147,9 +150,7 @@ function SuiteRow({
 				</div>
 
 				<div className="flex items-center gap-2.5 shrink-0 text-muted-foreground/70">
-					<span className="text-xs font-medium tabular-nums">
-						{items.length} app{items.length === 1 ? "" : "s"}
-					</span>
+					<span className="text-xs font-medium tabular-nums">{t('countApps', { defaultValue_one: '{{count}} app', defaultValue_other: '{{count}} apps', count: items.length })}</span>
 					<ChevronDown
 						className={cn(
 							"h-4 w-4 transition-transform duration-300",

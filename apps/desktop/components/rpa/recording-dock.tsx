@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -119,6 +120,7 @@ export function RecordingDock({
 	onClose,
 	onInsertActions,
 }: RecordingDockProps) {
+	const { t } = useTranslation("common");
 	const [status, setStatus] = useState<RecordingStatus>("Idle");
 	const [actions, setActions] = useState<RecordedAction[]>([]);
 	const [elapsed, setElapsed] = useState(0);
@@ -357,11 +359,11 @@ export function RecordingDock({
 
 	const getActionLabel = (action: RecordedAction): string => {
 		const type = action.action_type;
-		if ("Click" in type) return `Click (${type.Click.button})`;
+		if ("Click" in type) return t('clickButton', 'Click ({{button}})', { button: type.Click.button });
 		if ("DoubleClick" in type) return "Double Click";
 		if ("Drag" in type) return "Drag";
 		if ("Scroll" in type)
-			return `Scroll ${type.Scroll.direction} (${type.Scroll.amount})`;
+			return t('scrollDirectionAmount', 'Scroll {{direction}} ({{amount}})', { direction: type.Scroll.direction, amount: type.Scroll.amount });
 		if ("KeyType" in type) {
 			const text = type.KeyType.text;
 			return text.length > MAX_LABEL_LENGTH
@@ -447,7 +449,7 @@ export function RecordingDock({
 									<Minimize2 className="h-4 w-4" />
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent>Minimize</TooltipContent>
+							<TooltipContent>{t('minimize', 'Minimize')}</TooltipContent>
 						</Tooltip>
 						<Tooltip>
 							<TooltipTrigger asChild>
@@ -460,7 +462,7 @@ export function RecordingDock({
 									<X className="h-4 w-4" />
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent>Close</TooltipContent>
+							<TooltipContent>{t('close', 'Close')}</TooltipContent>
 						</Tooltip>
 					</div>
 				</div>
@@ -502,7 +504,7 @@ export function RecordingDock({
 										onClick={startRecording}
 									>
 										<Circle className="h-4 w-4 fill-current" />
-										Start Recording
+										{t('startRecording', 'Start Recording')}
 									</Button>
 									<Tooltip>
 										<TooltipTrigger asChild>
@@ -520,17 +522,17 @@ export function RecordingDock({
 												/>
 											</Button>
 										</TooltipTrigger>
-										<TooltipContent>Settings</TooltipContent>
+										<TooltipContent>{t('settings', 'Settings')}</TooltipContent>
 									</Tooltip>
 								</div>
 								<div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 rounded-lg px-3 py-2">
 									<Info className="h-3.5 w-3.5" />
 									<span>
-										Press{" "}
+										{t('press', 'Press')}{" "}
 										<kbd className="px-1.5 py-0.5 bg-background rounded border text-[10px] font-mono">
 											{STOP_SHORTCUT}
 										</kbd>{" "}
-										to stop recording
+										{t('toStopRecording', 'to stop recording')}
 									</span>
 								</div>
 							</>
@@ -549,7 +551,7 @@ export function RecordingDock({
 											<Pause className="h-6 w-6" />
 										</Button>
 									</TooltipTrigger>
-									<TooltipContent>Pause</TooltipContent>
+									<TooltipContent>{t('pause', 'Pause')}</TooltipContent>
 								</Tooltip>
 								<Tooltip>
 									<TooltipTrigger asChild>
@@ -562,7 +564,7 @@ export function RecordingDock({
 											<Square className="h-6 w-6 fill-current" />
 										</Button>
 									</TooltipTrigger>
-									<TooltipContent>Stop</TooltipContent>
+									<TooltipContent>{t('stop', 'Stop')}</TooltipContent>
 								</Tooltip>
 							</div>
 						)}
@@ -580,7 +582,7 @@ export function RecordingDock({
 											<Play className="h-6 w-6" />
 										</Button>
 									</TooltipTrigger>
-									<TooltipContent>Resume</TooltipContent>
+									<TooltipContent>{t('resume', 'Resume')}</TooltipContent>
 								</Tooltip>
 								<Tooltip>
 									<TooltipTrigger asChild>
@@ -593,7 +595,7 @@ export function RecordingDock({
 											<Square className="h-6 w-6 fill-current" />
 										</Button>
 									</TooltipTrigger>
-									<TooltipContent>Stop</TooltipContent>
+									<TooltipContent>{t('stop', 'Stop')}</TooltipContent>
 								</Tooltip>
 							</div>
 						)}
@@ -617,7 +619,7 @@ export function RecordingDock({
 											htmlFor="capture_screenshots"
 											className="text-sm cursor-pointer"
 										>
-											Capture Screenshots
+											{t('captureScreenshots', 'Capture Screenshots')}
 										</Label>
 									</div>
 									<Switch
@@ -638,7 +640,7 @@ export function RecordingDock({
 											htmlFor="aggregate_keystrokes"
 											className="text-sm cursor-pointer"
 										>
-											Group Keystrokes
+											{t('groupKeystrokes', 'Group Keystrokes')}
 										</Label>
 									</div>
 									<Switch
@@ -654,10 +656,8 @@ export function RecordingDock({
 								</div>
 								<div className="space-y-3">
 									<div className="flex items-center justify-between">
-										<Label className="text-sm">Screenshot Region</Label>
-										<span className="text-sm text-muted-foreground font-mono bg-muted px-2 py-0.5 rounded">
-											{settings.capture_region_size}px
-										</span>
+										<Label className="text-sm">{t('screenshotRegion', 'Screenshot Region')}</Label>
+										<span className="text-sm text-muted-foreground font-mono bg-muted px-2 py-0.5 rounded">{`${settings.capture_region_size}px`}</span>
 									</div>
 									<Slider
 										value={[settings.capture_region_size]}
@@ -680,7 +680,7 @@ export function RecordingDock({
 											htmlFor="use_pattern_matching"
 											className="text-sm cursor-pointer"
 										>
-											Pattern Matching for Clicks
+											{t('patternMatchingForClicks', 'Pattern Matching for Clicks')}
 										</Label>
 									</div>
 									<Switch
@@ -697,7 +697,7 @@ export function RecordingDock({
 								{settings.use_pattern_matching && (
 									<div className="space-y-3 pl-6">
 										<div className="flex items-center justify-between">
-											<Label className="text-sm">Match Confidence</Label>
+											<Label className="text-sm">{t('matchConfidence', 'Match Confidence')}</Label>
 											<span className="text-sm text-muted-foreground font-mono bg-muted px-2 py-0.5 rounded">
 												{Math.round(settings.template_confidence * 100)}%
 											</span>
@@ -724,7 +724,7 @@ export function RecordingDock({
 											htmlFor="use_fingerprints"
 											className="text-sm cursor-pointer"
 										>
-											Element Fingerprinting
+											{t('elementFingerprinting', 'Element Fingerprinting')}
 										</Label>
 									</div>
 									<Switch
@@ -756,7 +756,7 @@ export function RecordingDock({
 									{actions.length}
 								</Badge>
 								<span className="text-sm text-muted-foreground">
-									actions recorded
+									{t('actionsRecorded', 'actions recorded')}
 								</span>
 							</div>
 							<div className="flex items-center gap-1">
@@ -774,7 +774,7 @@ export function RecordingDock({
 											<Trash2 className="h-3.5 w-3.5" />
 										</Button>
 									</TooltipTrigger>
-									<TooltipContent>Clear All</TooltipContent>
+									<TooltipContent>{t('clearAll', 'Clear All')}</TooltipContent>
 								</Tooltip>
 								{showActions ? (
 									<ChevronUp className="h-4 w-4 text-muted-foreground" />

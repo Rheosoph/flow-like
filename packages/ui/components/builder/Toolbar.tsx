@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Clipboard,
 	Code,
@@ -43,6 +44,7 @@ export function Toolbar({
 	currentPageId,
 	onPageChange,
 }: ToolbarProps) {
+	const { t } = useTranslation("flow");
 	const { copy, cut, paste, selection, deleteComponents, devMode, setDevMode } =
 		useBuilder();
 
@@ -114,7 +116,7 @@ export function Toolbar({
 					/>
 					<ToolbarButton
 						icon={Trash2}
-						label="Delete"
+						label={t('delete', 'Delete')}
 						shortcut="⌫"
 						onClick={() => deleteComponents(selection.componentIds)}
 						disabled={!hasSelection}
@@ -126,7 +128,7 @@ export function Toolbar({
 				{/* Dev Mode */}
 				<ToolbarButton
 					icon={Code}
-					label="Dev Mode (JSON Editor)"
+					label={t('devModeJsonEditor', 'Dev Mode (JSON Editor)')}
 					onClick={() => setDevMode(!devMode)}
 					active={devMode}
 				/>
@@ -136,7 +138,7 @@ export function Toolbar({
 				{/* Save */}
 				<ToolbarButton
 					icon={Save}
-					label="Save"
+					label={t('save', 'Save')}
 					shortcut="⌘S"
 					onClick={onSave}
 				/>

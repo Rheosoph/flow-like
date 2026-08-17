@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Suspense, lazy, useMemo } from "react";
 import { cn } from "../../../lib/utils";
 
@@ -194,24 +195,26 @@ function calculateBounds(markers: MapMarker[]): {
 }
 
 function MapFallback() {
+	const { t } = useTranslation("common");
 	return (
 		<div className="flex items-center justify-center h-80 bg-muted/20 rounded-lg animate-pulse">
-			<span className="text-muted-foreground text-sm">Loading map...</span>
+			<span className="text-muted-foreground text-sm">{t('loadingMap', 'Loading map...')}</span>
 		</div>
 	);
 }
 
 function MapErrorFallback({ markers }: { markers: MapMarker[] }) {
+	const { t } = useTranslation("common");
 	return (
 		<div className="rounded-md border border-border/50 bg-muted/20 p-4 text-sm">
-			<p className="font-medium mb-2">Map Locations</p>
+			<p className="font-medium mb-2">{t('mapLocations', 'Map Locations')}</p>
 			<ul className="space-y-1">
 				{markers.map((marker, i) => (
 					<li
 						key={`${marker.lat}-${marker.lng}-${i}`}
 						className="text-muted-foreground"
 					>
-						{marker.label || `Point ${i + 1}`}: {marker.lat.toFixed(4)},{" "}
+						{marker.label || t('pointVal', 'Point {{val}}', { val: i + 1 })}: {marker.lat.toFixed(4)},{" "}
 						{marker.lng.toFixed(4)}
 					</li>
 				))}
@@ -223,6 +226,7 @@ function MapErrorFallback({ markers }: { markers: MapMarker[] }) {
 const MapLibreMap = lazy(() => import("./map-libre-renderer"));
 
 export function MapCodeBlock({ content, className }: MapCodeBlockProps) {
+	const { t } = useTranslation("common");
 	const config = useMemo(() => parseMapContent(content), [content]);
 
 	const hasExplicitZoom = config.zoom != null;
@@ -242,7 +246,7 @@ export function MapCodeBlock({ content, className }: MapCodeBlockProps) {
 					className,
 				)}
 			>
-				No map markers found. Provide lat/lng coordinates.
+				{t('noMapMarkersFoundProvideLatlngCoordinates', 'No map markers found. Provide lat/lng coordinates.')}
 			</div>
 		);
 	}

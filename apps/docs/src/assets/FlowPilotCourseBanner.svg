@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-label="Abstract banner: a chat bubble sends a spark that materializes a small flow graph">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#1a161f"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <radialGradient id="glowCoral" cx=".5" cy=".5" r=".5"><stop stop-color="#ff7656" stop-opacity=".5"/><stop offset="1" stop-color="#ff7656" stop-opacity="0"/></radialGradient>
+    <radialGradient id="glowPurple" cx=".5" cy=".5" r=".5"><stop stop-color="#a78bfa" stop-opacity=".45"/><stop offset="1" stop-color="#a78bfa" stop-opacity="0"/></radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="6"/></filter>
+  </defs>
+  <rect width="1440" height="720" fill="url(#bg)"/><rect width="1440" height="720" fill="url(#grid)"/>
+  <circle cx="420" cy="360" r="300" fill="url(#glowCoral)"/>
+  <circle cx="1030" cy="330" r="330" fill="url(#glowPurple)"/>
+
+  <g>
+    <rect x="220" y="260" width="380" height="150" rx="66" fill="#22252c" stroke="#ff7656" stroke-width="3" stroke-opacity=".85"/>
+    <path d="M330 404 L300 470 L390 412" fill="#22252c" stroke="#ff7656" stroke-width="3" stroke-opacity=".85" stroke-linejoin="round"/>
+    <circle cx="320" cy="335" r="10" fill="#ff7656"/><circle cx="380" cy="335" r="10" fill="#ff8f75"/><circle cx="440" cy="335" r="10" fill="#ffb39f"/>
+    <path d="M488 320 l8 16 17 3 -12 12 3 17 -16-8 -16 8 3-17 -12-12 17-3z" fill="#a78bfa"/>
+  </g>
+
+  <path d="M600 335 C700 335 700 250 790 250" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" stroke-dasharray="1 14"/>
+  <path d="M600 355 C710 360 710 430 790 430" fill="none" stroke="#a78bfa" stroke-width="5" stroke-linecap="round" stroke-dasharray="1 14"/>
+
+  <g>
+    <rect x="790" y="205" width="200" height="92" rx="18" fill="#22252c" stroke="#464c57" stroke-width="2"/>
+    <rect x="790" y="205" width="200" height="30" rx="15" fill="#ff7656" opacity=".85"/>
+    <circle cx="998" cy="252" r="8" fill="#e8e8ec"/>
+    <rect x="1088" y="205" width="200" height="92" rx="18" fill="#22252c" stroke="#464c57" stroke-width="2"/>
+    <rect x="1088" y="205" width="200" height="30" rx="15" fill="#3de39d" opacity=".8"/>
+    <path d="M1006 252 H1080" stroke="#e8e8ec" stroke-width="4" stroke-linecap="round"/><circle cx="1080" cy="252" r="8" fill="#e8e8ec"/>
+    <rect x="790" y="385" width="200" height="92" rx="18" fill="#22252c" stroke="#464c57" stroke-width="2"/>
+    <rect x="790" y="385" width="200" height="30" rx="15" fill="#a78bfa" opacity=".85"/>
+    <circle cx="998" cy="432" r="8" fill="#d8b4fe"/>
+    <path d="M1006 432 C1040 432 1050 297 1084 297" stroke="#d8b4fe" stroke-width="4" fill="none" stroke-linecap="round" stroke-dasharray="10 8"/>
+    <rect x="1152" y="470" width="136" height="70" rx="18" fill="#1f2a27" stroke="#34d399" stroke-width="2.5"/>
+    <path d="M1196 505 l12 12 24-28" fill="none" stroke="#34d399" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M1188 297 C1188 400 1220 400 1220 462" stroke="#34d399" stroke-width="4" fill="none" stroke-linecap="round" stroke-dasharray="10 8"/>
+  </g>
+
+  <g filter="url(#soft)" opacity=".7">
+    <circle cx="700" cy="150" r="4" fill="#ff7656"/><circle cx="760" cy="560" r="5" fill="#a78bfa"/><circle cx="1330" cy="160" r="4" fill="#3de39d"/><circle cx="180" cy="560" r="5" fill="#ff7656"/><circle cx="1360" cy="600" r="4" fill="#a78bfa"/>
+  </g>
+</svg>

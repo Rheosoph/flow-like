@@ -13,9 +13,11 @@ import { cn } from "../../../lib/utils";
 import { useEditorAssetUrl } from "../hooks/use-editor-asset-url";
 
 export function ImageElementStatic(
-	props: SlateElementProps<TImageElement & TCaptionProps & TResizableProps>,
+	props: SlateElementProps<
+		TImageElement & TCaptionProps & TResizableProps & { alt?: string }
+	>,
 ) {
-	const { align = "center", caption, url, width } = props.element;
+	const { align = "center", alt, caption, url, width } = props.element;
 	const src = useEditorAssetUrl(url);
 
 	return (
@@ -30,7 +32,7 @@ export function ImageElementStatic(
 							"w-full max-w-full cursor-default object-cover px-0",
 							"rounded-sm",
 						)}
-						alt={(props.attributes as any).alt}
+						alt={alt ?? ""}
 						src={src}
 					/>
 					{caption && (

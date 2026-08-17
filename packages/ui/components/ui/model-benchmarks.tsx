@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	BookOpenIcon,
 	BrainIcon,
@@ -279,24 +280,24 @@ function intelligenceBadgeStyle(idx: number): {
 	if (idx >= 30)
 		return {
 			bg: "bg-emerald-500/10",
-			text: "text-emerald-700 dark:text-emerald-400",
+			text: `text-emerald-700 dark:text-emerald-400`,
 			border: "border-emerald-500/30",
 		};
 	if (idx >= 18)
 		return {
 			bg: "bg-blue-500/10",
-			text: "text-blue-700 dark:text-blue-400",
+			text: `text-blue-700 dark:text-blue-400`,
 			border: "border-blue-500/30",
 		};
 	if (idx >= 10)
 		return {
 			bg: "bg-amber-500/10",
-			text: "text-amber-700 dark:text-amber-400",
+			text: `text-amber-700 dark:text-amber-400`,
 			border: "border-amber-500/30",
 		};
 	return {
 		bg: "bg-zinc-500/10",
-		text: "text-zinc-600 dark:text-zinc-400",
+		text: `text-zinc-600 dark:text-zinc-400`,
 		border: "border-zinc-500/30",
 	};
 }
@@ -310,7 +311,7 @@ function formatPrice(price: number | null | undefined): string {
 
 function formatSpeed(val: number | null | undefined): string {
 	if (val == null) return "N/A";
-	return `${val.toFixed(1)} tok/s`;
+	return i18next.t('valToks', '{{val}} tok/s', { val: val.toFixed(1) });
 }
 
 function formatLatency(val: number | null | undefined): string {
@@ -322,6 +323,7 @@ function formatLatency(val: number | null | undefined): string {
 export function ModelBenchmarks({
 	evaluation,
 }: Readonly<{ evaluation: IModelEvaluation }>) {
+	const { t } = useTranslation("common");
 	const evals = evaluation.evaluations as AAEvaluations | null | undefined;
 	const pricing = evaluation.pricing as AAPricing | null | undefined;
 	if (!evals) return null;
@@ -354,14 +356,14 @@ export function ModelBenchmarks({
 	return (
 		<div className="space-y-4">
 			<div className="flex items-center justify-between">
-				<h4 className="text-sm font-medium">Benchmarks</h4>
+				<h4 className="text-sm font-medium">{t('benchmarks', 'Benchmarks')}</h4>
 				<a
 					href={`https://artificialanalysis.ai/leaderboards/models?model=${evaluation.slug}`}
 					target="_blank"
 					rel="noopener noreferrer"
 					className="text-[10px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
 				>
-					Artificial Analysis
+					{t('artificialAnalysis', 'Artificial Analysis')}
 					<ExternalLinkIcon className="h-2.5 w-2.5" />
 				</a>
 			</div>
@@ -423,12 +425,12 @@ export function ModelBenchmarks({
 			{(pricing || evaluation.median_output_tokens_per_second) && (
 				<div className="rounded-lg border bg-card p-3 space-y-0">
 					<h5 className="text-xs font-medium mb-1 flex items-center gap-1.5">
-						Performance & Pricing
+						{t('performancePricing', 'Performance & Pricing')}
 					</h5>
 					{evaluation.median_output_tokens_per_second != null && (
 						<PerfRow
 							icon={<ZapIcon className="h-3 w-3" />}
-							label="Output Speed"
+							label={t('outputSpeed', 'Output Speed')}
 							value={formatSpeed(evaluation.median_output_tokens_per_second)}
 							valueColor={speedColor(
 								evaluation.median_output_tokens_per_second,
@@ -438,7 +440,7 @@ export function ModelBenchmarks({
 					{evaluation.median_time_to_first_token_seconds != null && (
 						<PerfRow
 							icon={<TimerIcon className="h-3 w-3" />}
-							label="Time to First Token"
+							label={t('timeToFirstToken', 'Time to First Token')}
 							value={formatLatency(
 								evaluation.median_time_to_first_token_seconds,
 							)}
@@ -447,7 +449,7 @@ export function ModelBenchmarks({
 					{evaluation.median_time_to_first_answer_token != null && (
 						<PerfRow
 							icon={<TimerIcon className="h-3 w-3" />}
-							label="Time to First Answer"
+							label={t('timeToFirstAnswer', 'Time to First Answer')}
 							value={formatLatency(
 								evaluation.median_time_to_first_answer_token,
 							)}
@@ -456,7 +458,7 @@ export function ModelBenchmarks({
 					{pricing?.price_1m_input_tokens != null && (
 						<PerfRow
 							icon={<DollarSignIcon className="h-3 w-3" />}
-							label="Input (1M tokens)"
+							label={t('input1mTokens', 'Input (1M tokens)')}
 							value={formatPrice(pricing.price_1m_input_tokens)}
 							valueColor={priceColor(pricing.price_1m_input_tokens)}
 						/>
@@ -464,7 +466,7 @@ export function ModelBenchmarks({
 					{pricing?.price_1m_output_tokens != null && (
 						<PerfRow
 							icon={<DollarSignIcon className="h-3 w-3" />}
-							label="Output (1M tokens)"
+							label={t('output1mTokens', 'Output (1M tokens)')}
 							value={formatPrice(pricing.price_1m_output_tokens)}
 							valueColor={priceColor(pricing.price_1m_output_tokens)}
 						/>
@@ -472,7 +474,7 @@ export function ModelBenchmarks({
 					{pricing?.price_1m_blended_3_to_1 != null && (
 						<PerfRow
 							icon={<DollarSignIcon className="h-3 w-3" />}
-							label="Blended (3:1)"
+							label={t('blended31', 'Blended (3:1)')}
 							value={formatPrice(pricing.price_1m_blended_3_to_1)}
 							valueColor={priceColor(pricing.price_1m_blended_3_to_1)}
 						/>
@@ -481,14 +483,14 @@ export function ModelBenchmarks({
 			)}
 
 			<p className="text-[10px] text-muted-foreground text-center leading-relaxed">
-				Benchmark data provided by{" "}
+				{t('benchmarkDataProvidedBy', 'Benchmark data provided by')}{" "}
 				<a
 					href="https://artificialanalysis.ai/"
 					target="_blank"
 					rel="noopener noreferrer"
 					className="underline hover:text-foreground transition-colors"
 				>
-					Artificial Analysis
+					{t('artificialAnalysis', 'Artificial Analysis')}
 				</a>
 			</p>
 		</div>
@@ -532,6 +534,7 @@ function BenchmarkCategory({
 export function IntelligenceIndexBadge({
 	evaluation,
 }: Readonly<{ evaluation?: IModelEvaluation | null }>) {
+	const { t } = useTranslation("common");
 	if (!evaluation?.evaluations) return null;
 	const evals = evaluation.evaluations as AAEvaluations;
 	const idx = evals.artificial_analysis_intelligence_index;
@@ -551,7 +554,7 @@ export function IntelligenceIndexBadge({
 				</Badge>
 			</TooltipTrigger>
 			<TooltipContent side="top">
-				<p className="text-xs">Artificial Analysis Intelligence Index</p>
+				<p className="text-xs">{t('artificialAnalysisIntelligenceIndex', 'Artificial Analysis Intelligence Index')}</p>
 			</TooltipContent>
 		</Tooltip>
 	);

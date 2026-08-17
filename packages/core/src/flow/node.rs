@@ -717,6 +717,41 @@ pub trait NodeLogic: Send + Sync {
     async fn on_delete(&self, _node: &mut Node, _board: Arc<Board>) {}
 }
 
+/// Node types whose `on_update` mints input pins that are not in their catalog definition.
+///
+/// Three separate mechanisms have to agree on this membership, which is why it lives in one
+/// place:
+/// - schema sync must not delete these pins (they carry the user's wires, and re-minting
+///   assigns fresh ids)
+/// - the executability lint must not read them as unfilled required inputs
+/// - the FlowScript reconciler predicts them instead of reporting an unknown pin
+///
+/// Every entry must have an `on_update` that reconciles its dynamic pins **by name**, since
+/// that is what lets a preserved pin be adopted rather than duplicated.
+pub fn mints_pins_on_update(node_type: &str) -> bool {
+    matches!(
+        node_type,
+        // Placeholder-driven: one pin per token in a literal.
+        "string_format"
+            | "string_render_template"
+            // Mode-driven: pins swap with a dropdown.
+            | "a2ui_push_csv_to_chart"
+            // Mirror-driven: pins copied from a target function layer.
+            | "control_call_function"
+            | "control_call_reference"
+            // Widget-driven: pins derived from a persisted widget's bindings/contract.
+            | "a2ui_instantiate_widget"
+            | "a2ui_widget_update_inputs"
+            | "a2ui_widget_query"
+            // SQL-driven: one pin per `$placeholder` in a query literal.
+            | "df_sql_query"
+            | "df_sql_query_cached"
+            | "df_execute_sql"
+            | "df_write_delta"
+            | "graph_sql_query"
+    )
+}
+
 /// Utility for .on_update()
 pub fn remove_pin(node: &mut Node, pin: Option<Pin>) {
     if let Some(pin) = pin {

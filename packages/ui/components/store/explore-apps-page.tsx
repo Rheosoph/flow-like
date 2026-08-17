@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	AlertCircle,
 	ArrowRight,
@@ -19,7 +20,10 @@ import {
 } from "react";
 import { useInfiniteInvoke, useInvoke } from "../../hooks/use-invoke";
 import { useIsMobile } from "../../hooks/use-mobile";
-import { formatAppCategory } from "../../lib/app-category";
+import {
+	CATEGORY_TRANSLATION_KEYS,
+	formatAppCategory,
+} from "../../lib/app-category";
 import {
 	APP_CATEGORY_ORDER,
 	CATEGORY_ICONS,
@@ -59,11 +63,11 @@ const SORT_MAP: Record<SortOption, IAppSearchSort> = {
 	updated: IAppSearchSort.NewestUpdated,
 };
 
-const SORT_LABEL: Record<SortOption, string> = {
-	popular: "Most popular",
-	newest: "Newest first",
-	rated: "Best rated",
-	updated: "Recently updated",
+const SORT_LABEL: Record<SortOption, { key: string; defaultValue: string }> = {
+	popular: { key: "mostPopular", defaultValue: "Most popular" },
+	newest: { key: "newestFirst", defaultValue: "Newest first" },
+	rated: { key: "bestRated", defaultValue: "Best rated" },
+	updated: { key: "recentlyUpdated", defaultValue: "Recently updated" },
 };
 
 const SORT_OPTIONS = Object.keys(SORT_MAP) as SortOption[];
@@ -74,13 +78,16 @@ const isSortOption = (value: string | null): value is SortOption =>
 const isCategory = (value: string | null): value is IAppCategory =>
 	!!value && (Object.values(IAppCategory) as string[]).includes(value);
 
-// Rail order lookup keyed by formatted label (the grouping key).
+// Rail order lookup keyed by the stable category enum. Display labels are
+// translated separately and must never affect grouping or ordering.
 const CATEGORY_LABEL_ORDER = new Map(
-	APP_CATEGORY_ORDER.map((category, index) => [
-		formatAppCategory(category),
-		index,
-	]),
+	APP_CATEGORY_ORDER.map((category, index) => [category, index]),
 );
+
+function normalizeCategory(category?: string | null): IAppCategory {
+	const candidate = category ?? null;
+	return isCategory(candidate) ? candidate : IAppCategory.Other;
+}
 
 type AppEntry = [IApp, IMetadata | undefined];
 
@@ -103,6 +110,7 @@ export function ExploreAppsPage(props: Readonly<ExploreAppsPageProps>) {
 }
 
 function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
+	const { t } = useTranslation("store");
 	const router = useRouter();
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
@@ -278,21 +286,69 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 
 	const categoryRails = useMemo(() => {
 		if (isFiltered) return null;
-		const groups = new Map<string, AppEntry[]>();
+		const groups = new Map<IAppCategory, AppEntry[]>();
 		for (const entry of combinedApps) {
-			const label = formatAppCategory(entry[0].primary_category);
-			const existing = groups.get(label) ?? [];
+			const category = normalizeCategory(entry[0].primary_category);
+			const existing = groups.get(category) ?? [];
 			existing.push(entry);
-			groups.set(label, existing);
+			groups.set(category, existing);
 		}
 		return Array.from(groups.entries())
-			.map(([label, items]) => ({ label, items }))
+			.map(([category, items]) => ({
+				category,
+				label: t(
+					CATEGORY_TRANSLATION_KEYS[category],
+					formatAppCategory(category),
+				),
+				items,
+			}))
 			.toSorted(
 				(a, b) =>
-					(CATEGORY_LABEL_ORDER.get(a.label) ?? Number.MAX_SAFE_INTEGER) -
-					(CATEGORY_LABEL_ORDER.get(b.label) ?? Number.MAX_SAFE_INTEGER),
+					(CATEGORY_LABEL_ORDER.get(a.category) ?? Number.MAX_SAFE_INTEGER) -
+					(CATEGORY_LABEL_ORDER.get(b.category) ?? Number.MAX_SAFE_INTEGER),
 			);
-	}, [combinedApps, isFiltered]);
+	}, [combinedApps, isFiltered, t]);
+
+	const displayCount = `${combinedApps.length}${hasNextPage ? "+" : ""}`;
+	const selectedCategoryLabel = selectedCategory
+		? t(
+				CATEGORY_TRANSLATION_KEYS[selectedCategory],
+				formatAppCategory(selectedCategory),
+			)
+		: undefined;
+	const resultsSummary = selectedCategoryLabel
+		? debouncedQuery
+			? t("showingAppsInCategoryForQuery", {
+					count: combinedApps.length,
+					displayCount,
+					category: selectedCategoryLabel,
+					query: debouncedQuery,
+					defaultValue_one:
+						"Showing {{displayCount}} app in {{category}} for “{{query}}”",
+					defaultValue_other:
+						"Showing {{displayCount}} apps in {{category}} for “{{query}}”",
+				})
+			: t("showingAppsInCategory", {
+					count: combinedApps.length,
+					displayCount,
+					category: selectedCategoryLabel,
+					defaultValue_one: "Showing {{displayCount}} app in {{category}}",
+					defaultValue_other: "Showing {{displayCount}} apps in {{category}}",
+				})
+		: debouncedQuery
+			? t("showingAppsForQuery", {
+					count: combinedApps.length,
+					displayCount,
+					query: debouncedQuery,
+					defaultValue_one: "Showing {{displayCount}} app for “{{query}}”",
+					defaultValue_other: "Showing {{displayCount}} apps for “{{query}}”",
+				})
+			: t("showingApps", {
+					count: combinedApps.length,
+					displayCount,
+					defaultValue_one: "Showing {{displayCount}} app",
+					defaultValue_other: "Showing {{displayCount}} apps",
+				});
 
 	return (
 		<main className="flex flex-col w-full flex-1 min-h-0">
@@ -301,14 +357,17 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 			>
 				<ExploreHubHeader
 					active="apps"
-					subtitle="Community apps, ready to use or fork."
+					subtitle={t(
+						"communityAppsReadyToUseOrFork",
+						"Community apps, ready to use or fork.",
+					)}
 				/>
 
 				<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
 					<div className="relative w-full sm:flex-1 sm:max-w-lg">
 						<Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40 pointer-events-none" />
 						<Input
-							placeholder="Search community apps…"
+							placeholder={t("searchCommunityApps", "Search community apps…")}
 							value={searchQuery}
 							onChange={(e) => setSearchQuery(e.target.value)}
 							className="pl-11 h-11 sm:h-10 rounded-full bg-muted/30 border-transparent focus:border-border/40 focus:bg-muted/50 transition-all text-sm"
@@ -316,7 +375,7 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 						{searchQuery && (
 							<button
 								type="button"
-								aria-label="Clear search"
+								aria-label={t("clearSearch", "Clear search")}
 								onClick={() => setSearchQuery("")}
 								className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground/40 hover:text-foreground transition-colors"
 							>
@@ -331,7 +390,7 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 							onValueChange={(value) => setSortKey(value as SortOption)}
 						>
 							<SelectTrigger
-								aria-label="Sort results"
+								aria-label={t("sortResults", "Sort results")}
 								className="w-auto gap-1.5 rounded-full border-border/40 bg-muted/30 text-sm h-11 sm:h-10"
 							>
 								<SelectValue />
@@ -339,7 +398,7 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 							<SelectContent>
 								{SORT_OPTIONS.map((option) => (
 									<SelectItem key={option} value={option}>
-										{SORT_LABEL[option]}
+										{t(SORT_LABEL[option].key, SORT_LABEL[option].defaultValue)}
 									</SelectItem>
 								))}
 							</SelectContent>
@@ -353,7 +412,7 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 								onClick={clearFilters}
 							>
 								<X className="h-3.5 w-3.5 mr-1" />
-								Clear
+								{t("clear", "Clear")}
 							</Button>
 						)}
 					</div>
@@ -374,7 +433,11 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 					<Alert variant="destructive" className="mb-4">
 						<AlertCircle className="h-4 w-4" />
 						<AlertDescription className="flex items-center gap-3">
-							Failed to load apps: {error.message}
+							{t(
+								"failedToLoadAppsMessage",
+								"Failed to load apps: {{message}}",
+								{ message: error.message },
+							)}
 							<Button
 								variant="outline"
 								size="sm"
@@ -382,7 +445,7 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 								onClick={() => refetch()}
 							>
 								<RotateCw className="h-3.5 w-3.5 mr-1" />
-								Retry
+								{t("retry", "Retry")}
 							</Button>
 						</AlertDescription>
 					</Alert>
@@ -392,21 +455,17 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 					<ExploreEmpty hasFilters={isFiltered} onClear={clearFilters} />
 				) : categoryRails ? (
 					<div className="space-y-10">
-						{categoryRails.map(({ label, items }) => (
+						{categoryRails.map(({ category, label, items }) => (
 							<CategoryRailSection
-								key={label}
+								key={category}
+								category={category}
 								label={label}
 								apps={items}
 								userAppIds={userAppIds}
 								onAppClick={handleAppClick}
 								appHref={appHref}
 								isMobile={isMobile}
-								onSeeAll={() => {
-									const match = APP_CATEGORY_ORDER.find(
-										(category) => formatAppCategory(category) === label,
-									);
-									if (match) setSelectedCategory(match);
-								}}
+								onSeeAll={() => setSelectedCategory(category)}
 							/>
 						))}
 
@@ -419,13 +478,7 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 					</div>
 				) : (
 					<div className={isMobile ? "space-y-5" : "space-y-6"}>
-						<p className="text-xs text-muted-foreground/60">
-							Showing {combinedApps.length}
-							{hasNextPage ? "+" : ""} app
-							{combinedApps.length !== 1 ? "s" : ""}
-							{selectedCategory && ` in ${formatAppCategory(selectedCategory)}`}
-							{debouncedQuery && ` for “${debouncedQuery}”`}
-						</p>
+						<p className="text-xs text-muted-foreground/60">{resultsSummary}</p>
 
 						<ExploreGrid
 							apps={combinedApps}
@@ -457,6 +510,7 @@ function CategoryChips({
 	onSelect: (category: IAppCategory | undefined) => void;
 	isMobile: boolean;
 }>) {
+	const { t } = useTranslation("store");
 	return (
 		<div
 			className={
@@ -466,7 +520,10 @@ function CategoryChips({
 			}
 		>
 			{APP_CATEGORY_ORDER.map((category) => {
-				const label = formatAppCategory(category);
+				const label = t(
+					CATEGORY_TRANSLATION_KEYS[category],
+					formatAppCategory(category),
+				);
 				const color = categoryColor(category);
 				const Icon = CATEGORY_ICONS[category];
 				const isSelected = selected === category;
@@ -499,6 +556,7 @@ function CategoryChips({
 }
 
 function CategoryRailSection({
+	category,
 	label,
 	apps,
 	userAppIds,
@@ -507,6 +565,7 @@ function CategoryRailSection({
 	isMobile,
 	onSeeAll,
 }: Readonly<{
+	category: IAppCategory;
 	label: string;
 	apps: AppEntry[];
 	userAppIds: Set<string>;
@@ -515,8 +574,9 @@ function CategoryRailSection({
 	isMobile: boolean;
 	onSeeAll: () => void;
 }>) {
+	const { t } = useTranslation("store");
 	if (apps.length === 0) return null;
-	const color = categoryColor(label);
+	const color = categoryColor(category);
 
 	return (
 		<section>
@@ -535,7 +595,7 @@ function CategoryRailSection({
 					onClick={onSeeAll}
 					className="group/link flex shrink-0 items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
 				>
-					See all
+					{t("seeAll", "See all")}
 					<ArrowRight className="h-3.5 w-3.5 transition-transform group-hover/link:translate-x-0.5" />
 				</button>
 			</div>
@@ -620,18 +680,27 @@ function ExploreEmpty({
 	hasFilters,
 	onClear,
 }: Readonly<{ hasFilters: boolean; onClear: () => void }>) {
+	const { t } = useTranslation("store");
 	return (
 		<div className="flex flex-col items-center justify-center py-32 text-center">
 			<div className="rounded-full bg-muted/30 p-5 mb-5">
 				<PackageOpen className="h-7 w-7 text-muted-foreground/40" />
 			</div>
 			<p className="text-sm text-foreground/60 mb-1">
-				{hasFilters ? "No apps match your filters" : "No apps found"}
+				{hasFilters
+					? t("noAppsMatchYourFilters", "No apps match your filters")
+					: t("noAppsFound", "No apps found")}
 			</p>
 			<p className="text-xs text-muted-foreground/60 mb-4">
 				{hasFilters
-					? "Try adjusting your search or filters"
-					: "Check back later for new community apps"}
+					? t(
+							"tryAdjustingYourSearchOrFilters",
+							"Try adjusting your search or filters",
+						)
+					: t(
+							"checkBackLaterForNewCommunityApps",
+							"Check back later for new community apps",
+						)}
 			</p>
 			{hasFilters && (
 				<Button
@@ -640,7 +709,7 @@ function ExploreEmpty({
 					className="rounded-full"
 					onClick={onClear}
 				>
-					Clear filters
+					{t("clearFilters", "Clear filters")}
 				</Button>
 			)}
 		</div>
@@ -654,6 +723,7 @@ function LoadMoreButton({
 	isFetching: boolean;
 	onFetch: () => void;
 }>) {
+	const { t } = useTranslation("store");
 	return (
 		<div className="flex justify-center mt-3">
 			<button
@@ -665,10 +735,10 @@ function LoadMoreButton({
 				{isFetching ? (
 					<>
 						<RotateCw className="h-3 w-3 animate-spin" />
-						Loading…
+						{t("loading", "Loading…")}
 					</>
 				) : (
-					"Load more"
+					t("loadMore", "Load more")
 				)}
 			</button>
 		</div>

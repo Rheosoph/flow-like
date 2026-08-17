@@ -6,7 +6,7 @@
 		"dev": "astro dev",
 		"optimize:parallax": "node ./scripts/generate-parallax-images.mjs",
 		"prebuild": "bun run optimize:parallax",
-		"build": "NODE_OPTIONS=--max-old-space-size=8192 astro build",
+		"build": "NODE_OPTIONS=--max-old-space-size=8192 astro build && node ./scripts/agent-markdown/generate.mjs",
 		"deploy": "bun run build && bun run deploy:workers-sites",
 		"deploy:force": "bun run build && bun run deploy:workers-sites",
 		"deploy:workers-sites": "node ./scripts/prepare-workers-sites-deploy.mjs && bunx wrangler deploy",
@@ -39,6 +39,7 @@
 	},
 	"devDependencies": {
 		"astro-compressor": "^1.1.2",
+		"cheerio": "^1.0.0",
 		"postcss": "^8.4.49"
 	}
 }

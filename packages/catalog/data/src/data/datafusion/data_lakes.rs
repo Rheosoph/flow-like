@@ -1,6 +1,8 @@
+use crate::data::datafusion::params;
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::path::FlowPath;
 use flow_like::flow::{
+    board::Board,
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::ValueType,
@@ -866,9 +868,11 @@ impl NodeLogic for WriteDeltaTableNode {
         node.add_input_pin(
             "query",
             "Query",
-            "SQL query to execute",
+            "SQL query to execute. Use $placeholders for values that come from the flow (SELECT * FROM events WHERE day = $day) — each one adds an input pin to wire the value into. Placeholders stand for values only; table and column names cannot be parameterized.",
             VariableType::String,
         );
+
+        params::add_params_pin(&mut node);
 
         node.add_input_pin(
             "path",
@@ -935,6 +939,11 @@ impl NodeLogic for WriteDeltaTableNode {
         node
     }
 
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        node.error = None;
+        params::sync_param_pins(node, "query", board);
+    }
+
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         #[cfg(feature = "delta")]
         {
@@ -945,6 +954,7 @@ impl NodeLogic for WriteDeltaTableNode {
 
             let session: DataFusionSession = context.evaluate_pin("session").await?;
             let query: String = context.evaluate_pin("query").await?;
+            let query_params = params::resolve_params(context, &query).await?;
             let path: FlowPath = context.evaluate_pin("path").await?;
             let mode: String = context
                 .evaluate_pin("mode")
@@ -960,6 +970,7 @@ impl NodeLogic for WriteDeltaTableNode {
             let cached_session = session.load(context).await?;
 
             let df = cached_session.ctx.sql(&query).await?;
+            let df = params::bind(df, &query_params)?;
             let batches = df.collect().await?;
 
             if batches.is_empty() {

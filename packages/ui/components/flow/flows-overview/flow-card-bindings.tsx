@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	ClipboardListIcon,
 	ClockIcon,
@@ -62,23 +63,25 @@ function BindingPill({
 	tone: "paused" | "pinned" | "latest" | "canary" | "public";
 	children: string;
 }>) {
+	const { t } = useTranslation("flow");
 	const tones: Record<typeof tone, string> = {
 		paused:
-			"border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-		pinned: "border-border bg-muted text-muted-foreground",
-		latest: "border-border/70 bg-muted/60 text-muted-foreground",
-		canary: "border-primary/40 bg-primary/10 text-primary",
+			`border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400`,
+		pinned: `border-border bg-muted text-muted-foreground`,
+		latest: `border-border/70 bg-muted/60 text-muted-foreground`,
+		canary: `border-primary/40 bg-primary/10 text-primary`,
 		public:
-			"border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+			`border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400`,
 	};
 	return <span className={cn(PILL_BASE, tones[tone])}>{children}</span>;
 }
 
 function BindingActivity({ health }: Readonly<{ health?: SurfaceRunHealth }>) {
+	const { t } = useTranslation("flow");
 	if (!health || health.total === 0) {
 		return (
 			<span className="text-[10px] italic text-muted-foreground/60">
-				no runs in 24 h
+				{t('noRunsIn24H', 'no runs in 24 h')}
 			</span>
 		);
 	}
@@ -93,7 +96,7 @@ function BindingActivity({ health }: Readonly<{ health?: SurfaceRunHealth }>) {
 			<span className="block font-mono text-[10px] tabular-nums text-muted-foreground">
 				{health.total.toLocaleString()} runs
 				{health.failed > 0 ? (
-					<span className="ml-1 text-red-500">{health.failed} failed</span>
+					<span className="ml-1 text-red-500">{t('failedFailed', '{{failed}} failed', { failed: health.failed })}</span>
 				) : null}
 			</span>
 			<span className="mt-1 flex h-3 items-end justify-end gap-px">
@@ -114,6 +117,7 @@ function BindingRow({
 	row,
 	health,
 }: Readonly<{ event: IEvent; row: IFlowRow; health?: SurfaceRunHealth }>) {
+	const { t } = useTranslation("flow");
 	const glyph = getEventTypeGlyph(event);
 	const Icon = TYPE_ICONS[glyph.icon] ?? CogIcon;
 	const entry = describeEventEntry(
@@ -122,9 +126,9 @@ function BindingRow({
 	);
 	const target = event.node_id
 		? (row.board.nodes?.[event.node_id]?.friendly_name ??
-			"a node that no longer exists")
+			t('aNodeThatNoLongerExists', 'a Node that no longer exists'))
 		: (row.pages.find((page) => page.pageId === event.default_page_id)?.name ??
-			"a page");
+			t('aPage', 'a page'));
 
 	return (
 		<li
@@ -148,24 +152,24 @@ function BindingRow({
 						</span>
 					) : null}
 					{!event.active ? (
-						<BindingPill tone="paused">paused</BindingPill>
+						<BindingPill tone="paused">{t('paused', 'Paused')}</BindingPill>
 					) : null}
 					{event.board_version ? (
 						<BindingPill tone="pinned">
-							{`pinned v${event.board_version.join(".")}`}
+							{t('pinnedVval', 'pinned v{{val}}', { val: event.board_version.join(".") })}
 						</BindingPill>
 					) : (
-						<BindingPill tone="latest">latest</BindingPill>
+						<BindingPill tone="latest">{t('latest', 'Latest')}</BindingPill>
 					)}
 					{event.canary ? (
-						<BindingPill tone="canary">canary</BindingPill>
+						<BindingPill tone="canary">{t('canary', 'Canary')}</BindingPill>
 					) : null}
 					{event.exposure === "PUBLIC" ? (
-						<BindingPill tone="public">public</BindingPill>
+						<BindingPill tone="public">{t('public', 'Public')}</BindingPill>
 					) : null}
 				</span>
 				<span className="mt-0.5 block truncate text-[10px] text-muted-foreground">
-					starts at <span className="font-mono">{target}</span>
+					{t('startsAt', 'starts at')} <span className="font-mono">{target}</span>
 				</span>
 			</span>
 			<span className="ml-auto shrink-0 text-right">
@@ -184,32 +188,27 @@ export function FlowCardBindings({
 	healthByEvent: Map<string, SurfaceRunHealth>;
 	eventsHref?: string;
 }>) {
+	const { t } = useTranslation("flow");
 	if (row.entryPoints.length === 0) {
 		return (
-			<p className="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">
-				<span className="font-medium">No entry point.</span> A run always begins
+			<p className="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-600 dark:text-amber-400"><Trans i18nKey="spanClassnamefontmediumnoEntryPointspanARunAlwaysBeginsAtOneNodeMarkedAsAStartAndThisFlowHasNoneSoNothingCanBeBoundToIt"><span className="font-medium">No entry point.</span> A run always begins
 				at one node marked as a start, and this flow has none — so nothing can
-				be bound to it.
-			</p>
+				be bound to it.</Trans></p>
 		);
 	}
 
 	if (row.bindings.length === 0) {
 		return (
 			<p className="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">
-				<span className="font-medium">Nothing is bound.</span>{" "}
-				{row.entryPoints.length === 1
-					? "One entry point exists"
-					: `${row.entryPoints.length} entry points exist`}{" "}
-				but no event targets this flow, so only the editor can reach it.
+				<span className="font-medium">{t('nothingIsBound', 'Nothing is bound.')}</span>{" "}
+				{t('countEntryPointsExist', { defaultValue_one: 'One entry point exists', defaultValue_other: '{{count}} entry points exist', count: row.entryPoints.length })}{" "}
+				{t('butNoEventTargetsThisFlowSoOnlyTheEditorCanReachIt', 'but no event targets this flow, so only the editor can reach it.')}
 				{eventsHref ? (
 					<>
-						{" "}
-						<a href={eventsHref} className="underline underline-offset-2">
+						{" "}<Trans i18nKey="aHrefeventshrefClassnameunderlineUnderlineoffset2BindOneOnEventsA"><a href={eventsHref} className="underline underline-offset-2">
 							Bind one on Events
 						</a>
-						.
-					</>
+						.</Trans></>
 				) : null}
 			</p>
 		);

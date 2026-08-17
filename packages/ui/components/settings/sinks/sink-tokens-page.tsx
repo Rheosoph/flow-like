@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	AlertCircle,
 	Check,
@@ -96,6 +97,7 @@ export function SinkTokensPage({
 	onRegisterToken,
 	onRevokeToken,
 }: Readonly<SinkTokensPageProps>) {
+	const { t } = useTranslation("settings");
 	const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
 	const [isRevokeDialogOpen, setIsRevokeDialogOpen] = useState(false);
 	const [tokenToRevoke, setTokenToRevoke] = useState<ISinkTokenInfo | null>(
@@ -185,14 +187,14 @@ export function SinkTokensPage({
 				<CardHeader>
 					<CardTitle className="flex items-center gap-2 text-destructive">
 						<AlertCircle className="h-5 w-5" />
-						Error Loading Tokens
+						{t('errorLoadingTokens', 'Error Loading Tokens')}
 					</CardTitle>
 					<CardDescription>{error.message}</CardDescription>
 				</CardHeader>
 				<CardContent>
 					<Button onClick={onRefresh} variant="outline">
 						<RefreshCw className="mr-2 h-4 w-4" />
-						Retry
+						{t('retry', 'Retry')}
 					</Button>
 				</CardContent>
 			</Card>
@@ -205,21 +207,20 @@ export function SinkTokensPage({
 			<div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 				<div>
 					<h1 className="text-2xl font-bold tracking-tight">
-						Sink Service Tokens
+						{t('sinkServiceTokens', 'Sink Service Tokens')}
 					</h1>
 					<p className="text-muted-foreground">
-						Manage authentication tokens for external sink services (cron jobs,
-						webhooks, etc.)
+						{t('manageAuthenticationTokensForExternalSinkServicesCronJobsWebhooksEtc', "Manage authentication tokens for external sink services (cron jobs, webhooks, etc.)")}
 					</p>
 				</div>
 				<div className="flex gap-2">
 					<Button onClick={onRefresh} variant="outline" size="sm">
 						<RefreshCw className="mr-2 h-4 w-4" />
-						Refresh
+						{t('refresh', 'Refresh')}
 					</Button>
 					<Button onClick={() => setIsCreateDialogOpen(true)} size="sm">
 						<Plus className="mr-2 h-4 w-4" />
-						Create Token
+						{t('createToken', 'Create Token')}
 					</Button>
 				</div>
 			</div>
@@ -230,7 +231,7 @@ export function SinkTokensPage({
 					<div className="flex flex-wrap gap-4">
 						<div className="flex items-center gap-2">
 							<Label htmlFor="sink-type-filter" className="whitespace-nowrap">
-								Sink Type:
+								{t('sinkType', 'Sink Type:')}
 							</Label>
 							<Select
 								value={sinkTypeFilter ?? "all"}
@@ -241,10 +242,10 @@ export function SinkTokensPage({
 								}
 							>
 								<SelectTrigger id="sink-type-filter" className="w-40">
-									<SelectValue placeholder="All types" />
+									<SelectValue placeholder={t('allTypes', 'All types')} />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="all">All types</SelectItem>
+									<SelectItem value="all">{t('allTypes', 'All types')}</SelectItem>
 									{SINK_TYPES.map((type) => (
 										<SelectItem key={type} value={type}>
 											{SINK_TYPE_LABELS[type]}
@@ -261,7 +262,7 @@ export function SinkTokensPage({
 								onChange={(e) => onIncludeRevokedChange(e.target.checked)}
 								className="h-4 w-4 rounded border-gray-300"
 							/>
-							<Label htmlFor="include-revoked">Show revoked tokens</Label>
+							<Label htmlFor="include-revoked">{t('showRevokedTokens', 'Show revoked tokens')}</Label>
 						</div>
 					</div>
 				</CardContent>
@@ -271,7 +272,7 @@ export function SinkTokensPage({
 			<div className="grid gap-4 md:grid-cols-3">
 				<Card>
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">Active Tokens</CardTitle>
+						<CardTitle className="text-sm font-medium">{t('activeTokens', 'Active Tokens')}</CardTitle>
 						<Shield className="h-4 w-4 text-green-500" />
 					</CardHeader>
 					<CardContent>
@@ -285,7 +286,7 @@ export function SinkTokensPage({
 				<Card>
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
 						<CardTitle className="text-sm font-medium">
-							Revoked Tokens
+							{t('revokedTokens', 'Revoked Tokens')}
 						</CardTitle>
 						<ShieldOff className="h-4 w-4 text-destructive" />
 					</CardHeader>
@@ -299,7 +300,7 @@ export function SinkTokensPage({
 				</Card>
 				<Card>
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">Total Tokens</CardTitle>
+						<CardTitle className="text-sm font-medium">{t('totalTokens', 'Total Tokens')}</CardTitle>
 						<Key className="h-4 w-4 text-muted-foreground" />
 					</CardHeader>
 					<CardContent>
@@ -315,10 +316,9 @@ export function SinkTokensPage({
 			{/* Tokens Table */}
 			<Card>
 				<CardHeader>
-					<CardTitle>Tokens</CardTitle>
+					<CardTitle>{t('tokens', 'Tokens')}</CardTitle>
 					<CardDescription>
-						Each token is scoped to a specific sink type and can be individually
-						revoked.
+						{t('eachTokenIsScopedToASpecificSinkTypeAndCanBeIndividuallyRevoked', "Each token is scoped to a specific sink type and can be individually revoked.")}
 					</CardDescription>
 				</CardHeader>
 				<CardContent>
@@ -331,24 +331,24 @@ export function SinkTokensPage({
 					) : !data?.tokens?.length ? (
 						<div className="flex flex-col items-center justify-center py-12 text-center">
 							<Key className="h-12 w-12 text-muted-foreground mb-4" />
-							<h3 className="text-lg font-semibold">No tokens found</h3>
+							<h3 className="text-lg font-semibold">{t('noTokensFound', 'No tokens found')}</h3>
 							<p className="text-sm text-muted-foreground mb-4">
-								Create your first sink service token to get started.
+								{t('createYourFirstSinkServiceTokenToGetStarted', 'Create your first sink service token to get started.')}
 							</p>
 							<Button onClick={() => setIsCreateDialogOpen(true)}>
 								<Plus className="mr-2 h-4 w-4" />
-								Create Token
+								{t('createToken', 'Create Token')}
 							</Button>
 						</div>
 					) : (
 						<Table>
 							<TableHeader>
 								<TableRow>
-									<TableHead>Name / JTI</TableHead>
-									<TableHead>Sink Type</TableHead>
-									<TableHead>Status</TableHead>
-									<TableHead>Created</TableHead>
-									<TableHead className="text-right">Actions</TableHead>
+									<TableHead>{t('nameJti', 'Name / JTI')}</TableHead>
+									<TableHead>{t('sinkType2', 'Sink Type')}</TableHead>
+									<TableHead>{t('status', 'Status')}</TableHead>
+									<TableHead>{t('created', 'Created')}</TableHead>
+									<TableHead className="text-right">{t('actions', 'Actions')}</TableHead>
 								</TableRow>
 							</TableHeader>
 							<TableBody>
@@ -378,19 +378,17 @@ export function SinkTokensPage({
 												<TooltipProvider>
 													<Tooltip>
 														<TooltipTrigger>
-															<Badge variant="destructive">Revoked</Badge>
+															<Badge variant="destructive">{t('revoked', 'Revoked')}</Badge>
 														</TooltipTrigger>
 														<TooltipContent>
 															<p>
-																Revoked{" "}
+																{t('revoked', 'Revoked')}{" "}
 																{token.revoked_at
 																	? formatDate(token.revoked_at)
 																	: ""}
 															</p>
 															{token.revoked_by && (
-																<p className="text-xs">
-																	By: {token.revoked_by}
-																</p>
+																<p className="text-xs">{t('byRevoked_by', 'By: {{revoked_by}}', { revoked_by: token.revoked_by })}</p>
 															)}
 														</TooltipContent>
 													</Tooltip>
@@ -400,7 +398,7 @@ export function SinkTokensPage({
 													variant="outline"
 													className="border-green-500 text-green-600"
 												>
-													Active
+													{t('active', 'Active')}
 												</Badge>
 											)}
 										</TableCell>
@@ -421,7 +419,7 @@ export function SinkTokensPage({
 													}}
 												>
 													<Trash2 className="h-4 w-4" />
-													<span className="sr-only">Revoke</span>
+													<span className="sr-only">{t('revoke', 'Revoke')}</span>
 												</Button>
 											)}
 										</TableCell>
@@ -438,12 +436,12 @@ export function SinkTokensPage({
 				<DialogContent className="sm:max-w-lg">
 					<DialogHeader>
 						<DialogTitle>
-							{newToken ? "Token Created Successfully" : "Create Sink Token"}
+							{newToken ? t('tokenCreatedSuccessfully', 'Token Created Successfully') : t('createSinkToken', 'Create Sink Token')}
 						</DialogTitle>
 						<DialogDescription>
 							{newToken
-								? "Copy and securely store this token. It will not be shown again."
-								: "Create a new authentication token for a sink service."}
+								? t('copyAndSecurelyStoreThisTokenItWillNotBeShownAgain', 'Copy and securely store this token. It will not be shown again.')
+								: `Create a new authentication token for a sink service.`}
 						</DialogDescription>
 					</DialogHeader>
 
@@ -454,18 +452,16 @@ export function SinkTokensPage({
 									<Check className="h-5 w-5 text-green-600 mt-0.5" />
 									<div className="flex-1">
 										<p className="text-sm font-medium text-green-800 dark:text-green-200">
-											Token created for{" "}
+											{t('tokenCreatedFor', 'Token created for')}{" "}
 											{SINK_TYPE_LABELS[newToken.sink_type as ServiceSinkType]}
 										</p>
-										<p className="text-xs text-green-700 dark:text-green-300 mt-1">
-											JTI: {newToken.jti}
-										</p>
+										<p className="text-xs text-green-700 dark:text-green-300 mt-1">{t('jtiJti', 'JTI: {{jti}}', { jti: newToken.jti })}</p>
 									</div>
 								</div>
 							</div>
 
 							<div className="space-y-2">
-								<Label>Token (click to reveal)</Label>
+								<Label>{t('tokenClickToReveal', 'Token (click to reveal)')}</Label>
 								<div className="relative">
 									<Textarea
 										readOnly
@@ -502,19 +498,18 @@ export function SinkTokensPage({
 									</div>
 								</div>
 								<p className="text-xs text-muted-foreground">
-									Store this token securely. You won&apos;t be able to see it
-									again after closing this dialog.
+									{t('storeThisTokenSecurelyYouWonapostBeAbleToSeeItAgainAfterClosingThisDialog', "Store this token securely. You won't be able to see it again after closing this dialog.")}
 								</p>
 							</div>
 
 							<DialogFooter>
-								<Button onClick={handleCloseCreateDialog}>Done</Button>
+								<Button onClick={handleCloseCreateDialog}>{t('done', 'Done')}</Button>
 							</DialogFooter>
 						</div>
 					) : (
 						<div className="space-y-4">
 							<div className="space-y-2">
-								<Label htmlFor="sink-type">Sink Type</Label>
+								<Label htmlFor="sink-type">{t('sinkType2', 'Sink Type')}</Label>
 								<Select
 									value={selectedServiceSinkType}
 									onValueChange={(v) =>
@@ -540,17 +535,15 @@ export function SinkTokensPage({
 							</div>
 
 							<div className="space-y-2">
-								<Label htmlFor="token-name">
-									Name <span className="text-muted-foreground">(optional)</span>
-								</Label>
+								<Label htmlFor="token-name"><Trans i18nKey="nameSpanClassnametextmutedforegroundoptionalspan">Name <span className="text-muted-foreground">(optional)</span></Trans></Label>
 								<Input
 									id="token-name"
-									placeholder="e.g., Production Cron Service"
+									placeholder={t('egProductionCronService', 'e.g., Production Cron Service')}
 									value={tokenName}
 									onChange={(e) => setTokenName(e.target.value)}
 								/>
 								<p className="text-xs text-muted-foreground">
-									A human-readable name to identify this token.
+									{t('aHumanreadableNameToIdentifyThisToken', 'A human-readable name to identify this token.')}
 								</p>
 							</div>
 
@@ -560,7 +553,7 @@ export function SinkTokensPage({
 									onClick={handleCloseCreateDialog}
 									disabled={isSubmitting}
 								>
-									Cancel
+									{t('cancel', 'Cancel')}
 								</Button>
 								<Button onClick={handleCreateToken} disabled={isSubmitting}>
 									{isSubmitting ? (
@@ -571,7 +564,7 @@ export function SinkTokensPage({
 									) : (
 										<>
 											<Plus className="mr-2 h-4 w-4" />
-											Create Token
+											{t('createToken', 'Create Token')}
 										</>
 									)}
 								</Button>
@@ -585,10 +578,9 @@ export function SinkTokensPage({
 			<Dialog open={isRevokeDialogOpen} onOpenChange={setIsRevokeDialogOpen}>
 				<DialogContent>
 					<DialogHeader>
-						<DialogTitle>Revoke Token</DialogTitle>
+						<DialogTitle>{t('revokeToken', 'Revoke Token')}</DialogTitle>
 						<DialogDescription>
-							Are you sure you want to revoke this token? This action cannot be
-							undone.
+							{t('areYouSureYouWantToRevokeThisTokenThisActionCannotBeUndone', "Are you sure you want to revoke this token? This action cannot be undone.")}
 						</DialogDescription>
 					</DialogHeader>
 
@@ -602,7 +594,7 @@ export function SinkTokensPage({
 									{tokenToRevoke.jti}
 								</p>
 								<p className="text-sm">
-									Type:{" "}
+									{t('type', 'Type:')}{" "}
 									{SINK_TYPE_LABELS[
 										tokenToRevoke.sink_type as ServiceSinkType
 									] ?? tokenToRevoke.sink_type}
@@ -612,8 +604,7 @@ export function SinkTokensPage({
 					)}
 
 					<p className="text-sm text-muted-foreground">
-						Any service using this token will immediately lose access to trigger
-						events.
+						{t('anyServiceUsingThisTokenWillImmediatelyLoseAccessToTriggerEvents', "Any service using this token will immediately lose access to trigger events.")}
 					</p>
 
 					<DialogFooter>
@@ -622,7 +613,7 @@ export function SinkTokensPage({
 							onClick={() => setIsRevokeDialogOpen(false)}
 							disabled={isSubmitting}
 						>
-							Cancel
+							{t('cancel', 'Cancel')}
 						</Button>
 						<Button
 							variant="destructive"
@@ -637,7 +628,7 @@ export function SinkTokensPage({
 							) : (
 								<>
 									<Trash2 className="mr-2 h-4 w-4" />
-									Revoke Token
+									{t('revokeToken', 'Revoke Token')}
 								</>
 							)}
 						</Button>

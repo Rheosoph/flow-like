@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Card,
@@ -29,6 +30,7 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
 export default function ConfigurationPage() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const searchParams = useSearchParams();
 	const id = searchParams.get("id");
@@ -60,11 +62,10 @@ export default function ConfigurationPage() {
 						<SettingsIcon className="w-8 h-8 text-green-600 dark:text-green-400" />
 					</div>
 					<h3 className="text-xl font-semibold mb-2">
-						✅ No Configuration Needed
+						{t('noConfigurationNeeded', '✅ No Configuration Needed')}
 					</h3>
 					<p className="text-muted-foreground">
-						Your application doesn&apos;t have any configurable parameters.
-						You&apos;re ready to go! 🚀
+						{t('yourApplicationDoesnapostHaveAnyConfigurableParametersYouaposreReadyToGo', "Your application doesn't have any configurable parameters. You're ready to go! 🚀")}
 					</p>
 				</div>
 			</main>
@@ -81,18 +82,12 @@ export default function ConfigurationPage() {
 			<div className="w-full py-4 border-b z-50">
 				<div className="flex items-center justify-between">
 					<div>
-						<h2 className="text-2xl font-bold">Configuration</h2>
-						<p className="text-muted-foreground mt-1">
-							Configure {totalVariables} parameter
-							{totalVariables !== 1 ? "s" : ""} across{" "}
-							{configurableBoards.length} board
-							{configurableBoards.length !== 1 ? "s" : ""}
+						<h2 className="text-2xl font-bold">{t('configuration', 'Configuration')}</h2>
+						<p className="text-muted-foreground mt-1">{t('configureParametersAcrossBoards', 'Configure {{parameters}} across {{boards}}', { parameters: t('countParameters', { defaultValue_one: '{{count}} parameter', defaultValue_other: '{{count}} parameters', count: totalVariables }), boards: t('countBoards', { defaultValue_one: '{{count}} Board', defaultValue_other: '{{count}} Boards', count: configurableBoards.length }) })}
 						</p>
 					</div>
 					<Badge variant="secondary" className="gap-1">
-						<SettingsIcon className="w-3 h-3" />
-						{totalVariables} Parameters
-					</Badge>
+						<SettingsIcon className="w-3 h-3" />{t('countParameters', { defaultValue_one: '{{count}} parameter', defaultValue_other: '{{count}} parameters', count: totalVariables })}</Badge>
 				</div>
 			</div>
 
@@ -120,6 +115,7 @@ function BoardConfig({
 	board: IBoard;
 	variables: IVariable[];
 }>) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const [isOpen, setIsOpen] = useState(true);
@@ -152,15 +148,21 @@ function BoardConfig({
 								<div>
 									<CardTitle className="text-left">{board.name}</CardTitle>
 									<CardDescription className="text-left">
-										{variables.length} configurable parameter
-										{variables.length !== 1 ? "s" : ""}
+										{t('countConfigurableParameters', {
+											defaultValue_one: '{{count}} configurable parameter',
+											defaultValue_other: '{{count}} configurable parameters',
+											count: variables.length,
+										})}
 									</CardDescription>
 								</div>
 							</div>
 							<div className="flex items-center gap-2">
 								<Badge variant="outline" className="gap-1">
-									{variables.length}{" "}
-									{variables.length === 1 ? "parameter" : "parameters"}
+									{t('countParameters', {
+										defaultValue_one: '{{count}} parameter',
+										defaultValue_other: '{{count}} parameters',
+										count: variables.length,
+									})}
 								</Badge>
 								{isOpen ? (
 									<ChevronDownIcon className="w-4 h-4 text-muted-foreground" />

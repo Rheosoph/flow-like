@@ -1,0 +1,30 @@
+{
+	"name": "flow-like-translation",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Translation studio for @flow-like/locales. Reads and writes the locale JSON files directly — no API, no database.",
+	"scripts": {
+		"dev": "vite",
+		"build": "vite build",
+		"preview": "vite preview",
+		"test": "bun test",
+		"typecheck": "tsc -p tsconfig.json --noEmit"
+	},
+	"dependencies": {
+		"@flow-like/locales": "workspace:*",
+		"lucide-react": "^0.563.0",
+		"react": "19.2.1",
+		"react-dom": "19.2.1"
+	},
+	"devDependencies": {
+		"@tailwindcss/vite": "^4.1.16",
+		"@types/node": "^22.10.5",
+		"@types/react": "19.2.6",
+		"@types/react-dom": "19.2.3",
+		"@vitejs/plugin-react": "^4.7.0",
+		"tailwindcss": "^4.1.16",
+		"typescript": "^5.7.3",
+		"vite": "^7.3.5"
+	}
+}

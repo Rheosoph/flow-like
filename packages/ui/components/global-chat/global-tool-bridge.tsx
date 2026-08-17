@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef } from "react";
@@ -20,7 +21,14 @@ import {
 	useQueryClient,
 } from "../../index";
 import { addAppToProfile } from "../../lib/add-app-to-profile";
-import { captureInlineAppPageSnapshots } from "../../lib/app-page-snapshot";
+import {
+	captureInlineAppPageSnapshots,
+	uploadPageSnapshots,
+} from "../../lib/app-page-snapshot";
+import {
+	type AskUserAnswerPayload,
+	parseAskUserArguments,
+} from "../../lib/ask-user";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import { getErrorMessage } from "../../lib/error-message";
 import { EVENT_CONFIG, isChatEventType } from "../../lib/event-config";
@@ -36,6 +44,10 @@ import {
 	createFlowScriptGenerationTrace,
 	updateFlowScriptGenerationRunReceipt,
 } from "../../lib/flowpilot/flowscript-generation-receipt";
+import {
+	interactWithAppPage,
+	parseInteractActions,
+} from "../../lib/interact-app-page";
 import type { BoardEditJob, FlowIrCommitToken } from "../../lib/schema/copilot";
 import {
 	convertJsonToUint8Array,
@@ -62,7 +74,6 @@ import {
 import {
 	type GlobalChatAgentSelection,
 	type GlobalToolAsk,
-	type GlobalToolAskChoice,
 	type GlobalToolPrompt,
 	type GlobalToolPromptResolution,
 	SUB_STEP_PREFIX,
@@ -72,6 +83,7 @@ import {
 import { registerGlobalChatToolExecutor } from "../../state/global-chat/global-chat-tool-registry";
 import { handleUpgradeRequiredError } from "../../state/upgrade-dialog-state";
 import { foldA2UIServerMessage } from "../a2ui/fold-surfaces";
+import { findLivePage } from "../a2ui/live-page-registry";
 import type {
 	A2UIServerMessage,
 	CanvasSettings,
@@ -145,6 +157,7 @@ import {
 	resolveAppEventTarget,
 	resolveAppEventType,
 } from "./app-event-target";
+import { dataStudioRoutingGate } from "./data-studio-routing";
 import {
 	type DetachedPageLookup,
 	assertDetachedWriteSafe,
@@ -464,24 +477,9 @@ function argObject(
 		: undefined;
 }
 
-/** Parse the `ask_user` arguments into the choice metadata that drives the inline prompt. */
+/** Parse the `ask_user` arguments into the question form that drives the inline prompt. */
 function parseAsk(args: Record<string, unknown>): GlobalToolAsk {
-	const rawMode = argString(args, "mode");
-	const mode =
-		rawMode === "single_choice" || rawMode === "multiple_choice"
-			? rawMode
-			: "freeform";
-	const choices = Array.isArray(args.choices)
-		? (args.choices as GlobalToolAskChoice[]).filter(
-				(choice) => choice && typeof choice.label === "string",
-			)
-		: [];
-	return {
-		mode: mode === "freeform" || choices.length > 0 ? mode : "freeform",
-		choices,
-		defaultValue: args.default_value ?? args.defaultValue,
-		placeholder: argString(args, "placeholder") || undefined,
-	};
+	return parseAskUserArguments(args);
 }
 
 /**
@@ -1188,16 +1186,25 @@ function promptForDialog(
 	const promptId = createId();
 	const bound = (value: GlobalToolPromptResolution) => respond(value, promptId);
 	if (dialog.type === "ask") {
+		const ask = parseAsk(request.arguments);
 		return {
 			id: promptId,
 			kind: "ask" as const,
 			toolName: request.toolName,
-			title: "FlowPilot needs input",
+			title: i18next.t("flowpilotNeedsInput", "FlowPilot needs input"),
+			// A lone question reads best as the card's own subtitle; a batched intake form labels
+			// each of its questions itself, so repeating one here would just duplicate it.
 			description:
-				argString(request.arguments, "question") ||
-				argString(request.arguments, "prompt") ||
-				"Please provide the requested information.",
-			ask: parseAsk(request.arguments),
+				ask.questions.length === 1
+					? ask.questions[0].question
+					: ask.questions.length > 1
+						? undefined
+						: argString(request.arguments, "prompt") ||
+							i18next.t(
+								"pleaseProvideTheRequestedInformation",
+								"Please provide the requested information.",
+							),
+			ask,
 			respond: bound,
 		};
 	}
@@ -1207,11 +1214,17 @@ function promptForDialog(
 		destructive: dialog.override?.destructive ?? false,
 		toolName: request.toolName,
 		title:
-			dialog.override?.title || request.approval?.title || "Approve action",
+			dialog.override?.title ||
+			request.approval?.title ||
+			i18next.t("approveAction", "Approve action"),
 		description:
 			dialog.override?.description ||
 			request.approval?.description ||
-			`FlowPilot wants to run '${request.toolName}'.`,
+			i18next.t(
+				"flowpilotWantsToRunToolname",
+				"FlowPilot wants to run '{{toolName}}'.",
+				{ toolName: request.toolName },
+			),
 		// App-scoped tools (call_app_chat/call_app_event/flowpilot_board) carry the target app id
 		// in their arguments — the card resolves it to the app's name + icon.
 		appId:
@@ -2161,7 +2174,14 @@ export function GlobalToolBridge() {
 					let config = parseUint8ArrayToJson(event.config) ?? {};
 					const serialized = JSON.stringify(config);
 					if (serialized.length > 12_000) {
-						config = { truncated: true, preview: serialized.slice(0, 12_000) };
+						// Label the cut: an unexplained boundary around a config that carries the
+						// interface stylesheet reads to the model as a platform size limit.
+						config = {
+							truncated: true,
+							truncated_note:
+								"Context preview only — this is not a limit on the stored configuration.",
+							preview: serialized.slice(0, 12_000),
+						};
 					}
 					const kind = classifyAppEventInterface(event);
 					const consumerTool = consumerToolForEventKind(kind);
@@ -2215,8 +2235,7 @@ export function GlobalToolBridge() {
 						// browser equivalent, so say that rather than half-forking.
 						return {
 							status: "error",
-							message:
-								"Offline forks are only available in the desktop app. Use target 'online' here.",
+							message: `Offline forks are only available in the desktop app. Use target 'online' here.`,
 						};
 					}
 
@@ -2471,61 +2490,18 @@ export function GlobalToolBridge() {
 						pageEvent.id,
 					);
 					assertRequestActive(request, "app page screenshot capture");
-					const uploadedSnapshots = (
-						await Promise.all(
-							snapshot.images.map(async (image, index) => {
-								const extension =
-									image.mediaType === "image/webp"
-										? "webp"
-										: image.mediaType === "image/jpeg"
-											? "jpg"
-											: "png";
-								const file = new File(
-									[image.blob],
-									`flowpilot-page-${index + 1}.${extension}`,
-									{ type: image.mediaType },
-								);
-								try {
-									const temporaryFile = backend.helperState.fileToTemporaryFile
-										? await backend.helperState.fileToTemporaryFile(
-												file,
-												false,
-												undefined,
-												"remote",
-											)
-										: {
-												url: await backend.helperState.fileToUrl(
-													file,
-													false,
-													undefined,
-													"remote",
-												),
-											};
-									if (!/^https?:\/\//i.test(temporaryFile.url)) {
-										throw new Error(
-											"Temporary upload did not return a remotely readable URL.",
-										);
-									}
-									return {
-										url: temporaryFile.url,
-										media_type: image.mediaType,
-									};
-								} catch (error) {
-									console.warn(
-										"[global-tool-bridge] failed to upload app page capture",
-										error,
-									);
-									return null;
-								}
-							}),
-						)
-					).filter((image): image is { url: string; media_type: string } =>
-						Boolean(image),
-					);
+					const { uploaded: uploadedSnapshots, uploadErrors } =
+						await uploadPageSnapshots(backend, snapshot.images);
 					assertRequestActive(request, "app page screenshot upload");
 					const screenshotCount = uploadedSnapshots.length;
 					const screenshotComplete =
 						snapshot.complete && screenshotCount === snapshot.images.length;
+					const failureDetail =
+						screenshotCount > 0
+							? undefined
+							: snapshot.images.length > 0
+								? `its rendered content was captured but the ${snapshot.images.length} capture(s) could not be uploaded for attachment (${uploadErrors[0] ?? "unknown upload error"})`
+								: `its rendered content could not be captured${snapshot.failureReason ? ` (${snapshot.failureReason})` : ""}`;
 					return {
 						status: "ok",
 						event_id: pageEvent.id,
@@ -2539,13 +2515,93 @@ export function GlobalToolBridge() {
 						message:
 							screenshotCount > 0
 								? `Embedded the page '${pageEvent.name}' inline and attached ${screenshotCount} visual capture${screenshotCount === 1 ? "" : "s"} of its rendered content for inspection.`
-								: `Embedded the page '${pageEvent.name}' inline, but its rendered content could not be captured. Do not claim to have read the page visually.`,
+								: `Embedded the page '${pageEvent.name}' inline, but ${failureDetail}. Do not claim to have read the page visually.`,
 						screenshot_count: screenshotCount,
 						screenshot_complete: screenshotComplete,
+						...(uploadErrors.length > 0
+							? { upload_errors: uploadErrors.slice(0, 3) }
+							: {}),
 						...(screenshotCount > 0
 							? { _flowpilot_image_urls: uploadedSnapshots }
 							: {}),
 					};
+				}
+				case "interact_app_page": {
+					const appId =
+						argString(args, "app_id") ||
+						argString(args, "appId") ||
+						request.context?.appId ||
+						request.context?.app_id;
+					if (!appId)
+						return {
+							status: "error",
+							message: "interact_app_page requires an app_id.",
+						};
+					const profileAppIds = await getProfileAppIds();
+					if (!profileAppIds.has(appId))
+						return {
+							status: "error",
+							message: `App '${appId}' is not visible in the current profile.`,
+						};
+					const eventId =
+						argString(args, "event_id") || argString(args, "eventId");
+					const pageId =
+						argString(args, "page_id") || argString(args, "pageId");
+					const actions = parseInteractActions(args.actions);
+					if (actions.length === 0)
+						return {
+							status: "error",
+							message:
+								"interact_app_page requires a non-empty actions array of {action: 'set_value'|'trigger', component_id, value?, event?}.",
+						};
+					// The live target is keyed by the CANONICAL page Event id. The resolver also
+					// repairs a page id passed as event_id (canonicalized_from: "page_id"), so a
+					// raw-id miss must be re-resolved before embedding or waiting — driving and
+					// revealing under the raw id would strand a collapsed card and time out.
+					let resolvedEventId: string | undefined = eventId || undefined;
+					let resolvedPageId: string | undefined = pageId || undefined;
+					const requestedTarget = eventId || pageId;
+					if (requestedTarget && !findLivePage(appId, { eventId, pageId })) {
+						const lookup = await resolveOpenAppPageRequest(
+							requestedTarget,
+							(targetEventId) =>
+								backend.eventState.getEvent(appId, targetEventId),
+							() => backend.eventState.getEvents(appId, true),
+						);
+						if (
+							lookup.status !== "inventory_unavailable" &&
+							lookup.resolution.ok
+						) {
+							const pageEvent = lookup.resolution.event;
+							resolvedEventId = pageEvent.id;
+							resolvedPageId = undefined;
+							if (!findLivePage(appId, { eventId: resolvedEventId })) {
+								// No live instance — embed it inline through the same card
+								// open_app_page uses before driving it.
+								useGlobalChatStore.getState().addInlineAppPage({
+									appId,
+									eventId: pageEvent.id,
+									name: pageEvent.name || appId,
+								});
+								showConversation();
+							}
+						}
+					}
+					assertRequestActive(request, "app page interaction");
+					scope.referenceApp(appId);
+					return await interactWithAppPage(backend, {
+						appId,
+						eventId: resolvedEventId,
+						pageId: resolvedPageId,
+						actions,
+						captureScreenshots:
+							typeof args.capture_screenshots === "boolean"
+								? args.capture_screenshots
+								: typeof args.captureScreenshots === "boolean"
+									? args.captureScreenshots
+									: true,
+						deadlineAtMs: requestDeadline(request) ?? undefined,
+					});
 				}
 				case "call_app_event": {
 					const appId = argString(args, "app_id") || argString(args, "appId");
@@ -2617,8 +2673,7 @@ export function GlobalToolBridge() {
 					if (!name)
 						return {
 							status: "error",
-							message:
-								'create_app requires a `name`. Derive a short name from the request (e.g. "Weather App") and call create_app once with it — do not call it again with empty arguments.',
+							message: `create_app requires a \`name\`. Derive a short name from the request (e.g. "Weather App") and call create_app once with it — do not call it again with empty arguments.`,
 						};
 					const description = argString(args, "description");
 					const idempotencyKey =
@@ -2680,15 +2735,12 @@ export function GlobalToolBridge() {
 						if (handleUpgradeRequiredError(error, "project-limit")) {
 							return {
 								status: "error",
-								message:
-									"The user's plan does not allow creating another online project; an upgrade dialog was shown to them. Either wait for the user to upgrade, or offer to create the app locally instead (online:false).",
+								message: `The user's plan does not allow creating another online project; an upgrade dialog was shown to them. Either wait for the user to upgrade, or offer to create the app locally instead (online:false).`,
 							};
 						}
 						return {
 							status: "error",
-							message: `create_app failed: ${
-								error instanceof Error ? error.message : String(error)
-							}`,
+							message: `create_app failed: ${error instanceof Error ? error.message : String(error)}`,
 						};
 					}
 					// Associate the app with the current profile so it surfaces in list_apps
@@ -3161,6 +3213,15 @@ export function GlobalToolBridge() {
 					}
 				}
 				case "data_studio_agent": {
+					const routingState = scope.runId
+						? solveRoutingStateByRun.get(scope.runId)
+						: undefined;
+					const routingError = dataStudioRoutingGate({
+						routingReason: args.routing_reason ?? args.routingReason,
+						appInventoryComplete: routingState?.appInventoryComplete === true,
+					});
+					if (routingError) return routingError;
+
 					const instruction = argString(args, "instruction");
 					if (!instruction)
 						return {
@@ -3265,6 +3326,7 @@ export function GlobalToolBridge() {
 							undefined /* catalog */,
 							[] /* selectedNodeIds */,
 							null /* currentSurface */,
+							null /* currentCanvasSettings */,
 							[] /* selectedComponentIds */,
 							instruction,
 							[] /* history */,
@@ -3420,6 +3482,7 @@ export function GlobalToolBridge() {
 							undefined /* catalog */,
 							[] /* selectedNodeIds */,
 							null /* currentSurface */,
+							null /* currentCanvasSettings */,
 							[] /* selectedComponentIds */,
 							instruction,
 							[] /* history */,
@@ -3578,6 +3641,7 @@ export function GlobalToolBridge() {
 							undefined /* catalog */,
 							[] /* selectedNodeIds */,
 							null /* currentSurface */,
+							null /* currentCanvasSettings */,
 							[] /* selectedComponentIds */,
 							instruction,
 							[] /* history */,
@@ -4244,6 +4308,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								board,
 								catalog,
 								liveSurface?.selectedNodeIds ?? [],
+								null,
 								null,
 								[],
 								boardInstruction,
@@ -5402,6 +5467,13 @@ Completion contract: build complete helper logic first and add the Event entry l
 					// from the saved page when there is not.
 					const currentComponents =
 						editSurface?.currentComponents ?? detachedPage?.components ?? [];
+					// Same "before" rule for the stylesheet: the open canvas wins over the saved
+					// page. Without it the specialist writes customCss blind and silently replaces
+					// the design system the page already had.
+					const currentCanvasSettings =
+						editSurface?.currentCanvasSettings ??
+						detachedPage?.canvasSettings ??
+						null;
 					const selectedComponentIds = editSurface?.selectedComponentIds ?? [];
 					const widgetConversationId = conversationScopeId(request);
 					const widgetCreationIdentityForBoard = (targetBoardId: string) =>
@@ -5526,7 +5598,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 							}
 							if (event.type === "canvas_settings") {
 								canvasSettings =
-									validateCanvasSettings(event.data) ?? canvasSettings;
+									validateCanvasSettings(event.data, warnings) ??
+									canvasSettings;
 								continue;
 							}
 							if (event.type === "usage_stat") {
@@ -5571,6 +5644,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 								detached_page_id: detachedPage?.id,
 								selected_component_ids: selectedComponentIds,
 								current_components: currentComponents,
+								has_current_custom_css: Boolean(
+									currentCanvasSettings?.customCss,
+								),
 							},
 							summary: "Delegated UI sub-agent started.",
 						}),
@@ -5617,6 +5693,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							undefined,
 							[],
 							currentComponents,
+							currentCanvasSettings,
 							selectedComponentIds,
 							instruction,
 							[],
@@ -5666,7 +5743,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 					const components =
 						finalComponents.length > 0 ? finalComponents : streamedComponents;
 					canvasSettings =
-						validateCanvasSettings(response.canvas_settings) ?? canvasSettings;
+						validateCanvasSettings(response.canvas_settings, warnings) ??
+						canvasSettings;
 
 					if (components.length === 0)
 						return finishWidgetRun({
@@ -6008,7 +6086,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								page: { id: pageId, name: pageName, route },
 								widgets: createdWidgets,
 								...(createdBoard ? { created_board_id: boardId } : {}),
-								note: "Created and applied UI only; no workflow logic was built. If the user's request includes behavior, wiring, data loading, actions, nodes, connections, or events, the next required step is flowpilot_board with this app_id and the returned page route plus widget/action_ids. Do not report the overall build complete until that board specialist succeeds.",
+								note: `Created and applied UI only; no workflow logic was built. If the user's request includes behavior, wiring, data loading, actions, nodes, connections, or events, the next required step is flowpilot_board with this app_id and the returned page route plus widget/action_ids. Do not report the overall build complete until that board specialist succeeds.`,
 							});
 						} catch (error) {
 							return finishWidgetRun({
@@ -6059,7 +6137,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									applied: false,
 									app_id: appId,
 									page: { id: detachedPage.id, name: detachedPage.name },
-									note: "The user opened this page's builder while the UI was being generated, so the components are pending their review in the chat instead of being written directly. Tell the user to review and apply them.",
+									note: `The user opened this page's builder while the UI was being generated, so the components are pending their review in the chat instead of being written directly. Tell the user to review and apply them.`,
 								});
 							}
 							// Re-read under the lock: a parallel run may have saved this page while
@@ -6446,15 +6524,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 			}
 		},
 		[
-			backend.appState,
-			backend.boardState,
-			backend.eventState,
-			backend.helperState.fileToTemporaryFile,
-			backend.helperState.fileToUrl,
-			backend.userState,
-			backend.pageState,
-			backend.widgetState,
-			backend.routeState,
+			backend,
 			executeRuntimeTool,
 			queryClient,
 			showConversation,
@@ -6479,6 +6549,20 @@ Completion contract: build complete helper logic first and add the Event entry l
 			try {
 				assertRequestActive(request, "approval handling");
 				if (request.toolName === "ask_user") {
+					// An empty form would show a card with nothing to answer, so tell the model how
+					// to fix its call instead of trapping the user in an unanswerable prompt.
+					if (parseAsk(request.arguments).questions.length === 0)
+						return {
+							requestId: request.requestId,
+							approved: true,
+							result: {
+								status: "error",
+								code: "ask_user_no_question",
+								next_action:
+									"Retry with a non-empty `questions` array; each entry needs an `id` and a `question`.",
+								message: "ask_user was called without a question to ask.",
+							},
+						};
 					const resolution = await openDialog({ type: "ask", request });
 					assertRequestActive(request, "question response");
 					if (!resolution || !("answer" in resolution))
@@ -6487,10 +6571,15 @@ Completion contract: build complete helper logic first and add the Event entry l
 							approved: false,
 							error: "User dismissed the question.",
 						};
+					// The card resolves with the whole payload: `{ answer }` for a lone question,
+					// `{ answers: { [id]: value } }` for a batched intake form.
 					return {
 						requestId: request.requestId,
 						approved: true,
-						result: { status: "ok", answer: resolution.answer },
+						result: {
+							status: "ok",
+							...(resolution.answer as AskUserAnswerPayload),
+						},
 					};
 				}
 

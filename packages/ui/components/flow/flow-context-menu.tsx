@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import {
 	MessageCircleDashedIcon,
@@ -65,6 +66,7 @@ export function FlowContextMenu({
 	onCreateVariable?: (variable: IVariable) => void;
 	onClose: () => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const inputRef = useRef<HTMLInputElement>(null);
 	const placeholderInputRef = useRef<HTMLInputElement>(null);
 	const menuBlockedRef = useRef(false);
@@ -107,8 +109,8 @@ export function FlowContextMenu({
 
 			const friendlyName =
 				nodeName === "variable_get"
-					? `Get ${variable.name}`
-					: `Set ${variable.name}`;
+					? t('getName', 'Get {{name}}', { name: variable.name })
+					: t('setName', 'Set {{name}}', { name: variable.name });
 
 			return {
 				...baseNode,
@@ -219,7 +221,7 @@ export function FlowContextMenu({
 						pin_out_names: Object.values(newPins)
 							.filter((pin) => pin.pin_type === "Output")
 							.map((pin) => pin.friendly_name),
-						friendly_name: `Call ${node.friendly_name}`,
+						friendly_name: t('callFriendly_name', 'Call {{friendly_name}}', { friendly_name: node.friendly_name }),
 						category: "Events/Call",
 						pins: newPins,
 					});
@@ -282,7 +284,7 @@ export function FlowContextMenu({
 					pin_out_names: Object.values(newGetPins)
 						.filter((pin) => pin.pin_type === "Output")
 						.map((pin) => pin.friendly_name),
-					friendly_name: `Get ${variable.name}`,
+					friendly_name: t('getName', 'Get {{name}}', { name: variable.name }),
 					category: "Variables/Get",
 					pins: newGetPins,
 				});
@@ -296,7 +298,7 @@ export function FlowContextMenu({
 					pin_out_names: Object.values(newSetPins)
 						.filter((pin) => pin.pin_type === "Output")
 						.map((pin) => pin.friendly_name),
-					friendly_name: `Set ${variable.name}`,
+					friendly_name: t('setName', 'Set {{name}}', { name: variable.name }),
 					category: "Variables/Set",
 					pins: newSetPins,
 				});
@@ -324,7 +326,7 @@ export function FlowContextMenu({
 						pin_out_names: Object.values(newPins)
 							.filter((pin) => pin.pin_type === "Output")
 							.map((pin) => pin.friendly_name),
-						friendly_name: `Call ${layer.name}`,
+						friendly_name: t('callName', 'Call {{name}}', { name: layer.name }),
 						category: "Functions/Call",
 						pins: newPins,
 					});
@@ -446,11 +448,11 @@ export function FlowContextMenu({
 				<ContextMenuContent className="w-80 max-h-120 h-120 overflow-y-hidden overflow-x-hidden flex flex-col">
 					<div className="sticky">
 						<div className="flex flex-row w-full items-center justify-between bg-accent text-accent-foreground p-1 mb-1">
-							<small className="font-bold">Actions</small>
+							<small className="font-bold">{t('actions', 'Actions')}</small>
 							{droppedPin && (
 								<div className="flex flex-row items-center gap-2">
 									<div className="grid gap-1.5 leading-none">
-										<small>Context Sensitive</small>
+										<small>{t('contextSensitive', 'Context Sensitive')}</small>
 									</div>
 									<Checkbox
 										id="context-sensitive"
@@ -473,7 +475,7 @@ export function FlowContextMenu({
 							}}
 						>
 							<MessageCircleDashedIcon className="w-4 h-4" />
-							Comment
+							{t('comment', 'Comment')}
 						</ContextMenuItem>
 						<ContextMenuItem
 							className="flex flex-row gap-1 items-center"
@@ -489,7 +491,7 @@ export function FlowContextMenu({
 							}}
 						>
 							<PlayCircleIcon className="w-4 h-4" />
-							Event
+							{t('event', 'Event')}
 						</ContextMenuItem>
 						<ContextMenuItem
 							className="flex flex-row gap-1 items-center"
@@ -502,7 +504,7 @@ export function FlowContextMenu({
 							}}
 						>
 							<ZapIcon className="w-4 h-4" />
-							Placeholder
+							{t('placeholder', 'Placeholder')}
 						</ContextMenuItem>
 						{/* TODO: create the get node if input, set node if output! */}
 						{droppedPin &&
@@ -544,7 +546,7 @@ export function FlowContextMenu({
 									}}
 								>
 									<VariableIcon className="w-4 h-4" />
-									Create Variable from Pin
+									{`Create Variable from Pin`}
 								</ContextMenuItem>
 							)}
 						<Separator className="my-1" />
@@ -599,14 +601,14 @@ export function FlowContextMenu({
 					onOpenAutoFocus={(e) => e.preventDefault()} // we'll focus manually
 				>
 					<DialogHeader>
-						<DialogTitle>Name Your Placeholder</DialogTitle>
+						<DialogTitle>{t('nameYourPlaceholder', 'Name Your Placeholder')}</DialogTitle>
 					</DialogHeader>
 					<div className="grid gap-2">
 						<Label htmlFor="placeholder-name">Name</Label>
 						<Input
 							id="placeholder-name"
 							ref={placeholderInputRef}
-							placeholder="e.g. Temporary Result"
+							placeholder={t('egTemporaryResult', 'e.g. Temporary Result')}
 							value={placeholderName}
 							onChange={(e) => setPlaceholderName(e.target.value)}
 							onKeyDown={(e) => {
@@ -626,13 +628,13 @@ export function FlowContextMenu({
 							variant="outline"
 							onClick={() => setIsPlaceholderOpen(false)}
 						>
-							Cancel
+							{t('cancel', 'Cancel')}
 						</Button>
 						<Button
 							onClick={confirmPlaceholder}
 							disabled={!placeholderName.trim()}
 						>
-							Create
+							{t('create', 'Create')}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

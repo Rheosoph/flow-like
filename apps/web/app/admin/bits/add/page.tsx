@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	Card,
@@ -193,6 +194,7 @@ function getDefaultMlxAssetBit(fileName = ""): IBit {
 }
 
 export default function Page() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -773,11 +775,9 @@ export default function Page() {
 	return (
 		<main className="flex grow h-full min-h-0 bg-background overflow-hidden flex-col w-full">
 			<div className="flex-1 min-h-0 overflow-y-auto p-4">
-				<h1>Add a new Bit</h1>
+				<h1>{`Add a new Bit`}</h1>
 				<p className="max-w-screen-md">
-					This page is for adding new bits, which are the building blocks of
-					extra models available to the user. You can add bits here by providing
-					the necessary information.
+					{`This page is for adding new bits, which are the building blocks of extra models available to the user. You can add bits here by providing the necessary information.`}
 				</p>
 				<div className="max-w-screen-md flex flex-row items-center gap-2 mt-4">
 					<button
@@ -805,7 +805,7 @@ export default function Page() {
 							setType(IBitTypes.Stt);
 						}}
 					>
-						Hosted STT
+						{t('hostedStt', 'Hosted STT')}
 					</button>
 					<button
 						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Stt && localStt ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
@@ -814,7 +814,7 @@ export default function Page() {
 							setType(IBitTypes.Stt);
 						}}
 					>
-						Local STT
+						{t('localStt', 'Local STT')}
 					</button>
 					<button
 						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Embedding ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
@@ -823,19 +823,19 @@ export default function Page() {
 							setType(IBitTypes.Embedding);
 						}}
 					>
-						Embedding
+						{t('embedding', 'Embedding')}
 					</button>
 					<button
 						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.ImageEmbedding ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
 						onClick={() => setType(IBitTypes.ImageEmbedding)}
 					>
-						Image Embedding
+						{t('imageEmbedding', 'Image Embedding')}
 					</button>
 					<button
 						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.ObjectDetection ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
 						onClick={() => setType(IBitTypes.ObjectDetection)}
 					>
-						Classification
+						{t('classification', 'Classification')}
 					</button>
 				</div>
 				<br />
@@ -864,7 +864,7 @@ export default function Page() {
 										download_link: e.target.value.trim(),
 									}))
 								}
-								placeholder="File URL (ONNX/GGUF/Safetensors)"
+								placeholder={`File URL (ONNX/GGUF/Safetensors)`}
 							/>
 						</div>
 						<br />
@@ -1325,9 +1325,9 @@ export default function Page() {
 					{loading ? (
 						<Loader2Icon className="w-4 h-4 animate-spin" rotate={2} />
 					) : isMlxModel ? (
-						"Upload MLX model"
+						t('uploadMlxModel', 'Upload MLX model')
 					) : (
-						"Add Bit"
+						t('addBit', 'Add Bit')
 					)}
 				</Button>
 			</div>

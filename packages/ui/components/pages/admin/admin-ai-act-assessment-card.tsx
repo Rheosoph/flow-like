@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Bot, ShieldAlert, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -148,6 +149,7 @@ function canonical(question: Question | undefined, value: unknown): string {
 export function AdminAiActAssessmentCard({
 	appId,
 }: Readonly<{ appId: string }>) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const features = useFeatures();
 	const profile = useInvoke(
@@ -190,8 +192,8 @@ export function AdminAiActAssessmentCard({
 			const count = res.suggestion?.suggestedAnswers?.length ?? 0;
 			toast.success(
 				count > 0
-					? `FlowPilot reviewed ${count} answer${count === 1 ? "" : "s"}.`
-					: "FlowPilot completed with no answer findings.",
+					? t('flowpilotReviewedCountAnswers', 'FlowPilot reviewed {{count}} answer.', { count })
+					: t('flowpilotCompletedWithNoAnswerFindings', 'FlowPilot completed with no answer findings.'),
 			);
 		},
 		onError: (err: Error) =>
@@ -218,7 +220,7 @@ export function AdminAiActAssessmentCard({
 				<CardHeader>
 					<CardTitle className="text-base flex items-center gap-2">
 						<ShieldAlert className="h-4 w-4" />
-						EU AI Act Conformity
+						{t('euAiActConformity', 'EU AI Act Conformity')}
 					</CardTitle>
 				</CardHeader>
 				<CardContent>
@@ -234,7 +236,7 @@ export function AdminAiActAssessmentCard({
 	const risk = RISK_META[classification.riskCategory] ?? RISK_META.UNDETERMINED;
 	const statusLabel = hasAssessment
 		? (data.assessment?.status ?? "DRAFT")
-		: "NOT SUBMITTED";
+		: t('notSubmitted', 'NOT SUBMITTED');
 
 	return (
 		<Card>
@@ -243,12 +245,12 @@ export function AdminAiActAssessmentCard({
 					<div className="space-y-1.5">
 						<CardTitle className="text-base flex items-center gap-2">
 							<ShieldAlert className="h-4 w-4" />
-							EU AI Act Conformity
+							{t('euAiActConformity', 'EU AI Act Conformity')}
 						</CardTitle>
 						<CardDescription>
 							{hasAssessment
-								? "The owner's submitted assessment and the authoritative live classification."
-								: "The owner has not started an assessment. The questionnaire below shows auto-derived answers and the current classification."}
+								? t('theOwnersSubmittedAssessmentAndTheAuthoritativeLiveClassification', 'The owner\'s submitted assessment and the authoritative live classification.')
+								: t('theOwnerHasNotStartedAnAssessmentTheQuestionnaireBelowShowsAutoderivedAnswersAndTheCurrentClassification', 'The owner has not started an assessment. The questionnaire below shows auto-derived answers and the current classification.')}
 						</CardDescription>
 					</div>
 					<Button
@@ -260,7 +262,7 @@ export function AdminAiActAssessmentCard({
 						<Sparkles
 							className={`mr-2 h-4 w-4 ${validate.isPending ? "animate-pulse" : ""}`}
 						/>
-						Validate with FlowPilot
+						{t('validateWithFlowpilot', 'Validate with FlowPilot')}
 					</Button>
 				</div>
 			</CardHeader>
@@ -271,12 +273,10 @@ export function AdminAiActAssessmentCard({
 					{typeof classification.conformityScore === "number" && (
 						<span
 							className={`text-sm font-semibold ${bandTextColor(classification.conformityBand)}`}
-						>
-							{classification.conformityScore}/100
-						</span>
+						>{`${classification.conformityScore}/100`}</span>
 					)}
 					{classification.blocked && (
-						<Badge variant="destructive">Blocked</Badge>
+						<Badge variant="destructive">{t('blocked', 'Blocked')}</Badge>
 					)}
 				</div>
 
@@ -341,26 +341,27 @@ function FlowPilotValidation({
 	answers: Record<string, unknown>;
 	model: string | null;
 }>) {
+	const { t } = useTranslation("admin");
 	const suggestedAnswers = suggestion.suggestedAnswers ?? [];
 
 	return (
 		<div className="rounded-lg border border-dashed bg-muted/30 p-4 space-y-3">
 			<div className="flex flex-wrap items-center gap-2">
 				<Bot className="h-4 w-4 text-primary" />
-				<h4 className="text-sm font-semibold">FlowPilot validation</h4>
+				<h4 className="text-sm font-semibold">{t('flowpilotValidation', 'FlowPilot validation')}</h4>
 				{model && <Badge variant="secondary">{model}</Badge>}
 			</div>
 
 			{suggestion.purpose && (
 				<p className="text-sm text-muted-foreground">
-					<span className="font-medium text-foreground">Derived purpose:</span>{" "}
+					<span className="font-medium text-foreground">{t('derivedPurpose', 'Derived purpose:')}</span>{" "}
 					{suggestion.purpose}
 				</p>
 			)}
 
 			{suggestedAnswers.length === 0 ? (
 				<p className="text-sm text-muted-foreground">
-					FlowPilot found nothing to flag against the submitted answers.
+					{t('flowpilotFoundNothingToFlagAgainstTheSubmittedAnswers', 'FlowPilot found nothing to flag against the submitted answers.')}
 				</p>
 			) : (
 				<ul className="space-y-3">
@@ -389,9 +390,7 @@ function FlowPilotValidation({
 										{confidencePct !== null && (
 											<Badge
 												variant={lowConfidence ? "destructive" : "secondary"}
-											>
-												{confidencePct}% confidence
-											</Badge>
+											>{t('confidencepctConfidence', '{{confidencePct}}% confidence', { confidencePct })}</Badge>
 										)}
 										<Badge
 											className={
@@ -407,7 +406,7 @@ function FlowPilotValidation({
 								<div className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
 									<div>
 										<span className="text-xs text-muted-foreground">
-											Submitted
+											{t('submitted2', 'Submitted')}
 										</span>
 										<div className="font-medium">
 											{formatAnswer(question, ownerValue)}
@@ -415,7 +414,7 @@ function FlowPilotValidation({
 									</div>
 									<div>
 										<span className="text-xs text-muted-foreground">
-											FlowPilot suggests
+											{t('flowpilotSuggests', 'FlowPilot suggests')}
 										</span>
 										<div className="font-medium">
 											{formatAnswer(question, s.value)}
@@ -434,7 +433,7 @@ function FlowPilotValidation({
 			{(suggestion.notes?.length ?? 0) > 0 && (
 				<div className="space-y-1">
 					<span className="text-xs font-medium text-muted-foreground">
-						Reviewer notes
+						{t('reviewerNotes', 'Reviewer notes')}
 					</span>
 					<ul className="list-disc pl-5 text-xs text-muted-foreground space-y-1">
 						{suggestion.notes?.map((note) => (

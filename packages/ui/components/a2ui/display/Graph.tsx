@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Suspense, lazy, useCallback, useMemo } from "react";
 import { cn } from "../../../lib/utils";
 import type {
@@ -122,6 +123,7 @@ export function A2UIGraph({
 	surfaceId,
 	onAction,
 }: ComponentProps<GraphComponent>) {
+	const { t } = useTranslation("common");
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const nodes = useResolved<GraphNodeDef[]>(component.nodes);
 	const edges = useResolved<GraphEdgeDef[]>(component.edges);
@@ -175,7 +177,7 @@ export function A2UIGraph({
 				: { nodeId: null };
 			onAction?.({
 				type: "userAction",
-				name: "nodeClick",
+				name: `nodeClick`,
 				surfaceId,
 				sourceComponentId: componentId,
 				timestamp: Date.now(),
@@ -202,7 +204,7 @@ export function A2UIGraph({
 				: { edgeId: null };
 			onAction?.({
 				type: "userAction",
-				name: "edgeClick",
+				name: `edgeClick`,
 				surfaceId,
 				sourceComponentId: componentId,
 				timestamp: Date.now(),

@@ -1,0 +1,809 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-document-processing",
+		"name": "Document Processing Pipelines",
+		"language": "en",
+		"slug": "document-processing",
+		"difficulty": "INTERMEDIATE",
+		"category": "DATA",
+		"estimatedMinutes": 65,
+		"isPublished": true,
+		"iconUrl": null,
+		"bannerUrl": null,
+		"tags": ["documents", "extraction", "pdf", "pii", "pipelines"],
+		"position": 14,
+		"description": "Turn folders of PDFs and scans into clean, searchable, redacted data.",
+		"longDescription": "Monday: 214 contracts land in the compliance inbox — signing-service exports, office scans, stray DOCX drafts. Across six lessons you build the pipeline that tames them: inventory the storage, extract text deterministically (and know exactly when a scan needs a vision model), tag and summarize into structured records, mask PII with layered regex and AI passes, then assemble a nightly run that reruns safely and logs like an auditor is watching. Scenario challenges throughout; the final drops you into the go-live review.",
+		"media": {
+			"icon": "media/app-logo.webp",
+			"banner": "assets/course-banner.webp"
+		},
+		"assets": [
+			{
+				"name": "DocumentProcessingOverview",
+				"file": "assets/course-banner.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "course-banner.webp",
+				"replace": true
+			},
+			{
+				"name": "DataPipelinesOverview",
+				"file": "assets/data-pipelines-overview.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "data-pipelines-overview.webp",
+				"replace": true
+			},
+			{
+				"name": "AppStorage",
+				"file": "assets/AppStorage.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "AppStorage.webp",
+				"replace": true
+			},
+			{
+				"name": "DataStudioOverview",
+				"file": "assets/DataStudioOverview.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "DataStudioOverview.webp",
+				"replace": true
+			},
+			{
+				"name": "RunsAndLogs",
+				"file": "assets/RunsAndLogs.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "RunsAndLogs.webp",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "course-document-processing-module-text",
+				"title": "Get the Text Out",
+				"description": "Take stock of the compliance inbox, understand what each format needs, and extract text the cheap way first.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "course-document-processing-lesson-intake",
+						"title": "Monday: 214 PDFs Land in the Inbox",
+						"language": "en",
+						"contentFile": "content/intake-and-formats.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-docproc-text-layer",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You open one of the 214 contracts in a viewer and can select and copy a sentence. What does that tell you about the file?",
+								"explanation": "Selectable text means the characters live in the file — a text layer — so a deterministic reader can pull them straight out. The tempting slip is crediting the viewer with OCR: viewers display what the file already carries, which is exactly why a scan stays unselectable. And the extension proves nothing either way; only the content does.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "has-text-layer",
+											"label": "It's a digital PDF with a text layer — deterministic extraction will work on it"
+										},
+										{
+											"id": "viewer-ran-ocr",
+											"label": "The viewer ran OCR for you, so every PDF behaves this way"
+										},
+										{
+											"id": "ai-always-needed",
+											"label": "Nothing — extraction always needs an AI model, selectable or not"
+										},
+										{
+											"id": "extension-guarantees",
+											"label": "The .pdf extension already guaranteed extractable text"
+										}
+									],
+									"correct": ["has-text-layer"]
+								}
+							},
+							{
+								"id": "challenge-docproc-format-truths",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The inbox mixes signing-service exports, office-scanner uploads, and a few DOCX drafts. Which statements should shape your intake step?",
+								"explanation": "Scans are photographs of pages — they need the vision path — and an extension is a claim, not a fact, so you validate type before routing. The tempting miss is \"PDF is PDF\": a signed export and a scan share an extension but not a text layer, and that difference decides the whole extraction route. DOCX needs no manual conversion — it has native readers.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "scans-are-images",
+											"label": "The scanner uploads are pictures of text — they'll need the vision path"
+										},
+										{
+											"id": "extension-untrusted",
+											"label": "An extension isn't proof of content — validate the type before routing"
+										},
+										{
+											"id": "pdf-is-pdf",
+											"label": "PDF is PDF — one reader handles signed exports and scans identically"
+										},
+										{
+											"id": "docx-manual-convert",
+											"label": "DOCX files must be converted to PDF by hand before Flow-Like can read them"
+										}
+									],
+									"correct": ["scans-are-images", "extension-untrusted"]
+								}
+							},
+							{
+								"id": "challenge-docproc-inventory",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "First build step: count what's actually sitting in contracts/. Which wiring produces the file list?",
+								"explanation": "Storage Dir hands the flow a path into the app's storage, and List Paths enumerates everything under the contracts/ prefix — inventory in two nodes. The tempting shortcut is believing the upload itself registered the files with your flows: the Storage page stores them, but a flow still has to list the folder to see what's there. Path Exists? checks one path you already know, and Head reads one file's metadata — neither enumerates.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "storagedir-listpaths",
+											"label": "Storage Dir to point at the app's storage, then List Paths on the contracts/ prefix"
+										},
+										{
+											"id": "upload-auto-registers",
+											"label": "None needed — uploading through the Storage page already registers each file with every flow"
+										},
+										{
+											"id": "exists-loop",
+											"label": "Loop Path Exists? over every filename you expect to find"
+										},
+										{
+											"id": "head-implies-list",
+											"label": "Head alone — reading metadata implies the full listing"
+										}
+									],
+									"correct": ["storagedir-listpaths"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-document-processing-lesson-extraction",
+						"title": "Why Did 24 Contracts Come Back Empty?",
+						"language": "en",
+						"contentFile": "content/extraction.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-docproc-empty-pages",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Extraction ran over all 214 contracts: 190 produced clean markdown, 24 came back with no text. What's the most likely story?",
+								"explanation": "The 24 are the scans — the deterministic reader worked correctly on files that have no text layer to read, and the empty result is your routing signal toward AI Extract Document. The tempting answer is a missing model: Extract Document is the deterministic node and has no model pin at all, so no model could be \"missing.\" Deleting signed contracts because a reader returned empty would be the real failure.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "scans-no-text-layer",
+											"label": "The 24 are scans — Extract Document found no text layer, and that's the signal to route them differently"
+										},
+										{
+											"id": "model-not-connected",
+											"label": "Extract Document needs a model connected before it can read any PDF"
+										},
+										{
+											"id": "files-corrupted",
+											"label": "The 24 files are corrupted and should be deleted"
+										},
+										{
+											"id": "first-page-only",
+											"label": "The node only reads the first page, and those 24 start with a blank cover sheet"
+										}
+									],
+									"correct": ["scans-no-text-layer"]
+								}
+							},
+							{
+								"id": "challenge-docproc-ai-extract-when",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which of these jobs justify switching from Extract Document to AI Extract Document?",
+								"explanation": "The AI path earns its cost where deterministic parsing can't see: scanned pages and layout-heavy documents where stamps, signatures, or columns carry the meaning. \"Send everything through AI for quality\" is the tempting one — it inverts the documented rule: deterministic first, escalate only what needs eyes. The model path bills per page and its transcription can vary between runs, so it's neither the cheap option nor the reproducible one.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "scanner-uploads",
+											"label": "Reading the 24 scanner uploads that produced no text"
+										},
+										{
+											"id": "layout-heavy",
+											"label": "A contract whose meaning lives in stamps, signatures, and a two-column layout the plain reader mangles"
+										},
+										{
+											"id": "all-for-quality",
+											"label": "All 214 files — the AI path always produces strictly better text"
+										},
+										{
+											"id": "cheaper-per-page",
+											"label": "Cutting costs — the model-backed path is cheaper per page"
+										},
+										{
+											"id": "reproducible-output",
+											"label": "Getting identical output on every run for the audit trail"
+										}
+									],
+									"correct": ["scanner-uploads", "layout-heavy"]
+								}
+							},
+							{
+								"id": "challenge-docproc-extract-outputs",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "What do you actually get out of the deterministic Extract Document node?",
+								"explanation": "It emits an array of pages — each with its page number, markdown content, and optionally embedded images via the Extract Images toggle — and the same node accepts PDFs, DOCX, spreadsheets, and images. The tempting pick is \"one combined string\": combining is a separate step (Pages to Markdown), and keeping pages apart is what preserves page-level provenance. A model pin belongs to the AI variant, not this node.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "pages-array",
+											"label": "An array of pages, each carrying its page number and markdown content"
+										},
+										{
+											"id": "many-formats",
+											"label": "One node that accepts PDFs, DOCX, spreadsheets, and images"
+										},
+										{
+											"id": "images-toggle",
+											"label": "Embedded images when the Extract Images toggle is on"
+										},
+										{
+											"id": "single-string",
+											"label": "One combined string — no assembly step required"
+										},
+										{
+											"id": "requires-model-pin",
+											"label": "Nothing without a model pin — extraction is AI-only"
+										}
+									],
+									"correct": ["pages-array", "many-formats", "images-toggle"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "course-document-processing-module-deliver",
+				"title": "Structure, Privacy, Delivery",
+				"description": "Turn extracted text into structured records, redact PII before anything is shared, and assemble a nightly pipeline that reruns safely.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "course-document-processing-lesson-structure",
+						"title": "From Text Pile to Filing System",
+						"language": "en",
+						"contentFile": "content/cleaning-and-structure.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-docproc-keywords-budget",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Legal wants every contract tagged tonight, and this month's model budget is gone. What do you reach for?",
+								"explanation": "RAKE and YAKE extract keywords deterministically — no model, no cost, and the same input yields the same tags every run, which is exactly what an audit likes. The tempting belief is that keywords are inherently an AI job: AI Keywords is the escalation for semantic tagging, not the only option. Summarize-then-search-by-hand burns model calls you don't have, and no index is required before tagging.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "rake-yake",
+											"label": "RAKE or YAKE Keywords — deterministic, free, and reproducible across all 214 files"
+										},
+										{
+											"id": "ai-keywords-only-option",
+											"label": "AI Keywords — it's the only node that produces keywords"
+										},
+										{
+											"id": "summarize-and-grep",
+											"label": "Summarize every contract with a model, then search the summaries by hand"
+										},
+										{
+											"id": "index-first",
+											"label": "Nothing yet — keywords require the search index to exist first"
+										}
+									],
+									"correct": ["rake-yake"]
+								}
+							},
+							{
+								"id": "challenge-docproc-summary-strategy",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The 80-page master services agreement builds every clause on definitions from page 2. Which summarization strategy fits, and why?",
+								"explanation": "Refine walks the pages in order and carries the accumulated summary forward, so clause 14 is read with page 2's definitions in hand — order is information here. The tempting pick is MapReduce for speed, but its chunks are summarized in isolation, which is precisely how cross-chunk dependencies get lost. Strategies genuinely differ in what they preserve, and SlidingWindow's strength is memory-bounded very-long inputs, not a universal best.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "refine-sequential",
+											"label": "Refine — it processes pages sequentially, carrying the accumulated summary forward"
+										},
+										{
+											"id": "mapreduce-speed",
+											"label": "MapReduce — fastest wins, and chunk isolation doesn't matter"
+										},
+										{
+											"id": "slidingwindow-always",
+											"label": "SlidingWindow — it's the strongest choice for any long document"
+										},
+										{
+											"id": "strategies-equal",
+											"label": "Any of them — strategies change speed, never what the summary preserves"
+										}
+									],
+									"correct": ["refine-sequential"]
+								}
+							},
+							{
+								"id": "challenge-docproc-record-fields",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "You're designing the structured record each contract gets. Which fields belong?",
+								"explanation": "A record carries what it learned — keywords, summary, page count, type — plus the one non-negotiable: a stable reference back to the source file. The tempting economy is deleting the original once the record exists; lesson one's rule says the opposite — originals stay for audit and reprocessing, and the record points at them. Embedding other contracts' full text bloats every row with data that belongs in its own records.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "source-reference",
+											"label": "A stable reference back to the source file in storage"
+										},
+										{
+											"id": "keywords-summary",
+											"label": "The extracted keywords and the summary"
+										},
+										{
+											"id": "pagecount-type",
+											"label": "Page count and the detected file type"
+										},
+										{
+											"id": "embed-other-contracts",
+											"label": "The full text of every related contract, embedded for convenience"
+										},
+										{
+											"id": "delete-original",
+											"label": "No source field — the original file gets deleted once the record exists"
+										}
+									],
+									"correct": ["source-reference", "keywords-summary", "pagecount-type"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-document-processing-lesson-pii",
+						"title": "Redact Before You Share",
+						"language": "en",
+						"contentFile": "content/pii-and-redaction.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-docproc-name-leak",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The shared NDA copy still shows the signer's full name — yet PII Mask (Regex) ran and redacted two email addresses in the same document. Why did the name get through?",
+								"explanation": "Names have no pattern. The regex mask targets shaped PII — emails, phones, SSNs, cards, IBANs, addresses — and its own description points names and contextual PII to the AI-based node. The tempting read is a silent crash, but the node demonstrably worked: it masked the emails and reported detections. It did its job; names were never in its job description.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "names-not-shaped",
+											"label": "Names aren't pattern-shaped — the regex mask covers emails, phones, IBANs and the like; names need the AI mask"
+										},
+										{
+											"id": "silent-crash",
+											"label": "The regex node crashed silently and masked nothing at all"
+										},
+										{
+											"id": "english-only",
+											"label": "The regex mask only works on English-language documents"
+										},
+										{
+											"id": "count-disabled",
+											"label": "Detection Count was zero, which disables masking entirely"
+										}
+									],
+									"correct": ["names-not-shaped"]
+								}
+							},
+							{
+								"id": "challenge-docproc-regex-catches",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which of these will PII Mask (Regex) reliably catch in a contract?",
+								"explanation": "Emails, IBANs, and phone numbers all have a recognizable shape — that's regex territory. The tempting stretch is \"our CFO, who signed below\": identifying a person from context is meaning, not pattern, and that's exactly the gap the AI mask exists to close. A nickname in a greeting is even further from any pattern.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "email-address",
+											"label": "billing@acme-corp.com in the notices clause"
+										},
+										{
+											"id": "iban-payment",
+											"label": "An IBAN in the payment clause"
+										},
+										{
+											"id": "phone-signature",
+											"label": "A phone number in the signature block"
+										},
+										{
+											"id": "cfo-reference",
+											"label": "\"Our CFO, who signed below\" — an indirect reference to a person"
+										},
+										{
+											"id": "nickname-greeting",
+											"label": "The signer's nickname used in the greeting"
+										}
+									],
+									"correct": ["email-address", "iban-payment", "phone-signature"]
+								}
+							},
+							{
+								"id": "challenge-docproc-mask-order",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Where does redaction belong in the compliance pipeline?",
+								"explanation": "Everything shared — the team copy, the search index — is built from masked text, while the original stays in restricted storage. The tempting compromise is masking only at export time, but internal shared surfaces are exposure too: anyone with search access reads what the index holds. And masking isn't reversible bookkeeping you can reorder — once unmasked text reaches a shared surface, it has been shared.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "before-shared-surfaces",
+											"label": "Before anything shared — team copies and the index are built from masked text; originals stay restricted"
+										},
+										{
+											"id": "after-indexing",
+											"label": "After indexing — search recall needs raw text in the shared index"
+										},
+										{
+											"id": "export-only",
+											"label": "Only at export time — internal surfaces don't count as exposure"
+										},
+										{
+											"id": "order-cosmetic",
+											"label": "Anywhere — masking is reversible, so the order is cosmetic"
+										}
+									],
+									"correct": ["before-shared-surfaces"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-document-processing-lesson-pipeline",
+						"title": "The Nightly Run That Reruns Safely",
+						"language": "en",
+						"contentFile": "content/pipeline-and-monitoring.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 2,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-docproc-rerun",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The nightly run died at document 178 of 214, cause fixed. With Diff Directory, a manifest committed after each success, and upsert writes — what happens when you press run again?",
+								"explanation": "The diff reports only the uncommitted files, they process, and their writes converge on existing records — 214 contracts, 214 records. The tempting assumption is that Insert quietly deduplicates: its own description warns it might write duplicate items, which is exactly why the pipeline upserts on a stable key. Wiping the table first is what people do when they didn't build this.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "resume-converge",
+											"label": "Only the uncommitted files process, and their writes land on the same records — no duplicates"
+										},
+										{
+											"id": "all-reprocess-duplicate",
+											"label": "All 214 process again and the table doubles up"
+										},
+										{
+											"id": "wipe-table-first",
+											"label": "You must wipe the output table first — reruns are never safe"
+										},
+										{
+											"id": "insert-dedupes",
+											"label": "Insert deduplicates automatically, so the manifest is redundant"
+										}
+									],
+									"correct": ["resume-converge"]
+								}
+							},
+							{
+								"id": "challenge-docproc-observability",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "What belongs in the nightly run's logs and final summary?",
+								"explanation": "Counts, the IDs of what failed, and timings — enough to retry and to explain the run without opening a single contract. Logging extracted text \"for debugging\" is the tempting one: sensitive document content in logs is a leak wearing a log level, and the checklist forbids it outright. Masking is evidenced by detection counts, never by repeating the masked values.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "outcome-counts",
+											"label": "Processed, skipped, routed-to-review, and failed counts"
+										},
+										{
+											"id": "failed-ids",
+											"label": "The document paths or IDs that failed, so someone can retry them"
+										},
+										{
+											"id": "durations-checkpoint",
+											"label": "Run duration and when the manifest was committed"
+										},
+										{
+											"id": "log-fulltext",
+											"label": "The extracted contract text, for debugging convenience"
+										},
+										{
+											"id": "log-masked-values",
+											"label": "The PII values that were masked, to prove the masks worked"
+										}
+									],
+									"correct": ["outcome-counts", "failed-ids", "durations-checkpoint"]
+								}
+							},
+							{
+								"id": "challenge-docproc-index-unredacted",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A teammate proposes indexing the unredacted text \"for better search recall — the team only ever sees short snippets anyway.\" Your call?",
+								"explanation": "Snippets are indexed text — whatever the index holds, search surfaces. Lesson four's placement rule applies unchanged: shared surfaces are built from masked text, and the index is a shared surface. \"Internal doesn't count as exposure\" is the same tempting fallacy in a new outfit, and masking results on the way out means the raw PII already lives in a store others can query.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "refuse-index-masked",
+											"label": "No — snippets surface indexed text, so unmasked PII would reach anyone who can search; index the redacted text"
+										},
+										{
+											"id": "internal-is-fine",
+											"label": "Fine — the index lives inside the app, and internal surfaces don't count as exposure"
+										},
+										{
+											"id": "mask-on-output",
+											"label": "Fine — mask the search results on the way out instead"
+										},
+										{
+											"id": "redacted-unindexable",
+											"label": "No — but only because redacted text can't be indexed at all"
+										}
+									],
+									"correct": ["refuse-index-masked"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "course-document-processing-module-assessment",
+				"title": "Final Assessment",
+				"description": "Defend the compliance pipeline at its go-live review.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "course-document-processing-lesson-final",
+						"title": "Ship the Compliance Pipeline",
+						"language": "en",
+						"contentFile": "content/final-assessment.md",
+						"videoUrl": null,
+						"estimatedMinutes": 15,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-docproc-final-routing",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Finding S1 meets constraint C2: 24 of 214 files extracted empty, all from the scanner, and per-page AI spend needs justification. How do you route extraction?",
+								"explanation": "The empty result is the router: deterministic Extract Document stays the default for the 190 digital files, and only the 24 that came back empty justify AI Extract Document's per-page cost. Sending all 214 through the AI path is the tempting \"safe\" option — it inverts deterministic-first and burns exactly the budget C2 protects. Skipping the scans abandons signed contracts, and renaming a file changes its badge, never its content.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "split-route",
+											"label": "Extract Document for the 190 digital files; only the 24 empties go through AI Extract Document"
+										},
+										{
+											"id": "all-through-ai",
+											"label": "Send all 214 through AI Extract Document so both cases are covered"
+										},
+										{
+											"id": "skip-scans",
+											"label": "Skip the 24 — scanned documents can't be processed"
+										},
+										{
+											"id": "rename-extension",
+											"label": "Re-save the scans under a different extension so the deterministic reader accepts them"
+										}
+									],
+									"correct": ["split-route"]
+								}
+							},
+							{
+								"id": "challenge-docproc-final-audit",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "R3 demands: reproduce how any record was built, with evidence that masking ran. Which choices follow?",
+								"explanation": "Reproducibility points at deterministic keyword extraction for audit-relevant tags, and evidence means every record keeps its source reference while detection counts land in the run record. The tempting claim is that model choice doesn't affect reproducibility — a model's output can vary between runs, which is the definition of harder to reproduce. Logging full contract text as \"evidence\" violates finding S2's lesson: content never belongs in logs.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "deterministic-tags",
+											"label": "Use RAKE/YAKE for the tags the audit relies on — same input, same tags, every run"
+										},
+										{
+											"id": "provenance-plus-counts",
+											"label": "Keep a source reference on every record and write the masks' detection counts into the run record"
+										},
+										{
+											"id": "model-choice-irrelevant",
+											"label": "Use AI Keywords everywhere — reproducibility isn't affected by model choice"
+										},
+										{
+											"id": "log-text-as-evidence",
+											"label": "Log each contract's full extracted text so auditors can diff it later"
+										}
+									],
+									"correct": ["deterministic-tags", "provenance-plus-counts"]
+								}
+							},
+							{
+								"id": "challenge-docproc-final-masks",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "R2 says emails, IBANs, and signer names must never reach a shared copy. Which setup meets it?",
+								"explanation": "Layered masking: the regex node deterministically clears the shaped PII (emails, IBANs), the AI pass reads for names and contextual references, and both nodes' detection counts become the R3 evidence. The tempting simplification is \"names are just another pattern\" — they aren't, which is why the regex node's own description hands them to the AI mask. AI-alone isn't the cheap option either: it bills model calls on text the regex node would have cleared for free.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "regex-shaped-pii",
+											"label": "PII Mask (Regex) handles the emails and IBANs deterministically"
+										},
+										{
+											"id": "ai-pass-names",
+											"label": "PII Mask (AI) makes a second pass for signer names and contextual mentions"
+										},
+										{
+											"id": "counts-as-evidence",
+											"label": "Both masks' detection counts go into the run record as evidence"
+										},
+										{
+											"id": "regex-covers-names",
+											"label": "Regex alone is enough — names are just another pattern"
+										},
+										{
+											"id": "ai-alone-cheaper",
+											"label": "The AI mask alone is the cheaper way to cover all three"
+										}
+									],
+									"correct": ["regex-shaped-pii", "ai-pass-names", "counts-as-evidence"]
+								}
+							},
+							{
+								"id": "challenge-docproc-final-order",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Put the nightly pipeline in a defensible order.",
+								"explanation": "List, extract, structure, redact, then write records and copies, index the masked text, and commit the manifest last — checkpoints advance only after the work they certify. Committing first is the tempting crash-safety inversion: a crash after an early commit makes unprocessed files invisible to every future diff. Indexing before redaction puts raw PII on a shared surface — S4's proposal, already rejected.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "correct-order",
+											"label": "List new files → extract → structure → redact → write records and redacted copies → index → commit manifest"
+										},
+										{
+											"id": "index-before-redact",
+											"label": "List → extract → index → redact → commit — index early so search stays fresh"
+										},
+										{
+											"id": "commit-first",
+											"label": "Commit the manifest first so a crash can't cause reprocessing"
+										},
+										{
+											"id": "redact-at-export",
+											"label": "Deliver everything raw and redact copies only when someone exports one"
+										}
+									],
+									"correct": ["correct-order"]
+								}
+							},
+							{
+								"id": "challenge-docproc-final-monday",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Scenario S5: Monday adds 30 new contracts and one updated amendment to an existing contract. What does the healthy pipeline do overnight?",
+								"explanation": "Diff Directory emits added, updated, and deleted — so it reports 30 added plus 1 updated, exactly those 31 run, and the amendment's upsert lands on its existing record instead of minting a duplicate. The tempting half-truth is \"diffs only see additions\": updates are precisely what the manifest comparison exists to catch. Reprocessing all 245 nightly is what the manifest saves you from, and hand-picking files defeats C1's unattended window.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "diff-31-upsert",
+											"label": "Diff Directory reports 30 added and 1 updated; those 31 run, and the amendment upserts onto its existing record"
+										},
+										{
+											"id": "reprocess-all",
+											"label": "All 245 files reprocess — that's what nightly means"
+										},
+										{
+											"id": "added-only",
+											"label": "Only the 30 new files run — updates are invisible to a directory diff"
+										},
+										{
+											"id": "manual-selection",
+											"label": "Someone selects the new files by hand in the Storage page before the run"
+										}
+									],
+									"correct": ["diff-31-upsert"]
+								}
+							},
+							{
+								"id": "challenge-docproc-final-incident",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Incident review time: finding S2 (a Debug log line holds a full contract paragraph) and finding S3 (nobody knew if rerunning Thursday's failed run was safe). Which fixes close both?",
+								"explanation": "S2's fix is logging discipline — IDs, counts, durations, never content, at any log level; Debug lines travel just as far as Error lines. S3's fix is the idempotency pair: upsert on a stable key and commit the manifest only after successful writes, so a rerun converges and the on-call answer becomes \"press run.\" The tempting dodge is demoting content to Debug — the checklist says sensitive content is not exposed in logs, full stop. Deleting run history destroys the evidence monitoring exists to provide.",
+								"points": 10,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "scrub-log-content",
+											"label": "Log IDs, counts, and durations — document content never appears at any log level"
+										},
+										{
+											"id": "idempotent-rerun",
+											"label": "Upsert by stable key and commit the manifest only after successful writes, so reruns converge"
+										},
+										{
+											"id": "debug-doesnt-count",
+											"label": "Keep the text but only at Debug level — Debug doesn't count as exposure"
+										},
+										{
+											"id": "delete-run-history",
+											"label": "Delete the run history so the half-written state can't be inspected"
+										}
+									],
+									"correct": ["scrub-log-content", "idempotent-rerun"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		]
+	}
+}

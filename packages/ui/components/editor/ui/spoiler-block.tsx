@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { ChevronRight } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
@@ -19,10 +20,11 @@ function parseSpoilerContent(raw: string): {
 		const body = raw.slice(separatorIndex + 5).trim();
 		return { label: label || "Spoiler", body };
 	}
-	return { label: "Spoiler", body: raw.trim() };
+	return { label: i18next.t('spoiler', 'Spoiler'), body: raw.trim() };
 }
 
 export function SpoilerBlock({ content, className }: SpoilerBlockProps) {
+	const { t } = useTranslation("common");
 	const [isOpen, setIsOpen] = useState(false);
 	const bodyRef = useRef<HTMLDivElement>(null);
 	const { label, body } = parseSpoilerContent(content);

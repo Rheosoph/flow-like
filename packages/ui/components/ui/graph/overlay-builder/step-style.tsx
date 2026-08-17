@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type {
 	EdgeLabelMapping,
 	NodeLabelMapping,
@@ -20,14 +21,13 @@ export function StepStyle({
 	edges,
 	onApplyPreset,
 }: StepStyleProps) {
+	const { t } = useTranslation("common");
 	return (
 		<div className="space-y-4">
 			<div>
-				<h3 className="text-sm font-medium mb-1">Style & Presets</h3>
+				<h3 className="text-sm font-medium mb-1">{t('stylePresets', 'Style & Presets')}</h3>
 				<p className="text-xs text-muted-foreground">
-					Optionally apply a domain preset to auto-style your node and edge
-					mappings. You can also customize individual styles in the Node and
-					Edge steps.
+					{t('optionallyApplyADomainPresetToAutostyleYourNodeAndEdgeMappingsYouCanAlsoCustomizeIndividualStylesInTheNodeAndEdgeSteps', "Optionally apply a domain preset to auto-style your node and edge mappings. You can also customize individual styles in the Node and Edge steps.")}
 				</p>
 			</div>
 
@@ -39,10 +39,7 @@ export function StepStyle({
 				<>
 					<Separator />
 					<div>
-						<p className="text-xs text-muted-foreground">
-							Current configuration: {nodes.length} node label
-							{nodes.length !== 1 ? "s" : ""}, {edges.length} edge label
-							{edges.length !== 1 ? "s" : ""}.
+						<p className="text-xs text-muted-foreground">{t('currentConfiguration', 'Current configuration:')} {t('countNodeLabels', { defaultValue_one: '{{count}} Node label', defaultValue_other: '{{count}} Node labels', count: nodes.length })}, {t('countEdgeLabels', { defaultValue_one: '{{count}} Edge label', defaultValue_other: '{{count}} Edge labels', count: edges.length })}.
 						</p>
 					</div>
 				</>

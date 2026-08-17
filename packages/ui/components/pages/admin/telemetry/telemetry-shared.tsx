@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Skeleton } from "../../../ui";
 
 export type TelemetryBucket = "minute" | "hour" | "day";
@@ -85,6 +86,7 @@ export function BarList({
 	loading?: boolean;
 	emptyMessage?: string;
 }) {
+	const { t } = useTranslation("admin");
 	const max = Math.max(1, ...rows.map((r) => r.count));
 	if (loading) {
 		return (
@@ -97,7 +99,7 @@ export function BarList({
 	}
 	if (rows.length === 0) {
 		return (
-			<EmptyState message={emptyMessage ?? "No data in the selected window."} />
+			<EmptyState message={emptyMessage ?? t('noDataInTheSelectedWindow', 'No data in the selected window.')} />
 		);
 	}
 	return (

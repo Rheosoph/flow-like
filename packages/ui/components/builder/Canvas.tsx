@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type MouseEvent,
 	type WheelEvent,
@@ -25,6 +26,7 @@ export function Canvas({
 	height = 900,
 	dropRef,
 }: CanvasProps) {
+	const { t } = useTranslation("flow");
 	const containerRef = useRef<HTMLDivElement>(null);
 	const canvasRef = useRef<HTMLDivElement>(null);
 	const isPanningRef = useRef(false);

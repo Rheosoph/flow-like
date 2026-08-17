@@ -134,7 +134,7 @@ describe("FlowPilot app-creation E2E cases", () => {
 		);
 		expect(built.prompt).toContain("Restore last savepoint");
 		// A first live run burned its whole budget re-patching an over-budget root layer.
-		expect(built.prompt).toContain("at most 50 nodes");
+		expect(built.prompt).toContain("at most 100 nodes");
 		expect(built.prompt).toContain("rejected whole");
 		expect(flowPilotE2ECaseRunTimeoutMs(built.caseDefinition)).toBe(
 			60 * 60_000,

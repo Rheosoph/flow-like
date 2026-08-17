@@ -370,23 +370,37 @@ fn control_type_to_string(control_type: i32) -> String {
 pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
     use std::time::Duration;
 
-    // AT-SPI2 requires async runtime - use blocking approach with timeout
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(e) => {
-            tracing::debug!("Failed to create tokio runtime for AT-SPI: {:?}", e);
-            return None;
-        }
-    };
+    // AT-SPI2 requires an async runtime, and callers already run inside one, so the
+    // runtime has to be built on a thread that is not a tokio worker.
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        tracing::debug!("Failed to create tokio runtime for AT-SPI: {:?}", e);
+                        return None;
+                    }
+                };
 
-    rt.block_on(async {
-        tokio::time::timeout(Duration::from_millis(500), extract_fingerprint_atspi(x, y))
-            .await
-            .ok()
-            .flatten()
+                rt.block_on(async {
+                    tokio::time::timeout(
+                        Duration::from_millis(500),
+                        extract_fingerprint_atspi(x, y),
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                })
+            })
+            .join()
+            .unwrap_or_else(|_| {
+                tracing::debug!("AT-SPI fingerprint thread panicked");
+                None
+            })
     })
 }
 

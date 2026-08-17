@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { IIndexType } from "../../state/backend-state/db-state";
 import { Select } from "./select";
 import {
@@ -154,22 +155,22 @@ const TABLE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 export function validateColumnName(name: string): string | null {
 	const trimmed = name.trim();
-	if (!trimmed) return "Name is required";
-	if (trimmed.length > 128) return "Max 128 characters";
+	if (!trimmed) return i18next.t('nameIsRequired', 'Name is required');
+	if (trimmed.length > 128) return i18next.t('max128Characters', 'Max 128 characters');
 	if (!COLUMN_NAME_PATTERN.test(trimmed))
-		return "Letters, numbers and underscores only; cannot start with a number";
+		return i18next.t('lettersNumbersAndUnderscoresOnlyCannotStartWithANumber', 'Letters, numbers and underscores only; cannot start with a number');
 	if (RESERVED_COLUMNS.has(trimmed.toLowerCase()))
-		return `"${trimmed}" is reserved by LanceDB`;
+		return i18next.t('trimmedIsReservedByLancedb', '"{{trimmed}}" is reserved by LanceDB', { trimmed });
 	return null;
 }
 
 export function validateTableName(name: string): string | null {
 	const trimmed = name.trim();
-	if (!trimmed) return "Name is required";
-	if (trimmed.length > 256) return "Max 256 characters";
+	if (!trimmed) return i18next.t('nameIsRequired', 'Name is required');
+	if (trimmed.length > 256) return i18next.t('max256Characters', 'Max 256 characters');
 	if (!TABLE_NAME_PATTERN.test(trimmed))
-		return "Letters, numbers, dot, dash and underscore only";
-	if (trimmed.includes("..")) return "Cannot contain '..'";
+		return i18next.t('lettersNumbersDotDashAndUnderscoreOnly', 'Letters, numbers, dot, dash and underscore only');
+	if (trimmed.includes("..")) return i18next.t('cannotContain', 'Cannot contain \'..\'');
 	if (/^__.*__$/.test(trimmed)) return "This name is reserved";
 	return null;
 }
@@ -225,6 +226,7 @@ export function NullableSelect({
 	id?: string;
 	className?: string;
 }>) {
+	const { t } = useTranslation("common");
 	return (
 		<Select
 			value={nullable ? "nullable" : "required"}
@@ -235,8 +237,8 @@ export function NullableSelect({
 				<SelectValue />
 			</SelectTrigger>
 			<SelectContent>
-				<SelectItem value="nullable">Nullable</SelectItem>
-				<SelectItem value="required">Required</SelectItem>
+				<SelectItem value="nullable">{t('nullable', 'Nullable')}</SelectItem>
+				<SelectItem value="required">{t('required', 'Required')}</SelectItem>
 			</SelectContent>
 		</Select>
 	);

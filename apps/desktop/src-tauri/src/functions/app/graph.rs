@@ -1490,6 +1490,9 @@ pub struct NeighborsPayload {
     pub depth: Option<usize>,
     pub direction: Option<String>,
     pub limit: Option<usize>,
+    /// Relationship labels to follow. Omit or leave empty to follow all of them.
+    #[serde(default, alias = "edge_labels")]
+    pub edge_labels: Option<Vec<String>>,
 }
 
 #[tauri::command(async)]
@@ -1519,6 +1522,7 @@ pub async fn graph_neighbors(
             payload.depth.unwrap_or(1),
             direction,
             payload.limit,
+            payload.edge_labels.as_deref(),
         )
         .await?;
     serde_json::to_value(result).map_err(|e| e.into())
@@ -1554,6 +1558,9 @@ pub async fn graph_overlay_children(
 #[serde(rename_all = "camelCase")]
 pub struct SqlPayload {
     pub query: String,
+    /// Values for the query's `$placeholders`, keyed by placeholder name without the `$`.
+    #[serde(default)]
+    pub params: serde_json::Value,
     pub limit: Option<usize>,
 }
 
@@ -1571,6 +1578,7 @@ pub async fn graph_sql(
     let result = store
         .sql(
             &payload.query,
+            payload.params,
             Some(payload.limit.unwrap_or(DEFAULT_GRAPH_QUERY_LIMIT)),
         )
         .await?;

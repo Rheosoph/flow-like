@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import {
 	CertificateCard,
 	EmptyState,
@@ -13,6 +14,7 @@ import { useAuth } from "react-oidc-context";
 import { learnApi } from "../../../lib/learn-api";
 
 export default function CertificatesPage() {
+	const { t } = useTranslation("common");
 	const auth = useAuth();
 	const router = useRouter();
 	const backend = useBackend();
@@ -52,19 +54,19 @@ export default function CertificatesPage() {
 						<Award className="size-7 text-amber-500" />
 					</div>
 					<h1 className="text-3xl md:text-4xl font-semibold tracking-tight">
-						Your certificates
+						{t('yourCertificates', 'Your certificates')}
 					</h1>
 					<p className="text-muted-foreground">
-						Each certificate is signed and verifiable by hash.
+						{t('eachCertificateIsSignedAndVerifiableByHash', 'Each certificate is signed and verifiable by hash.')}
 					</p>
 				</motion.section>
 
 				{certificates.length === 0 ? (
 					<div className="flex justify-center py-6">
 						<EmptyState
-							title="No certificates — yet"
+							title={t('noCertificatesYet', 'No certificates — yet')}
 							description={
-								"Finish a course end-to-end\nto earn one and put it on display."
+								t('finishACourseEndtoendToEarnOneAndPutItOnDisplay', "Finish a course end-to-end to earn one and put it on display.")
 							}
 							icons={[Compass, ScrollText, Sparkles]}
 							action={{

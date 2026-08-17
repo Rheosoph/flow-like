@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type ITelemetryClient,
 	TelemetryConsentPrompt,
@@ -231,6 +232,7 @@ function desktopPlatform(): string {
 export function TelemetryProvider({
 	children,
 }: Readonly<{ children: React.ReactNode }>) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const features = useFeatures();
 	const pathname = usePathname();
@@ -351,7 +353,7 @@ export function TelemetryProvider({
 						platform,
 						events,
 					}),
-					failureMessage: "Failed to deliver buffered telemetry events:",
+					failureMessage: t('failedToDeliverBufferedTelemetryEvents', 'Failed to deliver buffered telemetry events:'),
 				});
 				await drainBuffer<IQueuedTelemetryError>({
 					drainCommand: "drain_telemetry_errors",
@@ -368,7 +370,7 @@ export function TelemetryProvider({
 						platform,
 						errors,
 					}),
-					failureMessage: "Failed to deliver buffered crash reports:",
+					failureMessage: t('failedToDeliverBufferedCrashReports', 'Failed to deliver buffered crash reports:'),
 				});
 			};
 

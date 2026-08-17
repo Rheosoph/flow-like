@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::{
     ensure_any_permission,
     error::ApiError,
@@ -29,6 +27,10 @@ pub struct VectorQueryPayload {
 #[derive(Debug, Clone, serde::Deserialize, ToSchema)]
 pub struct QueryTablePayload {
     sql: Option<String>,
+    /// Values for the `sql` field's `$placeholders`, keyed by placeholder name without the
+    /// `$`. Bound by the planner, so a caller never has to build a value into the statement.
+    #[serde(default)]
+    sql_params: flow_like_types::Value,
     vector_query: Option<VectorQueryPayload>,
     filter: Option<String>,
     fts_term: Option<String>,
@@ -89,8 +91,10 @@ pub async fn query_table(
     if let Some(sql) = payload.sql {
         let context = SessionContext::new();
         let fusion = db.to_datafusion().await?;
-        context.register_table(table, Arc::new(fusion))?;
-        let df = context.sql(&sql).await?;
+        context.register_table(table, fusion)?;
+        let param_values =
+            flow_like_storage::databases::sql_params::bind_params(&payload.sql_params)?;
+        let df = context.sql(&sql).await?.with_param_values(param_values)?;
         let items = df.collect().await?;
         let items = record_batches_to_vec(Some(items))?;
         return Ok(Json(items));

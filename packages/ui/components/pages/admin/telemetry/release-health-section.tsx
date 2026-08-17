@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import {
 	Activity,
@@ -101,6 +102,7 @@ function CrashFreeTrendChart({
 	readonly points: ITelemetryReleaseHealthPoint[];
 	readonly bucket: TelemetryBucket;
 }) {
+	const { t } = useTranslation("admin");
 	const data = useMemo(
 		() =>
 			points.map((p) => ({
@@ -178,7 +180,7 @@ function CrashFreeTrendChart({
 							}
 							formatter={(value) => (
 								<span className="text-xs text-muted-foreground">
-									Crash-free sessions{" "}
+									{t('crashfreeSessions', 'Crash-free sessions')}{" "}
 									<span className="font-medium tabular-nums text-foreground">
 										{Number(value).toFixed(2)}%
 									</span>
@@ -223,6 +225,7 @@ function AdoptionBar({ adoption }: { readonly adoption?: number | null }) {
 function ReleasesTable({
 	releases,
 }: { readonly releases: ITelemetryReleaseRow[] }) {
+	const { t } = useTranslation("admin");
 	const sorted = useMemo(
 		() =>
 			[...releases].sort(
@@ -245,12 +248,12 @@ function ReleasesTable({
 		<Table>
 			<TableHeader>
 				<TableRow>
-					<TableHead>Version</TableHead>
-					<TableHead>Adoption</TableHead>
-					<TableHead className="text-right">Installs</TableHead>
-					<TableHead className="text-right">Sessions</TableHead>
-					<TableHead className="text-right">Crash-free</TableHead>
-					<TableHead className="text-right">Errors</TableHead>
+					<TableHead>{t('version', 'Version')}</TableHead>
+					<TableHead>{t('adoption', 'Adoption')}</TableHead>
+					<TableHead className="text-right">{t('installs', 'Installs')}</TableHead>
+					<TableHead className="text-right">{t('sessions', 'Sessions')}</TableHead>
+					<TableHead className="text-right">{t('crashfree', 'Crash-free')}</TableHead>
+					<TableHead className="text-right">{t('errors', 'Errors')}</TableHead>
 				</TableRow>
 			</TableHeader>
 			<TableBody>
@@ -299,6 +302,7 @@ export function ReleaseHealthSection({
 	hours,
 	source,
 }: Readonly<ReleaseHealthSectionProps>) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 
 	const health = useQuery<ITelemetryReleaseHealthResponse>({
@@ -324,7 +328,7 @@ export function ReleaseHealthSection({
 		<section className="space-y-4">
 			<h2 className="flex items-center gap-2 text-xl font-semibold">
 				<HeartPulse className="h-5 w-5 text-primary" />
-				Release health
+				{t('releaseHealth', 'Release health')}
 				<TelemetryGranularityNotice response={health.data} />
 			</h2>
 
@@ -352,27 +356,27 @@ export function ReleaseHealthSection({
 				<>
 					<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
 						<HeroTile
-							label="Crash-free sessions"
+							label={t('crashfreeSessions', 'Crash-free sessions')}
 							value={formatRatePercent(health.data?.crashFreeSessionRate)}
 							icon={<ShieldCheck className="h-4 w-4" />}
-							hint={`${(health.data?.totalSessions ?? 0).toLocaleString()} sessions`}
+							hint={t('valSessions', '{{val}} sessions', { val: (health.data?.totalSessions ?? 0).toLocaleString() })}
 							emphasis
 						/>
 						<HeroTile
-							label="Crash-free installs"
+							label={t('crashfreeInstalls', 'Crash-free installs')}
 							value={formatRatePercent(health.data?.crashFreeInstallRate)}
 							icon={<MonitorSmartphone className="h-4 w-4" />}
-							hint={`${(health.data?.totalInstalls ?? 0).toLocaleString()} installs`}
+							hint={t('valInstalls', '{{val}} installs', { val: (health.data?.totalInstalls ?? 0).toLocaleString() })}
 							emphasis
 						/>
 						<HeroTile
-							label="Total sessions"
+							label={t('totalSessions', 'Total sessions')}
 							value={(health.data?.totalSessions ?? 0).toLocaleString()}
 							icon={<Activity className="h-4 w-4" />}
 							hint="Reported in the selected window"
 						/>
 						<HeroTile
-							label="Crashed sessions"
+							label={t('crashedSessions', 'Crashed sessions')}
 							value={(health.data?.crashedSessions ?? 0).toLocaleString()}
 							icon={<ServerCrash className="h-4 w-4" />}
 							hint="Sessions ending in a crash"
@@ -382,12 +386,11 @@ export function ReleaseHealthSection({
 					<Card>
 						<CardHeader className="pb-3">
 							<CardTitle className="text-base">
-								Crash-free rate over time
+								{t('crashfreeRateOverTime', 'Crash-free rate over time')}
 							</CardTitle>
 							<CardDescription>
-								Share of sessions without a crash, bucketed by{" "}
-								<span className="font-mono">{bucket}</span> over the selected
-								window.
+								{t('shareOfSessionsWithoutACrashBucketedBy', 'Share of sessions without a crash, bucketed by')}{" "}
+								<span className="font-mono">{bucket}</span> {t('overTheSelectedWindow', "over the selected window.")}
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -400,9 +403,9 @@ export function ReleaseHealthSection({
 
 					<Card>
 						<CardHeader className="pb-3">
-							<CardTitle className="text-base">Releases</CardTitle>
+							<CardTitle className="text-base">{t('releases', 'Releases')}</CardTitle>
 							<CardDescription>
-								Adoption and stability per release, newest first.
+								{t('adoptionAndStabilityPerReleaseNewestFirst', 'Adoption and stability per release, newest first.')}
 							</CardDescription>
 						</CardHeader>
 						<CardContent className="p-0">

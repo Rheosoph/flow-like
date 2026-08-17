@@ -1,4 +1,5 @@
 "use client";
+import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	BracesIcon,
 	CalendarIcon,
@@ -172,6 +173,7 @@ export function EventPayloadForm({
 	canRemoteExecute,
 	onClose,
 }: Readonly<EventPayloadFormProps>) {
+	const { t } = useTranslation("flow");
 	const refs = boardRef.current?.refs;
 
 	const outputPins = useMemo(() => {
@@ -362,7 +364,7 @@ export function EventPayloadForm({
 										e.target.value ? Number.parseInt(e.target.value, 10) : "",
 									)
 								}
-								placeholder={prop.description || `Enter ${fieldName}`}
+								placeholder={prop.description || t('enterFieldname', 'Enter {{fieldName}}', { fieldName })}
 							/>
 						</div>
 					);
@@ -383,7 +385,7 @@ export function EventPayloadForm({
 										e.target.value ? Number.parseFloat(e.target.value) : "",
 									)
 								}
-								placeholder={prop.description || `Enter ${fieldName}`}
+								placeholder={prop.description || t('enterFieldname', 'Enter {{fieldName}}', { fieldName })}
 							/>
 						</div>
 					);
@@ -408,7 +410,7 @@ export function EventPayloadForm({
 										// Keep raw string on invalid JSON
 									}
 								}}
-								placeholder={prop.description || `Enter ${fieldName} as JSON`}
+								placeholder={prop.description || t('enterFieldnameAsJson', 'Enter {{fieldName}} as JSON', { fieldName })}
 							/>
 						</div>
 					);
@@ -424,7 +426,7 @@ export function EventPayloadForm({
 								onChange={(e) =>
 									handleStructFieldChange(pinName, fieldName, e.target.value)
 								}
-								placeholder={prop.description || `Enter ${fieldName}`}
+								placeholder={prop.description || t('enterFieldname', 'Enter {{fieldName}}', { fieldName })}
 							/>
 						</div>
 					);
@@ -573,7 +575,7 @@ export function EventPayloadForm({
 										e.target.value ? Number.parseInt(e.target.value, 10) : "",
 									)
 								}
-								placeholder={description || `Enter ${pin.friendly_name}`}
+								placeholder={description || t('enterFriendly_name', 'Enter {{friendly_name}}', { friendly_name: pin.friendly_name })}
 							/>
 							{description && (
 								<p className="text-xs text-muted-foreground">{description}</p>
@@ -604,7 +606,7 @@ export function EventPayloadForm({
 										e.target.value ? Number.parseFloat(e.target.value) : "",
 									)
 								}
-								placeholder={description || `Enter ${pin.friendly_name}`}
+								placeholder={description || t('enterFriendly_name', 'Enter {{friendly_name}}', { friendly_name: pin.friendly_name })}
 							/>
 							{description && (
 								<p className="text-xs text-muted-foreground">{description}</p>
@@ -660,7 +662,7 @@ export function EventPayloadForm({
 								type="text"
 								value={String(value ?? "")}
 								onChange={(e) => handleFieldChange(pin.name, e.target.value)}
-								placeholder={description || `Enter ${pin.friendly_name}`}
+								placeholder={description || t('enterFriendly_name', 'Enter {{friendly_name}}', { friendly_name: pin.friendly_name })}
 							/>
 							{description && (
 								<p className="text-xs text-muted-foreground">{description}</p>
@@ -701,7 +703,7 @@ export function EventPayloadForm({
 			{hasFormFields && (
 				<div className="flex items-center justify-end gap-2">
 					<Label htmlFor="json-mode" className="text-xs text-muted-foreground">
-						JSON Mode
+						{t('jsonMode', 'JSON Mode')}
 					</Label>
 					<Checkbox
 						id="json-mode"
@@ -713,16 +715,16 @@ export function EventPayloadForm({
 
 			{useJsonMode ? (
 				<div className="space-y-2">
-					<Label>JSON Payload</Label>
+					<Label>{t('jsonPayload', 'JSON Payload')}</Label>
 					<Textarea
 						rows={10}
-						placeholder='{"key": "value"}'
+						placeholder={`{"key": "value"}`}
 						value={jsonPayload}
 						onChange={(e) => setJsonPayload(e.target.value)}
 						className="font-mono text-sm"
 					/>
 					<p className="text-xs text-muted-foreground">
-						Enter a valid JSON object. Keys should match the output pin names.
+						{t('enterAValidJsonObjectKeysShouldMatchTheOutputPinNames', 'Enter a valid JSON object. Keys should match the output pin names.')}
 					</p>
 				</div>
 			) : (
@@ -733,18 +735,15 @@ export function EventPayloadForm({
 						{complexFields.length > 0 && (
 							<div className="pt-4 border-t">
 								<p className="text-sm text-muted-foreground mb-2">
-									The following fields require JSON input. Switch to JSON mode
-									to configure them:
+									{t('theFollowingFieldsRequireJsonInputSwitchToJsonModeToConfigureThem', "The following fields require JSON input. Switch to JSON mode to configure them:")}
 								</p>
 								<ul className="text-xs text-muted-foreground space-y-1">
 									{complexFields.map((pin) => (
-										<li key={pin.id} className="flex items-center gap-2">
-											<span
+										<li key={pin.id} className="flex items-center gap-2"><Trans i18nKey="spanClassnamew2H2RoundedfullStyleBackgroundcolorTypetocolorpindata_typeFriendly_namePinfriendly_nameData_typePindata_type"><span
 												className="w-2 h-2 rounded-full"
 												style={{ backgroundColor: typeToColor(pin.data_type) }}
 											/>
-											{pin.friendly_name} ({pin.data_type}
-											{pin.value_type !== IValueType.Normal &&
+											{{ friendly_name: pin.friendly_name }} ({{ data_type: pin.data_type }}</Trans>{pin.value_type !== IValueType.Normal &&
 												` - ${pin.value_type}`}
 											)
 										</li>
@@ -760,7 +759,7 @@ export function EventPayloadForm({
 				{canLocalExecute && (
 					<Button className="flex-1" onClick={handleLocalExecute}>
 						<PlayCircleIcon className="w-4 h-4 mr-2" />
-						Execute Locally
+						{t('executeLocally2', 'Execute Locally')}
 					</Button>
 				)}
 				{canRemoteExecute && (
@@ -770,7 +769,7 @@ export function EventPayloadForm({
 						onClick={handleRemoteExecute}
 					>
 						<CloudIcon className="w-4 h-4 mr-2" />
-						Execute on Server
+						{t('executeOnServer2', 'Execute on Server')}
 					</Button>
 				)}
 			</div>

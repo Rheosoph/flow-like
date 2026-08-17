@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useRouter } from "next/navigation";
@@ -49,6 +50,7 @@ function markHandled(key: string): void {
 export function DeeplinkNavigationHandler({
 	children,
 }: Readonly<{ children: ReactNode }>) {
+	const { t } = useTranslation("common");
 	const router = useRouter();
 
 	useEffect(() => {

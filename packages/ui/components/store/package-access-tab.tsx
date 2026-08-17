@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Clock, Users, X } from "lucide-react";
 import { toast } from "sonner";
@@ -28,6 +29,7 @@ export function PackageAccessTab({
 	fetcher,
 	auth,
 }: PackageAccessTabProps) {
+	const { t } = useTranslation("store");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
@@ -59,10 +61,11 @@ export function PackageAccessTab({
 				auth,
 			),
 		onSuccess: () => {
-			toast.success("Access request accepted");
+			toast.success(t("accessRequestAccepted", "Access request accepted"));
 			queryClient.invalidateQueries({ queryKey });
 		},
-		onError: () => toast.error("Failed to accept request"),
+		onError: () =>
+			toast.error(t("failedToAcceptRequest", "Failed to accept request")),
 	});
 
 	const reject = useMutation({
@@ -74,10 +77,11 @@ export function PackageAccessTab({
 				auth,
 			),
 		onSuccess: () => {
-			toast.success("Access request rejected");
+			toast.success(t("accessRequestRejected", "Access request rejected"));
 			queryClient.invalidateQueries({ queryKey });
 		},
-		onError: () => toast.error("Failed to reject request"),
+		onError: () =>
+			toast.error(t("failedToRejectRequest", "Failed to reject request")),
 	});
 
 	const isMutating = accept.isPending || reject.isPending;
@@ -87,7 +91,9 @@ export function PackageAccessTab({
 			<Card>
 				<CardContent className="flex items-center justify-center py-12">
 					<Clock className="mr-2 h-4 w-4 animate-spin text-muted-foreground" />
-					<span className="text-sm text-muted-foreground">Loading…</span>
+					<span className="text-sm text-muted-foreground">
+						{t("loading", "Loading…")}
+					</span>
 				</CardContent>
 			</Card>
 		);
@@ -96,15 +102,23 @@ export function PackageAccessTab({
 	return (
 		<Card>
 			<CardHeader className="flex flex-row items-center justify-between pb-4">
-				<CardTitle className="text-base font-medium">Access Requests</CardTitle>
-				<Badge variant="secondary">{requests.length} pending</Badge>
+				<CardTitle className="text-base font-medium">
+					{t("accessRequests", "Access Requests")}
+				</CardTitle>
+				<Badge variant="secondary">
+					{t("lengthPending", "{{length}} pending", {
+						length: requests.length,
+					})}
+				</Badge>
 			</CardHeader>
 
 			<CardContent>
 				{requests.length === 0 ? (
 					<div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
 						<Users className="h-8 w-8" />
-						<p className="text-sm">No pending access requests</p>
+						<p className="text-sm">
+							{t("noPendingAccessRequests", "No pending access requests")}
+						</p>
 					</div>
 				) : (
 					<div className="divide-y">

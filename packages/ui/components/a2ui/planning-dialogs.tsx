@@ -4,6 +4,7 @@
 // A2UI components. The dialogs are presentation-only: the host component owns
 // the item state and fires the workflow actions from the callbacks.
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { differenceInCalendarDays } from "date-fns";
 import {
 	AlignLeftIcon,
@@ -109,12 +110,13 @@ function ColorField({
 	value: string | undefined;
 	onChange: (color: string | undefined) => void;
 }) {
+	const { t } = useTranslation("common");
 	return (
 		<div className="flex items-center gap-1.5">
 			<button
 				type="button"
 				onClick={() => onChange(undefined)}
-				aria-label="Default color"
+				aria-label={t('defaultColor', 'Default color')}
 				className={cn(
 					"flex h-6 w-6 items-center justify-center rounded-full border border-border bg-primary/20 transition-transform hover:scale-110",
 					!value && "ring-2 ring-ring ring-offset-1 ring-offset-background",
@@ -127,7 +129,7 @@ function ColorField({
 					key={c}
 					type="button"
 					onClick={() => onChange(c)}
-					aria-label={`Color ${c}`}
+					aria-label={t('colorC', 'Color {{c}}', { c })}
 					style={{ backgroundColor: c }}
 					className={cn(
 						"flex h-6 w-6 items-center justify-center rounded-full transition-transform hover:scale-110",
@@ -140,7 +142,7 @@ function ColorField({
 			))}
 			<label
 				className="relative flex h-6 w-6 cursor-pointer items-center justify-center rounded-full border border-dashed border-muted-foreground/50 transition-transform hover:scale-110"
-				aria-label="Custom color"
+				aria-label={t('customColor', 'Custom color')}
 				style={
 					value && !PLANNING_COLORS.includes(value as never)
 						? {
@@ -274,6 +276,7 @@ function DialogActions({
 	onCancel: () => void;
 	onSave: () => void;
 }) {
+	const { t } = useTranslation("common");
 	if (mode === "view") {
 		return (
 			<DialogFooter className="gap-2 sm:justify-between">
@@ -284,18 +287,18 @@ function DialogActions({
 						onClick={onDelete}
 						className="text-destructive hover:text-destructive"
 					>
-						<Trash2Icon className="mr-1.5 h-3.5 w-3.5" /> Delete
+						<Trash2Icon className="mr-1.5 h-3.5 w-3.5" /> {t('delete', 'Delete')}
 					</Button>
 				) : (
 					<span />
 				)}
 				<div className="flex gap-2">
 					<Button variant="outline" size="sm" onClick={onCancel}>
-						Close
+						{t('close', 'Close')}
 					</Button>
 					{editable && (
 						<Button size="sm" onClick={onEdit}>
-							<PencilIcon className="mr-1.5 h-3.5 w-3.5" /> Edit
+							<PencilIcon className="mr-1.5 h-3.5 w-3.5" /> {t('edit', 'Edit')}
 						</Button>
 					)}
 				</div>
@@ -305,7 +308,7 @@ function DialogActions({
 	return (
 		<DialogFooter className="gap-2">
 			<Button variant="outline" size="sm" onClick={onCancel}>
-				Cancel
+				{t('cancel', 'Cancel')}
 			</Button>
 			<Button size="sm" onClick={onSave}>
 				{mode === "create" ? "Create" : "Save"}
@@ -491,6 +494,7 @@ function MetadataField({
 	entries: MetaEntry[];
 	onChange: (entries: MetaEntry[]) => void;
 }) {
+	const { t } = useTranslation("common");
 	const update = (uid: string, patch: Partial<MetaEntry>) =>
 		onChange(entries.map((e) => (e.uid === uid ? { ...e, ...patch } : e)));
 	return (
@@ -511,7 +515,7 @@ function MetadataField({
 					/>
 					<button
 						type="button"
-						aria-label="Remove field"
+						aria-label={t('removeField', 'Remove field')}
 						onClick={() => onChange(entries.filter((e) => e.uid !== entry.uid))}
 						className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 					>
@@ -528,7 +532,7 @@ function MetadataField({
 				}
 				className="h-6 px-1.5 text-xs text-muted-foreground hover:text-foreground"
 			>
-				<PlusIcon className="mr-1 h-3 w-3" /> Add field
+				<PlusIcon className="mr-1 h-3 w-3" /> {t('addField', 'Add field')}
 			</Button>
 		</div>
 	);
@@ -594,6 +598,7 @@ function MemberCommandItem({
 	sub: string;
 	onPick: (sub: string) => void;
 }) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const lookup = useInvoke(
 		backend.userState.lookupUser,
@@ -627,6 +632,7 @@ function MemberCommandItem({
 }
 
 function TeamMemberPicker({ onPick }: { onPick: (sub: string) => void }) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const { appId } = useActionContext();
 	const [open, setOpen] = useState(false);
@@ -654,18 +660,18 @@ function TeamMemberPicker({ onPick }: { onPick: (sub: string) => void }) {
 					variant="outline"
 					size="icon"
 					className="h-8 w-8 shrink-0"
-					aria-label="Pick from team"
-					title="Pick from team"
+					aria-label={`Pick from team`}
+					title={`Pick from team`}
 				>
 					<UsersIcon className="h-3.5 w-3.5" />
 				</Button>
 			</PopoverTrigger>
 			<PopoverContent align="end" className="w-64 p-0">
 				<Command>
-					<CommandInput placeholder="Search team…" />
+					<CommandInput placeholder={t('searchTeam', 'Search team…')} />
 					<CommandList>
 						<CommandEmpty>
-							{team.isLoading ? "Loading members…" : "No members found"}
+							{team.isLoading ? "Loading members…" : t('noMembersFound', 'No members found')}
 						</CommandEmpty>
 						{members.map((m) => (
 							<MemberCommandItem
@@ -695,6 +701,7 @@ function AssigneeField({
 	value: string;
 	onChange: (value: string) => void;
 }) {
+	const { t } = useTranslation("common");
 	const user = useAssigneeUser(value || undefined);
 	if (value && user) {
 		return (
@@ -702,7 +709,7 @@ function AssigneeField({
 				<AssigneeDisplay value={value} className="flex-1 text-sm" />
 				<button
 					type="button"
-					aria-label="Clear assignee"
+					aria-label={t('clearAssignee', 'Clear assignee')}
 					onClick={() => onChange("")}
 					className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 				>
@@ -716,7 +723,7 @@ function AssigneeField({
 			<Input
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
-				placeholder="Type a name, or pick from the team"
+				placeholder={`Type a name, or pick from the team`}
 				className="h-8 flex-1"
 			/>
 			<TeamMemberPicker onPick={onChange} />
@@ -790,8 +797,8 @@ function formatEventRange(ev: CalendarEvent, locale?: string): string {
 	const sameDay = differenceInCalendarDays(end, start) === 0;
 	if (ev.allDay) {
 		return sameDay
-			? `${day.format(start)} · All day`
-			: `${day.format(start)} → ${day.format(end)} · All day`;
+			? i18next.t('valAllDay', '{{val}} · All day', { val: day.format(start) })
+			: i18next.t('valVal2AllDay', '{{val}} → {{val2}} · All day', { val: day.format(start), val2: day.format(end) });
 	}
 	if (sameDay)
 		return `${day.format(start)} · ${time.format(start)} – ${time.format(end)}`;
@@ -806,6 +813,7 @@ function EventDialogBody({
 	onSave,
 	onDelete,
 }: EventDialogProps & { state: EventDialogState }) {
+	const { t } = useTranslation("common");
 	const original = state.event;
 	const [mode, setMode] = useState<PlanningDialogMode>(state.mode);
 	const [title, setTitle] = useState(original.title);
@@ -864,7 +872,7 @@ function EventDialogBody({
 						<span className="truncate">{original.title}</span>
 						{original.allDay && (
 							<Badge variant="secondary" className="ml-1 shrink-0 text-[10px]">
-								All day
+								{t('allDay', 'All day')}
 							</Badge>
 						)}
 					</DialogTitle>
@@ -924,7 +932,7 @@ function EventDialogBody({
 			<AccentBar color={color} />
 			<DialogHeader>
 				<DialogTitle className="text-base">
-					{mode === "create" ? "New event" : "Edit event"}
+					{mode === "create" ? "New event" : t('editEvent', 'Edit event')}
 				</DialogTitle>
 			</DialogHeader>
 			<div className="space-y-3 py-1">
@@ -935,18 +943,18 @@ function EventDialogBody({
 						autoFocus
 						onChange={(e) => setTitle(e.target.value)}
 						onKeyDown={(e) => e.key === "Enter" && save()}
-						placeholder="Event title"
+						placeholder={t('eventTitle', 'Event title')}
 						className="h-8"
 					/>
 				</FieldRow>
 				<div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
 					<Label htmlFor="ev-allday" className="text-xs">
-						All day
+						{t('allDay', 'All day')}
 					</Label>
 					<Switch id="ev-allday" checked={allDay} onCheckedChange={setAllDay} />
 				</div>
 				<div className="grid grid-cols-2 gap-2">
-					<FieldRow label="Start" htmlFor="ev-start">
+					<FieldRow label={t('start', 'Start')} htmlFor="ev-start">
 						<Input
 							id="ev-start"
 							type={allDay ? "date" : "datetime-local"}
@@ -973,7 +981,7 @@ function EventDialogBody({
 						id="ev-location"
 						value={location}
 						onChange={(e) => setLocation(e.target.value)}
-						placeholder="Add location"
+						placeholder={t('addLocation', 'Add location')}
 						className="h-8"
 					/>
 				</FieldRow>
@@ -991,7 +999,7 @@ function EventDialogBody({
 						id="ev-description"
 						value={description}
 						onChange={(e) => setDescription(e.target.value)}
-						placeholder="Add description"
+						placeholder={t('addDescription', 'Add description')}
 						className="min-h-16 text-sm"
 					/>
 				</FieldRow>
@@ -1089,6 +1097,7 @@ function TaskDialogBody({
 	onSave,
 	onDelete,
 }: TaskDialogProps & { state: TaskDialogState }) {
+	const { t } = useTranslation("common");
 	const original = state.task;
 	const [mode, setMode] = useState<PlanningDialogMode>(state.mode);
 	const [name, setName] = useState(original.name);
@@ -1169,7 +1178,7 @@ function TaskDialogBody({
 						<span className="truncate">{original.name}</span>
 						{original.milestone && (
 							<Badge variant="secondary" className="ml-1 shrink-0 text-[10px]">
-								<DiamondIcon className="mr-1 h-2.5 w-2.5" /> Milestone
+								<DiamondIcon className="mr-1 h-2.5 w-2.5" /> {t('milestone', 'Milestone')}
 							</Badge>
 						)}
 					</DialogTitle>
@@ -1241,7 +1250,7 @@ function TaskDialogBody({
 			<AccentBar color={color} />
 			<DialogHeader>
 				<DialogTitle className="text-base">
-					{mode === "create" ? "New task" : "Edit task"}
+					{mode === "create" ? "New task" : t('editTask', 'Edit task')}
 				</DialogTitle>
 			</DialogHeader>
 			<div className="space-y-3 py-1">
@@ -1252,13 +1261,13 @@ function TaskDialogBody({
 						autoFocus
 						onChange={(e) => setName(e.target.value)}
 						onKeyDown={(e) => e.key === "Enter" && save()}
-						placeholder="Task name"
+						placeholder={t('taskName', 'Task name')}
 						className="h-8"
 					/>
 				</FieldRow>
 				<div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
 					<Label htmlFor="task-milestone" className="text-xs">
-						Milestone
+						{t('milestone', 'Milestone')}
 					</Label>
 					<Switch
 						id="task-milestone"
@@ -1289,7 +1298,7 @@ function TaskDialogBody({
 					)}
 				</div>
 				{!milestone && (
-					<FieldRow label={`Progress · ${Math.round(progress)}%`}>
+					<FieldRow label={t('progressVal', 'Progress · {{val}}%', { val: Math.round(progress) })}>
 						<Slider
 							value={[progress]}
 							min={0}
@@ -1299,7 +1308,7 @@ function TaskDialogBody({
 						/>
 					</FieldRow>
 				)}
-				<FieldRow label="Assignee">
+				<FieldRow label={t('assignee', 'Assignee')}>
 					<AssigneeField value={assignee} onChange={setAssignee} />
 				</FieldRow>
 				<FieldRow label="Link" htmlFor="task-link">
@@ -1318,7 +1327,7 @@ function TaskDialogBody({
 					<ColorField value={color} onChange={setColor} />
 				</FieldRow>
 				{dependencyChoices.length > 0 && (
-					<FieldRow label="Depends on">
+					<FieldRow label={t('dependsOn', 'Depends on')}>
 						<div className="max-h-32 space-y-1 overflow-y-auto rounded-md border border-border p-2">
 							{dependencyChoices.map((t) => (
 								<label

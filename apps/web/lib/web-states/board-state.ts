@@ -28,7 +28,10 @@ import {
 	finishAllProgressToasts,
 	showProgressToast,
 } from "@flow-like/flow-like-ui";
-import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
+import type {
+	CanvasSettings,
+	SurfaceComponent,
+} from "@flow-like/flow-like-ui/components/a2ui/types";
 import { apiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import type {
 	ChatImage,
@@ -40,6 +43,9 @@ import type {
 } from "@flow-like/flow-like-ui/lib/schema/copilot";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import type { IPrerunBoardResponse } from "@flow-like/flow-like-ui/state/backend-state/types";
+import { globalChatTransportRunId } from "@flow-like/flow-like-ui/state/global-chat/global-chat-run-control";
+import { runGlobalChatTool } from "@flow-like/flow-like-ui/state/global-chat/global-chat-tool-registry";
+import { dispatchSpecialistToolRequest } from "@flow-like/flow-like-ui/state/global-chat/global-chat-web-transport";
 import { toast } from "sonner";
 import { oauthConsentStore, oauthTokenStore } from "../oauth-db";
 import { getOAuthApiBaseUrl, getOAuthService } from "../oauth-service";
@@ -53,6 +59,18 @@ import {
 	getApiBaseUrl,
 } from "./api-utils";
 import { executionElementsFromResponse } from "./execution-elements";
+
+/** The request id inside a `tool_request` SSE payload, or undefined for a malformed frame. */
+function toolRequestIdOf(data: string): string | undefined {
+	try {
+		const parsed = JSON.parse(data) as { requestId?: unknown };
+		return typeof parsed.requestId === "string" && parsed.requestId.trim()
+			? parsed.requestId
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 // Hub configuration cache
 let hubCache: IHub | undefined;
@@ -816,6 +834,7 @@ export class WebBoardState implements IBoardState {
 		catalogNodes: INode[] | undefined,
 		selectedNodeIds: string[],
 		currentSurface: SurfaceComponent[] | null,
+		currentCanvasSettings: CanvasSettings | null,
 		selectedComponentIds: string[],
 		userPrompt: string,
 		history: UnifiedChatMessage[],
@@ -845,6 +864,11 @@ export class WebBoardState implements IBoardState {
 		}
 		const baseUrl = getApiBaseUrl();
 		const url = `${baseUrl}/api/v1/ai/copilot/chat`;
+		// The server minted the owning chat run's id; callers only hold the client id, so a nested
+		// specialist has to be addressed through the transport's mapping.
+		const specialistRunId = toolContext?.runId
+			? globalChatTransportRunId(toolContext.runId)
+			: undefined;
 
 		const headers: Record<string, string> = {
 			"Content-Type": "application/json",
@@ -873,6 +897,7 @@ export class WebBoardState implements IBoardState {
 					board,
 					selected_node_ids: selectedNodeIds,
 					current_surface: currentSurface,
+					current_canvas_settings: currentCanvasSettings,
 					selected_component_ids: selectedComponentIds,
 					user_prompt: userPrompt,
 					raw_user_prompt: rawUserPrompt,
@@ -886,6 +911,11 @@ export class WebBoardState implements IBoardState {
 					run_context: runContext,
 					action_context: actionContext,
 					app_id: contextAppId,
+					// Data Studio / Scout specialists run server-side but call their tools in this
+					// browser: they ride the owning chat run so results reach the endpoint the
+					// global chat already posts to, and stopping that run stops them too.
+					run_id: specialistRunId,
+					overlay_id: toolContext?.overlayId,
 					stream: wantsStream,
 				}),
 			});
@@ -905,6 +935,11 @@ export class WebBoardState implements IBoardState {
 				let buffer = "";
 				let result: UnifiedCopilotResponse | undefined;
 				let streamError: Error | undefined;
+				// A nested Data Studio / Scout specialist runs server-side but owns no tools of its
+				// own: they execute here, exactly like the orchestrator's, and their results go back
+				// over the owning chat run.
+				const toolDispatches = new Set<Promise<void>>();
+				const seenToolRequests = new Set<string>();
 
 				const handleEvent = (rawEvent: string) => {
 					if (!rawEvent.trim()) return;
@@ -926,6 +961,36 @@ export class WebBoardState implements IBoardState {
 
 					if (eventName === "token" || eventName === "message") {
 						onToken(data);
+						return;
+					}
+
+					if (eventName === "tool_request") {
+						if (!specialistRunId) {
+							streamError = new Error(
+								"Received a specialist tool request without an owning run id; the result cannot be routed.",
+							);
+							return;
+						}
+						// A redelivered frame must not run a mutating tool twice.
+						const requestId = toolRequestIdOf(data);
+						if (requestId) {
+							if (seenToolRequests.has(requestId)) return;
+							seenToolRequests.add(requestId);
+						}
+						const dispatch = dispatchSpecialistToolRequest({
+							baseUrl,
+							token: this.backend.auth?.user?.access_token,
+							runId: specialistRunId,
+							data,
+							onToolRequest: runGlobalChatTool,
+						}).catch((error) => {
+							// The specialist is blocked on this request; failing the stream beats
+							// leaving it to time out with no explanation.
+							streamError ??=
+								error instanceof Error ? error : new Error(String(error));
+						});
+						toolDispatches.add(dispatch);
+						void dispatch.finally(() => toolDispatches.delete(dispatch));
 						return;
 					}
 
@@ -975,6 +1040,11 @@ export class WebBoardState implements IBoardState {
 
 				buffer += decoder.decode();
 				if (buffer.trim()) handleEvent(buffer);
+				// A delivery failure for a tool still in flight when the stream ended belongs to
+				// this run, so wait for the dispatches before deciding the run succeeded.
+				if (toolDispatches.size > 0) {
+					await Promise.allSettled([...toolDispatches]);
+				}
 				if (streamError) throw streamError;
 				if (!result)
 					throw new Error("Copilot stream ended without a final event");

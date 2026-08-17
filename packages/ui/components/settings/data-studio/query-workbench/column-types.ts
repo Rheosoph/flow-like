@@ -1,3 +1,4 @@
+import { looksLikeTemporalName } from "../../../../lib/date";
 import type { QueryColumn } from "../../../../state/backend-state/query-state";
 
 export type ColumnKind = "number" | "temporal" | "boolean" | "json" | "text";
@@ -7,8 +8,11 @@ export function classifyColumn(column: QueryColumn): ColumnKind {
 	if (/bool/.test(type)) return "boolean";
 	if (/date|time|timestamp|instant|duration|interval/.test(type))
 		return "temporal";
-	if (/int|float|double|decimal|numeric|number|real|serial/.test(type))
-		return "number";
+	if (/int|float|double|decimal|numeric|number|real|serial/.test(type)) {
+		// An integer column named `created_at` holds an instant; the declared type
+		// is all the SQL layer knows, so the name is the only remaining signal.
+		return looksLikeTemporalName(column.name) ? "temporal" : "number";
+	}
 	if (/json|struct|list|array|map|object|record/.test(type)) return "json";
 	return "text";
 }

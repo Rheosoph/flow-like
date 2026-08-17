@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMemo } from "react";
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import {
@@ -39,6 +40,7 @@ function formatTick(value: string, bucket: string) {
 }
 
 export function ErrorChart({ points, bucket }: Readonly<ErrorChartProps>) {
+	const { t } = useTranslation("admin");
 	const data = useMemo(
 		() =>
 			points.map((p) => ({
@@ -52,7 +54,7 @@ export function ErrorChart({ points, bucket }: Readonly<ErrorChartProps>) {
 	if (data.length === 0) {
 		return (
 			<div className="flex h-64 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
-				No errors in the selected window.
+				{t('noErrorsInTheSelectedWindow', 'No errors in the selected window.')}
 			</div>
 		);
 	}

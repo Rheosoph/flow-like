@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="320" viewBox="0 0 960 320" role="img" aria-labelledby="title description">
+  <title id="title">Example course map</title>
+  <desc id="description">Introduction leads to a lesson and then a final assessment.</desc>
+  <rect width="960" height="320" rx="32" fill="#111827"/>
+  <g fill="none" stroke="#60a5fa" stroke-width="8">
+    <path d="M280 160h110"/>
+    <path d="M570 160h110"/>
+  </g>
+  <g font-family="system-ui, sans-serif" font-size="26" text-anchor="middle">
+    <rect x="60" y="95" width="220" height="130" rx="24" fill="#1d4ed8"/>
+    <text x="170" y="170" fill="white">Introduction</text>
+    <rect x="390" y="95" width="180" height="130" rx="24" fill="#0f766e"/>
+    <text x="480" y="170" fill="white">Lesson</text>
+    <rect x="680" y="95" width="220" height="130" rx="24" fill="#7c3aed"/>
+    <text x="790" y="155" fill="white">Final</text>
+    <text x="790" y="188" fill="white">assessment</text>
+  </g>
+</svg>

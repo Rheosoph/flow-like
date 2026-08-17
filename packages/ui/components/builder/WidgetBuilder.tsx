@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { useDroppable } from "@dnd-kit/core";
 import html2canvas from "html2canvas-pro";
 import {
@@ -33,6 +34,7 @@ import { useBackend } from "../../state/backend-state";
 import type { IWidgetRef } from "../../state/backend-state/page-state";
 import type { IWidget } from "../../state/backend-state/widget-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
+import { useRequestFabBubble } from "../../state/fab-bubble";
 import { A2UIRenderer } from "../a2ui/A2UIRenderer";
 import { applyA2UIMessage } from "../a2ui/apply-a2ui-message";
 import type {
@@ -123,7 +125,7 @@ function createRootComponent(): SurfaceComponent {
 	return {
 		id: ROOT_ID,
 		style: {
-			className: "flex-1 h-full overflow-auto",
+			className: `flex-1 h-full overflow-auto`,
 		},
 		component: {
 			type: "column",
@@ -204,6 +206,9 @@ export function WidgetBuilder({
 	onPageChange,
 	externalAssistant = false,
 }: WidgetBuilderProps) {
+	// Without an in-interface FlowPilot button the floating bubble is this builder's only way into
+	// the assistant, so ask for it exactly when we drop our own.
+	useRequestFabBubble(externalAssistant);
 	const [mode, setMode] = useState<"edit" | "preview">("edit");
 	const [leftTab, setLeftTab] = useState<"palette" | "hierarchy">("palette");
 	const [copilotOpen, setCopilotOpen] = useState(false);
@@ -301,6 +306,7 @@ function WidgetBuilderContent({
 	onPageChange,
 	externalAssistant,
 }: WidgetBuilderContentProps) {
+	const { t } = useTranslation("flow");
 	const {
 		components,
 		selection,
@@ -310,6 +316,7 @@ function WidgetBuilderContent({
 		deleteComponents,
 		widgetRefs,
 		actionContext,
+		canvasSettings,
 		setCanvasSettings,
 	} = useBuilder();
 	const { activeId } = useBuilderDnd();
@@ -362,7 +369,7 @@ function WidgetBuilderContent({
 	const handleApplyComponents = useCallback(
 		(
 			_components?: SurfaceComponent[],
-			canvasSettings?: {
+			appliedCanvasSettings?: {
 				backgroundColor?: string;
 				padding?: string;
 				customCss?: string;
@@ -370,9 +377,13 @@ function WidgetBuilderContent({
 		) => {
 			if (pendingComponents.length === 0) return;
 
-			// Apply canvas settings if provided
-			if (canvasSettings) {
-				setCanvasSettings(canvasSettings);
+			// Merge, never replace: the copilot omits fields it is not changing, and a plain
+			// assignment here dropped the surface's existing customCss whenever it sent back only
+			// a backgroundColor. The detached-page write path (`pageWithAppliedComponents`) has
+			// always merged — these two must agree or the same emit means different things
+			// depending on whether a builder happens to be open.
+			if (appliedCanvasSettings) {
+				setCanvasSettings({ ...canvasSettings, ...appliedCanvasSettings });
 			}
 
 			// Get root component BEFORE adding new components (to avoid stale closure)
@@ -443,6 +454,7 @@ function WidgetBuilderContent({
 			updateComponent,
 			addComponent,
 			setPendingComponents,
+			canvasSettings,
 			setCanvasSettings,
 		],
 	);
@@ -469,6 +481,7 @@ function WidgetBuilderContent({
 			pageId,
 			widgetId: kind === "widget" ? widgetId : undefined,
 			currentComponents,
+			currentCanvasSettings: canvasSettings,
 			selectedComponentIds: selectedIds,
 			captureScreenshot,
 			applyComponents: handleApplyComponents,
@@ -487,6 +500,7 @@ function WidgetBuilderContent({
 		actionContext?.pageId,
 		currentPageId,
 		currentComponents,
+		canvasSettings,
 		selectedIds,
 		captureScreenshot,
 		handleApplyComponents,
@@ -525,7 +539,7 @@ function WidgetBuilderContent({
 							onClick={() => setCopilotOpen(!copilotOpen)}
 						>
 							<SparklesIcon className="h-4 w-4" />
-							<span className="text-xs">FlowPilot</span>
+							<span className="text-xs">{t('flowpilot', 'FlowPilot')}</span>
 						</Button>
 					)}
 				</div>
@@ -563,11 +577,11 @@ function WidgetBuilderContent({
 									<TabsList className="w-full justify-start rounded-none border-b bg-transparent px-2 shrink-0">
 										<TabsTrigger value="palette" className="gap-1.5">
 											<Palette className="h-4 w-4" />
-											<span className="hidden sm:inline">Components</span>
+											<span className="hidden sm:inline">{t('components', 'Components')}</span>
 										</TabsTrigger>
 										<TabsTrigger value="hierarchy" className="gap-1.5">
 											<Layers className="h-4 w-4" />
-											<span className="hidden sm:inline">Hierarchy</span>
+											<span className="hidden sm:inline">{t('hierarchy', 'Hierarchy')}</span>
 										</TabsTrigger>
 									</TabsList>
 									<TabsContent
@@ -671,13 +685,13 @@ function PendingComponentsBar({
 	onApply,
 	onDismiss,
 }: PendingComponentsBarProps) {
+	const { t } = useTranslation("flow");
 	return (
 		<div className="flex items-center justify-between px-4 py-2 bg-primary/5 border-b border-primary/20 shrink-0">
 			<div className="flex items-center gap-2">
 				<SparklesIcon className="h-4 w-4 text-primary" />
-				<span className="text-sm font-medium">
-					{components.length} component{components.length !== 1 ? "s" : ""}{" "}
-					ready to apply
+				<span className="text-sm font-medium">{t('countComponents', { defaultValue_one: '{{count}} component', defaultValue_other: '{{count}} components', count: components.length })}{" "}
+					{t('readyToApply', 'ready to apply')}
 				</span>
 			</div>
 			<div className="flex items-center gap-2">
@@ -688,10 +702,10 @@ function PendingComponentsBar({
 					className="h-7 px-2 text-muted-foreground hover:text-destructive"
 				>
 					<XIcon className="h-4 w-4 mr-1" />
-					Dismiss
+					{t('dismiss', 'Dismiss')}
 				</Button>
 				<Button size="sm" onClick={onApply} className="h-7 px-3">
-					Apply Changes
+					{t('applyChanges', 'Apply Changes')}
 				</Button>
 			</div>
 		</div>
@@ -700,6 +714,7 @@ function PendingComponentsBar({
 
 // Visual Canvas - shows live preview with drop overlays
 function VisualCanvas({ surfaceId }: { surfaceId: string }) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const {
 		components,
@@ -963,7 +978,7 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 
 			{/* Canvas header with breadcrumb */}
 			<div className="flex items-center gap-2 px-3 py-2 border-b bg-background text-xs text-muted-foreground shrink-0">
-				<span>Canvas</span>
+				<span>{t('canvas', 'Canvas')}</span>
 				{selection.componentIds.length > 0 &&
 					selection.componentIds[0] !== ROOT_ID && (
 						<>
@@ -1027,7 +1042,7 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 							<div className="text-center text-muted-foreground">
 								<Plus className="h-8 w-8 mx-auto mb-2 opacity-50" />
 								<p className="text-sm">
-									Drop components here to start building
+									{t('dropComponentsHereToStartBuilding', 'Drop components here to start building')}
 								</p>
 							</div>
 						</div>
@@ -1043,6 +1058,7 @@ interface BuilderPreviewProps {
 }
 
 function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
 	const { components, canvasSettings, actionContext, widgetRefs } =

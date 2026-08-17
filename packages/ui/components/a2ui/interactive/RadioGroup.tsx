@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { cn } from "../../../lib/utils";
 import { Label } from "../../ui/label";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
@@ -25,6 +26,7 @@ export function A2UIRadioGroup({
 	componentId,
 	surfaceId,
 }: ComponentProps<RadioGroupComponent>) {
+	const { t } = useTranslation("common");
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const value = useResolved<string>(component.value);

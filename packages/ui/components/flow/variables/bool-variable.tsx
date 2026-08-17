@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { Label } from "../../../components/ui/label";
 import { Switch } from "../../../components/ui/switch";
 import type { IVariable } from "../../../lib/schema/flow/variable";
@@ -15,6 +16,7 @@ export function BoolVariable({
 	variable: IVariable;
 	onChange: (variable: IVariable) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	return (
 		<div className="flex items-center space-x-2">
 			<Switch
@@ -28,7 +30,7 @@ export function BoolVariable({
 				}
 				id="default_value"
 			/>
-			<Label htmlFor="default_value">Default Value</Label>
+			<Label htmlFor="default_value">{t('defaultValue', 'Default Value')}</Label>
 		</div>
 	);
 }

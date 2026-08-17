@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import {
@@ -52,6 +53,7 @@ import { useChat } from "../use-chat";
 import { AIChatEditor } from "./ai-chat-editor";
 
 export function AIMenu() {
+	const { t } = useTranslation("common");
 	const { api, editor } = useEditorPlugin(AIChatPlugin);
 	const open = usePluginOption(AIChatPlugin, "open");
 	const mode = usePluginOption(AIChatPlugin, "mode");
@@ -183,7 +185,7 @@ export function AIMenu() {
 								}
 							}}
 							onValueChange={setInput}
-							placeholder="Ask AI anything..."
+							placeholder={t('askAiAnything', 'Ask AI anything...')}
 							data-plate-focus
 							autoFocus
 						/>
@@ -520,12 +522,10 @@ export function AILoadingBar() {
 				className="flex items-center gap-1 text-xs"
 				onClick={() => api.aiChat.stop()}
 			>
-				<PauseIcon className="h-4 w-4" />
-				Stop
+				<PauseIcon className="h-4 w-4" /><Trans i18nKey="stopKbdClassnameml1RoundedBgborderPx1FontmonoText10pxTextmutedforegroundShadowsmEscKbd">Stop
 				<kbd className="ml-1 rounded bg-border px-1 font-mono text-[10px] text-muted-foreground shadow-sm">
 					Esc
-				</kbd>
-			</Button>
+				</kbd></Trans></Button>
 		</div>
 	);
 }

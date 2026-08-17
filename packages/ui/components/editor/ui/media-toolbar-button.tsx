@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import type { DropdownMenuProps } from "@radix-ui/react-dropdown-menu";
@@ -81,6 +82,7 @@ export function MediaToolbarButton({
 	nodeType,
 	...props
 }: DropdownMenuProps & { nodeType: string }) {
+	const { t } = useTranslation("common");
 	const currentConfig = MEDIA_CONFIG[nodeType];
 
 	const editor = useEditorRef();
@@ -135,7 +137,7 @@ export function MediaToolbarButton({
 							</DropdownMenuItem>
 							<DropdownMenuItem onSelect={() => setDialogOpen(true)}>
 								<LinkIcon />
-								Insert via URL
+								{t('insertViaUrl', 'Insert via URL')}
 							</DropdownMenuItem>
 						</DropdownMenuGroup>
 					</DropdownMenuContent>
@@ -169,6 +171,7 @@ function MediaUrlDialogContent({
 	nodeType: string;
 	setOpen: (value: boolean) => void;
 }) {
+	const { t } = useTranslation("common");
 	const editor = useEditorRef();
 	const [url, setUrl] = React.useState("");
 
@@ -212,14 +215,14 @@ function MediaUrlDialogContent({
 			</AlertDialogDescription>
 
 			<AlertDialogFooter>
-				<AlertDialogCancel>Cancel</AlertDialogCancel>
+				<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
 				<AlertDialogAction
 					onClick={(e) => {
 						e.preventDefault();
 						embedMedia();
 					}}
 				>
-					Accept
+					{t('accept', 'Accept')}
 				</AlertDialogAction>
 			</AlertDialogFooter>
 		</>

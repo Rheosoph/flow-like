@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { toast } from "sonner";
 
 export interface ProgressToastData {
@@ -13,6 +14,7 @@ export interface ProgressToastData {
 const activeProgressToasts = new Map<string, ProgressToastData>();
 
 function ProgressBarDescription({ progress }: { progress?: number }) {
+	const { t } = useTranslation("common");
 	const isIndeterminate = progress === undefined;
 	const clampedProgress =
 		progress !== undefined ? Math.max(0, Math.min(100, progress)) : 0;
@@ -33,9 +35,7 @@ function ProgressBarDescription({ progress }: { progress?: number }) {
 				)}
 			</div>
 			{!isIndeterminate && (
-				<span className="block text-right text-xs text-muted-foreground mt-1">
-					{clampedProgress}%
-				</span>
+				<span className="block text-right text-xs text-muted-foreground mt-1">{`${clampedProgress}%`}</span>
 			)}
 		</div>
 	);

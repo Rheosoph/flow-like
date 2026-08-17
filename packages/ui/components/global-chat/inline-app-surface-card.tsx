@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronDownIcon, LayoutGridIcon, XIcon } from "lucide-react";
 import { useState } from "react";
@@ -24,6 +25,7 @@ export function InlineAppSurfaceCard({
 	onClose,
 	compact = false,
 }: InlineAppSurfaceCardProps) {
+	const { t } = useTranslation("chat");
 	const [expanded, setExpanded] = useState(false);
 
 	return (
@@ -49,7 +51,7 @@ export function InlineAppSurfaceCard({
 						{surface.name}
 					</span>
 					<span className="ml-1 px-1.5 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-semibold uppercase tracking-wide shrink-0">
-						App UI
+						{t('appUi', 'App UI')}
 					</span>
 					<ChevronDownIcon
 						className={`size-4 text-muted-foreground shrink-0 ml-auto transition-transform ${expanded ? "" : "-rotate-90"}`}
@@ -59,7 +61,7 @@ export function InlineAppSurfaceCard({
 					variant="ghost"
 					size="icon"
 					className="h-7 w-7 rounded-full shrink-0 text-muted-foreground hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-					aria-label="Dismiss app UI"
+					aria-label={t('dismissAppUi', 'Dismiss app UI')}
 					onClick={() => onClose(surface.id)}
 				>
 					<XIcon className="size-3.5" />

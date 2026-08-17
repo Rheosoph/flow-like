@@ -1,4 +1,5 @@
 "use client";
+import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	AppLinkPicker,
 	type AppOption,
@@ -34,6 +35,7 @@ export default function CourseAdminPage() {
 }
 
 function CourseAdminContent() {
+	const { t } = useTranslation("common");
 	const auth = useAuth();
 	const searchParams = useSearchParams();
 	const courseId = searchParams.get("courseId") ?? "";
@@ -136,8 +138,8 @@ function CourseAdminContent() {
 			queryClient.invalidateQueries({ queryKey: ["learn", "courses"] });
 			toast.success(
 				args.item === "icon"
-					? "Course icon uploaded"
-					: "Course banner uploaded",
+					? t('courseIconUploaded', 'Course icon uploaded')
+					: t('courseBannerUploaded', 'Course banner uploaded'),
 			);
 		},
 		onError: (err) => {
@@ -166,16 +168,16 @@ function CourseAdminContent() {
 				<div className="mx-auto max-w-3xl p-6 md:p-10">
 					<Card>
 						<CardHeader>
-							<CardTitle>Course missing</CardTitle>
+							<CardTitle>{t('courseMissing', 'Course missing')}</CardTitle>
 							<CardDescription>
-								Open a course from the course admin library.
+								{`Open a course from the course admin library.`}
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
 							<Button asChild variant="outline">
 								<Link href="/learn/admin">
 									<ArrowLeft className="mr-2 h-4 w-4" />
-									Course admin
+									{t('courseAdmin', 'Course admin')}
 								</Link>
 							</Button>
 						</CardContent>
@@ -194,7 +196,7 @@ function CourseAdminContent() {
 						className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 					>
 						<ArrowLeft className="h-3 w-3" />
-						Authoring
+						{t('authoring', 'Authoring')}
 					</Link>
 					<h1 className="ml-auto text-2xl font-semibold truncate max-w-[60%]">
 						{course?.name ?? courseId}
@@ -209,13 +211,13 @@ function CourseAdminContent() {
 						}}
 					>
 						<Trash2 className="h-3.5 w-3.5 mr-1.5" />
-						Delete
+						{t('delete', 'Delete')}
 					</Button>
 				</div>
 
 				<Card>
 					<CardHeader>
-						<CardTitle className="text-base">Course details</CardTitle>
+						<CardTitle className="text-base">{t('courseDetails', 'Course details')}</CardTitle>
 					</CardHeader>
 					<CardContent>
 						<CourseForm
@@ -287,6 +289,7 @@ interface ModulesEditorProps {
 }
 
 function ModulesEditor({ courseId, modules, onChanged }: ModulesEditorProps) {
+	const { t } = useTranslation("common");
 	const auth = useAuth();
 	const router = useRouter();
 	const backend = useBackend();
@@ -370,8 +373,8 @@ function ModulesEditor({ courseId, modules, onChanged }: ModulesEditorProps) {
 				moduleId,
 				lessonId,
 				{
-					title: "New lesson",
-					content: "# New lesson\n\nStart writing…",
+					title: t('newLesson', 'New lesson'),
+					content: t('newLessonStartWriting', "# New lesson Start writing…"),
 					position,
 				},
 			);
@@ -388,9 +391,9 @@ function ModulesEditor({ courseId, modules, onChanged }: ModulesEditorProps) {
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-base">Modules & lessons</CardTitle>
+				<CardTitle className="text-base">{t('modulesLessons', 'Modules & lessons')}</CardTitle>
 				<CardDescription>
-					Modules group lessons. Reorder via the position field.
+					{t('modulesGroupLessonsReorderViaThePositionField', 'Modules group lessons. Reorder via the position field.')}
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-4">
@@ -406,31 +409,29 @@ function ModulesEditor({ courseId, modules, onChanged }: ModulesEditorProps) {
 							htmlFor="new-module-title"
 							className="text-xs font-medium text-muted-foreground"
 						>
-							New module title
+							{t('newModuleTitle', 'New module title')}
 						</label>
 						<Input
 							id="new-module-title"
 							value={newTitle}
 							onChange={(e) => setNewTitle(e.target.value)}
-							placeholder="Getting started"
+							placeholder={t('gettingStarted', 'Getting started')}
 						/>
 					</div>
 					<Button type="submit" disabled={createModule.isPending || !profile}>
 						<Plus className="h-4 w-4 mr-2" />
-						Add module
+						{t('addModule', 'Add module')}
 					</Button>
 				</form>
 
 				{modules.length === 0 ? (
-					<p className="text-sm text-muted-foreground">No modules yet.</p>
+					<p className="text-sm text-muted-foreground">{t('noModulesYet', 'No modules yet.')}</p>
 				) : (
 					<ul className="space-y-3">
 						{modules.map((m) => (
 							<li key={m.id} className="rounded-md border p-3 space-y-2">
 								<div className="flex items-center gap-2">
-									<span className="text-xs font-mono text-muted-foreground">
-										#{m.position}
-									</span>
+									<span className="text-xs font-mono text-muted-foreground">{`#${m.position}`}</span>
 									{editingId === m.id ? (
 										<form
 											className="flex flex-1 items-center gap-2"
@@ -465,7 +466,7 @@ function ModulesEditor({ courseId, modules, onChanged }: ModulesEditorProps) {
 												size="sm"
 												disabled={renameModule.isPending || !editTitle.trim()}
 											>
-												Save
+												{t('save', 'Save')}
 											</Button>
 											<Button
 												type="button"
@@ -474,7 +475,7 @@ function ModulesEditor({ courseId, modules, onChanged }: ModulesEditorProps) {
 												onClick={() => setEditingId(null)}
 												disabled={renameModule.isPending}
 											>
-												Cancel
+												{t('cancel', 'Cancel')}
 											</Button>
 										</form>
 									) : (
@@ -519,9 +520,7 @@ function ModulesEditor({ courseId, modules, onChanged }: ModulesEditorProps) {
 													)
 												}
 											>
-												<span className="text-xs font-mono text-muted-foreground w-6">
-													#{l.position}
-												</span>
+												<span className="text-xs font-mono text-muted-foreground w-6">{`#${l.position}`}</span>
 												<span className="flex-1">{l.title}</span>
 												{l.is_optional && (
 													<Badge variant="outline" className="text-[10px]">
@@ -546,7 +545,7 @@ function ModulesEditor({ courseId, modules, onChanged }: ModulesEditorProps) {
 											disabled={createLesson.isPending}
 										>
 											<Plus className="h-3 w-3 mr-2" />
-											Add lesson
+											{t('addLesson', 'Add lesson')}
 										</Button>
 									</li>
 								</ul>
@@ -577,6 +576,7 @@ function AppLinksEditor({
 	appOptions,
 	onChanged,
 }: AppLinksEditorProps) {
+	const { t } = useTranslation("common");
 	const auth = useAuth();
 	const backend = useBackend();
 	const profileQuery = useInvoke(
@@ -623,12 +623,9 @@ function AppLinksEditor({
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-base">Linked apps</CardTitle>
-				<CardDescription>
-					Apps used by this course. <strong>Shared template</strong> /
-					Playground apps are forked into the user's library on first encounter.{" "}
-					<strong>Reference</strong> apps are read-only links.
-				</CardDescription>
+				<CardTitle className="text-base">{t('linkedApps', 'Linked apps')}</CardTitle>
+				<CardDescription><Trans i18nKey="appsUsedByThisCourseStrongsharedTemplatestrongPlaygroundAppsAreForkedIntoTheUsersLibraryOnFirstEncounter">Apps used by this course. <strong>Shared template</strong> /
+					Playground apps are forked into the user's library on first encounter.</Trans>{" "}<Trans i18nKey="strongreferencestrongAppsAreReadonlyLinks"><strong>Reference</strong> apps are read-only links.</Trans></CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-4">
 				<div className="space-y-2 rounded-md border p-3 bg-muted/20">
@@ -638,12 +635,12 @@ function AppLinksEditor({
 						disabled={!draft.appId || upsert.isPending || !profile}
 					>
 						<Plus className="h-4 w-4 mr-2" />
-						Add link
+						{t('addLink', 'Add link')}
 					</Button>
 				</div>
 
 				{links.length === 0 ? (
-					<p className="text-sm text-muted-foreground">No apps linked yet.</p>
+					<p className="text-sm text-muted-foreground">{t('noAppsLinkedYet', 'No apps linked yet.')}</p>
 				) : (
 					<ul className="space-y-2">
 						{links.map((l) => (

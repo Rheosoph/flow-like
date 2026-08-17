@@ -16,7 +16,10 @@ import type {
 	IVersionType,
 } from "../../../";
 import type { IJwks, IRealtimeAccess } from "../../../";
-import type { SurfaceComponent } from "../../../components/a2ui/types";
+import type {
+	CanvasSettings,
+	SurfaceComponent,
+} from "../../../components/a2ui/types";
 import type {
 	ChatImage,
 	CopilotScope,
@@ -181,6 +184,7 @@ export class EmptyBoardState implements IBoardState {
 		catalogNodes: INode[] | undefined,
 		selectedNodeIds: string[],
 		currentSurface: SurfaceComponent[] | null,
+		currentCanvasSettings: CanvasSettings | null,
 		selectedComponentIds: string[],
 		userPrompt: string,
 		history: UnifiedChatMessage[],

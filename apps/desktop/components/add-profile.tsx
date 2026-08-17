@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	Dialog,
@@ -34,6 +35,7 @@ export const CreateProfileDialog: React.FC<CreateProfileDialogProps> = ({
 	triggerLabel = "New Profile",
 	defaultOpen = false,
 }) => {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const currentProfile = useInvoke(
 		backend.userState.getSettingsProfile,
@@ -76,9 +78,9 @@ export const CreateProfileDialog: React.FC<CreateProfileDialogProps> = ({
 		<Dialog open={open} onOpenChange={setOpen}>
 			<DialogContent className="sm:max-w-lg">
 				<DialogHeader>
-					<DialogTitle>Create Profile</DialogTitle>
+					<DialogTitle>{t('createProfile', 'Create Profile')}</DialogTitle>
 					<DialogDescription>
-						Provide a name and optional description.
+						{t('provideANameAndOptionalDescription', 'Provide a name and optional description.')}
 					</DialogDescription>
 				</DialogHeader>
 
@@ -89,20 +91,20 @@ export const CreateProfileDialog: React.FC<CreateProfileDialogProps> = ({
 							id="create-profile-name"
 							value={name}
 							onChange={(e) => setName(e.target.value)}
-							placeholder="Profile name"
+							placeholder={t('profileName', 'Profile name')}
 							autoFocus
 						/>
 					</div>
 
 					<div className="space-y-2">
 						<Label htmlFor="create-profile-description">
-							Description (optional)
+							{t('descriptionOptional', 'Description (optional)')}
 						</Label>
 						<Textarea
 							id="create-profile-description"
 							value={description}
 							onChange={(e) => setDescription(e.target.value)}
-							placeholder="Short description..."
+							placeholder={t('shortDescription', 'Short description...')}
 							rows={3}
 						/>
 					</div>
@@ -110,7 +112,7 @@ export const CreateProfileDialog: React.FC<CreateProfileDialogProps> = ({
 
 				<DialogFooter>
 					<DialogClose asChild>
-						<Button variant="ghost">Cancel</Button>
+						<Button variant="ghost">{t('cancel', 'Cancel')}</Button>
 					</DialogClose>
 					<Button
 						onClick={handleCreate}
@@ -118,7 +120,7 @@ export const CreateProfileDialog: React.FC<CreateProfileDialogProps> = ({
 						className="flex items-center gap-2"
 					>
 						<Save className="h-4 w-4" />
-						Create
+						{t('create', 'Create')}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

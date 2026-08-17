@@ -255,6 +255,23 @@ declare function pdfAddWatermark({ template: Struct, text: string, fontSize?: fl
 declare function pdfCompress({ template: Struct, output: Struct }): { result: Struct, originalSize: int, compressedSize: int };
 
 /**
+ * Typesets Markdown into a paginated PDF with selectable text, tables, code blocks, charts and embedded images
+ * @param markdown — Markdown source to typeset
+ * @param output — Save path
+ * @param pageSize (optional) — Page geometry
+ * @param embedImages (optional) — Download and embed images referenced by the Markdown. Disable to render placeholders instead.
+ * @param pageNumbers (optional) — Print a page number in the footer
+ * @param title (optional) — Document title. Also sets the running header and the cover block.
+ * @param subtitle (optional) — Secondary line under the title on the cover block
+ * @param cover (optional) — Open the document with the accent title block
+ * @param author (optional) — Document author metadata
+ * @returns result — Output file path
+ * @returns pages — Number of pages written
+ * @impure has side effects / drives control flow
+ */
+declare function pdfCreateFromMarkdown({ markdown: string, output: Struct, pageSize?: string, embedImages?: bool, pageNumbers?: bool, title?: string, subtitle?: string, cover?: bool, author?: string }): { result: Struct, pages: int };
+
+/**
  * Remove password protection from a PDF using the owner or user password.
  * @param template — Encrypted PDF file
  * @param password — Owner or user password

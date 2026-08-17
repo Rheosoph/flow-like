@@ -299,8 +299,8 @@ export function teamRowClass(
 		"group/row flex gap-3 rounded-xl border bg-card px-3 py-2.5 transition-colors",
 		align === "center" ? "items-center" : "items-start",
 		attention
-			? "border-primary/40 bg-primary/5 hover:border-primary hover:bg-primary/10"
-			: "border-border/60 hover:border-border hover:bg-muted/40",
+			? `border-primary/40 bg-primary/5 hover:border-primary hover:bg-primary/10`
+			: `border-border/60 hover:border-border hover:bg-muted/40`,
 		muted && "opacity-70",
 	);
 }

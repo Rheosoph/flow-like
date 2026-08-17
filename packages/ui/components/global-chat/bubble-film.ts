@@ -28,12 +28,59 @@ export interface BubbleFilmUniforms {
 	sat: number;
 	pop: number;
 	spinMix: number;
-	/** Satellite orbit radius. 0 keeps the shader's built-in one. */
-	satOrbit: number;
-	/** xy per satellite, film space. Only read where `satDock` is above 0. */
-	satPos: Float32Array;
-	satDock: Float32Array;
-	satShrink: Float32Array;
+	/** 1 removes the body and its satellites, leaving the blob field to carry the film. */
+	bodyOff: number;
+	/**
+	 * The mark's nominal half-extent, for the directional grade and the window streak. 0 uses
+	 * `boxX`/`boxY`, which is right whenever the body is the whole mark; a pose whose body shrinks
+	 * while blobs carry the silhouette has to pass the size the mark still reads as.
+	 */
+	gradeX: number;
+	gradeY: number;
+	/**
+	 * Light-mode saturation punch. 0 keeps the shader's built-in 2.45, which was tuned against the
+	 * 72px launcher; a film rendered much larger reads as hot magenta at that value and should pass
+	 * its own — the empty-state mark uses 1.35.
+	 */
+	satL: number;
+	/** Eight blobs, packed xy centre / radius / presence. Presence 0 is a no-op. */
+	blob: Float32Array;
+	/** Per-blob smooth-min radius. 0 is a hard union. */
+	blobK: Float32Array;
+	/** Per-blob 0 wobble space … 1 screen space. Aim at a DOM rect in screen space. */
+	blobUv: Float32Array;
+}
+
+export const BUBBLE_BLOB_COUNT = 8;
+
+/**
+ * Writes one blob into the uniform block. Radii below a pixel or so are dropped rather than
+ * clamped: `length(p - o) - 0` is 0 at the centre, which lights a singular bright point.
+ */
+export function setBubbleBlob(
+	u: BubbleFilmUniforms,
+	index: number,
+	x: number,
+	y: number,
+	radius: number,
+	smooth = 0,
+	screenSpace = 0,
+) {
+	if (index < 0 || index >= BUBBLE_BLOB_COUNT || !(radius > 0.0012)) return;
+	const at = index * 4;
+	u.blob[at] = x;
+	u.blob[at + 1] = y;
+	u.blob[at + 2] = radius;
+	u.blob[at + 3] = 1;
+	u.blobK[index] = smooth;
+	u.blobUv[index] = screenSpace;
+}
+
+/** Clears the blob field. A frame callback owns every blob it wants, so it starts from empty. */
+export function clearBubbleBlobs(u: BubbleFilmUniforms) {
+	u.blob.fill(0);
+	u.blobK.fill(0);
+	u.blobUv.fill(0);
 }
 
 export interface BubbleFilmHandle {
@@ -68,10 +115,13 @@ function createUniforms(): BubbleFilmUniforms {
 		sat: 0,
 		pop: 0,
 		spinMix: 0,
-		satOrbit: 0,
-		satPos: new Float32Array(6),
-		satDock: new Float32Array(3),
-		satShrink: new Float32Array(3),
+		bodyOff: 0,
+		gradeX: 0,
+		gradeY: 0,
+		satL: 0,
+		blob: new Float32Array(BUBBLE_BLOB_COUNT * 4),
+		blobK: new Float32Array(BUBBLE_BLOB_COUNT),
+		blobUv: new Float32Array(BUBBLE_BLOB_COUNT),
 	};
 }
 
@@ -155,10 +205,12 @@ export function createBubbleFilm({
 	const uSat = at("u_sat");
 	const uPop = at("u_pop");
 	const uSpinMix = at("u_spin_mix");
-	const uSatOrbit = at("u_sat_orbit");
-	const uSatPos = at("u_sat_pos[0]");
-	const uSatDock = at("u_sat_dock[0]");
-	const uSatShrink = at("u_sat_shrink[0]");
+	const uBodyOff = at("u_body_off");
+	const uGrade = at("u_grade");
+	const uSatL = at("u_sat_l");
+	const uBlob = at("u_blob[0]");
+	const uBlobK = at("u_blob_k[0]");
+	const uBlobUv = at("u_blob_uv[0]");
 
 	const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 	const u = createUniforms();
@@ -188,10 +240,12 @@ export function createBubbleFilm({
 		gl.uniform1f(uSat, u.sat);
 		gl.uniform1f(uPop, u.pop);
 		gl.uniform1f(uSpinMix, u.spinMix);
-		gl.uniform1f(uSatOrbit, u.satOrbit);
-		gl.uniform2fv(uSatPos, u.satPos);
-		gl.uniform1fv(uSatDock, u.satDock);
-		gl.uniform1fv(uSatShrink, u.satShrink);
+		gl.uniform1f(uBodyOff, u.bodyOff);
+		gl.uniform2f(uGrade, u.gradeX, u.gradeY);
+		gl.uniform1f(uSatL, u.satL);
+		gl.uniform4fv(uBlob, u.blob);
+		gl.uniform1fv(uBlobK, u.blobK);
+		gl.uniform1fv(uBlobUv, u.blobUv);
 		gl.clearColor(0, 0, 0, 0);
 		gl.clear(gl.COLOR_BUFFER_BIT);
 		gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -199,6 +253,7 @@ export function createBubbleFilm({
 
 	/** Reduced motion still gets a per-state still frame, not one shared pose. */
 	const still = () => {
+		clearBubbleBlobs(u);
 		frame(0, u, true);
 		draw();
 	};
@@ -241,6 +296,9 @@ export function createBubbleFilm({
 		if (!running) return;
 		const dt = last ? Math.min((ms - last) / 1000, 0.05) : 0.016;
 		last = ms;
+		// The blob field is owned per frame, never accumulated: a caller that stops writing a
+		// blob has removed it, and never has to remember to clear one it no longer wants.
+		clearBubbleBlobs(u);
 		frame(dt, u, false);
 		if (++frames % 20 === 0) lightTarget = themeIsLight() ? 1 : 0;
 		light += (lightTarget - light) * 0.08;

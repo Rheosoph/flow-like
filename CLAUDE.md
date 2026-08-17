@@ -142,6 +142,34 @@ node.add_output_pin("output_log", "Log", …);
 
 ---
 
+## Translations (packages/locales/)
+
+All user-facing strings for the desktop app, the web app and `packages/ui` live
+in `packages/locales/locales/{lang}/{namespace}.json`. Namespaces: `common`
+(default), `nav`, `settings`, `flow`, `store`.
+
+```tsx
+import { useTranslation } from "@flow-like/locales";
+
+const { t } = useTranslation();              // `common`
+const { t } = useTranslation("settings");    // one namespace
+t("settings:theme.light");                   // explicit namespace
+```
+
+Keys are type-checked against `locales/en/*.json` — a typo fails the build.
+Never hand-add a key to a non-English file and never copy the English string
+into it; an untranslated value must stay empty so it shows as missing.
+
+```bash
+mise run i18n:studio     # UI for editing the JSON files
+mise run i18n:extract    # pull new t() keys into every locale (also prunes dead ones)
+mise run i18n:status     # coverage per locale
+mise run i18n:lint       # find hardcoded strings that should go through t()
+```
+
+Adding a language is a JSON change (`locales/config.json` + a folder). Adding a
+namespace also needs an import in `packages/locales/src/resources.ts`.
+
 ## API Guidelines (packages/api/)
 
 - **Always** verify user access to resources with `ensure_permission!(user, &app_id, &state, RolePermissions::<Permission>)` and enforce in SQL queries. Check comparable endpoints for the pattern.

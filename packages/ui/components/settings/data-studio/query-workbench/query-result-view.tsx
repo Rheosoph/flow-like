@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	AlertCircle,
 	BarChart3,
@@ -86,6 +87,7 @@ export function QueryResultView({
 	onVizConfigChange: (config: VizConfig) => void;
 	onRun?: () => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const view: VizView = vizConfig.view ?? "table";
 	const columns = useMemo(() => result?.columns ?? [], [result]);
 	const rows = useMemo(() => result?.rows ?? [], [result]);
@@ -131,7 +133,7 @@ export function QueryResultView({
 				>
 					<div className="flex items-center justify-between gap-2 border-b border-destructive/20 bg-destructive/10 px-4 py-2.5">
 						<span className="flex items-center gap-2 text-sm font-semibold text-destructive">
-							<AlertCircle className="h-4 w-4" /> Query failed
+							<AlertCircle className="h-4 w-4" /> {t('queryFailed', 'Query failed')}
 						</span>
 						<Button
 							variant="ghost"
@@ -142,7 +144,7 @@ export function QueryResultView({
 								toast.success("Copied error");
 							}}
 						>
-							<Copy className="h-3.5 w-3.5" /> Copy
+							<Copy className="h-3.5 w-3.5" /> {t('copy', 'Copy')}
 						</Button>
 					</div>
 					<pre className="max-h-64 overflow-auto whitespace-pre-wrap wrap-break-word px-4 py-3 font-mono text-xs text-destructive">
@@ -169,14 +171,14 @@ export function QueryResultView({
 				</div>
 				<div className="space-y-1">
 					<p className="text-sm font-medium text-foreground">
-						Run a query to see results
+						{t('runAQueryToSeeResults', 'Run a query to see results')}
 					</p>
 					<p className="mx-auto max-w-xs text-xs text-muted-foreground">
-						Write SQL and press{" "}
+						{t('writeSqlAndPress', 'Write SQL and press')}{" "}
 						<kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
-							⌘↵
+							{`⌘↵`}
 						</kbd>{" "}
-						to run. Results render as a table, chart, or relationship graph.
+						{t('toRunResultsRenderAsATableChartOrRelationshipGraph', 'to run. Results render as a table, chart, or relationship graph.')}
 					</p>
 				</div>
 				{onRun && (
@@ -186,7 +188,7 @@ export function QueryResultView({
 						className="gap-1.5"
 						onClick={onRun}
 					>
-						<Play className="h-3.5 w-3.5" /> Run query
+						<Play className="h-3.5 w-3.5" /> {t('runQuery', 'Run query')}
 					</Button>
 				)}
 			</div>
@@ -206,16 +208,16 @@ export function QueryResultView({
 			<div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 p-2">
 				<TabsList className="h-8">
 					<TabsTrigger value="table" className="gap-1.5 text-xs">
-						<TableIcon className="h-3.5 w-3.5" /> Table
+						<TableIcon className="h-3.5 w-3.5" /> {t('table', 'Table')}
 					</TabsTrigger>
 					<TabsTrigger value="chart" className="gap-1.5 text-xs">
-						<BarChart3 className="h-3.5 w-3.5" /> Chart
+						<BarChart3 className="h-3.5 w-3.5" /> {t('chart', 'Chart')}
 					</TabsTrigger>
 					<TabsTrigger value="graph" className="gap-1.5 text-xs">
-						<Share2 className="h-3.5 w-3.5" /> Graph
+						<Share2 className="h-3.5 w-3.5" /> {t('graph', 'Graph')}
 					</TabsTrigger>
 					<TabsTrigger value="json" className="gap-1.5 text-xs">
-						<Braces className="h-3.5 w-3.5" /> JSON
+						<Braces className="h-3.5 w-3.5" /> {`JSON`}
 					</TabsTrigger>
 				</TabsList>
 
@@ -226,15 +228,15 @@ export function QueryResultView({
 							<Input
 								value={filter}
 								onChange={(event) => setFilter(event.target.value)}
-								placeholder="Filter rows…"
-								aria-label="Filter result rows"
+								placeholder={t('filterRows', 'Filter rows…')}
+								aria-label={t('filterResultRows', 'Filter result rows')}
 								className="h-8 w-40 pl-8 pr-7 text-xs"
 							/>
 							{filter && (
 								<button
 									type="button"
 									onClick={() => setFilter("")}
-									aria-label="Clear filter"
+									aria-label={t('clearFilter', 'Clear filter')}
 									className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
 								>
 									<X className="h-3.5 w-3.5" />
@@ -255,7 +257,7 @@ export function QueryResultView({
 							variant="secondary"
 							className="bg-amber-500/10 text-xs text-amber-600 dark:text-amber-400"
 						>
-							Truncated
+							{t('truncated', 'Truncated')}
 						</Badge>
 					)}
 
@@ -267,7 +269,7 @@ export function QueryResultView({
 								className="h-8 gap-1.5 px-2 text-xs"
 								disabled={rows.length === 0}
 							>
-								<Download className="h-3.5 w-3.5" /> Export
+								<Download className="h-3.5 w-3.5" /> {t('export', 'Export')}
 							</Button>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="end" className="w-40">
@@ -275,10 +277,10 @@ export function QueryResultView({
 								<SheetIcon className="h-3.5 w-3.5" /> CSV
 							</DropdownMenuItem>
 							<DropdownMenuItem onClick={exportJson}>
-								<FileJson className="h-3.5 w-3.5" /> JSON
+								<FileJson className="h-3.5 w-3.5" /> {`JSON`}
 							</DropdownMenuItem>
 							<DropdownMenuItem onClick={copyMarkdown}>
-								<Copy className="h-3.5 w-3.5" /> Copy as Markdown
+								<Copy className="h-3.5 w-3.5" /> {t('copyAsMarkdown', 'Copy as Markdown')}
 							</DropdownMenuItem>
 						</DropdownMenuContent>
 					</DropdownMenu>
@@ -295,9 +297,7 @@ export function QueryResultView({
 					) : matched === 0 ? (
 						<div className="flex h-full items-center justify-center p-8 text-center text-sm text-muted-foreground">
 							<div>
-								<SearchX className="mx-auto mb-2 h-6 w-6 opacity-60" />
-								No rows match “{filter}”.
-							</div>
+								<SearchX className="mx-auto mb-2 h-6 w-6 opacity-60" />{t('noRowsMatchFilter', 'No rows match “{{filter}}”.', { filter })}</div>
 						</div>
 					) : (
 						<QueryResultTable columns={columns} rows={filteredRows} />
@@ -348,12 +348,13 @@ export function QueryResultView({
 }
 
 function EmptyResult() {
+	const { t } = useTranslation("settings");
 	return (
 		<div className="flex h-full items-center justify-center p-8 text-center">
 			<div className="flex flex-col items-center gap-2 text-sm text-muted-foreground">
 				<SearchX className="h-7 w-7 opacity-60" />
-				<p className="font-medium text-foreground">0 rows</p>
-				<p>The query ran but matched nothing.</p>
+				<p className="font-medium text-foreground">{t('0Rows', '0 rows')}</p>
+				<p>{t('theQueryRanButMatchedNothing', 'The query ran but matched nothing.')}</p>
 			</div>
 		</div>
 	);

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { cn } from "../../../lib/utils";
 import { Label } from "../../ui/label";
 import { Switch } from "../../ui/switch";
@@ -21,6 +22,7 @@ export function A2UISwitch({
 	componentId,
 	surfaceId,
 }: ComponentProps<SwitchComponent>) {
+	const { t } = useTranslation("common");
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const checked = useResolved<boolean>(component.checked);

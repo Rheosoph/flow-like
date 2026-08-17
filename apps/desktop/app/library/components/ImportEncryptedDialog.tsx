@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	Dialog,
@@ -32,6 +33,7 @@ const ImportEncryptedDialog: React.FC<ImportEncryptedDialogProps> = ({
 	path,
 	onImported,
 }) => {
+	const { t } = useTranslation("common");
 	const [password, setPassword] = useState("");
 	const [show, setShow] = useState(false);
 	const [loading, setLoading] = useState(false);
@@ -47,8 +49,8 @@ const ImportEncryptedDialog: React.FC<ImportEncryptedDialogProps> = ({
 	const handleImport = useCallback(async () => {
 		if (!path) return;
 		setLoading(true);
-		const toastId = toast.loading("Importing encrypted app...", {
-			description: "Decrypting and importing. Please wait.",
+		const toastId = toast.loading(t('importingEncryptedApp', 'Importing encrypted app...'), {
+			description: t('decryptingAndImportingPleaseWait', 'Decrypting and importing. Please wait.'),
 		});
 		try {
 			const app = await invoke<IApp>("import_app_from_file", {
@@ -59,12 +61,12 @@ const ImportEncryptedDialog: React.FC<ImportEncryptedDialogProps> = ({
 				visibility: app.visibility ?? IAppVisibility.Offline,
 				appId: app.id,
 			});
-			toast.success("App imported successfully!", { id: toastId });
+			toast.success(t('appImportedSuccessfully', 'App imported successfully!'), { id: toastId });
 			onOpenChange(false);
 			await onImported();
 		} catch (err) {
 			console.error(err);
-			toast.error("Failed to import app", { id: toastId });
+			toast.error(`Failed to import app`, { id: toastId });
 		} finally {
 			setLoading(false);
 		}
@@ -78,10 +80,10 @@ const ImportEncryptedDialog: React.FC<ImportEncryptedDialogProps> = ({
 						<LockIcon className="h-6 w-6 text-primary" />
 					</div>
 					<DialogTitle className="text-center text-2xl font-bold">
-						Import Encrypted App
+						{t('importEncryptedApp', 'Import Encrypted App')}
 					</DialogTitle>
 					<DialogDescription className="text-center text-muted-foreground">
-						This file is encrypted. Enter the password to decrypt and import it.
+						{`This file is encrypted. Enter the password to decrypt and import it.`}
 					</DialogDescription>
 				</DialogHeader>
 
@@ -91,7 +93,7 @@ const ImportEncryptedDialog: React.FC<ImportEncryptedDialogProps> = ({
 							htmlFor="import-password"
 							className="text-xs text-muted-foreground"
 						>
-							Password
+							{t('password', 'Password')}
 						</label>
 						<div className="relative">
 							<Input
@@ -99,7 +101,7 @@ const ImportEncryptedDialog: React.FC<ImportEncryptedDialogProps> = ({
 								type={show ? "text" : "password"}
 								value={password}
 								onChange={(e) => setPassword(e.target.value)}
-								placeholder="Enter password"
+								placeholder={t('enterPassword', 'Enter password')}
 								autoFocus
 							/>
 							<Button
@@ -123,7 +125,7 @@ const ImportEncryptedDialog: React.FC<ImportEncryptedDialogProps> = ({
 				<DialogFooter className="flex flex-row gap-1 justify-center pt-2">
 					<DialogClose asChild>
 						<Button variant="outline" disabled={loading}>
-							Cancel
+							{t('cancel', 'Cancel')}
 						</Button>
 					</DialogClose>
 					<Button

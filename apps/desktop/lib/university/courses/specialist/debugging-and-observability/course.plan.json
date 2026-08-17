@@ -1,0 +1,918 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-debugging-and-observability",
+		"name": "Debug Like a Pro",
+		"language": "en",
+		"slug": "debugging-and-observability",
+		"difficulty": "INTERMEDIATE",
+		"category": "FLOWS",
+		"estimatedMinutes": 75,
+		"isPublished": true,
+		"iconUrl": null,
+		"bannerUrl": null,
+		"tags": ["debugging", "runs", "logs", "testing", "versions"],
+		"position": 10,
+		"description": "Broken flows are normal. Guessing is optional — follow the run, read the log, fix one thing, prove it.",
+		"longDescription": "A field guide to fixing broken flows under pressure. It's Friday, 16:58, the support app stopped replying, and you have a run log and thirty minutes: reproduce the failure from run history, read per-node logs like a flight recorder, trace bad values across execution and data wires, write logs that diagnose for you, snapshot a version before every fix, and prove the repair through the real invocation path.",
+		"media": {
+			"icon": "media/app-logo.webp",
+			"banner": "assets/course-banner.webp"
+		},
+		"assets": [
+			{
+				"name": "DebugLoop",
+				"file": "assets/debug-loop.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "debug-loop.webp",
+				"replace": true
+			},
+			{
+				"name": "RunsAndLogs",
+				"file": "assets/RunsAndLogs.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "RunsAndLogs.webp",
+				"replace": true
+			},
+			{
+				"name": "FlowLikeStudio",
+				"file": "assets/FlowLikeStudio.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "FlowLikeStudio.webp",
+				"replace": true
+			},
+			{
+				"name": "BoardVersions",
+				"file": "assets/BoardVersions.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "BoardVersions.webp",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "course-debugging-and-observability.module.read-the-evidence",
+				"title": "Read the Evidence",
+				"description": "Meet the debug loop, then the run history that makes guessing unnecessary.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "course-debugging-and-observability.lesson.debug-loop",
+						"title": "Your flow failed. Now what?",
+						"language": "en",
+						"contentFile": "content/your-flow-failed-now-what.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-debug-first-move",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "16:58 — the support app stopped replying, and a failed run is sitting in the run history. Per the debug loop, what do you do before touching any node on the board?",
+								"explanation": "Step 1 is Reproduce: run the flow again with the same input, so the bug becomes something you can trigger on demand. Re-reading the board feels productive, but it spends your thirty minutes on nodes that were never the problem — the run's trace already names the failing node.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "reproduce-same-input",
+											"label": "Reproduce the failure by running the flow again with the same input"
+										},
+										{
+											"id": "reread-board",
+											"label": "Re-read every node and wire on the board, looking for something suspicious"
+										},
+										{
+											"id": "recent-edit",
+											"label": "Change the node that was edited most recently — that's usually the culprit"
+										},
+										{
+											"id": "add-logging-wait",
+											"label": "Add more logging everywhere, then wait for the next customer to hit the bug"
+										}
+									],
+									"correct": ["reproduce-same-input"]
+								}
+							},
+							{
+								"id": "challenge-debug-loop-facts",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which of these statements match the debug loop in @DebugLoop?",
+								"explanation": "Reproduce and Verify both use the same input that failed, and the fix is the smallest change that explains the evidence. A failed verify does not restart you from zero — the dashed arrow says loop again with one more fact than last time. And the loop never starts with fixing: a fix chosen before the evidence is a guess.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "same-input",
+											"label": "Reproduce with the same input that failed, not a fresh one"
+										},
+										{
+											"id": "smallest-change",
+											"label": "Fix the smallest change that explains the evidence — then stop"
+										},
+										{
+											"id": "verify-same-input",
+											"label": "Verify with a fresh run using the same input"
+										},
+										{
+											"id": "start-over",
+											"label": "A failed verify means starting the investigation over from zero"
+										},
+										{
+											"id": "fix-first",
+											"label": "The loop starts with fixing, since fixing is the goal"
+										}
+									],
+									"correct": ["same-input", "smallest-change", "verify-same-input"]
+								}
+							},
+							{
+								"id": "challenge-debug-one-change",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You applied a fix, re-ran with the same input, and the flow still fails. What now?",
+								"explanation": "Loop again: back to Reproduce and Isolate, carrying the new fact that this fix wasn't the answer. Stacking a second change on top is the tempting one — but then the next green (or red) run can't tell you which change did what, and the loop stops being a measurement instrument.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "loop-again",
+											"label": "Loop back to Reproduce and Isolate, keeping what you just learned"
+										},
+										{
+											"id": "stack-fix",
+											"label": "Leave the first fix in and stack a second fix on top before re-running"
+										},
+										{
+											"id": "three-at-once",
+											"label": "Change the three most suspicious nodes at once to save passes"
+										},
+										{
+											"id": "rebuild",
+											"label": "Rebuild the flow from scratch — it's clearly beyond saving"
+										}
+									],
+									"correct": ["loop-again"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-debugging-and-observability.lesson.runs-and-logs",
+						"title": "Runs and logs: the flight recorder",
+						"language": "en",
+						"contentFile": "content/runs-and-logs-the-flight-recorder.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-debug-slowest-step",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Look at @RunsAndLogs. How do you know that drafting the reply was the slowest step of the run?",
+								"explanation": "Every log line records the duration of its step: Draft Helpful Reply took 730.00 ms against 120.00 ms for receiving the request. The token counts are tempting evidence, but they measure what the model consumed and produced — a step can use many tokens quickly or few tokens slowly.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "line-duration",
+											"label": "Its log line shows 730.00 ms, versus 120.00 ms for receiving the request"
+										},
+										{
+											"id": "token-counts",
+											"label": "It has token counts, and token usage means a step was slow"
+										},
+										{
+											"id": "run-color",
+											"label": "The run entry in the sidebar changes color when a step is slow"
+										},
+										{
+											"id": "external-profiler",
+											"label": "You can't tell from the log — you'd need an external profiler"
+										}
+									],
+									"correct": ["line-duration"]
+								}
+							},
+							{
+								"id": "challenge-debug-run-records",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which of these can you actually do from the runs sidebar and log panel?",
+								"explanation": "Historic runs replay with their exact recorded payloads, and every executed node's lines — durations and token stats included — are there to read, for successful runs too. The recorder is read-only, though: fixing wires happens on the canvas, not in the log panel.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "rerun-payload",
+											"label": "Re-run a historic run with its exact recorded payload"
+										},
+										{
+											"id": "read-per-node",
+											"label": "Read per-node log lines with durations and token stats"
+										},
+										{
+											"id": "edit-wires",
+											"label": "Edit the flow's wires directly from the log panel"
+										},
+										{
+											"id": "failed-only",
+											"label": "Inspect logs — but only for runs that failed"
+										}
+									],
+									"correct": ["rerun-payload", "read-per-node"]
+								}
+							},
+							{
+								"id": "challenge-debug-reproduce-payload",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You need to reproduce Friday's failure exactly. What's the best move?",
+								"explanation": "The failed run already carries the payload that broke the flow — re-running it replays that input exactly. Typing a message that's 'roughly like' the customer's is the trap: if your reconstruction misses the detail that triggered the bug, you'll chase a failure that never happens.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "rerun-historic",
+											"label": "Select the failed run in the sidebar and re-run it with its recorded payload"
+										},
+										{
+											"id": "retype-memory",
+											"label": "Type a fresh test message that's roughly like the customer's"
+										},
+										{
+											"id": "wait-trigger",
+											"label": "Wait for the next customer to trigger it, so the test is realistic"
+										},
+										{
+											"id": "ask-resend",
+											"label": "Ask the customer to resend their message"
+										}
+									],
+									"correct": ["rerun-historic"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "course-debugging-and-observability.module.isolate-and-fix",
+				"title": "Isolate and Fix",
+				"description": "Trace failures to the node that caused them, write logs that diagnose, and snapshot before every fix.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "course-debugging-and-observability.lesson.find-the-failing-node",
+						"title": "Find the failing node",
+						"language": "en",
+						"contentFile": "content/find-the-failing-node.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-debug-first-node",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Look at @FlowLikeStudio. Which node runs first when a support request arrives?",
+								"explanation": "Incoming Support Request is the event node — the entry point that starts the run. The '1 · Listen for requests' label is the tempting read, but it's a comment: annotation, not machinery. Canvas position never determines execution order; wires do.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "incoming-event",
+											"label": "Incoming Support Request — the event node is the entry point"
+										},
+										{
+											"id": "comment-label",
+											"label": "The '1 · Listen for requests' label — it marks the first stage"
+										},
+										{
+											"id": "pure-first",
+											"label": "Customer Message — pure nodes run before everything else"
+										},
+										{
+											"id": "leftmost",
+											"label": "Whichever node sits furthest left on the canvas"
+										}
+									],
+									"correct": ["incoming-event"]
+								}
+							},
+							{
+								"id": "challenge-debug-null-body-trace",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Send Reply failed because its Body input was null. What's the right next read?",
+								"explanation": "A wrong value means following the dashed data wire backward to whoever produced it, then reading that node's log and outputs. Replacing Send Reply is the trap: it's the victim that correctly refused an empty body. And the white execution wire can't help — it orders nodes, it never carries values.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "follow-data-wire",
+											"label": "Follow Body's dashed data wire backward and read the producing node's log and outputs"
+										},
+										{
+											"id": "replace-victim",
+											"label": "Replace the Send Reply node — it's the one that errored"
+										},
+										{
+											"id": "exec-wire-value",
+											"label": "Inspect the white execution wire into Send Reply — it delivered the bad value"
+										},
+										{
+											"id": "reorder-node",
+											"label": "Move Send Reply earlier in the chain so the value reaches it sooner"
+										}
+									],
+									"correct": ["follow-data-wire"]
+								}
+							},
+							{
+								"id": "challenge-debug-node-types",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements about the support board are true?",
+								"explanation": "Pure nodes have no execution pins, comments never run, and a trace that points into a collapsed layer continues inside it. The layer distractor is the one to watch: Draft Helpful Reply logged under its own name from inside Prepare Support Reply — layers group nodes on the canvas but never hide their evidence. And the node named in the error is where the flow stopped, not automatically the one to fix.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "pure-no-exec",
+											"label": "Customer Message and Format Generic Value never appear on the white execution path"
+										},
+										{
+											"id": "open-layer",
+											"label": "If the trace points inside Prepare Support Reply, open the layer and keep tracing"
+										},
+										{
+											"id": "comments-never-run",
+											"label": "Stage labels like '2 · Draft with AI' never execute"
+										},
+										{
+											"id": "layer-hides-logs",
+											"label": "Nodes inside a collapsed layer can't write log lines under their own names"
+										},
+										{
+											"id": "error-node-culprit",
+											"label": "The node named in the error is always the one that must be fixed"
+										}
+									],
+									"correct": ["pure-no-exec", "open-layer", "comments-never-run"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-debugging-and-observability.lesson.log-deliberately",
+						"title": "Log deliberately",
+						"language": "en",
+						"contentFile": "content/log-deliberately.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-debug-milestone-level",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "'Drafted a helpful reply and queued human review' — which level fits this line?",
+								"explanation": "It's a business milestone a teammate can read as part of the run's story: Info. Debug is the tempting neighbor, but Debug is for internal evidence — intermediate values, branch decisions — not for the headline of what the run accomplished.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "level-info",
+											"label": "Info — a business milestone in the run's story"
+										},
+										{
+											"id": "level-debug",
+											"label": "Debug — it describes what the flow did internally"
+										},
+										{
+											"id": "level-warning",
+											"label": "Warning — a human still has to review, so it's not done"
+										},
+										{
+											"id": "level-error",
+											"label": "Error — logging at high levels ensures it's never missed"
+										}
+									],
+									"correct": ["level-info"]
+								}
+							},
+							{
+								"id": "challenge-debug-best-line",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "It's 16:58 again. Which log line would help you most?",
+								"explanation": "The winning line names the operation that failed, the unexpected value, and an identifier to find the affected request. 'Reply not sent' is the tempting almost-answer — it states the outcome but gives you nothing to trace: which request, and what value was wrong?",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "named-value-id",
+											"label": "\"Send Reply skipped: Body was null for request #4812 after review returned no draft\""
+										},
+										{
+											"id": "outcome-only",
+											"label": "\"Reply not sent\""
+										},
+										{
+											"id": "vague-wrong",
+											"label": "\"Something went wrong in the flow\""
+										},
+										{
+											"id": "step-done",
+											"label": "\"Step 3 done\""
+										}
+									],
+									"correct": ["named-value-id"]
+								}
+							},
+							{
+								"id": "challenge-debug-level-facts",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements about log levels are true?",
+								"explanation": "Debug records the most evidence per run, the dial lives in the Manage Board dialog, and flattening everything to Error deletes the severity information that makes filtering work. A Warning specifically means the run noticed something odd and kept going — a run that stopped would be reporting an Error.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "debug-most-evidence",
+											"label": "With the board's Log Level at Debug, runs record the most evidence"
+										},
+										{
+											"id": "manage-board-dial",
+											"label": "The board's Log Level is set in the Manage Board dialog"
+										},
+										{
+											"id": "flatten-useless",
+											"label": "Logging everything at Error makes the Error filter useless during an incident"
+										},
+										{
+											"id": "warning-stops",
+											"label": "A Warning line means the run stopped at that node"
+										},
+										{
+											"id": "fatal-faster",
+											"label": "Raising the level toward Fatal makes failing flows stop sooner"
+										}
+									],
+									"correct": [
+										"debug-most-evidence",
+										"manage-board-dial",
+										"flatten-useless"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-debugging-and-observability.lesson.versions-safety-net",
+						"title": "Versions: your safety net",
+						"language": "en",
+						"contentFile": "content/versions-your-safety-net.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 2,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-debug-create-version",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In @BoardVersions, what does the Create Version button actually do?",
+								"explanation": "It freezes the current draft as an immutable numbered snapshot and moves the editable draft to the next version number — existing snapshots are never overwritten. It does not lock the draft (you keep editing Latest) and it does not deploy anything: Events keep running whatever they're pinned to until you repoint them.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "immutable-snapshot",
+											"label": "Saves the current draft as an immutable numbered snapshot and moves the draft to the next number"
+										},
+										{
+											"id": "overwrite-previous",
+											"label": "Overwrites the previous version with the current draft"
+										},
+										{
+											"id": "lock-draft",
+											"label": "Locks the draft so nobody can edit it until release"
+										},
+										{
+											"id": "deploy-events",
+											"label": "Publishes the current draft to every Event immediately"
+										}
+									],
+									"correct": ["immutable-snapshot"]
+								}
+							},
+							{
+								"id": "challenge-debug-rollback",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Your shipped fix, version 1.0.1, misbehaves on the pinned production Event. What's the fastest safe rollback?",
+								"explanation": "Rollback is repointing: re-select the previous tested version on the Event and keep debugging on Latest. Editing 1.0.1 in place is impossible by design — numbered versions are immutable, which is exactly what makes them trustworthy to pin. Switching production to Latest trades one incident for a subscription to every future draft experiment.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "repoint-previous",
+											"label": "Repoint the Event to the previous tested version and keep debugging on Latest"
+										},
+										{
+											"id": "edit-in-place",
+											"label": "Edit version 1.0.1 in place — it's the one that's live"
+										},
+										{
+											"id": "pin-latest",
+											"label": "Switch the Event to Latest so every new fix goes live instantly"
+										},
+										{
+											"id": "app-version-field",
+											"label": "Set the App's Version field back to the old number"
+										}
+									],
+									"correct": ["repoint-previous"]
+								}
+							},
+							{
+								"id": "challenge-debug-version-type",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You corrected the null body without changing how any caller uses the flow. Which version type do you pick?",
+								"explanation": "A compatible correction is the textbook Patch. Minor is the tempting overshoot — it signals added capability, which this isn't. And there's no skipping the menu: Flow-Like deliberately doesn't infer the bump, because only you know what the change means to the flow's consumers.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "patch",
+											"label": "Patch — a compatible correction"
+										},
+										{
+											"id": "minor",
+											"label": "Minor — every fix adds capability"
+										},
+										{
+											"id": "major",
+											"label": "Major — production was affected, so it's major by definition"
+										},
+										{
+											"id": "auto-infer",
+											"label": "None — Flow-Like infers the right bump from the diff"
+										}
+									],
+									"correct": ["patch"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "course-debugging-and-observability.module.prove-it-works",
+				"title": "Prove It Works",
+				"description": "Verify fixes through the real invocation path, then close the Friday incident end to end.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "course-debugging-and-observability.lesson.test-before-you-ship",
+						"title": "Test before you ship",
+						"language": "en",
+						"contentFile": "content/test-before-you-ship.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-debug-green-studio",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Latest runs green in Studio with Friday's payload. What's still missing before you can close the incident?",
+								"explanation": "Customers reach the flow through the Event, so the fix must survive the complete invocation path — including the version pin, which may still point at the broken snapshot. 'Nothing' is the tempting answer because the payload matched, but a Studio run exercises the graph, not the door the customer walks through.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "through-event",
+											"label": "A run through the activated Event — the complete invocation path, with the version pin updated"
+										},
+										{
+											"id": "nothing-missing",
+											"label": "Nothing — a green run on the failing payload proves the app works"
+										},
+										{
+											"id": "customer-monday",
+											"label": "Ask the customer to try again on Monday and watch what happens"
+										},
+										{
+											"id": "raise-level-rerun",
+											"label": "Raise the log level and run it once more in Studio"
+										}
+									],
+									"correct": ["through-event"]
+								}
+							},
+							{
+								"id": "challenge-debug-verify-payloads",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which runs belong in your verification pass?",
+								"explanation": "The failing payload proves the fix, a previously successful payload proves no regression, and a fresh payload through the activated Event proves the real door. Recorded payloads aren't stale — they're the only inputs you *know* reproduce both the bug and the healthy path. And no fix is too small to verify; one-line changes have broken plenty of Fridays.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "failed-payload",
+											"label": "A re-run of the failing run's recorded payload"
+										},
+										{
+											"id": "regression-payload",
+											"label": "A re-run of a payload that succeeded before the fix"
+										},
+										{
+											"id": "fresh-through-event",
+											"label": "A fresh payload sent through the activated Event"
+										},
+										{
+											"id": "fresh-only",
+											"label": "Only brand-new payloads — recorded ones are stale"
+										},
+										{
+											"id": "skip-small-fix",
+											"label": "None — a one-line fix doesn't need a verification pass"
+										}
+									],
+									"correct": [
+										"failed-payload",
+										"regression-payload",
+										"fresh-through-event"
+									]
+								}
+							},
+							{
+								"id": "challenge-debug-local-only",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Your fix added a browser-automation node inside the Prepare Support Reply layer. The support Event is configured for Remote execution. What happens?",
+								"explanation": "The pre-run check inspects every node, including those inside layers, and one local-only node marks the whole flow as requiring local execution — so the Remote Event can't run it. The split-run option is the classic misconception: a single run is never divided between local and remote workers, and Hybrid means fully-local or fully-remote per invocation, never half and half.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "whole-flow-local",
+											"label": "The pre-run check sees the node inside the layer and marks the whole flow local-only — the Remote Event can't run it"
+										},
+										{
+											"id": "split-run",
+											"label": "The run splits: remote-capable nodes run remotely, the browser node runs on your desktop"
+										},
+										{
+											"id": "layer-skipped",
+											"label": "Nothing — nodes inside collapsed layers are skipped by the pre-run check"
+										},
+										{
+											"id": "hybrid-half",
+											"label": "Switch the flow to Hybrid so each run divides itself between both environments"
+										}
+									],
+									"correct": ["whole-flow-local"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-debugging-and-observability.lesson.final-assessment",
+						"title": "The Friday incident",
+						"language": "en",
+						"contentFile": "content/the-friday-incident.md",
+						"videoUrl": null,
+						"estimatedMinutes": 15,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-debug-final-first-five",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "17:00. What do you do with your first five minutes?",
+								"explanation": "Reproduce, then Isolate: re-run the failed run — it replays the recorded payload exactly — and read the log to find the failing node. Snapshotting first is the tempting discipline-answer, but you'd be freezing state before you have a diagnosis and editing 'the node you suspect from memory', which is guessing with extra steps. The version comes right before the fix, not before the evidence.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "rerun-then-read",
+											"label": "Re-run today's failed run from the runs list to reproduce it, then read its log to find the failing node"
+										},
+										{
+											"id": "snapshot-then-edit",
+											"label": "Create a version, then start editing the node you suspect from memory"
+										},
+										{
+											"id": "recheck-wires",
+											"label": "Open the board and re-check every wire between the four stages"
+										},
+										{
+											"id": "wait-for-email",
+											"label": "Set Log Level to Debug and wait for the next customer email to generate fresh evidence"
+										}
+									],
+									"correct": ["rerun-then-read"]
+								}
+							},
+							{
+								"id": "challenge-debug-final-trace",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The log reads '✗ Send Reply — body is null'. Where does your trace go next?",
+								"explanation": "The null was produced upstream, so you follow the dashed data wire feeding Body backward — into the Human Review and Prepare Support Reply layers — and read those nodes' evidence. Send Reply's settings are the victim's pockets: it correctly refused an empty body. The pure-node option contradicts the design — pure nodes never have execution wires, so a 'missing' one isn't a bug.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "trace-upstream-data",
+											"label": "Backward along the dashed wire feeding Body — into Human Review and Prepare Support Reply — reading those nodes' logs"
+										},
+										{
+											"id": "send-reply-settings",
+											"label": "Into Send Reply's configuration — it errored, so it's misconfigured"
+										},
+										{
+											"id": "exec-order-changed",
+											"label": "Along the white execution wires, checking whether the node order changed"
+										},
+										{
+											"id": "pure-missing-exec",
+											"label": "To Customer Message's missing execution wire — that's why the value never arrived"
+										}
+									],
+									"correct": ["trace-upstream-data"]
+								}
+							},
+							{
+								"id": "challenge-debug-final-thin-evidence",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Today's log holds one line; the healthy run from 16 days ago tells a whole story. What explains the gap, and what do you do about it?",
+								"explanation": "Exhibit C is the key: Log Level was raised to Error, so today's run recorded almost nothing below the failure. Set it back to Debug, re-run the failing payload, and the Debug-level evidence — like what Reply contained before Send Reply — appears. 'Failed runs record less because they stop early' is the tempting red herring: the drafting and review stages ran *before* the failure and would have logged their milestones, if the level had let them.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "level-explains",
+											"label": "The board's Log Level is Error, so today's run recorded almost nothing below the failure"
+										},
+										{
+											"id": "set-debug-rerun",
+											"label": "Set Log Level to Debug in Manage Board, then re-run the failing payload to record rich evidence"
+										},
+										{
+											"id": "debug-shows-values",
+											"label": "Debug-level lines would capture intermediate values — like what Reply contained before it reached Send Reply"
+										},
+										{
+											"id": "failed-runs-thin",
+											"label": "Failed runs always record less because the flow stopped early"
+										},
+										{
+											"id": "more-error-lines",
+											"label": "Add more Error-level lines everywhere so every future run is richer"
+										}
+									],
+									"correct": [
+										"level-explains",
+										"set-debug-rerun",
+										"debug-shows-values"
+									]
+								}
+							},
+							{
+								"id": "challenge-debug-final-before-fix",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You've found the culprit and drafted the fix. The constraints say every irreversible step needs a fallback. What comes immediately before editing?",
+								"explanation": "Create Version in Manage Board: the current state becomes an immutable snapshot you can roll back to, and you fix one thing on Latest. 'Just save first' is the misconception this course keeps refuting — saving updates the very draft you're about to edit; it creates no restore point at all.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "create-version-first",
+											"label": "Open Manage Board and Create Version — freeze the current state as a rollback target, then fix one thing on Latest"
+										},
+										{
+											"id": "save-restore-point",
+											"label": "Just save the board first — saving stores a restore point"
+										},
+										{
+											"id": "edit-pinned-version",
+											"label": "Edit the pinned numbered version directly so production gets the fix at once"
+										},
+										{
+											"id": "screenshot-board",
+											"label": "Screenshot the board so you can rebuild it by hand if needed"
+										}
+									],
+									"correct": ["create-version-first"]
+								}
+							},
+							{
+								"id": "challenge-debug-final-ship",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The fix is verified on Latest. Which steps ship it safely to the pinned support Event?",
+								"explanation": "Patch version (the fix changes nothing for callers), repoint the Event to it, and test the complete invocation path with the failing payload. Switching the Event to Latest feels efficient but subscribes production to every future draft experiment — the opposite of what the pin is for. The App's Version field is release metadata; editing it deploys nothing.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "create-patch",
+											"label": "Create a Patch version — the fix changes nothing for callers"
+										},
+										{
+											"id": "repoint-support-event",
+											"label": "Repoint the support Event to the new version"
+										},
+										{
+											"id": "test-real-path",
+											"label": "Test the complete invocation path through the activated Event, including the failing payload"
+										},
+										{
+											"id": "switch-to-latest",
+											"label": "Switch the Event to Latest so future fixes deploy themselves"
+										},
+										{
+											"id": "bump-app-field",
+											"label": "Bump the App's Version field — that's what deploys the new flow"
+										}
+									],
+									"correct": [
+										"create-patch",
+										"repoint-support-event",
+										"test-real-path"
+									]
+								}
+							},
+							{
+								"id": "challenge-debug-final-close",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "17:26. Which evidence actually closes the incident?",
+								"explanation": "Proof means the real door and the real value: a green run through the support Event on Friday's payload, a log showing Send Reply received a non-null body, and a green re-run of a previously healthy payload to rule out regression. A green Studio run on a hand-typed message is the tempting shortcut — it proves a different payload through a different door. Version numbers and quiet inboxes prove nothing by themselves.",
+								"points": 10,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "event-payload-proof",
+											"label": "A green run through the support Event on Friday's payload, logs showing a non-null body at Send Reply, and a green re-run of a previously healthy payload"
+										},
+										{
+											"id": "studio-hand-typed",
+											"label": "A green Studio run on a hand-typed test message"
+										},
+										{
+											"id": "version-number",
+											"label": "The version selector reading the new patch number"
+										},
+										{
+											"id": "quiet-weekend",
+											"label": "No new customer complaints arriving by Monday morning"
+										}
+									],
+									"correct": ["event-payload-proof"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		]
+	}
+}

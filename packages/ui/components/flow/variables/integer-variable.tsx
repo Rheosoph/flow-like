@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { Input } from "../../../components/ui/input";
 import { Label } from "../../../components/ui/label";
 import { saveParseInt } from "../../../lib/save-parse";
@@ -16,9 +17,10 @@ export function IntegerVariable({
 	variable: IVariable;
 	onChange: (variable: IVariable) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	return (
 		<div className="grid w-full items-center gap-1.5">
-			<Label htmlFor="default_value">Default Value</Label>
+			<Label htmlFor="default_value">{t('defaultValue', 'Default Value')}</Label>
 			<Input
 				disabled={disabled}
 				value={parseUint8ArrayToJson(variable.default_value)}
@@ -32,7 +34,7 @@ export function IntegerVariable({
 				}}
 				type={variable.secret ? "password" : "number"}
 				id="default_value"
-				placeholder="Default Value"
+				placeholder={t('defaultValue', 'Default Value')}
 				step={1}
 			/>
 		</div>

@@ -31,6 +31,10 @@ default when the variable is neither exposed nor configured at runtime:
 
 ![A screenshot showing how to set the value of a variable](../../../assets/SetVariableValue.webp)
 
+A **Date** variable holds an instant in UTC, not a calendar day. See
+[Dates & Times](/reference/dates/) for its wire format, the inputs it parses,
+the formatting placeholders, and how it is stored in tables.
+
 ## Variable Settings
 
 ### Exposed

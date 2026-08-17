@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	Check,
@@ -179,6 +180,7 @@ function groupFrames(frames: ITelemetryIssueFrame[]): FrameGroup[] {
 }
 
 function StackTrace({ frames }: { readonly frames: ITelemetryIssueFrame[] }) {
+	const { t } = useTranslation("admin");
 	if (frames.length === 0) {
 		return <EmptyState message="No stack trace attached to this event." />;
 	}
@@ -201,9 +203,7 @@ function StackTrace({ frames }: { readonly frames: ITelemetryIssueFrame[] }) {
 				) : (
 					<Collapsible key={group.key}>
 						<CollapsibleTrigger className="group flex w-full items-center gap-1.5 border-y border-border/40 px-3 py-1.5 text-left text-[11px] text-muted-foreground hover:bg-muted/60">
-							<ChevronDown className="h-3 w-3 transition-transform group-data-[state=open]:rotate-180" />
-							{group.frames.length} system{" "}
-							{group.frames.length === 1 ? "frame" : "frames"}
+							<ChevronDown className="h-3 w-3 transition-transform group-data-[state=open]:rotate-180" />{t('countSystemFrames', '{{count}} system frame', { count: group.frames.length })}
 						</CollapsibleTrigger>
 						<CollapsibleContent>
 							<ul className="divide-y divide-border/40">
@@ -271,6 +271,7 @@ function CopyableJson({
 	readonly label: string;
 	readonly value: unknown;
 }) {
+	const { t } = useTranslation("admin");
 	const text = useMemo(() => safeStringify(value), [value]);
 	return (
 		<div className="space-y-1">
@@ -287,7 +288,7 @@ function CopyableJson({
 					}}
 				>
 					<Copy className="mr-1 h-3 w-3" />
-					Copy
+					{t('copy', 'Copy')}
 				</Button>
 			</div>
 			<pre className="max-h-72 overflow-auto rounded-lg border bg-muted/40 p-3 font-mono text-[11px] leading-relaxed">
@@ -310,6 +311,7 @@ export function TelemetryIssueDetailSheet({
 	onOpenChange,
 	profile,
 }: Readonly<TelemetryIssueDetailSheetProps>) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const [resolveRelease, setResolveRelease] = useState<string>(NO_RELEASE);
@@ -362,13 +364,13 @@ export function TelemetryIssueDetailSheet({
 			});
 			toast.success(
 				body.resolved_in_release
-					? `Resolved in ${body.resolved_in_release}`
-					: `Issue marked ${body.status ?? "updated"}`,
+					? t('resolvedInResolved_in_release', 'Resolved in {{resolved_in_release}}', { resolved_in_release: body.resolved_in_release })
+					: t('issueMarkedVal', 'Issue marked {{val}}', { val: body.status ?? "updated" }),
 			);
 		},
 		onError: (error) => {
 			toast.error(
-				error instanceof Error ? error.message : "Failed to update the issue",
+				error instanceof Error ? error.message : t('failedToUpdateTheIssue', 'Failed to update the issue'),
 			);
 		},
 	});
@@ -432,7 +434,7 @@ export function TelemetryIssueDetailSheet({
 								<div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
 									<div>
 										<div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-											Events
+											{t('events', 'Events')}
 										</div>
 										<div className="font-semibold tabular-nums">
 											{issue.eventCount.toLocaleString()}
@@ -440,7 +442,7 @@ export function TelemetryIssueDetailSheet({
 									</div>
 									<div>
 										<div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-											Installs
+											{t('installs', 'Installs')}
 										</div>
 										<div className="font-semibold tabular-nums">
 											{issue.installCount.toLocaleString()}
@@ -448,7 +450,7 @@ export function TelemetryIssueDetailSheet({
 									</div>
 									<div>
 										<div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-											First seen
+											{t('firstSeen2', 'First seen')}
 										</div>
 										<RelativeTime
 											value={issue.firstSeen}
@@ -457,7 +459,7 @@ export function TelemetryIssueDetailSheet({
 									</div>
 									<div>
 										<div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-											Last seen
+											{t('lastSeen', 'Last seen')}
 										</div>
 										<RelativeTime
 											value={issue.lastSeen}
@@ -467,7 +469,7 @@ export function TelemetryIssueDetailSheet({
 								</div>
 								<div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
 									<span>
-										Releases:{" "}
+										{t('releases2', 'Releases:')}{" "}
 										<span className="font-mono">
 											{issue.firstRelease ?? "—"}
 										</span>{" "}
@@ -500,7 +502,7 @@ export function TelemetryIssueDetailSheet({
 									}
 								>
 									<CircleCheck className="mr-1 h-3.5 w-3.5" />
-									Resolve
+									{t('resolve', 'Resolve')}
 								</Button>
 								<Button
 									size="sm"
@@ -509,7 +511,7 @@ export function TelemetryIssueDetailSheet({
 									onClick={() => triage.mutate({ status: "ignored" })}
 								>
 									<EyeOff className="mr-1 h-3.5 w-3.5" />
-									Ignore
+									{t('ignore', 'Ignore')}
 								</Button>
 								<Button
 									size="sm"
@@ -523,7 +525,7 @@ export function TelemetryIssueDetailSheet({
 									}
 								>
 									<RotateCcw className="mr-1 h-3.5 w-3.5" />
-									Unresolve
+									{t('unresolve', 'Unresolve')}
 								</Button>
 								<div className="flex items-center gap-1.5">
 									<Select
@@ -532,11 +534,11 @@ export function TelemetryIssueDetailSheet({
 										disabled={releaseOptions.length === 0}
 									>
 										<SelectTrigger className="w-44" size="sm">
-											<SelectValue placeholder="Resolve in release" />
+											<SelectValue placeholder={t('resolveInRelease', 'Resolve in release')} />
 										</SelectTrigger>
 										<SelectContent>
 											<SelectItem value={NO_RELEASE}>
-												Resolve in release…
+												{t('resolveInRelease2', 'Resolve in release…')}
 											</SelectItem>
 											{releaseOptions.map((version) => (
 												<SelectItem key={version} value={version}>
@@ -563,7 +565,7 @@ export function TelemetryIssueDetailSheet({
 
 							<div className="space-y-1">
 								<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-									Events over time
+									{t('eventsOverTime', 'Events over time')}
 								</div>
 								<IssueTrendChart points={detail.data?.timeseries ?? []} />
 							</div>
@@ -571,11 +573,11 @@ export function TelemetryIssueDetailSheet({
 							<div className="space-y-1">
 								<div className="flex items-center justify-between">
 									<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-										Stack trace
+										{t('stackTrace', 'Stack trace')}
 									</div>
 									{latestEvent ? (
 										<span className="text-[11px] text-muted-foreground">
-											latest event ·{" "}
+											{t('latestEvent', 'latest event ·')}{" "}
 											<RelativeTime value={latestEvent.createdAt} />
 										</span>
 									) : null}
@@ -585,7 +587,7 @@ export function TelemetryIssueDetailSheet({
 
 							<div className="space-y-1">
 								<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-									Breadcrumbs
+									{t('breadcrumbs', 'Breadcrumbs')}
 								</div>
 								<BreadcrumbTimeline crumbs={crumbs} />
 							</div>
@@ -599,7 +601,7 @@ export function TelemetryIssueDetailSheet({
 							<div className="grid gap-4 sm:grid-cols-2">
 								<div className="space-y-1">
 									<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-										Releases
+										{t('releases', 'Releases')}
 									</div>
 									<BarList
 										rows={(detail.data?.releases ?? []).map((r) => ({
@@ -612,7 +614,7 @@ export function TelemetryIssueDetailSheet({
 								</div>
 								<div className="space-y-1">
 									<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-										Platforms
+										{t('platforms', 'Platforms')}
 									</div>
 									<BarList
 										rows={(detail.data?.platforms ?? []).map((p) => ({
@@ -628,8 +630,7 @@ export function TelemetryIssueDetailSheet({
 							<Separator />
 
 							<p className="text-xs text-muted-foreground">
-								Crash reports are anonymous: the install id is a random
-								identifier and no user identity or IP address is ever stored.
+								{t('crashReportsAreAnonymousTheInstallIdIsARandomIdentifierAndNoUserIdentityOrIpAddressIsEverStored', "Crash reports are anonymous: the install id is a random identifier and no user identity or IP address is ever stored.")}
 							</p>
 						</>
 					)}

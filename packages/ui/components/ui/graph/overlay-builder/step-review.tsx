@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 import type {
 	EdgeLabelMapping,
@@ -27,12 +28,13 @@ export function StepReview({
 	defaultLimit,
 	validation,
 }: StepReviewProps) {
+	const { t } = useTranslation("common");
 	return (
 		<div className="space-y-4">
 			<div>
-				<h3 className="text-sm font-medium mb-1">Review Overlay</h3>
+				<h3 className="text-sm font-medium mb-1">{t('reviewOverlay', 'Review Overlay')}</h3>
 				<p className="text-xs text-muted-foreground">
-					Review your graph overlay configuration before creating it.
+					{t('reviewYourGraphOverlayConfigurationBeforeCreatingIt', 'Review your graph overlay configuration before creating it.')}
 				</p>
 			</div>
 
@@ -41,9 +43,7 @@ export function StepReview({
 					<h4 className="text-sm font-semibold">
 						{name || "Untitled Overlay"}
 					</h4>
-					<Badge variant="secondary" className="text-[10px]">
-						Limit: {defaultLimit}
-					</Badge>
+					<Badge variant="secondary" className="text-[10px]">{t('limitDefaultlimit', 'Limit: {{defaultLimit}}', { defaultLimit })}</Badge>
 				</div>
 				{description && (
 					<p className="text-xs text-muted-foreground">{description}</p>
@@ -52,9 +52,7 @@ export function StepReview({
 
 			{nodes.length > 0 && (
 				<div className="space-y-2">
-					<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-						Node Labels ({nodes.length})
-					</p>
+					<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('nodeLabelsLength', 'Node Labels ({{length}})', { length: nodes.length })}</p>
 					<div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
 						{nodes.map((n) => {
 							const Icon = getGraphIcon(n.style.icon);
@@ -71,9 +69,7 @@ export function StepReview({
 									</div>
 									<div className="min-w-0">
 										<p className="text-xs font-medium truncate">{n.label}</p>
-										<p className="text-[10px] text-muted-foreground truncate">
-											{n.table} → {n.id_column}
-										</p>
+										<p className="text-[10px] text-muted-foreground truncate">{`${n.table} → ${n.id_column}`}</p>
 									</div>
 								</div>
 							);
@@ -84,9 +80,7 @@ export function StepReview({
 
 			{edges.length > 0 && (
 				<div className="space-y-2">
-					<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-						Edge Labels ({edges.length})
-					</p>
+					<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('edgeLabelsLength', 'Edge Labels ({{length}})', { length: edges.length })}</p>
 					<div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
 						{edges.map((e) => (
 							<div
@@ -99,9 +93,7 @@ export function StepReview({
 								/>
 								<div className="min-w-0">
 									<p className="text-xs font-medium truncate">{e.label}</p>
-									<p className="text-[10px] text-muted-foreground truncate">
-										{e.src_label} → {e.dst_label} ({e.table})
-									</p>
+									<p className="text-[10px] text-muted-foreground truncate">{`${e.src_label} → ${e.dst_label} (${e.table})`}</p>
 								</div>
 							</div>
 						))}
@@ -120,7 +112,7 @@ export function StepReview({
 							<AlertCircle className="h-4 w-4 text-destructive" />
 						)}
 						<span className="text-xs font-medium">
-							{validation.ok ? "Validation passed" : "Validation issues found"}
+							{validation.ok ? "Validation passed" : t('validationIssuesFound', 'Validation issues found')}
 						</span>
 					</div>
 					{validation.issues.length > 0 && (

@@ -88,13 +88,13 @@ function createMarkerElement(
 	const pin = document.createElement("div");
 	pin.style.width = "28px";
 	pin.style.height = "28px";
-	pin.style.borderRadius = "50% 50% 50% 0";
+	pin.style.borderRadius = `50% 50% 50% 0`;
 	pin.style.backgroundColor = color;
 	pin.style.transform = "rotate(-45deg)";
 	pin.style.border = `2.5px solid ${isDark ? "rgba(255,255,255,0.9)" : "white"}`;
 	pin.style.boxShadow = isDark
-		? "0 2px 12px rgba(0,0,0,0.6)"
-		: "0 2px 8px rgba(0,0,0,0.35)";
+		? `0 2px 12px rgba(0,0,0,0.6)`
+		: `0 2px 8px rgba(0,0,0,0.35)`;
 	pin.style.position = "relative";
 
 	const dot = document.createElement("div");
@@ -105,7 +105,7 @@ function createMarkerElement(
 	dot.style.position = "absolute";
 	dot.style.top = "50%";
 	dot.style.left = "50%";
-	dot.style.transform = "translate(-50%, -50%) rotate(45deg)";
+	dot.style.transform = `translate(-50%, -50%) rotate(45deg)`;
 	pin.appendChild(dot);
 	wrapper.appendChild(pin);
 

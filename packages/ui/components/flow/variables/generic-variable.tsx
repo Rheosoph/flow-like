@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useState } from "react";
 import { Label } from "../../../components/ui/label";
 import {
@@ -83,6 +84,7 @@ export function GenericVariable({
 	variable: IVariable;
 	onChange: (variable: IVariable) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const [jsonValue, setJsonValue] = useState(() =>
 		decodeJsonBytes(variable.default_value),
 	);
@@ -164,7 +166,7 @@ export function GenericVariable({
 	return (
 		<div className="grid w-full items-center gap-1.5">
 			<div className="grid gap-1.5">
-				<Label htmlFor="generic_value_template">Value Type</Label>
+				<Label htmlFor="generic_value_template">{t('valueType', 'Value Type')}</Label>
 				<Select
 					disabled={disabled}
 					value={template}
@@ -173,23 +175,23 @@ export function GenericVariable({
 					}
 				>
 					<SelectTrigger id="generic_value_template">
-						<SelectValue placeholder="Value Type" />
+						<SelectValue placeholder={t('valueType', 'Value Type')} />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="custom">Custom JSON</SelectItem>
-						<SelectItem value="unset">No default</SelectItem>
-						<SelectItem value="string">String</SelectItem>
-						<SelectItem value="integer">Integer</SelectItem>
-						<SelectItem value="float">Float</SelectItem>
-						<SelectItem value="boolean">Boolean</SelectItem>
-						<SelectItem value="object">Object</SelectItem>
-						<SelectItem value="array">Array</SelectItem>
-						<SelectItem value="null">Null</SelectItem>
+						<SelectItem value="custom">{t('customJson', 'Custom JSON')}</SelectItem>
+						<SelectItem value="unset">{t('noDefault', 'No default')}</SelectItem>
+						<SelectItem value="string">{t('string', 'String')}</SelectItem>
+						<SelectItem value="integer">{t('integer', 'Integer')}</SelectItem>
+						<SelectItem value="float">{t('float', 'Float')}</SelectItem>
+						<SelectItem value="boolean">{t('boolean', 'Boolean')}</SelectItem>
+						<SelectItem value="object">{t('object', 'Object')}</SelectItem>
+						<SelectItem value="array">{t('array', 'Array')}</SelectItem>
+						<SelectItem value="null">{t('null', 'Null')}</SelectItem>
 					</SelectContent>
 				</Select>
 			</div>
 
-			<Label htmlFor="generic_default_value">JSON Value</Label>
+			<Label htmlFor="generic_default_value">{t('jsonValue2', 'JSON Value')}</Label>
 			<div
 				className={cn(
 					"relative w-full rounded-md border bg-transparent transition-all duration-200",
@@ -206,7 +208,7 @@ export function GenericVariable({
 					onChange={(event) => handleJsonChange(event.target.value)}
 					onFocus={() => setIsFocused(true)}
 					onBlur={() => setIsFocused(false)}
-					placeholder='{"key": "value"}'
+					placeholder={`{"key": "value"}`}
 					autoComplete="off"
 					spellCheck="false"
 					autoCorrect="off"

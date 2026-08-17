@@ -1373,3 +1373,143 @@ fn real_agent_loop() {
          a funded API key, and per-run human approval before it can drive the loop for real"
     );
 }
+
+/// A parameterized query authored the way FlowPilot authors it: the query literal and the
+/// parameter value in ONE call, with the value coming from the event's input rather than from
+/// the SQL text.
+///
+/// This is the end-to-end claim behind SQL parameters. The pins do not exist in the catalog —
+/// `on_update` mints them from the query literal — so every stage has to cooperate: reconcile
+/// predicts `param_org_id`, apply writes the `query` literal in the setup batch, `on_update`
+/// runs at the end of that batch and creates the pin, and the deferred write plus the
+/// connection resolve against it afterwards. A regression in any one of them shows up here as
+/// either a diagnostic or an unwired pin.
+#[tokio::test]
+async fn parameterized_query_wires_user_input_into_a_derived_pin() {
+    let fixture = &*FIXTURE;
+    let state = catalog_state().await;
+    let mut board = empty_board("sim-sql-params");
+
+    let authored = "function loadForOrg(orgId: string): (rows: Struct[]) {\n    const session = dfCreateSession({ sessionName: \"default\" })\n    const result = dfSqlQuery({ session: session.session, query: \"SELECT * FROM users WHERE org = $org_id AND status = $status\", paramOrgId: orgId, paramStatus: \"active\" })\n    return result.rows\n}\n";
+
+    let applied = apply_flowscript_to_board(
+        &mut board,
+        authored,
+        &fixture.nodes,
+        state.clone(),
+        None,
+        false,
+    )
+    .await
+    .expect("parameterized query applies");
+    assert!(
+        applied.diagnostics.is_empty(),
+        "apply diagnostics: {:#?}",
+        applied.diagnostics
+    );
+
+    let query_node = board
+        .nodes
+        .values()
+        .find(|node| node.name == "df_sql_query")
+        .expect("the query node was placed");
+
+    let wired = query_node
+        .pins
+        .values()
+        .find(|pin| pin.name == "param_org_id")
+        .expect("on_update minted the pin for $org_id");
+    assert!(
+        !wired.depends_on.is_empty(),
+        "the function input must be connected into $org_id, not concatenated into the SQL"
+    );
+
+    let literal = query_node
+        .pins
+        .values()
+        .find(|pin| pin.name == "param_status")
+        .expect("on_update minted the pin for $status");
+    let value: flow_like_types::Value = literal
+        .default_value
+        .as_ref()
+        .map(|bytes| flow_like_types::json::from_slice(bytes).expect("pin value is JSON"))
+        .expect("the literal parameter value was applied");
+    assert_eq!(value, flow_like_types::json::json!("active"));
+
+    // The SQL text must still contain the placeholders — a parameter that got inlined would
+    // pass every assertion above while reintroducing exactly the injection this prevents.
+    let query_text: flow_like_types::Value = query_node
+        .pins
+        .values()
+        .find(|pin| pin.name == "query")
+        .and_then(|pin| pin.default_value.as_ref())
+        .map(|bytes| flow_like_types::json::from_slice(bytes).expect("query is JSON"))
+        .expect("query literal");
+    let query_text = query_text.as_str().unwrap_or_default();
+    assert!(
+        query_text.contains("$org_id") && query_text.contains("$status"),
+        "placeholders must survive into the stored query: {query_text}"
+    );
+}
+
+/// Re-applying the same parameterized source must be a no-op. `on_update` re-derives these pins
+/// on every board parse, so a pin re-minted with a fresh id would silently drop the edge made
+/// above and make the board non-idempotent for FlowPilot's readback loop.
+#[tokio::test]
+async fn reapplying_a_parameterized_query_keeps_the_same_pins() {
+    let fixture = &*FIXTURE;
+    let state = catalog_state().await;
+    let mut board = empty_board("sim-sql-params-idempotent");
+
+    let authored = "function loadForOrg(orgId: string): (rows: Struct[]) {\n    const session = dfCreateSession({ sessionName: \"default\" })\n    const result = dfSqlQuery({ session: session.session, query: \"SELECT * FROM users WHERE org = $org_id\", paramOrgId: orgId })\n    return result.rows\n}\n";
+
+    apply_flowscript_to_board(
+        &mut board,
+        authored,
+        &fixture.nodes,
+        state.clone(),
+        None,
+        false,
+    )
+    .await
+    .expect("first apply");
+
+    let identity = |board: &Board| {
+        let node = board
+            .nodes
+            .values()
+            .find(|node| node.name == "df_sql_query")
+            .expect("query node");
+        let pin = node
+            .pins
+            .values()
+            .find(|pin| pin.name == "param_org_id")
+            .expect("derived pin");
+        (pin.id.clone(), pin.depends_on.clone())
+    };
+    let first = identity(&board);
+    assert!(!first.1.is_empty(), "first apply wired the pin");
+
+    let anchored = board_to_flowscript(
+        &board,
+        &RenderOptions {
+            anchors: true,
+            ..RenderOptions::default()
+        },
+    );
+    let reapplied =
+        apply_flowscript_to_board(&mut board, &anchored, &fixture.nodes, state, None, false)
+            .await
+            .expect("re-apply");
+    assert!(
+        reapplied.diagnostics.is_empty(),
+        "re-apply diagnostics: {:#?}",
+        reapplied.diagnostics
+    );
+
+    assert_eq!(
+        identity(&board),
+        first,
+        "the derived pin and its edge must survive a readback round trip"
+    );
+}

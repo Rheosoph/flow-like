@@ -1,3 +1,4 @@
+import { i18n as i18next } from "@flow-like/locales";
 import Dexie from "dexie";
 import { HistoryIcon } from "lucide-react";
 import type { IGenericCommand } from "../../lib";
@@ -77,7 +78,7 @@ const writeStacks = async (key: string, stacks: IHistoryStacks) => {
 
 const toastStaleHistory = (action: "Undo" | "Redo") => {
 	toastWarning(
-		`${action} history was recorded against an older version of this board and has been cleared`,
+		i18next.t('actionHistoryWasRecordedAgainstAnOlderVersionOfThisBoardAndHasBeenCleared', '{{action}} history was recorded against an older version of this board and has been cleared', { action }),
 		<HistoryIcon className="w-4 h-4" />,
 	);
 };

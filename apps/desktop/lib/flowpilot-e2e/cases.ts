@@ -594,7 +594,7 @@ Wire the real page, widget, widget-action, and table ids returned by the setup t
 
 Handle an empty adventure list, a missing or empty save game, an empty decision input, and an agent answer that does not parse with clear states and messages.
 
-Keep everything on one coherent workflow board. This app is far larger than one layer holds, so plan the decomposition BEFORE writing: every layer, including the board root, accepts at most 50 nodes, and each \`function name(...) { ... }\` declaration gets its own layer with its own budget. Keep the root layer to entry blocks and calls, put every sub-behavior in its own function, and prefer node-cheap construction (build a row from one JSON/struct-schema value instead of a chain of per-field struct writes). An edit that would overflow a layer is rejected whole and nothing is queued, so treat that diagnostic as a signal to split the layer, never as an edit to retry.`,
+Keep everything on one coherent workflow board. This app is far larger than one layer holds, so plan the decomposition BEFORE writing: every layer, including the board root, accepts at most 100 nodes, and each \`function name(...) { ... }\` declaration gets its own layer with its own budget. Keep the root layer to entry blocks and calls, put every sub-behavior in its own function, and prefer node-cheap construction (build a row from one JSON/struct-schema value instead of a chain of per-field struct writes). An edit that would overflow a layer is rejected whole and nothing is queued, so treat that diagnostic as a signal to split the layer, never as an edit to retry.`,
 		requirements: requirements({
 			minFlowScriptNonWhitespaceChars: 2_500,
 			maxFlowScriptNonWhitespaceChars: 24_000,

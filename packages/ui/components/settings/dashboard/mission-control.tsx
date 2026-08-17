@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import {
 	ActivityIcon,
@@ -118,6 +119,7 @@ export function MissionControl({
 	listingDone: number;
 	onOpenPanel: (panel: InspectorPanel) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const spend = useProjectSpend(appId, app.visibility);
 	const listed = isOnlineVisibility(app.visibility);
 	const spendDollars =
@@ -130,15 +132,15 @@ export function MissionControl({
 		<div className="space-y-4">
 			<div className="grid grid-cols-1 gap-3 min-[400px]:grid-cols-2 lg:grid-cols-4">
 				<MetricTile
-					label="Runs · 24h"
+					label={t('runs24h2', 'Runs · 24h')}
 					icon={PlayCircleIcon}
 					value={runs.windowRuns.toLocaleString()}
 					hint={
 						runs.windowFailed > 0
-							? `${runs.windowFailed} failed`
+							? t('windowfailedFailed', '{{windowFailed}} failed', { windowFailed: runs.windowFailed })
 							: runs.windowRuns > 0
-								? "all succeeded"
-								: "no runs in the last day"
+								? t('allSucceeded', 'all succeeded')
+								: t('noRunsInTheLastDay', 'no runs in the last day')
 					}
 				>
 					{runs.windowRuns > 0 && (
@@ -151,35 +153,35 @@ export function MissionControl({
 				</MetricTile>
 
 				<MetricTile
-					label="Success rate"
+					label={t('successRate', 'Success rate')}
 					icon={CheckCircle2Icon}
 					value={
 						runs.successRate === null ? "—" : `${runs.successRate.toFixed(1)}%`
 					}
 					hint={
 						runs.successRate === null
-							? "needs a run to measure"
-							: `${runs.windowRuns - runs.windowFailed} of ${runs.windowRuns} ok`
+							? t('needsARunToMeasure', 'needs a run to measure')
+							: t('valOfWindowrunsOk', '{{val}} of {{windowRuns}} ok', { val: runs.windowRuns - runs.windowFailed, windowRuns: runs.windowRuns })
 					}
 				/>
 
 				<MetricTile
-					label="p95 duration"
+					label={t('p95Duration', 'p95 duration')}
 					icon={ClockIcon}
 					value={runs.p95Micros === null ? "—" : formatDuration(runs.p95Micros)}
-					hint={runs.p95Micros === null ? "no runs yet" : "slowest 5% of runs"}
+					hint={runs.p95Micros === null ? t('noRunsYet', 'no runs yet') : t('slowest5OfRuns', 'slowest 5% of runs')}
 				/>
 
 				{spendDollars !== null ? (
 					<MetricTile
-						label="Model spend"
+						label={t('modelSpend', 'Model spend')}
 						icon={DollarSignIcon}
 						value={`$${spendDollars.toFixed(2)}`}
 						hint="all time, LLM + embeddings"
 					/>
 				) : (
 					<MetricTile
-						label="Last run"
+						label={t('lastRun', 'Last run')}
 						icon={ActivityIcon}
 						value={
 							runs.lastRunAt
@@ -189,7 +191,7 @@ export function MissionControl({
 									)
 								: "—"
 						}
-						hint={runs.lastRunAt ? "most recent execution" : "never run"}
+						hint={runs.lastRunAt ? t('mostRecentExecution', 'most recent execution') : "never run"}
 					/>
 				)}
 			</div>
@@ -214,12 +216,12 @@ export function MissionControl({
 					>
 						{boards.length === 0 ? (
 							<EmptyHint>
-								No flows yet.{" "}
+								{t('noFlowsYet', 'No flows yet.')}{" "}
 								<Link
 									href={`/library/config/flows?id=${appId}`}
 									className="text-primary hover:underline"
 								>
-									Create your first flow
+									{t('createYourFirstFlow', 'Create your first flow')}
 								</Link>
 							</EmptyHint>
 						) : (
@@ -254,11 +256,15 @@ export function MissionControl({
 											</span>
 											<span className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
 												{health && health.failed > 0 && (
-													<span className="text-destructive">
-														{health.failed} failing
-													</span>
+													<span className="text-destructive">{t('failedFailing', '{{failed}} failing', { failed: health.failed })}</span>
 												)}
-												<span>{nodeCount} nodes</span>
+												<span>
+													{t('countNodes', {
+														defaultValue_one: '{{count}} Node',
+														defaultValue_other: '{{count}} Nodes',
+														count: nodeCount,
+													})}
+												</span>
 												{board.updated_at && (
 													<span className="hidden md:inline">
 														{formatRelativeTime(board.updated_at, "narrow")}
@@ -271,7 +277,7 @@ export function MissionControl({
 								})}
 								{boards.length > 5 && (
 									<p className="pt-1 text-center text-xs text-muted-foreground">
-										+{boards.length - 5} more flows
+										+{boards.length - 5} {t('moreFlows', 'more flows')}
 									</p>
 								)}
 							</div>
@@ -281,12 +287,12 @@ export function MissionControl({
 
 				<div className="space-y-4">
 					<SectionCard
-						title="Live activity"
+						title={t('liveActivity', 'Live activity')}
 						icon={ActivityIcon}
 						contentClassName="p-2"
 					>
 						{runs.recent.length === 0 ? (
-							<EmptyHint>No runs recorded yet.</EmptyHint>
+							<EmptyHint>{t('noRunsRecordedYet', 'No runs recorded yet.')}</EmptyHint>
 						) : (
 							<div className="space-y-0.5">
 								{runs.recent.slice(0, 8).map((run) => (
@@ -328,7 +334,7 @@ export function MissionControl({
 					</SectionCard>
 
 					<SectionCard
-						title="Access"
+						title={t('access', 'Access')}
 						icon={ShieldIcon}
 						action={
 							<Button
@@ -344,31 +350,31 @@ export function MissionControl({
 					>
 						<div className="space-y-2.5 text-xs">
 							<div className="flex items-center gap-2">
-								<span className="text-muted-foreground">Visibility</span>
+								<span className="text-muted-foreground">{t('visibility', 'Visibility')}</span>
 								<span className="ml-auto">
 									<VisibilityBadge visibility={app.visibility} />
 								</span>
 							</div>
 							<div className="flex items-center gap-2">
 								<UsersRoundIcon className="h-3.5 w-3.5 text-muted-foreground" />
-								<span className="text-muted-foreground">Team & Roles</span>
+								<span className="text-muted-foreground">{t('teamRoles', 'Team & Roles')}</span>
 								<span className="ml-auto">
 									{listed ? (
 										<Link
 											href={`/library/config/team?id=${appId}`}
 											className="text-primary hover:underline"
 										>
-											Manage
+											{t('manage', 'Manage')}
 										</Link>
 									) : (
 										<Badge variant="outline" className="text-[10px]">
-											Needs Prototype
+											{t('needsPrototype', 'Needs Prototype')}
 										</Badge>
 									)}
 								</span>
 							</div>
 							<div className="flex items-center gap-2">
-								<span className="text-muted-foreground">Forking</span>
+								<span className="text-muted-foreground">{t('forking2', 'Forking')}</span>
 								<span className="ml-auto text-foreground">
 									{app.allow_forking ? "Allowed" : "Off"}
 								</span>
@@ -380,7 +386,7 @@ export function MissionControl({
 									className="w-full"
 									onClick={() => onOpenPanel("access")}
 								>
-									Switch to Prototype to unlock team features
+									{t('switchToPrototypeToUnlockTeamFeatures', 'Switch to Prototype to unlock team features')}
 								</Button>
 							)}
 						</div>
@@ -398,10 +404,8 @@ export function MissionControl({
 						<div className="space-y-3 text-xs">
 							<div>
 								<div className="mb-1 flex items-center gap-2">
-									<span className="text-muted-foreground">Store readiness</span>
-									<span className="ml-auto tabular-nums text-muted-foreground">
-										{listingDone} / {listing.length}
-									</span>
+									<span className="text-muted-foreground">{t('storeReadiness', 'Store readiness')}</span>
+									<span className="ml-auto tabular-nums text-muted-foreground">{`${listingDone} / ${listing.length}`}</span>
 								</div>
 								<Meter value={listingDone} total={listing.length} />
 							</div>
@@ -413,7 +417,7 @@ export function MissionControl({
 									onClick={() => onOpenPanel("compliance")}
 								>
 									<ShieldIcon className="h-3.5 w-3.5 text-muted-foreground" />
-									<span className="text-muted-foreground">EU AI Act</span>
+									<span className="text-muted-foreground">{t('euAiAct', 'EU AI Act')}</span>
 									<span className="ml-auto">
 										{aiAct.hasAssessment ? (
 											<Badge variant="secondary" className="text-[10px]">
@@ -423,7 +427,7 @@ export function MissionControl({
 											</Badge>
 										) : (
 											<Badge variant="outline" className="text-[10px]">
-												Not submitted
+												{t('notSubmitted', 'Not submitted')}
 											</Badge>
 										)}
 									</span>
@@ -437,7 +441,7 @@ export function MissionControl({
 											{app.download_count.toLocaleString()}
 										</div>
 										<div className="text-[11px] text-muted-foreground">
-											Downloads
+											{t('downloads', 'Downloads')}
 										</div>
 									</div>
 									<div>
@@ -445,7 +449,7 @@ export function MissionControl({
 											{app.interactions_count.toLocaleString()}
 										</div>
 										<div className="text-[11px] text-muted-foreground">
-											Interactions
+											{t('interactions', 'Interactions')}
 										</div>
 									</div>
 									<div>
@@ -455,15 +459,12 @@ export function MissionControl({
 												<StarIcon className="h-3 w-3 text-amber-500" />
 											) : null}
 										</div>
-										<div className="text-[11px] text-muted-foreground">
-											{app.rating_count} ratings
-										</div>
+										<div className="text-[11px] text-muted-foreground">{t('rating_countRatings', '{{rating_count}} ratings', { rating_count: app.rating_count })}</div>
 									</div>
 								</div>
 							) : (
 								<p className="text-[11px] leading-relaxed text-muted-foreground">
-									Downloads, ratings and revenue appear here once the app is
-									listed — not before.
+									{t('downloadsRatingsAndRevenueAppearHereOnceTheAppIsListedNotBefore', "Downloads, ratings and revenue appear here once the app is listed — not before.")}
 								</p>
 							)}
 						</div>
@@ -472,7 +473,7 @@ export function MissionControl({
 					<Link href={`/library/config/flows?id=${appId}`}>
 						<Button variant="outline" size="sm" className="w-full">
 							<PlusIcon className="mr-1.5 h-3 w-3" />
-							New flow
+							{t('newFlow', 'New flow')}
 						</Button>
 					</Link>
 				</div>

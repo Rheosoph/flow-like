@@ -111,10 +111,20 @@ pub async fn apply_flowscript_to_board(
     // Resolve dynamic (on_update-generated) pins during reconcile by running each node's on_update on
     // an in-memory scratch node seeded with the call's literal args — no board mutation. Limited to
     // audited pure nodes whose on_update only reads their own pins (no network / cross-node reads).
+    //
+    // The SQL nodes qualify: their `on_update` reads only their own `query` pin and derives
+    // pins from it. The widget nodes deliberately do NOT — their `on_update` awaits app
+    // storage to resolve the widget, which cannot be driven from a synchronous `block_on`
+    // here; reconcile predicts their `dyn*` pins permissively instead.
     const ENRICH_ALLOWLIST: &[&str] = &[
         "string_format",
         "string_render_template",
         "a2ui_push_csv_to_chart",
+        "df_sql_query",
+        "df_sql_query_cached",
+        "df_execute_sql",
+        "df_write_delta",
+        "graph_sql_query",
     ];
     let logic_by_type: HashMap<String, Arc<dyn NodeLogic>> = {
         let registry = state.node_registry.read().await.node_registry.clone();
@@ -729,6 +739,10 @@ impl FlowScriptApplyPlanner {
     /// Apply pin writes deferred from setup, now that `on_update` has minted their target pins.
     /// Multiple pins on one node are folded into a single `UpdateNode` (each command is a whole-node
     /// replace, so per-pin commands would overwrite each other). Node order is first-seen.
+    ///
+    /// A pin still missing at this point is a hard error: reconcile accepted the argument on the
+    /// promise that configuring the node would create it, and it did not. See
+    /// [`deferred_pin_error`] for why the generic wording is not enough here.
     fn build_deferred_pin_updates(
         &mut self,
         board: &Board,
@@ -745,7 +759,8 @@ impl FlowScriptApplyPlanner {
                     entry.insert(self.resolve_node(board, &node_id)?.clone())
                 }
             };
-            let pin_id = resolve_pin_id_in_node(node, &pin_ref, Some(PinType::Input))?;
+            let pin_id = resolve_pin_id_in_node(node, &pin_ref, Some(PinType::Input))
+                .map_err(|error| deferred_pin_error(node, &pin_ref, error))?;
             let value = {
                 let node_ref = &*node;
                 self.resolve_layer_reference_pin_value(board, node_ref, &pin_id, &value)
@@ -1500,6 +1515,35 @@ fn invert_boundary_pin_direction(direction: PinType) -> PinType {
         PinType::Input => PinType::Output,
         PinType::Output => PinType::Input,
     }
+}
+
+/// Explains a deferred pin write whose target still does not exist after `on_update` ran.
+///
+/// Reconcile deliberately accepts arguments naming pins it cannot see, because the pin is
+/// supposed to be created by applying the node's own configuration first. When that promise
+/// is not kept, "unknown pin" describes the symptom and hides the cause — which is always
+/// either a configuration that did not produce the pin, or a name that does not match one it
+/// produces. Both are fixable, and neither is guessable from the generic wording.
+fn deferred_pin_error(
+    node: &Node,
+    pin_ref: &str,
+    error: flow_like_types::Error,
+) -> flow_like_types::Error {
+    if super::reconcile::widget_dynamic_pin_node(&node.name)
+        && super::reconcile::is_widget_dynamic_binding_arg(pin_ref)
+    {
+        return flow_like_types::anyhow!(
+            "`{}` still has no input pin `{pin_ref}` after being configured. Widget binding pins come from the persisted widget, so one of these is true: the widget selector does not name an existing widget, the widget has not finished being written yet, or `{pin_ref}` is not a binding this widget exposes. `ui_inspect` with operation `widget` lists the exact pin names for a widget.",
+            node.friendly_name
+        );
+    }
+    if super::reconcile::sql_param_node(&node.name) && pin_ref.starts_with("param") {
+        return flow_like_types::anyhow!(
+            "`{}` still has no input pin `{pin_ref}` after being configured. Parameter pins are derived from the query literal, so the query must contain the matching $placeholder (`paramCustomerId` needs `$customer_id`) and must be set as a literal on the same call that supplies the parameter.",
+            node.friendly_name
+        );
+    }
+    error
 }
 
 fn resolve_pin_id_in_node(

@@ -1,0 +1,854 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-movgjniz-i31e",
+		"name": "Events",
+		"language": "en",
+		"slug": "events",
+		"difficulty": "INTERMEDIATE",
+		"category": "EVENTS",
+		"estimatedMinutes": 65,
+		"isPublished": true,
+		"iconUrl": null,
+		"bannerUrl": null,
+		"tags": ["events", "triggers", "routes", "api", "automation"],
+		"position": 4,
+		"description": "Give your flows buttons, forms, APIs, schedules, and chat — and ship them safely.",
+		"longDescription": "One support app grows a new surface every lesson: trigger a Quick Action in your first minutes, wire a public intake form to a route you own, expose APIs and schedules that run with nobody watching, connect chat and mail, and pin immutable flow versions so a Friday-afternoon draft edit never reaches production. In-lesson challenges and a scenario-driven final make you prove each release decision as you go.",
+		"media": {
+			"icon": "assets/course-icon.webp",
+			"banner": "assets/route-event-architecture.webp"
+		},
+		"assets": [
+			{
+				"name": "AppEvents",
+				"file": "assets/app-events.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "app-events.webp",
+				"replace": true
+			},
+			{
+				"name": "QuickActionEvent",
+				"file": "assets/quick-action-event.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "quick-action-event.webp",
+				"replace": true
+			},
+			{
+				"name": "RouteConfiguration",
+				"file": "assets/route-configuration.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "route-configuration.webp",
+				"replace": true
+			},
+			{
+				"name": "RouteEventArchitecture",
+				"file": "assets/route-event-architecture.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "route-event-architecture.webp",
+				"replace": true
+			},
+			{
+				"name": "RunsAndLogs",
+				"file": "assets/runs-and-logs.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "runs-and-logs.webp",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "course-movgjniz-i31e.module.foundations",
+				"title": "Event Foundations",
+				"description": "Model entry contracts, compatibility, and execution location before exposing a flow.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "course-movgjniz-i31e.lesson.event-model",
+						"title": "Your First Event: Press the Button",
+						"language": "en",
+						"contentFile": "content/how-events-connect-to-flows.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "course-movgjniz-i31e.challenge.record-vs-node",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You press \"Triage selected request\" in the sidebar and the flow runs. What did the Event record contribute?",
+								"explanation": "The Event record is configuration around an entry node — type, interface, route, version. The logic stays in the flow; deleting the Event leaves the flow untouched. The tempting answer is the snapshot: this record targets Latest, so it follows the editable draft and freezes nothing — pinning is a separate, deliberate choice you'll meet in the versions lesson.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "points-and-configures",
+											"label": "It points at the flow's entry node and adds invocation configuration around it"
+										},
+										{
+											"id": "contains-logic",
+											"label": "It contains the triage logic itself, copied out of the flow"
+										},
+										{
+											"id": "replaces-node",
+											"label": "It replaced the Simple Event node inside the flow"
+										},
+										{
+											"id": "froze-snapshot",
+											"label": "It froze a snapshot of the flow at the moment it was created"
+										}
+									],
+									"correct": ["points-and-configures"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.pick-entry-node",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Soon the support app will collect subject, description, and priority from visitors. Which entry node does that flow need?",
+								"explanation": "A structured payload needs the Generic Event contract — extra output pins map the named fields into typed pins. The tempting slip is \"Quick Action\": that's an Event type, not an entry node, so the node menu will never offer it. A Simple Event starts with no payload at all, leaving the form nothing to deliver into.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "generic-node",
+											"label": "Generic Event — its output pins map the submitted fields into the flow"
+										},
+										{
+											"id": "simple-node",
+											"label": "Simple Event — forms can attach to any entry node"
+										},
+										{
+											"id": "chat-node",
+											"label": "Chat Event — user-facing input always flows through chat context"
+										},
+										{
+											"id": "quick-action-node",
+											"label": "A Quick Action node — that's what buttons and forms trigger"
+										}
+									],
+									"correct": ["generic-node"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.no-compatible-node",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You click Create Event in a fresh app and the dialog offers no usable node for the flow you selected. What's the most likely cause?",
+								"explanation": "Build order is flow-first: an Event record can only point at an entry node that already exists. Activation and routes are properties of the Event itself, so they can't block a dialog for an Event you haven't created yet — and versions never gate creation; Latest is a valid target.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "missing-entry",
+											"label": "The flow has no compatible event entry node yet"
+										},
+										{
+											"id": "not-activated",
+											"label": "The Event hasn't been activated yet"
+										},
+										{
+											"id": "no-route",
+											"label": "The flow has no route assigned"
+										},
+										{
+											"id": "needs-pinned-version",
+											"label": "You must pin a numbered flow version before creating Events"
+										}
+									],
+									"correct": ["missing-entry"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-movgjniz-i31e.lesson.compatibility-location",
+						"title": "Two Filters: What Can Run Where",
+						"language": "en",
+						"contentFile": "content/compatibility-and-execution-location.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "course-movgjniz-i31e.challenge.dialog-pairings",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which of these pairings will the Create Event dialog actually offer?",
+								"explanation": "Chat UI, Generic Form, and Cron each sit in their node's row of the compatibility matrix. Quick Action is the tempting miss: it's the Simple Event's UI type, not Generic's — a form-like feel doesn't make it a Generic surface. Email pairs only with the Mail Event entry.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "chat-ui-chat",
+											"label": "Chat UI on a Chat Event node"
+										},
+										{
+											"id": "form-generic",
+											"label": "Generic Form on a Generic Event node"
+										},
+										{
+											"id": "cron-simple",
+											"label": "Cron on a Simple Event node"
+										},
+										{
+											"id": "quick-generic",
+											"label": "Quick Action on a Generic Event node"
+										},
+										{
+											"id": "email-simple",
+											"label": "Email on a Simple Event node"
+										}
+									],
+									"correct": ["chat-ui-chat", "form-generic", "cron-simple"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.no-remote-offered",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You're configuring an Event and the editor offers no Remote option for its type. What does that tell you?",
+								"explanation": "Availability is filter two: each sink runs where its connection and runtime live, and the editor encodes that. Credentials and version pinning matter for operating remote events, but they never unlock a location the sink can't support — that misconception keeps people fighting the dropdown instead of redesigning the surface.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "sink-local-bound",
+											"label": "The sink's connection or runtime is local-bound — reconsider the execution location, not the dropdown"
+										},
+										{
+											"id": "stale-ui",
+											"label": "The option list is stale; refreshing the editor restores Remote"
+										},
+										{
+											"id": "pin-unlocks",
+											"label": "Remote unlocks once you pin a numbered flow version"
+										},
+										{
+											"id": "credential-unlocks",
+											"label": "Remote appears after you add a server-side credential"
+										}
+									],
+									"correct": ["sink-local-bound"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.api-vs-rest",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The partner portal needs a single inbound webhook today and a multi-endpoint authenticated service next quarter. What do you plan?",
+								"explanation": "An API event is one configured HTTP endpoint and runs locally or remotely — exactly webhook-shaped. REST is a broader remote-only authenticated service surface, so \"run it locally until it matures\" is impossible by design. Stacking API events never yields one coherent service contract, and MCP serves tool-capable clients, not REST consumers.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "api-then-rest",
+											"label": "API for the webhook now; REST (remote) for the service later"
+										},
+										{
+											"id": "rest-local-dev",
+											"label": "REST for both — run it locally until the service matures"
+										},
+										{
+											"id": "api-everywhere",
+											"label": "API for both — REST is just a naming convention for several API events"
+										},
+										{
+											"id": "mcp-supersedes",
+											"label": "MCP for both — it supersedes REST for new services"
+										}
+									],
+									"correct": ["api-then-rest"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "course-movgjniz-i31e.module.configuration",
+				"title": "Configure and Operate Events",
+				"description": "Build reachable UI, external, background, and specialized Event surfaces with safe versions.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "course-movgjniz-i31e.lesson.ui-events-routes",
+						"title": "Routes: Every Path Has One Owner",
+						"language": "en",
+						"contentFile": "content/ui-events-and-routes.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "course-movgjniz-i31e.challenge.valid-route",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The support app already owns /triage and /chat. Which Route Path can you save for the new intake form?",
+								"explanation": "A route begins with / and must be unique within the app — /support/new is the only candidate passing both rules. \"support/new\" fails the leading-slash contract, /triage already has an owner (the Events UI enforces one owner per path), and nothing except an Event ever owns a route, so there is no page-side setting to fall back to.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "support-new",
+											"label": "/support/new"
+										},
+										{
+											"id": "missing-slash",
+											"label": "support/new"
+										},
+										{
+											"id": "taken-triage",
+											"label": "/triage"
+										},
+										{
+											"id": "route-on-page",
+											"label": "None — set the route on the form's page instead of the event"
+										}
+									],
+									"correct": ["support-new"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.orphan-page",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Your landing page renders in the builder, but the shared link drops everyone on the app's default view. What's the fix?",
+								"explanation": "Pages don't own routes — no path resolves to a page until a Page-target Event claims one. Re-saving can't register a route that doesn't exist, boards never carry paths, and a Quick Action is a manual trigger surface, not page navigation. One owner per path means reachability always traces back to exactly one Event.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "page-target-event",
+											"label": "Create a Page-target Event, select the page, and assign a unique route"
+										},
+										{
+											"id": "resave-page",
+											"label": "Re-save the page so its built-in route registers"
+										},
+										{
+											"id": "board-route",
+											"label": "Routes attach to boards — set the path on the page's board"
+										},
+										{
+											"id": "expose-quick-action",
+											"label": "Expose the page as a Quick Action instead"
+										}
+									],
+									"correct": ["page-target-event"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.form-trust",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The /support/new form is live. Which statements should guide how you harden it?",
+								"explanation": "The flow revalidates because replayed or API-shaped requests reach the entry node without ever seeing the form — which is exactly why a hidden field or client-only validation is decoration, not authorization. Field-to-pin alignment keeps payload values mapping instead of silently vanishing. And node-before-event is lesson one's build order, still true here.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "revalidate-flow",
+											"label": "Revalidate subject, description, and priority inside the flow before persisting"
+										},
+										{
+											"id": "align-pins",
+											"label": "Keep form field names aligned with the Generic Event's output pins"
+										},
+										{
+											"id": "node-before-event",
+											"label": "The Generic Event node had to exist before the form event could be created"
+										},
+										{
+											"id": "hidden-field-auth",
+											"label": "A hidden form field is a reliable way to restrict who can submit"
+										},
+										{
+											"id": "client-validation-enough",
+											"label": "Client-side validation is sufficient once the form is the only linked entry"
+										}
+									],
+									"correct": ["revalidate-flow", "align-pins", "node-before-event"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-movgjniz-i31e.lesson.external-background",
+						"title": "Events That Run While You Sleep",
+						"language": "en",
+						"contentFile": "content/external-and-background-events.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "course-movgjniz-i31e.challenge.unattended-difference",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "What can an interactive local run do that the 3 a.m. reconciliation run cannot?",
+								"explanation": "Unattended runs still log, retry, and — for Cron — execute remotely. What vanishes is the human: a local interactive run can stop and prompt for a missing runtime value, while a scheduled run just fails or blocks. That's why every credential and configuration value must exist where the run lives, before activation.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "prompt-for-value",
+											"label": "Pause and ask a person for a missing runtime value"
+										},
+										{
+											"id": "write-logs",
+											"label": "Write entries to Runs and Logs"
+										},
+										{
+											"id": "be-retried",
+											"label": "Be retried after a failure"
+										},
+										{
+											"id": "run-remote",
+											"label": "Execute on remote infrastructure"
+										}
+									],
+									"correct": ["prompt-for-value"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.cron-overlap",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The hourly reconciliation sometimes takes 70 minutes. A teammate proposes: \"Switch it to a Daemon so we never miss a tick.\" What's the right call?",
+								"explanation": "Finite periodic work is Cron's job; the missing piece is an explicit answer to \"what happens at the next tick?\" plus a deterministic period identity so retries converge on one record. A Daemon is a supervised local long-runner — the hosted reconciliation fails that shape on the location filter and the work-shape filter at once. And nothing queues \"automatically\": unspecified overlap is exactly how periods get double-processed.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "define-overlap-policy",
+											"label": "Keep Cron and define the overlap policy — skip, queue, or safe concurrency — plus deterministic period identity"
+										},
+										{
+											"id": "switch-daemon",
+											"label": "Switch to a Daemon; supervised processes can't miss ticks"
+										},
+										{
+											"id": "auto-queue",
+											"label": "Do nothing; overlapping ticks queue automatically"
+										},
+										{
+											"id": "stretch-schedule",
+											"label": "Stretch the schedule to every two hours so runs can't collide"
+										}
+									],
+									"correct": ["define-overlap-policy"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.release-evidence",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which checks belong in the release evidence for the partner webhook and the hourly reconciliation?",
+								"explanation": "Evidence means the real path, the durable outcome, and rehearsed failure. A green terminal status only proves the run finished — the reconciliation can \"succeed\" while writing nothing. And a passing board-editor run proves logic, not location: it never touches the endpoint config, credentials, or sink environment (lesson two's warning, still collecting victims).",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "real-invocation-path",
+											"label": "Trigger each through its real configured path with a safe payload or temporary schedule"
+										},
+										{
+											"id": "durable-outcome",
+											"label": "Verify the durable outcome — the ticket row and completion record — not just terminal status"
+										},
+										{
+											"id": "rehearse-failure",
+											"label": "Rehearse failure: invalid payloads, missing credentials, a dependency timeout"
+										},
+										{
+											"id": "green-status-enough",
+											"label": "Accept a green terminal status across three runs as sufficient evidence"
+										},
+										{
+											"id": "board-run-covers",
+											"label": "Let a passing board-editor run cover the API path — same flow, same result"
+										}
+									],
+									"correct": [
+										"real-invocation-path",
+										"durable-outcome",
+										"rehearse-failure"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "course-movgjniz-i31e.lesson.specialized-versions",
+						"title": "Chat, Mail, and the Version That Saves Your Friday",
+						"language": "en",
+						"contentFile": "content/specialized-events-and-versions.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 2,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "course-movgjniz-i31e.challenge.friday-mystery",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In the Friday story, why did Monday's tickets lose their priority when nobody touched the /support/new event?",
+								"explanation": "Latest is a pointer to the editable draft — every save is instantly live for events targeting it, no event-side change required. Routes live on the event and never react to pin renames, and saving a draft neither creates nor pins a version. That immediacy is exactly why production surfaces pin reviewed numbered versions.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "latest-follows-draft",
+											"label": "The event targets Latest, so the saved draft edit changed live behavior immediately"
+										},
+										{
+											"id": "route-reset",
+											"label": "Renaming a pin reset the event's route mapping"
+										},
+										{
+											"id": "needed-resave",
+											"label": "Draft edits only go live when someone re-saves the event — someone must have"
+										},
+										{
+											"id": "auto-version",
+											"label": "Saving a draft automatically creates and pins a new numbered version"
+										}
+									],
+									"correct": ["latest-follows-draft"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.rollout-practices",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The intake flow needs a bug fix and /support/new pins version 3. Which moves belong in the rollout?",
+								"explanation": "Numbered versions are immutable, so change means a new version tested through a real surface, then a deliberate repoint — with the old version kept warm as the rollback path. Editing v3 in place is impossible by design; pointing production at Latest reintroduces the Friday problem mid-incident; and pinning never froze providers or credentials, so monitoring stays on.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "new-version-canary",
+											"label": "Create version 4 from the fixed draft and test it through a temporary event first"
+										},
+										{
+											"id": "rollback-repoint",
+											"label": "Keep version 3 available and roll back by repointing the event if thresholds fail"
+										},
+										{
+											"id": "edit-v3-in-place",
+											"label": "Apply the fix directly inside version 3 to avoid a risky migration"
+										},
+										{
+											"id": "bridge-via-latest",
+											"label": "Point production at Latest during the fix so the repair arrives immediately"
+										},
+										{
+											"id": "pinning-freezes-deps",
+											"label": "Pause provider monitoring during the rollout — pinned versions freeze external dependencies"
+										}
+									],
+									"correct": ["new-version-canary", "rollback-repoint"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.mail-loop",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The new support inbox event answers every incoming mail — including its own auto-replies, which now arrive every few seconds. What did the configuration miss?",
+								"explanation": "Email events must define which mailboxes and messages count as invocations — otherwise the flow's own replies re-trigger it, and the mail server happily plays the other half of the loop. Mail Event is the correct (and only) entry node for Email, and neither version pinning nor account permissions change what triggers the flow — they'd just loop a pinned version instead.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "invocation-rules",
+											"label": "Rules for which mailboxes and messages may invoke the flow, so it never triggers on its own output"
+										},
+										{
+											"id": "wrong-entry-node",
+											"label": "The flow used a Mail Event node when email needs Generic"
+										},
+										{
+											"id": "pin-stops-loop",
+											"label": "The event follows Latest; pinning a version stops the loop"
+										},
+										{
+											"id": "account-permissions",
+											"label": "The mail account lacks permissions, so sends duplicate as retries"
+										}
+									],
+									"correct": ["invocation-rules"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "course-movgjniz-i31e.module.assessment",
+				"title": "Final Assessment",
+				"description": "Design and review a multi-surface Event release.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "course-movgjniz-i31e.lesson.final-assessment",
+						"title": "Ship the Support Surface",
+						"language": "en",
+						"contentFile": "content/final-assessment.md",
+						"videoUrl": null,
+						"estimatedMinutes": 15,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "course-movgjniz-i31e.challenge.entry-contract",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You open Create Event for the operator refresh flow and Quick Action isn't offered. What's the actual blocker?",
+								"explanation": "The dialog reads the selected node and offers only compatible types — Quick Action lives in the Simple Event row, so its absence means the entry contract is missing or the wrong node is selected. Build order is flow-first. Routes and versions are configured on the event afterward, so they can't gate the type list, and Quick Actions are invoked through the app interface — remote execution never enters into it.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "missing-simple-node",
+											"label": "The refresh flow lacks a Simple Event entry node, or the wrong node is selected"
+										},
+										{
+											"id": "route-first",
+											"label": "Quick Actions need a route assigned before the type appears"
+										},
+										{
+											"id": "version-unlocks",
+											"label": "The type list unlocks after you pin a numbered version"
+										},
+										{
+											"id": "remote-required",
+											"label": "Quick Action requires remote execution, which isn't enabled"
+										}
+									],
+									"correct": ["missing-simple-node"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.compatibility",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "A teammate drafts the event list below. Which entries will fail before they can even be activated?",
+								"explanation": "Two filters, two failures: Generic Form belongs to the Generic Event contract, so it's never offered for a Simple node — Quick Action is that node's UI type — and REST is a remote-only service surface no matter who consumes it. The other three pass both filters: Cron on a Simple node runs locally or remotely, Quick Action is the refresh's natural shape, and the intake pairing at a unique route is exactly the routes-lesson build.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "form-on-simple",
+											"label": "Operator refresh exposed as a Generic Form on its Simple Event node"
+										},
+										{
+											"id": "rest-local",
+											"label": "An internal REST surface configured for Local execution"
+										},
+										{
+											"id": "cron-remote",
+											"label": "Reconciliation as Cron → Simple Event → Remote"
+										},
+										{
+											"id": "quick-on-simple",
+											"label": "Operator refresh as a Quick Action on its Simple Event node"
+										},
+										{
+											"id": "form-on-generic",
+											"label": "Intake as a Generic Form on the Generic Event node at /support/new"
+										}
+									],
+									"correct": ["form-on-simple", "rest-local"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.location",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "For the reconciliation, a teammate suggests a Daemon \"so ticks are never missed\" — but the editor offers no Remote option for Daemon. What's the correct read?",
+								"explanation": "The missing Remote option is the availability filter speaking: a Daemon supervises a long-running local process, the wrong shape and the wrong location for hosted finite hourly work — that's Cron → Remote. No permission or retry setting changes a sink's runtime requirements, and \"keep the laptop online\" recreates the exact fragility the hosted requirement exists to remove: the schedule dies with the laptop's lid.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "daemon-wrong-shape",
+											"label": "A Daemon is a supervised local long-runner; hosted hourly finite work belongs to Cron → Remote"
+										},
+										{
+											"id": "admin-permission",
+											"label": "Remote is hidden until an admin grants hosting permissions"
+										},
+										{
+											"id": "retry-unlocks-remote",
+											"label": "Daemons run remotely once retry limits are configured"
+										},
+										{
+											"id": "laptop-online",
+											"label": "Keep the Daemon local — the laptop just has to stay online every hour"
+										}
+									],
+									"correct": ["daemon-wrong-shape"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.route-ownership",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The designed landing Page should greet users at /support. How do you make it reachable?",
+								"explanation": "Only Events own routes: a path resolves through the route mapping to an App Event, which opens the Page. Pages and flows have no route field of their own, and one path has exactly one owner — sharing /support/new would be rejected, and the form and the landing page are different surfaces anyway. A Page-target Event with the unique route /support is the whole answer.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "page-event-route",
+											"label": "Create a Page-target Event, select the Page, and assign the unique route /support"
+										},
+										{
+											"id": "route-on-page-itself",
+											"label": "Set /support on the Page itself and skip the event layer"
+										},
+										{
+											"id": "share-support-new",
+											"label": "Attach the Page to the existing /support/new event so both share the path"
+										},
+										{
+											"id": "route-on-flow",
+											"label": "Assign /support to the flow that generated the Page"
+										}
+									],
+									"correct": ["page-event-route"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.versioning",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Mid-sprint, the intake flow needs a validation fix while /support/new pins version 3. Which steps belong in your rollout plan?",
+								"explanation": "The safe sequence: new version, canary through the real surface (including invalid and unauthorized submissions), deliberate repoint in a controlled window, old version kept warm. Editing v3 is impossible by design — that immutability is what makes rollback trustworthy. Bridging through Latest trades a one-line fix for exposure to every draft save: the Friday-afternoon incident, scheduled on purpose.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "v4-canary",
+											"label": "Create version 4 and test it through a temporary internal event, including invalid and unauthorized submissions"
+										},
+										{
+											"id": "repoint-window",
+											"label": "Repoint /support/new to version 4 in a controlled window and watch outcomes"
+										},
+										{
+											"id": "keep-v3-rollback",
+											"label": "Keep version 3 available as the rollback target"
+										},
+										{
+											"id": "patch-v3",
+											"label": "Patch version 3 in place so the event never needs repointing"
+										},
+										{
+											"id": "latest-bridge",
+											"label": "Temporarily target Latest so the fix ships the moment the draft is saved"
+										}
+									],
+									"correct": ["v4-canary", "repoint-window", "keep-v3-rollback"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.remote-credentials",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The reconciliation Cron currently runs Local on the developer's laptop with a local Secret token. Which two requirements does this setup violate?",
+								"explanation": "One violation per filter: \"runs on company infrastructure\" makes Local-on-a-laptop wrong — the schedule sleeps when the laptop does — and moving remote strands the token, because local Secret runtime variables are deliberately excluded from remote execution payloads. Provision the credential where the run lives. Cron → Simple is the correct pairing, backend events take no routes, and a Daemon remains the local long-runner, not a schedule with ambitions.",
+								"points": 10,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "must-run-remote",
+											"label": "\"Runs on company infrastructure\" means the event must be configured for remote execution"
+										},
+										{
+											"id": "server-side-credential",
+											"label": "Unattended remote runs need a server-side credential — local Secrets are excluded from remote payloads"
+										},
+										{
+											"id": "cron-cant-simple",
+											"label": "Cron events can't target Simple Event nodes"
+										},
+										{
+											"id": "needs-ui-route",
+											"label": "The reconciliation needs a UI route to be reachable"
+										},
+										{
+											"id": "must-be-daemon",
+											"label": "Hourly schedules must run as Daemons to survive restarts"
+										}
+									],
+									"correct": ["must-run-remote", "server-side-credential"]
+								}
+							},
+							{
+								"id": "course-movgjniz-i31e.challenge.operations",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Yesterday's dry run: a double-click created two tickets, and the reconciliation logged success with no completion record. Which responses actually close out these findings?",
+								"explanation": "Both symptoms are trust-the-wrong-signal bugs. Duplicates need identity inside the flow — a disabled submit button is client decoration that replayed or API-shaped requests never see (the routes lesson's rule). And the missing record is the finding, not a glitch: terminal status proves a run finished, never that the business outcome exists, so release evidence pairs Runs and Logs with the durable record.",
+								"points": 10,
+								"position": 6,
+								"payload": {
+									"options": [
+										{
+											"id": "flow-idempotency",
+											"label": "Guard duplicate submission and add an idempotency check on ticket creation inside the flow"
+										},
+										{
+											"id": "period-identity",
+											"label": "Give the reconciliation deterministic period identity so retries and overlap converge on one record"
+										},
+										{
+											"id": "verify-durable",
+											"label": "Re-test and verify the durable ticket and completion records, not just terminal status"
+										},
+										{
+											"id": "logging-glitch",
+											"label": "Treat the missing record as a logging glitch — the green status shows the work happened"
+										},
+										{
+											"id": "disable-button-only",
+											"label": "Disable the submit button after the first click and rely on that as the duplicate defense"
+										}
+									],
+									"correct": [
+										"flow-idempotency",
+										"period-identity",
+										"verify-durable"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		]
+	}
+}

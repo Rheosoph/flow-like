@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "../../../lib/utils";
 import { AudioPreview } from "../../ui/audio-preview";
@@ -90,6 +91,7 @@ export function A2UIFilePreview({
 	component,
 	style,
 }: ComponentProps<FilePreviewComponent>) {
+	const { t } = useTranslation("common");
 	const src = useResolved<string>(component.src ?? component.url);
 	const filename = useResolved<string>(component.filename);
 	const mimeType = useResolved<string>(component.mimeType);
@@ -101,7 +103,7 @@ export function A2UIFilePreview({
 	const fit = useResolved<string>(component.fit) ?? "contain";
 	const loading = useResolved<"lazy" | "eager">(component.loading);
 	const fallbackText =
-		useResolved<string>(component.fallbackText) ?? "Cannot preview this file";
+		useResolved<string>(component.fallbackText) ?? t('cannotPreviewThisFile', 'Cannot preview this file');
 
 	const [content, setContent] = useState<string>("");
 	const [loadingText, setLoadingText] = useState(false);

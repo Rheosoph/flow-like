@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type CollisionDetection,
 	DndContext,
@@ -155,6 +156,7 @@ export function BuilderDndProvider({
 	children,
 	setIsDraggingGlobal,
 }: BuilderDndProviderProps) {
+	const { t } = useTranslation("flow");
 	const [activeId, setActiveId] = useState<string | null>(null);
 	const [activeData, setActiveData] = useState<DragData | null>(null);
 	const [overId, setOverId] = useState<string | null>(null);

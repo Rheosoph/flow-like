@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import { Handle, type HandleType, Position, useReactFlow } from "@xyflow/react";
 import { EllipsisVerticalIcon, GripIcon, ListIcon, Trash2 } from "lucide-react";
 import {
@@ -141,6 +142,7 @@ function FlowPinInnerComponent({
 	selectorDataRef,
 	selectorDataVersion,
 }: FlowPinInnerProps) {
+	const { t } = useTranslation("flow");
 	const { pushCommand } = useUndoRedo(appId, boardId);
 	const invalidate = useInvalidateInvoke();
 	const { getNode } = useReactFlow();
@@ -365,7 +367,7 @@ function FlowPinInnerComponent({
 						<button
 							type="button"
 							className="opacity-0 bg-background border p-0.5 rounded-full group-hover:opacity-100 hover:text-primary"
-							title="Delete Pin"
+							title={t('deletePin', 'Delete Pin')}
 							onClick={() => onPinRemove(pin)}
 						>
 							<Trash2 className="w-1.5 h-1.5" />
@@ -381,7 +383,7 @@ function FlowPinInnerComponent({
 							? "ml-2.5"
 							: "mr-2.5 right-0 absolute"
 					}`}
-					title="Delete Pin"
+					title={t('deletePin', 'Delete Pin')}
 					onClick={() => onPinRemove(pin)}
 				>
 					<Trash2 className="w-1.5 h-1.5" />

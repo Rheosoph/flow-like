@@ -29,6 +29,7 @@ pub enum A2UIComponentType {
     Center(CenterProps),
     Spacer(SpacerProps),
     WidgetInstance(WidgetInstanceProps),
+    MicroWidgetInstance(MicroWidgetInstanceProps),
 
     // Display components
     Text(TextProps),
@@ -208,6 +209,31 @@ pub struct WidgetInstanceProps {
     pub app_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exposed_prop_values: Option<HashMap<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_bindings: Option<HashMap<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style_override: Option<Style>,
+}
+
+/// A package-shipped widget rendered in a sandboxed iframe. Self-contained: the contract and
+/// current props ride on the component, so an instance replays from component data alone.
+/// `bundle_hash` is what desktop serves from (`flow-widget://`) and cannot be invented — it comes
+/// from the installed package manifest via `ui_inspect`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroWidgetInstanceProps {
+    pub instance_id: String,
+    pub package_id: String,
+    pub widget_id: String,
+    pub package_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundle_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub props: Option<HashMap<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action_bindings: Option<HashMap<String, Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]

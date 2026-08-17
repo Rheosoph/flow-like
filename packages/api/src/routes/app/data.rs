@@ -8,6 +8,7 @@ use crate::state::AppState;
 pub mod delete_files;
 pub mod download_files;
 pub mod list_files;
+pub mod paths;
 pub mod presign_data_access;
 pub mod upload_files;
 

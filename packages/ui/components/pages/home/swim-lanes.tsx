@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "framer-motion";
 import { ArrowRight, ArrowUpRight, CloudOff } from "lucide-react";
@@ -8,7 +9,7 @@ import { useRouter } from "next/navigation";
 import { Fragment, type ReactNode, useMemo } from "react";
 import { useInvoke } from "../../../hooks";
 import type { IApp, IAppCategory, IMetadata } from "../../../lib";
-import { formatAppCategory } from "../../../lib/app-category";
+import { useAppCategoryLabel } from "../../../lib/app-category";
 import {
 	APP_CATEGORY_ORDER,
 	CATEGORY_ICONS,
@@ -107,6 +108,7 @@ function useSwimlanes() {
 }
 
 export function HomeSwimlanes() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const apps = useInvoke(backend.appState.getApps, backend.appState, []);
 	const latestApps = useInvoke(backend.appState.searchApps, backend.appState, [
@@ -142,11 +144,14 @@ export function HomeSwimlanes() {
 				{error && !data && (
 					<Alert variant="destructive">
 						<CloudOff className="h-4 w-4" />
-						<AlertTitle>Couldn’t load highlights</AlertTitle>
+						<AlertTitle>
+							{t("couldntLoadHighlights", "Couldn’t load highlights")}
+						</AlertTitle>
 						<AlertDescription>
-							The curated sections are unavailable right now — check your
-							connection or try again later. Your library and community apps
-							below still work.
+							{t(
+								"theCuratedSectionsAreUnavailableRightNowCheckYourConnectionOrTryAgainLaterYourLibraryAndCommunityAppsBelowStillWork",
+								"The curated sections are unavailable right now — check your connection or try again later. Your library and community apps below still work.",
+							)}
 						</AlertDescription>
 					</Alert>
 				)}
@@ -199,19 +204,21 @@ function SectionHeader({
 	title,
 	subtitle,
 	href,
-	linkLabel = "View all",
+	linkLabel,
 }: Readonly<{
 	title: string;
 	subtitle?: string;
 	href?: string;
 	linkLabel?: string;
 }>) {
+	const { t } = useTranslation("common");
+	const resolvedLinkLabel = linkLabel ?? t("viewAll", "View all");
 	const external = isExternalLink(href);
 	const linkClass =
 		"group/link flex shrink-0 items-center gap-1.5 rounded-full border border-border/40 bg-card/60 px-4 py-1.5 text-sm font-medium text-muted-foreground transition-all hover:border-primary/30 hover:text-foreground hover:shadow-sm";
 	const linkContent = (
 		<>
-			{linkLabel}
+			{resolvedLinkLabel}
 			{external ? (
 				<ArrowUpRight className="h-3.5 w-3.5 transition-transform group-hover/link:translate-x-0.5 group-hover/link:-translate-y-0.5" />
 			) : (
@@ -253,17 +260,22 @@ function SectionHeader({
 // ─── Category rail ───────────────────────────────────────────────────────────
 
 function CategoryRail() {
+	const { t } = useTranslation("common");
+	const categoryLabel = useAppCategoryLabel();
 	return (
 		<Reveal>
 			<SectionHeader
-				title="Browse by category"
-				subtitle="Find the right app for every job."
+				title={t("browseByCategory", "Browse by category")}
+				subtitle={t(
+					"findTheRightAppForEveryJob",
+					"Find the right app for every job.",
+				)}
 				href="/store/explore/apps"
-				linkLabel="Explore all"
+				linkLabel={t("exploreAll", "Explore all")}
 			/>
 			<ScrollRail>
 				{APP_CATEGORY_ORDER.map((category) => {
-					const label = formatAppCategory(category);
+					const label = categoryLabel(category);
 					const color = categoryColor(category);
 					const Icon = CATEGORY_ICONS[category];
 					return (
@@ -300,6 +312,7 @@ function LibraryAppsSection({
 	recentLibraryApps: [IApp, IMetadata | undefined][];
 	router: AppRouterInstance;
 }>) {
+	const { t } = useTranslation("common");
 	if (recentLibraryApps.length === 0) {
 		return null;
 	}
@@ -307,10 +320,13 @@ function LibraryAppsSection({
 	return (
 		<Reveal>
 			<SectionHeader
-				title="From your library"
-				subtitle="Jump back into the apps you updated most recently."
+				title={t("fromYourLibrary", "From your library")}
+				subtitle={t(
+					"jumpBackIntoTheAppsYouUpdatedMostRecently",
+					"Jump back into the apps you updated most recently.",
+				)}
 				href="/library"
-				linkLabel="Open library"
+				linkLabel={t("openLibrary", "Open library")}
 			/>
 			<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
 				{recentLibraryApps.map(([app, metadata]) => (
@@ -339,6 +355,7 @@ function LatestUserAppsSection({
 	latestApps: IAppQuery;
 	router: AppRouterInstance;
 }>) {
+	const { t } = useTranslation("common");
 	if (!latestApps.data?.length) {
 		if (!latestApps.isFetching) {
 			return null;
@@ -347,8 +364,11 @@ function LatestUserAppsSection({
 		return (
 			<section>
 				<SectionHeader
-					title="Latest community apps"
-					subtitle="Freshly published apps from the community."
+					title={t("latestCommunityApps", "Latest community apps")}
+					subtitle={t(
+						"freshlyPublishedAppsFromTheCommunity",
+						"Freshly published apps from the community.",
+					)}
 				/>
 				<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
 					{["a", "b", "c", "d", "e", "f"].map((slot) => (
@@ -365,8 +385,11 @@ function LatestUserAppsSection({
 	return (
 		<Reveal>
 			<SectionHeader
-				title="Latest community apps"
-				subtitle="Freshly published apps from the community."
+				title={t("latestCommunityApps", "Latest community apps")}
+				subtitle={t(
+					"freshlyPublishedAppsFromTheCommunity",
+					"Freshly published apps from the community.",
+				)}
 				href="/store/explore/apps?sort=newest"
 			/>
 			<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">

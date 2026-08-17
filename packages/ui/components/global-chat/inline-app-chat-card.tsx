@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { AnimatePresence, motion } from "framer-motion";
 import {
 	ChevronDownIcon,
@@ -32,6 +33,7 @@ export function InlineAppChatCard({
 	onClose,
 	compact = false,
 }: InlineAppChatCardProps) {
+	const { t } = useTranslation("chat");
 	const backend = useBackend();
 	const router = useRouter();
 	const [event, setEvent] = useState<IEvent | null>(null);
@@ -91,7 +93,7 @@ export function InlineAppChatCard({
 						{chat.name}
 					</span>
 					<span className="ml-1 px-1.5 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-semibold uppercase tracking-wide shrink-0">
-						App Chat
+						{t('appChat', 'App Chat')}
 					</span>
 					<ChevronDownIcon
 						className={`size-4 text-muted-foreground shrink-0 ml-auto transition-transform ${expanded ? "" : "-rotate-90"}`}
@@ -101,8 +103,8 @@ export function InlineAppChatCard({
 					variant="ghost"
 					size="icon"
 					className="h-7 w-7 rounded-full shrink-0 text-muted-foreground hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-					aria-label="Open in full app view"
-					title="Open in full app view"
+					aria-label={t('openInFullAppView', 'Open in full app view')}
+					title={t('openInFullAppView', 'Open in full app view')}
 					onClick={() =>
 						router.push(`/use?id=${chat.appId}&eventId=${chat.eventId}`)
 					}
@@ -113,7 +115,7 @@ export function InlineAppChatCard({
 					variant="ghost"
 					size="icon"
 					className="h-7 w-7 rounded-full shrink-0 text-muted-foreground hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-					aria-label="Close app chat"
+					aria-label={t('closeAppChat', 'Close app chat')}
 					onClick={() => onClose(chat.id)}
 				>
 					<XIcon className="size-3.5" />
@@ -142,7 +144,7 @@ export function InlineAppChatCard({
 									/>
 								) : (
 									<div className="flex flex-1 items-center justify-center text-sm text-muted-foreground p-6">
-										{error ?? "Loading app chat…"}
+										{error ?? t('loadingAppChat', 'Loading app chat…')}
 									</div>
 								)}
 							</div>

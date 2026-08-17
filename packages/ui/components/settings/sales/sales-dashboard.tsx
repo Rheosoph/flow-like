@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { ResponsiveBar } from "@nivo/bar";
 import { ResponsiveLine } from "@nivo/line";
 import { ResponsivePie } from "@nivo/pie";
@@ -131,6 +132,7 @@ function StatCard({
 
 // Revenue Chart Component
 function RevenueChart({ data }: { data: IDailyStat[] }) {
+	const { t } = useTranslation("settings");
 	const chartData = useMemo(
 		() => [
 			{
@@ -151,7 +153,7 @@ function RevenueChart({ data }: { data: IDailyStat[] }) {
 	if (data.length === 0) {
 		return (
 			<div className="h-[300px] flex items-center justify-center text-muted-foreground">
-				No revenue data available
+				{t('noRevenueDataAvailable', 'No revenue data available')}
 			</div>
 		);
 	}
@@ -198,6 +200,7 @@ function RevenueChart({ data }: { data: IDailyStat[] }) {
 
 // Purchases by Day Chart
 function PurchasesChart({ data }: { data: IDailyStat[] }) {
+	const { t } = useTranslation("settings");
 	const chartData = useMemo(
 		() =>
 			data.map((d) => ({
@@ -214,7 +217,7 @@ function PurchasesChart({ data }: { data: IDailyStat[] }) {
 	if (data.length === 0) {
 		return (
 			<div className="h-[300px] flex items-center justify-center text-muted-foreground">
-				No purchase data available
+				{t('noPurchaseDataAvailable', 'No purchase data available')}
 			</div>
 		);
 	}
@@ -266,23 +269,24 @@ function PurchasesChart({ data }: { data: IDailyStat[] }) {
 
 // Revenue Breakdown Pie Chart
 function RevenueBreakdownChart({ data }: { data: ISalesOverview }) {
+	const { t } = useTranslation("settings");
 	const chartData = useMemo(
 		() =>
 			[
 				{
 					id: "Net Revenue",
 					value: data.netRevenue / 100,
-					color: "hsl(142, 76%, 36%)",
+					color: `hsl(142, 76%, 36%)`,
 				},
 				{
 					id: "Refunds",
 					value: data.refundAmount / 100,
-					color: "hsl(0, 84%, 60%)",
+					color: `hsl(0, 84%, 60%)`,
 				},
 				{
 					id: "Discounts",
 					value: data.totalDiscounts / 100,
-					color: "hsl(45, 93%, 47%)",
+					color: `hsl(45, 93%, 47%)`,
 				},
 			].filter((d) => d.value > 0),
 		[data],
@@ -291,7 +295,7 @@ function RevenueBreakdownChart({ data }: { data: ISalesOverview }) {
 	if (chartData.length === 0) {
 		return (
 			<div className="h-[250px] flex items-center justify-center text-muted-foreground">
-				No revenue breakdown available
+				{t('noRevenueBreakdownAvailable', 'No revenue breakdown available')}
 			</div>
 		);
 	}
@@ -332,6 +336,7 @@ function DiscountDialog({
 	onSave: (discount: ICreateDiscountRequest) => Promise<void>;
 	discount?: IDiscount;
 }) {
+	const { t } = useTranslation("settings");
 	const [form, setForm] = useState<ICreateDiscountRequest>({
 		code: "",
 		name: "",
@@ -384,7 +389,7 @@ function DiscountDialog({
 			onOpenChange(false);
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : "Failed to save discount",
+				error instanceof Error ? error.message : t('failedToSaveDiscount', 'Failed to save discount'),
 			);
 		} finally {
 			setSaving(false);
@@ -396,21 +401,21 @@ function DiscountDialog({
 			<DialogContent className="max-w-md">
 				<DialogHeader>
 					<DialogTitle>
-						{discount ? "Edit Discount" : "Create Discount"}
+						{discount ? t('editDiscount', 'Edit Discount') : t('createDiscount', 'Create Discount')}
 					</DialogTitle>
 					<DialogDescription>
 						{discount
-							? "Update the discount details"
-							: "Create a new discount code for your app"}
+							? t('updateTheDiscountDetails', 'Update the discount details')
+							: `Create a new discount code for your app`}
 					</DialogDescription>
 				</DialogHeader>
 
 				<div className="grid gap-4 py-4">
 					<div className="grid gap-2">
-						<Label htmlFor="code">Code</Label>
+						<Label htmlFor="code">{t('code', 'Code')}</Label>
 						<Input
 							id="code"
-							placeholder="LAUNCH20"
+							placeholder={`LAUNCH20`}
 							value={form.code}
 							onChange={(e) =>
 								setForm({ ...form, code: e.target.value.toUpperCase() })
@@ -422,17 +427,17 @@ function DiscountDialog({
 						<Label htmlFor="name">Name</Label>
 						<Input
 							id="name"
-							placeholder="Launch Discount"
+							placeholder={t('launchDiscount', 'Launch Discount')}
 							value={form.name}
 							onChange={(e) => setForm({ ...form, name: e.target.value })}
 						/>
 					</div>
 
 					<div className="grid gap-2">
-						<Label htmlFor="description">Description</Label>
+						<Label htmlFor="description">{t('description', 'Description')}</Label>
 						<Textarea
 							id="description"
-							placeholder="Special launch offer..."
+							placeholder={t('specialLaunchOffer', 'Special launch offer...')}
 							value={form.description}
 							onChange={(e) =>
 								setForm({ ...form, description: e.target.value })
@@ -456,15 +461,15 @@ function DiscountDialog({
 									<SelectValue />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="percentage">Percentage</SelectItem>
-									<SelectItem value="fixed_amount">Fixed Amount</SelectItem>
+									<SelectItem value="percentage">{t('percentage', 'Percentage')}</SelectItem>
+									<SelectItem value="fixed_amount">{t('fixedAmount', 'Fixed Amount')}</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>
 
 						<div className="grid gap-2">
 							<Label htmlFor="value">
-								Value {form.discountType === "percentage" ? "(%)" : "(cents)"}
+								{t('value', 'Value')} {form.discountType === "percentage" ? "(%)" : "(cents)"}
 							</Label>
 							<Input
 								id="value"
@@ -484,7 +489,7 @@ function DiscountDialog({
 
 					<div className="grid grid-cols-2 gap-4">
 						<div className="grid gap-2">
-							<Label htmlFor="maxUses">Max Uses (optional)</Label>
+							<Label htmlFor="maxUses">{t('maxUsesOptional', 'Max Uses (optional)')}</Label>
 							<Input
 								id="maxUses"
 								type="number"
@@ -503,12 +508,12 @@ function DiscountDialog({
 						</div>
 
 						<div className="grid gap-2">
-							<Label htmlFor="minAmount">Min Amount (cents)</Label>
+							<Label htmlFor="minAmount">{t('minAmountCents', 'Min Amount (cents)')}</Label>
 							<Input
 								id="minAmount"
 								type="number"
 								min={0}
-								placeholder="No minimum"
+								placeholder={t('noMinimum', 'No minimum')}
 								value={form.minPurchaseAmount || ""}
 								onChange={(e) =>
 									setForm({
@@ -525,7 +530,7 @@ function DiscountDialog({
 
 				<DialogFooter>
 					<Button variant="outline" onClick={() => onOpenChange(false)}>
-						Cancel
+						{t('cancel', 'Cancel')}
 					</Button>
 					<Button
 						onClick={handleSave}
@@ -551,6 +556,7 @@ function PriceEditorDialog({
 	currentPrice: number;
 	onSave: (price: number) => Promise<void>;
 }) {
+	const { t } = useTranslation("settings");
 	const [price, setPrice] = useState(currentPrice);
 	const [saving, setSaving] = useState(false);
 
@@ -567,7 +573,7 @@ function PriceEditorDialog({
 			toast.success("Price updated successfully");
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : "Failed to update price",
+				error instanceof Error ? error.message : t('failedToUpdatePrice', 'Failed to update price'),
 			);
 		} finally {
 			setSaving(false);
@@ -578,15 +584,15 @@ function PriceEditorDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="max-w-sm">
 				<DialogHeader>
-					<DialogTitle>Update Price</DialogTitle>
+					<DialogTitle>{t('updatePrice', 'Update Price')}</DialogTitle>
 					<DialogDescription>
-						Set a new price for your app (in cents)
+						{`Set a new price for your app (in cents)`}
 					</DialogDescription>
 				</DialogHeader>
 
 				<div className="grid gap-4 py-4">
 					<div className="grid gap-2">
-						<Label htmlFor="price">Price (cents)</Label>
+						<Label htmlFor="price">{t('priceCents', 'Price (cents)')}</Label>
 						<div className="flex items-center gap-2">
 							<Input
 								id="price"
@@ -604,10 +610,10 @@ function PriceEditorDialog({
 
 				<DialogFooter>
 					<Button variant="outline" onClick={() => onOpenChange(false)}>
-						Cancel
+						{t('cancel', 'Cancel')}
 					</Button>
 					<Button onClick={handleSave} disabled={saving}>
-						{saving ? "Saving..." : "Update Price"}
+						{saving ? "Saving..." : t('updatePrice', 'Update Price')}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
@@ -616,6 +622,7 @@ function PriceEditorDialog({
 }
 
 export function SalesDashboard() {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const salesState = backend.salesState;
 	const searchParams = useSearchParams();
@@ -663,7 +670,7 @@ export function SalesDashboard() {
 			setDiscounts(discountsData);
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : "Failed to load sales data",
+				error instanceof Error ? error.message : t('failedToLoadSalesData', 'Failed to load sales data'),
 			);
 		} finally {
 			setLoading(false);
@@ -731,7 +738,7 @@ export function SalesDashboard() {
 	if (!salesState) {
 		return (
 			<div className="flex items-center justify-center h-full">
-				<p className="text-muted-foreground">Sales tracking is not available</p>
+				<p className="text-muted-foreground">{t('salesTrackingIsNotAvailable', 'Sales tracking is not available')}</p>
 			</div>
 		);
 	}
@@ -739,7 +746,7 @@ export function SalesDashboard() {
 	if (!appId) {
 		return (
 			<div className="flex items-center justify-center h-full">
-				<p className="text-muted-foreground">No app selected</p>
+				<p className="text-muted-foreground">{t('noAppSelected2', 'No app selected')}</p>
 			</div>
 		);
 	}
@@ -763,9 +770,9 @@ export function SalesDashboard() {
 			{/* Header */}
 			<div className="flex items-center justify-between">
 				<div>
-					<h1 className="text-2xl font-bold">Sales Dashboard</h1>
+					<h1 className="text-2xl font-bold">{t('salesDashboard', 'Sales Dashboard')}</h1>
 					<p className="text-muted-foreground">
-						Track your app&apos;s revenue and manage pricing
+						{t('trackYourAppapossRevenueAndManagePricing', "Track your app's revenue and manage pricing")}
 					</p>
 				</div>
 				<div className="flex items-center gap-2">
@@ -777,9 +784,9 @@ export function SalesDashboard() {
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="7d">Last 7 days</SelectItem>
-							<SelectItem value="30d">Last 30 days</SelectItem>
-							<SelectItem value="90d">Last 90 days</SelectItem>
+							<SelectItem value="7d">{t('last7Days', 'Last 7 days')}</SelectItem>
+							<SelectItem value="30d">{t('last30Days', 'Last 30 days')}</SelectItem>
+							<SelectItem value="90d">{t('last90Days', 'Last 90 days')}</SelectItem>
 						</SelectContent>
 					</Select>
 					<Button variant="outline" onClick={() => setPriceDialogOpen(true)}>
@@ -792,24 +799,24 @@ export function SalesDashboard() {
 			{/* Stats Cards */}
 			<div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
 				<StatCard
-					title="Total Revenue"
+					title={t('totalRevenue', 'Total Revenue')}
 					value={formatCurrency(overview?.totalRevenue ?? 0)}
 					change={overview?.revenueChangePercent}
 					icon={DollarSignIcon}
 				/>
 				<StatCard
-					title="Total Purchases"
+					title={t('totalPurchases', 'Total Purchases')}
 					value={(overview?.totalPurchases ?? 0).toString()}
 					change={overview?.purchasesChangePercent}
 					icon={ShoppingCartIcon}
 				/>
 				<StatCard
-					title="Unique Buyers"
+					title={t('uniqueBuyers', 'Unique Buyers')}
 					value={(overview?.uniqueBuyers ?? 0).toString()}
 					icon={UsersIcon}
 				/>
 				<StatCard
-					title="Avg. Order Value"
+					title={t('avgOrderValue', 'Avg. Order Value')}
 					value={formatCurrency(overview?.avgOrderValue ?? 0)}
 					icon={TrendingUpIcon}
 				/>
@@ -818,17 +825,17 @@ export function SalesDashboard() {
 			{/* Charts */}
 			<Tabs defaultValue="revenue" className="space-y-4">
 				<TabsList>
-					<TabsTrigger value="revenue">Revenue</TabsTrigger>
-					<TabsTrigger value="purchases">Purchases</TabsTrigger>
-					<TabsTrigger value="breakdown">Breakdown</TabsTrigger>
+					<TabsTrigger value="revenue">{t('revenue', 'Revenue')}</TabsTrigger>
+					<TabsTrigger value="purchases">{t('purchases', 'Purchases')}</TabsTrigger>
+					<TabsTrigger value="breakdown">{t('breakdown', 'Breakdown')}</TabsTrigger>
 				</TabsList>
 
 				<TabsContent value="revenue">
 					<Card>
 						<CardHeader>
-							<CardTitle>Revenue Over Time</CardTitle>
+							<CardTitle>{t('revenueOverTime', 'Revenue Over Time')}</CardTitle>
 							<CardDescription>
-								Daily revenue for the selected period
+								{t('dailyRevenueForTheSelectedPeriod', 'Daily revenue for the selected period')}
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -840,9 +847,9 @@ export function SalesDashboard() {
 				<TabsContent value="purchases">
 					<Card>
 						<CardHeader>
-							<CardTitle>Purchases & Refunds</CardTitle>
+							<CardTitle>{t('purchasesRefunds', 'Purchases & Refunds')}</CardTitle>
 							<CardDescription>
-								Daily purchase and refund activity
+								{t('dailyPurchaseAndRefundActivity', 'Daily purchase and refund activity')}
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -854,9 +861,9 @@ export function SalesDashboard() {
 				<TabsContent value="breakdown">
 					<Card>
 						<CardHeader>
-							<CardTitle>Revenue Breakdown</CardTitle>
+							<CardTitle>{t('revenueBreakdown', 'Revenue Breakdown')}</CardTitle>
 							<CardDescription>
-								Net revenue vs refunds and discounts
+								{t('netRevenueVsRefundsAndDiscounts', 'Net revenue vs refunds and discounts')}
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -872,9 +879,9 @@ export function SalesDashboard() {
 			<div className="space-y-4">
 				<div className="flex items-center justify-between">
 					<div>
-						<h2 className="text-xl font-semibold">Discount Codes</h2>
+						<h2 className="text-xl font-semibold">{t('discountCodes', 'Discount Codes')}</h2>
 						<p className="text-sm text-muted-foreground">
-							Manage promotional discounts for your app
+							{t('managePromotionalDiscountsForYourApp', 'Manage promotional discounts for your app')}
 						</p>
 					</div>
 					<Button
@@ -884,7 +891,7 @@ export function SalesDashboard() {
 						}}
 					>
 						<PlusIcon className="h-4 w-4 mr-2" />
-						Add Discount
+						{t('addDiscount', 'Add Discount')}
 					</Button>
 				</div>
 
@@ -892,7 +899,7 @@ export function SalesDashboard() {
 					<Card>
 						<CardContent className="flex flex-col items-center justify-center py-12">
 							<TagIcon className="h-12 w-12 text-muted-foreground mb-4" />
-							<p className="text-muted-foreground">No discounts created yet</p>
+							<p className="text-muted-foreground">{t('noDiscountsCreatedYet', 'No discounts created yet')}</p>
 							<Button
 								variant="outline"
 								className="mt-4"
@@ -901,7 +908,7 @@ export function SalesDashboard() {
 									setDiscountDialogOpen(true);
 								}}
 							>
-								Create your first discount
+								{t('createYourFirstDiscount', 'Create your first discount')}
 							</Button>
 						</CardContent>
 					</Card>
@@ -910,12 +917,12 @@ export function SalesDashboard() {
 						<Table>
 							<TableHeader>
 								<TableRow>
-									<TableHead>Code</TableHead>
+									<TableHead>{t('code', 'Code')}</TableHead>
 									<TableHead>Name</TableHead>
-									<TableHead>Discount</TableHead>
-									<TableHead>Uses</TableHead>
-									<TableHead>Status</TableHead>
-									<TableHead className="text-right">Actions</TableHead>
+									<TableHead>{t('discount', 'Discount')}</TableHead>
+									<TableHead>{t('uses', 'Uses')}</TableHead>
+									<TableHead>{t('status', 'Status')}</TableHead>
+									<TableHead className="text-right">{t('actions', 'Actions')}</TableHead>
 								</TableRow>
 							</TableHeader>
 							<TableBody>
@@ -940,9 +947,7 @@ export function SalesDashboard() {
 										<TableCell>
 											{discount.discountType === "Percentage" ? (
 												<span className="flex items-center gap-1">
-													<PercentIcon className="h-3 w-3" />
-													{discount.discountValue}%
-												</span>
+													<PercentIcon className="h-3 w-3" />{`${discount.discountValue}%`}</span>
 											) : (
 												formatCurrency(discount.discountValue)
 											)}
@@ -960,11 +965,11 @@ export function SalesDashboard() {
 													}
 												/>
 												{discount.isValid ? (
-													<Badge variant="default">Active</Badge>
+													<Badge variant="default">{t('active', 'Active')}</Badge>
 												) : discount.isActive ? (
-													<Badge variant="secondary">Expired</Badge>
+													<Badge variant="secondary">{t('expired', 'Expired')}</Badge>
 												) : (
-													<Badge variant="outline">Disabled</Badge>
+													<Badge variant="outline">{t('disabled', 'Disabled')}</Badge>
 												)}
 											</div>
 										</TableCell>
@@ -978,7 +983,7 @@ export function SalesDashboard() {
 														setDiscountDialogOpen(true);
 													}}
 												>
-													Edit
+													{t('edit', 'Edit')}
 												</Button>
 												<Button
 													variant="ghost"
@@ -986,7 +991,7 @@ export function SalesDashboard() {
 													className="text-destructive"
 													onClick={() => handleDeleteDiscount(discount.id)}
 												>
-													Delete
+													{t('delete', 'Delete')}
 												</Button>
 											</div>
 										</TableCell>
@@ -1003,17 +1008,15 @@ export function SalesDashboard() {
 			{/* Recent Purchases */}
 			<div className="space-y-4">
 				<div>
-					<h2 className="text-xl font-semibold">Recent Purchases</h2>
-					<p className="text-sm text-muted-foreground">
-						{purchaseTotal} total purchases
-					</p>
+					<h2 className="text-xl font-semibold">{t('recentPurchases', 'Recent Purchases')}</h2>
+					<p className="text-sm text-muted-foreground">{t('purchasetotalTotalPurchases', '{{purchaseTotal}} total purchases', { purchaseTotal })}</p>
 				</div>
 
 				{purchases.length === 0 ? (
 					<Card>
 						<CardContent className="flex flex-col items-center justify-center py-12">
 							<ShoppingCartIcon className="h-12 w-12 text-muted-foreground mb-4" />
-							<p className="text-muted-foreground">No purchases yet</p>
+							<p className="text-muted-foreground">{t('noPurchasesYet', 'No purchases yet')}</p>
 						</CardContent>
 					</Card>
 				) : (
@@ -1021,11 +1024,11 @@ export function SalesDashboard() {
 						<Table>
 							<TableHeader>
 								<TableRow>
-									<TableHead>User</TableHead>
-									<TableHead>Amount</TableHead>
-									<TableHead>Discount</TableHead>
-									<TableHead>Status</TableHead>
-									<TableHead>Date</TableHead>
+									<TableHead>{t('user', 'User')}</TableHead>
+									<TableHead>{t('amount', 'Amount')}</TableHead>
+									<TableHead>{t('discount', 'Discount')}</TableHead>
+									<TableHead>{t('status', 'Status')}</TableHead>
+									<TableHead>{t('date', 'Date')}</TableHead>
 								</TableRow>
 							</TableHeader>
 							<TableBody>

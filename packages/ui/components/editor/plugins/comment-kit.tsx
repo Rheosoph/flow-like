@@ -29,7 +29,7 @@ export const commentPlugin = toTPlatePlugin<CommentConfig>(BaseCommentPlugin, {
 			let isSet = false;
 
 			const unsetActiveSuggestion = () => {
-				setOption("activeId", null);
+				setOption(`activeId`, null);
 				isSet = true;
 			};
 
@@ -47,7 +47,7 @@ export const commentPlugin = toTPlatePlugin<CommentConfig>(BaseCommentPlugin, {
 
 					const id = api.comment!.nodeId(commentsEntry[0]);
 
-					setOption("activeId", id ?? null);
+					setOption(`activeId`, id ?? null);
 					isSet = true;
 
 					break;
@@ -82,7 +82,7 @@ export const commentPlugin = toTPlatePlugin<CommentConfig>(BaseCommentPlugin, {
 				setDraft();
 
 				editor.tf.collapse();
-				setOption("activeId", getDraftCommentKey());
+				setOption(`activeId`, getDraftCommentKey());
 				setOption("commentingBlock", editor.selection!.focus.path.slice(0, 1));
 			},
 		}),

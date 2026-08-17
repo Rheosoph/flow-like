@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	DndContext,
 	type DragEndEvent,
@@ -96,6 +97,7 @@ export function TableDesignerDialog({
 	existingTables,
 	onCreated,
 }: Readonly<TableDesignerDialogProps>) {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const [tableName, setTableName] = useState("");
 	const [scope, setScope] = useState<"project" | "user">("project");
@@ -160,7 +162,7 @@ export function TableDesignerDialog({
 		const exists = existingTables?.some(
 			(name) => name.toLowerCase() === tableName.trim().toLowerCase(),
 		);
-		return exists ? "A table with this name already exists" : null;
+		return exists ? t('aTableWithThisNameAlreadyExists', 'A table with this name already exists') : null;
 	}, [tableName, existingTables]);
 
 	const duplicateNames = useMemo(() => {
@@ -180,11 +182,11 @@ export function TableDesignerDialog({
 			const nameError = validateColumnName(column.name);
 			if (nameError) return column.name.trim() ? nameError : null;
 			if (duplicateNames.has(column.name.trim().toLowerCase()))
-				return "Duplicate column name";
+				return t('duplicateColumnName', 'Duplicate column name');
 			if (column.type === "vector") {
 				const size = Number.parseInt(column.vectorSize, 10);
 				if (!Number.isFinite(size) || size <= 0)
-					return "Vector size must be a positive number";
+					return t('vectorSizeMustBeAPositiveNumber', 'Vector size must be a positive number');
 			}
 			return null;
 		},
@@ -221,9 +223,7 @@ export function TableDesignerDialog({
 			await backend.dbState.createTable(appId, name, fields, false, userScoped);
 		} catch (error) {
 			toast.error(
-				`Failed to create table: ${
-					error instanceof Error ? error.message : String(error)
-				}`,
+				t('failedToCreateTableVal', 'Failed to create table: {{val}}', { val: error instanceof Error ? error.message : String(error) }),
 			);
 			setSubmitting(false);
 			return;
@@ -247,9 +247,9 @@ export function TableDesignerDialog({
 
 		if (failedIndexes.length) {
 			toast.success(
-				`Created table "${name}". Index on ${failedIndexes.join(
+				t('createdTableNameIndexOnValWillBuildOnceTheTableHasData', 'Created table "{{name}}". Index on {{val}} will build once the table has data.', { name, val: failedIndexes.join(
 					", ",
-				)} will build once the table has data.`,
+				) }),
 			);
 		} else {
 			toast.success(`Created table "${name}"`);
@@ -275,17 +275,16 @@ export function TableDesignerDialog({
 			<DialogContent className="max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
-						<Database className="h-5 w-5 text-primary" /> Create table
+						<Database className="h-5 w-5 text-primary" /> {t('createTable', 'Create table')}
 					</DialogTitle>
 					<DialogDescription>
-						Design a native table with typed columns, nullability, and indexes.
-						Drag to reorder.
+						{t('designANativeTableWithTypedColumnsNullabilityAndIndexesDragToReorder', "Design a native table with typed columns, nullability, and indexes. Drag to reorder.")}
 					</DialogDescription>
 				</DialogHeader>
 
 				<div className="grid gap-4 shrink-0 sm:grid-cols-[1fr_200px]">
 					<div className="space-y-1.5">
-						<Label htmlFor="table-designer-name">Table name</Label>
+						<Label htmlFor="table-designer-name">{t('tableName', 'Table name')}</Label>
 						<Input
 							id="table-designer-name"
 							value={tableName}
@@ -298,7 +297,7 @@ export function TableDesignerDialog({
 						)}
 					</div>
 					<div className="space-y-1.5">
-						<Label htmlFor="table-designer-scope">Scope</Label>
+						<Label htmlFor="table-designer-scope">{t('scope', 'Scope')}</Label>
 						<Select
 							value={scope}
 							onValueChange={(value) => setScope(value as "project" | "user")}
@@ -307,17 +306,17 @@ export function TableDesignerDialog({
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="project">Project (shared)</SelectItem>
-								<SelectItem value="user">User scoped</SelectItem>
+								<SelectItem value="project">{t('projectShared', 'Project (shared)')}</SelectItem>
+								<SelectItem value="user">{t('userScoped', 'User scoped')}</SelectItem>
 							</SelectContent>
 						</Select>
 					</div>
 				</div>
 
 				<div className="flex shrink-0 items-center justify-between">
-					<Label>Columns</Label>
+					<Label>{t('columns', 'Columns')}</Label>
 					<Button variant="outline" size="sm" onClick={addColumn}>
-						<Plus className="h-4 w-4" /> Add column
+						<Plus className="h-4 w-4" /> {t('addColumn', 'Add column')}
 					</Button>
 				</div>
 
@@ -353,7 +352,7 @@ export function TableDesignerDialog({
 						onClick={() => handleOpenChange(false)}
 						disabled={submitting}
 					>
-						Cancel
+						{t('cancel', 'Cancel')}
 					</Button>
 					<Button onClick={handleCreate} disabled={!canSubmit || submitting}>
 						{submitting ? (
@@ -361,7 +360,7 @@ export function TableDesignerDialog({
 						) : (
 							<Plus className="h-4 w-4" />
 						)}
-						Create table
+						{t('createTable', 'Create table')}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
@@ -382,6 +381,7 @@ function ColumnDesignerRow({
 	onChange: (patch: Partial<ColumnDraft>) => void;
 	onRemove: () => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const {
 		attributes,
 		listeners,
@@ -408,7 +408,7 @@ function ColumnDesignerRow({
 				<button
 					type="button"
 					className="mt-2 cursor-grab text-muted-foreground hover:text-foreground touch-none"
-					aria-label="Reorder column"
+					aria-label={t('reorderColumn', 'Reorder column')}
 					{...attributes}
 					{...listeners}
 				>
@@ -418,7 +418,7 @@ function ColumnDesignerRow({
 					<Input
 						value={column.name}
 						onChange={(event) => onChange({ name: event.target.value })}
-						placeholder="Column name"
+						placeholder={t('columnName', 'Column name')}
 						autoComplete="off"
 						aria-invalid={error ? true : undefined}
 					/>
@@ -442,7 +442,7 @@ function ColumnDesignerRow({
 					className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
 					onClick={onRemove}
 					disabled={!canRemove}
-					aria-label="Remove column"
+					aria-label={t('removeColumn', 'Remove column')}
 				>
 					<Trash2 className="h-4 w-4" />
 				</Button>
@@ -451,7 +451,7 @@ function ColumnDesignerRow({
 			{isVector && (
 				<div className="mt-2 flex items-center gap-2 pl-6">
 					<Boxes className="h-4 w-4 text-muted-foreground" />
-					<Label className="text-xs text-muted-foreground">Dimensions</Label>
+					<Label className="text-xs text-muted-foreground">{t('dimensions', 'Dimensions')}</Label>
 					<Input
 						type="number"
 						min={1}
@@ -474,7 +474,7 @@ function ColumnDesignerRow({
 					htmlFor={`index-${column.id}`}
 					className="text-xs text-muted-foreground"
 				>
-					Index
+					{t('index', 'Index')}
 				</Label>
 				{column.indexed && !isVector && (
 					<IndexTypeSelect
@@ -485,7 +485,7 @@ function ColumnDesignerRow({
 				)}
 				{isVector && (
 					<Badge variant="secondary" className="text-[10px]">
-						Vector columns are indexed separately
+						{t('vectorColumnsAreIndexedSeparately', 'Vector columns are indexed separately')}
 					</Badge>
 				)}
 			</div>

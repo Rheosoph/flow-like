@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useEffect, useState } from "react";
 import type { ILayer } from "../../lib/schema/flow/board";
 import {
@@ -24,6 +25,7 @@ export function FlowBreadCrumb({
 		  }
 		| undefined;
 }>) {
+	const { t } = useTranslation("flow");
 	const [segments, setSegments] = useState<string[]>(
 		currentPath?.split("/") ?? [],
 	);
@@ -44,7 +46,7 @@ export function FlowBreadCrumb({
 							}}
 							className="cursor-pointer"
 						>
-							Board
+							{t('board', 'Board')}
 						</BreadcrumbLink>
 					</BreadcrumbItem>
 					{segments.map((segment, index, array) => {

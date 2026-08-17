@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next } from "@flow-like/locales";
 import {
 	type IApp,
 	IAppVisibility,
@@ -119,8 +120,7 @@ export function AppComplianceSection({
 	if (isOffline) {
 		return (
 			<p className="text-sm text-muted-foreground">
-				Offline projects are never listed, so no conformity assessment or
-				publication review is required. Bring the project online to start.
+				{i18next.t('offlineProjectsAreNeverListedSoNoConformityAssessmentOrPublicationReviewIsRequiredBringTheProjectOnlineToStart', "Offline projects are never listed, so no conformity assessment or publication review is required. Bring the project online to start.")}
 			</p>
 		);
 	}

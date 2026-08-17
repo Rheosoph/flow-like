@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Loader2, ThumbsDown, ThumbsUp } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -128,6 +129,7 @@ export function A2UIFeedback({
 	style,
 	componentId,
 }: ComponentProps<FeedbackComponent>) {
+	const { t } = useTranslation("common");
 	const [comment, setComment] = useState("");
 	const [pendingRating, setPendingRating] = useState<number | null>(null);
 	const [isCommentDialogOpen, setIsCommentDialogOpen] = useState(false);
@@ -147,7 +149,7 @@ export function A2UIFeedback({
 	const disabled = useResolved<boolean>(component.disabled) ?? false;
 	const showComment =
 		useResolved<boolean>(component.showComment) ?? mode === "extended";
-	const title = useResolved<string>(component.title) ?? "Was this helpful?";
+	const title = useResolved<string>(component.title) ?? t('wasThisHelpful', 'Was this helpful?');
 	const description = useResolved<string>(component.description);
 	const positiveLabel =
 		useResolved<string>(component.positiveLabel) ??
@@ -172,12 +174,12 @@ export function A2UIFeedback({
 		showComment,
 	);
 	const commentTitle =
-		useResolved<string>(component.commentTitle) ?? "Add feedback";
+		useResolved<string>(component.commentTitle) ?? t('addFeedback', 'Add feedback');
 	const commentDescription =
 		useResolved<string>(component.commentDescription) ??
-		"Share a little more context before submitting.";
+		t('shareALittleMoreContextBeforeSubmitting', 'Share a little more context before submitting.');
 	const commentSubmitLabel =
-		useResolved<string>(component.commentSubmitLabel) ?? "Submit feedback";
+		useResolved<string>(component.commentSubmitLabel) ?? t('submitFeedback', 'Submit feedback');
 	const commentCancelLabel =
 		useResolved<string>(component.commentCancelLabel) ?? "Cancel";
 	const feedbackId = useResolved<string>(component.feedbackId) || componentId;
@@ -199,7 +201,7 @@ export function A2UIFeedback({
 	const includePageHash =
 		useResolved<boolean>(component.includePageHash) ?? false;
 	const successMessage =
-		useResolved<string>(component.successMessage) ?? "Thanks for the feedback.";
+		useResolved<string>(component.successMessage) ?? t('thanksForTheFeedback', 'Thanks for the feedback.');
 	const feedbackStoragePageId = useMemo(
 		() => getPageContextStorageId(pathname, search),
 		[pathname, search],

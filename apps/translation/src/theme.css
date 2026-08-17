@@ -1,0 +1,157 @@
+@import "tailwindcss";
+
+/*
+ * Flow-Like design tokens. Mirrors the `:root` / `.dark` block that
+ * `packages/ui/global.css` ships to the product apps — kept as a local copy so
+ * this tool does not pull the whole UI package (plate, three, nivo, maplibre)
+ * into a dev-only Vite build. If the product palette moves, move it here too.
+ */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+	--background: oklch(0.9841 0.0035 39.4848);
+	--foreground: oklch(0.184 0.0081 285.5768);
+	--card: oklch(1 0 0);
+	--card-foreground: oklch(0.184 0.0081 285.5768);
+	--popover: oklch(1 0 0);
+	--primary: oklch(0.6724 0.208 34.7886);
+	--primary-foreground: oklch(1 0 0);
+	--secondary: oklch(0.9466 0.0084 56.3108);
+	--muted: oklch(0.9401 0.0068 53.4438);
+	--muted-foreground: oklch(0.5137 0.0156 285.8367);
+	--accent: oklch(0.6488 0.2155 31.664);
+	--destructive: oklch(0.6227 0.2289 23.472);
+	--border: oklch(0.8933 0.0111 54.4825);
+	--input: oklch(0.8933 0.0111 54.4825);
+	--ring: oklch(0.6724 0.208 34.7886);
+	--sidebar: oklch(0.9706 0.0057 84.5662);
+	--sidebar-foreground: oklch(0.1816 0.0296 259.8006);
+	--sidebar-border: oklch(0.8806 0.0152 260.7286);
+	--sidebar-accent: oklch(0.939 0.0104 261.7886);
+
+	--ok: oklch(0.58 0.14 155);
+	--warn: oklch(0.68 0.15 74);
+	--crit: oklch(0.6227 0.2289 23.472);
+
+	/* Sequential coverage ramp for the matrix. Step 0 is transparent so an
+	   empty cell reads as absence rather than as a low value. */
+	--heat-0: transparent;
+	--heat-1: oklch(0.958 0.026 158);
+	--heat-2: oklch(0.934 0.052 157);
+	--heat-3: oklch(0.906 0.082 156);
+	--heat-4: oklch(0.875 0.108 155);
+	--heat-5: oklch(0.838 0.128 154);
+
+	--radius: 0.375rem;
+	--font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+		sans-serif;
+	--font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+		monospace;
+}
+
+.dark {
+	--background: oklch(0.164 0.0111 268.0057);
+	--foreground: oklch(0.9544 0.0059 59.6503);
+	--card: oklch(0.1993 0.0111 260.661);
+	--card-foreground: oklch(0.9544 0.0059 59.6503);
+	--popover: oklch(0.1993 0.0111 260.661);
+	--secondary: oklch(0.2515 0.0122 264.3278);
+	--muted: oklch(0.264 0.012 264.345);
+	--muted-foreground: oklch(0.6984 0.0157 264.467);
+	--border: oklch(0.2921 0.014 261.7008);
+	--input: oklch(0.2921 0.014 261.7008);
+	--sidebar: oklch(0.1212 0.0304 253.9385);
+	--sidebar-foreground: oklch(0.9593 0.0103 81.7951);
+	--sidebar-border: oklch(0.2412 0.0393 256.701);
+	--sidebar-accent: oklch(0.2412 0.0393 256.701);
+
+	--ok: oklch(0.74 0.15 156);
+	--warn: oklch(0.81 0.145 80);
+	--crit: oklch(0.68 0.2 24);
+
+	--heat-1: oklch(0.238 0.028 160);
+	--heat-2: oklch(0.272 0.048 158);
+	--heat-3: oklch(0.312 0.068 157);
+	--heat-4: oklch(0.355 0.088 156);
+	--heat-5: oklch(0.405 0.108 155);
+}
+
+@theme inline {
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-destructive: var(--destructive);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+	--color-sidebar: var(--sidebar);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-ok: var(--ok);
+	--color-warn: var(--warn);
+	--color-crit: var(--crit);
+
+	--font-sans: var(--font-sans);
+	--font-mono: var(--font-mono);
+
+	--radius-sm: calc(var(--radius) - 2px);
+	--radius-md: var(--radius);
+	--radius-lg: calc(var(--radius) + 2px);
+}
+
+@layer base {
+	* {
+		border-color: var(--border);
+	}
+
+	html,
+	body {
+		height: 100%;
+		width: 100%;
+		overflow: hidden;
+		overscroll-behavior: none;
+	}
+
+	body {
+		background: var(--background);
+		color: var(--foreground);
+		font-family: var(--font-sans);
+		font-size: 14px;
+		-webkit-font-smoothing: antialiased;
+		margin: 0;
+	}
+
+	#root {
+		width: 100%;
+		min-width: 0;
+		height: 100dvh;
+		max-height: 100dvh;
+		overflow: hidden;
+		overscroll-behavior: none;
+	}
+
+	:focus-visible {
+		outline: 2px solid var(--ring);
+		outline-offset: 1px;
+		border-radius: 3px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		transition-duration: 0.01ms !important;
+		animation-duration: 0.01ms !important;
+	}
+}

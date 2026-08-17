@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import {
 	Bot,
@@ -236,6 +237,7 @@ export function FlowpilotSection({
 	profile,
 	hours,
 }: Readonly<FlowpilotSectionProps>) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 
 	const flowpilot = useQuery<ITelemetryFlowpilotResponse>({
@@ -261,7 +263,7 @@ export function FlowpilotSection({
 		<section className="space-y-4">
 			<h2 className="flex items-center gap-2 text-xl font-semibold">
 				<Bot className="h-5 w-5 text-primary" />
-				FlowPilot
+				{t('flowpilot', 'FlowPilot')}
 				<TelemetryGranularityNotice response={flowpilot.data} />
 			</h2>
 
@@ -286,22 +288,22 @@ export function FlowpilotSection({
 							label="Runs"
 							value={totals.runsStarted.toLocaleString()}
 							icon={<Play className="h-4 w-4" />}
-							hint={`${totals.runsFailed.toLocaleString()} failed`}
+							hint={t('valFailed', '{{val}} failed', { val: totals.runsFailed.toLocaleString() })}
 						/>
 						<StatTile
-							label="Success rate"
+							label={t('successRate', 'Success rate')}
 							value={successRate == null ? "—" : `${successRate.toFixed(1)}%`}
 							icon={<CircleCheck className="h-4 w-4" />}
-							hint={`${totals.runsSucceeded.toLocaleString()} of ${totals.runsStarted.toLocaleString()} runs`}
+							hint={t('valOfVal2Runs', '{{val}} of {{val2}} runs', { val: totals.runsSucceeded.toLocaleString(), val2: totals.runsStarted.toLocaleString() })}
 						/>
 						<StatTile
-							label="Cancelled"
+							label={t('cancelled', 'Cancelled')}
 							value={totals.runsCancelled.toLocaleString()}
 							icon={<CircleX className="h-4 w-4" />}
 							hint="Stopped by the user"
 						/>
 						<StatTile
-							label="Installs reporting"
+							label={t('installsReporting', 'Installs reporting')}
 							value={(flowpilot.data?.installs ?? 0).toLocaleString()}
 							icon={<MonitorSmartphone className="h-4 w-4" />}
 							hint="Distinct anonymous ids"
@@ -310,11 +312,10 @@ export function FlowpilotSection({
 
 					<Card>
 						<CardHeader className="pb-3">
-							<CardTitle className="text-base">Runs over time</CardTitle>
+							<CardTitle className="text-base">{t('runsOverTime', 'Runs over time')}</CardTitle>
 							<CardDescription>
-								Generation runs bucketed by{" "}
-								<span className="font-mono">{bucket}</span> over the selected
-								window.
+								{t('generationRunsBucketedBy', 'Generation runs bucketed by')}{" "}
+								<span className="font-mono">{bucket}</span> {t('overTheSelectedWindow', "over the selected window.")}
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -328,10 +329,9 @@ export function FlowpilotSection({
 					<div className="grid gap-4 lg:grid-cols-2">
 						<Card>
 							<CardHeader className="pb-3">
-								<CardTitle className="text-base">Generation funnel</CardTitle>
+								<CardTitle className="text-base">{t('generationFunnel', 'Generation funnel')}</CardTitle>
 								<CardDescription>
-									Attempts surviving each validation stage, as a share of all
-									attempts.
+									{t('attemptsSurvivingEachValidationStageAsAShareOfAllAttempts', "Attempts surviving each validation stage, as a share of all attempts.")}
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
@@ -340,10 +340,9 @@ export function FlowpilotSection({
 						</Card>
 						<Card>
 							<CardHeader className="pb-3">
-								<CardTitle className="text-base">Review dispositions</CardTitle>
+								<CardTitle className="text-base">{t('reviewDispositions', 'Review dispositions')}</CardTitle>
 								<CardDescription>
-									{totals.queuedReviews.toLocaleString()} reviews queued in this
-									window.
+									{totals.queuedReviews.toLocaleString()} {t('reviewsQueuedInThisWindow', "reviews queued in this window.")}
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
@@ -378,9 +377,9 @@ export function FlowpilotSection({
 
 					<Card>
 						<CardHeader className="pb-3">
-							<CardTitle className="text-base">Quality</CardTitle>
+							<CardTitle className="text-base">{t('quality', 'Quality')}</CardTitle>
 							<CardDescription>
-								Diagnostic and validation signals across all reported runs.
+								{t('diagnosticAndValidationSignalsAcrossAllReportedRuns', 'Diagnostic and validation signals across all reported runs.')}
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -390,25 +389,25 @@ export function FlowpilotSection({
 									value={totals.diagnosticOccurrences.toLocaleString()}
 								/>
 								<StatTile
-									label="Repeated diagnostics"
+									label={t('repeatedDiagnostics', 'Repeated diagnostics')}
 									value={totals.repeatedDiagnosticOccurrences.toLocaleString()}
 								/>
 								<StatTile
-									label="Validation regressions"
+									label={t('validationRegressions', 'Validation regressions')}
 									value={totals.validationRegressions.toLocaleString()}
 								/>
 								<StatTile
-									label="Empty boards after run"
+									label={t('emptyBoardsAfterRun', 'Empty boards after run')}
 									value={totals.emptyBoardsAfterRun.toLocaleString()}
 								/>
 								<StatTile
-									label="Boards inspected"
+									label={t('boardsInspected', 'Boards inspected')}
 									value={totals.boardsInspected.toLocaleString()}
 								/>
 								<StatTile
-									label="Plans feasible"
+									label={t('plansFeasible', 'Plans feasible')}
 									value={`${totals.plansFeasible.toLocaleString()} / ${totals.plansInfeasible.toLocaleString()}`}
-									hint={`feasible / infeasible of ${totals.plansAssessed.toLocaleString()} assessed`}
+									hint={t('feasibleInfeasibleOfValAssessed', 'feasible / infeasible of {{val}} assessed', { val: totals.plansAssessed.toLocaleString() })}
 								/>
 							</div>
 						</CardContent>

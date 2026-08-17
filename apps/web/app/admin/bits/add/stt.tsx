@@ -1,3 +1,4 @@
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	Card,
 	CardContent,
@@ -115,12 +116,12 @@ const whisperPreset = (
 	assets: whisperAssets(modelSize, multilingual),
 	authors: ["https://huggingface.co/openai"],
 	defaultLanguage: multilingual ? "auto" : "en",
-	description: `Local ${label} speech-to-text model running on Candle.`,
+	description: i18next.t('localLabelSpeechtotextModelRunningOnCandle', 'Local {{label}} speech-to-text model running on Candle.', { label }),
 	docsUrl: `https://huggingface.co/${modelId}`,
 	label,
 	languages: multilingual ? MULTILINGUAL_LANGS : ["en"],
 	license: "apache-2.0",
-	longDescription: `${label} is a Whisper transcription model loaded locally through any-speech-to-text. This preset installs the config, tokenizer, and safetensors weights from ${modelId}.`,
+	longDescription: i18next.t('labelIsAWhisperTranscriptionModelLoadedLocallyThroughAnyspeechtotextThisPresetInstallsTheConfigTokenizerAndSafetensorsWeightsFromModelid', '{{label}} is a Whisper transcription model loaded locally through any-speech-to-text. This preset installs the config, tokenizer, and safetensors weights from {{modelId}}.', { label, modelId }),
 	modelId,
 	modelType,
 	tags: [
@@ -141,12 +142,12 @@ const olmoPreset = (
 	assets: olmoAsrAssets(ptFile, size),
 	authors: ["https://huggingface.co/allenai"],
 	defaultLanguage: "en",
-	description: `Local ${label} English speech-to-text model running on Candle.`,
+	description: i18next.t('localLabelEnglishSpeechtotextModelRunningOnCandle', 'Local {{label}} English speech-to-text model running on Candle.', { label }),
 	docsUrl: "https://huggingface.co/allenai/OLMoASR",
 	label,
 	languages: ["en"],
 	license: "apache-2.0",
-	longDescription: `${label} is an OLMoASR Whisper-architecture model loaded locally through any-speech-to-text. This preset installs the ${ptFile} checkpoint from allenai/OLMoASR.`,
+	longDescription: i18next.t('labelIsAnOlmoasrWhisperarchitectureModelLoadedLocallyThroughAnyspeechtotextThisPresetInstallsThePtfileCheckpointFromAllenaiolmoasr', '{{label}} is an OLMoASR Whisper-architecture model loaded locally through any-speech-to-text. This preset installs the {{ptFile}} checkpoint from allenai/OLMoASR.', { label, ptFile }),
 	modelId: OLMOASR_REPO,
 	modelType,
 	tags: ["speech-to-text", "local", "any-speech-to-text", "olmoasr", "english"],
@@ -385,7 +386,7 @@ export function defaultSttAssetLayout(
 					...baseBit.meta,
 					en: {
 						...baseBit.meta?.en,
-						description: `${preset.label} asset: ${presetAsset.relativePath}`,
+						description: i18next.t('labelAssetRelativepath', '{{label}} asset: {{relativePath}}', { label: preset.label, relativePath: presetAsset.relativePath }),
 						name: `${preset.label} ${presetAsset.relativePath}`,
 						tags: ["stt-asset", "any-speech-to-text", ...preset.tags],
 					},
@@ -457,6 +458,7 @@ export function STTConfiguration({
 	setAssetBits: Dispatch<SetStateAction<SttAssetDraft[]>>;
 	createAssetBit: () => IBit;
 }>) {
+	const { t } = useTranslation("common");
 	const parameters = bit.parameters as ISttModelParameters;
 	const selectedModelType =
 		parameters.model_type ?? ISttModelType.WhisperLargeV3Turbo;
@@ -476,20 +478,19 @@ export function STTConfiguration({
 		<div className="space-y-6 w-full max-w-screen-lg">
 			<Card className="w-full">
 				<CardHeader>
-					<CardTitle>STT Model</CardTitle>
-					<CardDescription>
-						{selectedPreset.description} {assetBits.length} files,{" "}
+					<CardTitle>{t('sttModel', 'STT Model')}</CardTitle>
+					<CardDescription>{t('descriptionLengthFiles', '{{description}} {{length}} files,', { description: selectedPreset.description, length: assetBits.length })}{" "}
 						{humanFileSize(totalAssetSize)}.
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-2">
-					<Label htmlFor="stt-model-type">Model</Label>
+					<Label htmlFor="stt-model-type">{t('model', 'Model')}</Label>
 					<Select
 						value={selectedModelType}
 						onValueChange={(value) => applyPreset(value as ISttModelType)}
 					>
 						<SelectTrigger id="stt-model-type">
-							<SelectValue placeholder="Select model" />
+							<SelectValue placeholder={t('selectModel', 'Select model')} />
 						</SelectTrigger>
 						<SelectContent>
 							{STT_MODEL_TYPES.map((modelType) => {

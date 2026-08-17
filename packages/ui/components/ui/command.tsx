@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next } from "@flow-like/locales";
 import { Command as CommandPrimitive } from "cmdk";
 import { SearchIcon } from "lucide-react";
 import type * as React from "react";
@@ -31,7 +32,7 @@ function Command({
 
 function CommandDialog({
 	title = "Command Palette",
-	description = "Search for a command to run...",
+	description = i18next.t('searchForACommandToRun', 'Search for a command to run...'),
 	children,
 	className,
 	showCloseButton = true,

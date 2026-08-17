@@ -1,4 +1,5 @@
 "use client";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -134,34 +135,34 @@ function getConfigSummary(
 		case "http":
 			return `${(config.method as string) ?? "GET"} ${(config.path as string) ?? "/"}`;
 		case "cron":
-			if (config.expression) return `Cron: ${config.expression}`;
+			if (config.expression) return i18next.t('cronExpression', 'Cron: {{expression}}', { expression: config.expression });
 			if (config.scheduled_for) {
 				const sf = config.scheduled_for as { date: string; time: string };
-				return `Scheduled: ${sf.date} ${sf.time}`;
+				return i18next.t('scheduledDateTime', 'Scheduled: {{date}} {{time}}', { date: sf.date, time: sf.time });
 			}
 			return "Scheduled";
 		case "deeplink":
-			return `Route: ${(config.route as string) ?? ""}`;
+			return i18next.t('routeVal', 'Route: {{val}}', { val: (config.route as string) ?? "" });
 		case "webhook":
-			return `Path: ${(config.path as string) ?? "/"}`;
+			return i18next.t('pathVal', 'Path: {{val}}', { val: (config.path as string) ?? "/" });
 		case "discord":
-			return `Bot: ${(config.bot_name as string) ?? "Discord Bot"}`;
+			return i18next.t('botVal', 'Bot: {{val}}', { val: (config.bot_name as string) ?? "Discord Bot" });
 		case "telegram":
-			return `Bot: ${(config.bot_name as string) ?? "Telegram Bot"}`;
+			return i18next.t('botVal', 'Bot: {{val}}', { val: (config.bot_name as string) ?? "Telegram Bot" });
 		case "slack":
-			return `Bot: ${(config.bot_name as string) ?? "Slack Bot"}`;
+			return i18next.t('botVal', 'Bot: {{val}}', { val: (config.bot_name as string) ?? "Slack Bot" });
 		case "email":
-			return `IMAP: ${(config.imap_server as string) ?? ""}`;
+			return i18next.t('imapVal', 'IMAP: {{val}}', { val: (config.imap_server as string) ?? "" });
 		case "mqtt":
-			return `Topic: ${(config.topic as string) ?? ""}`;
+			return i18next.t('topicVal', 'Topic: {{val}}', { val: (config.topic as string) ?? "" });
 		case "github":
-			return `Repo: ${(config.repository as string) ?? ""}`;
+			return i18next.t('repoVal', 'Repo: {{val}}', { val: (config.repository as string) ?? "" });
 		case "file":
-			return `Path: ${(config.path as string) ?? ""}`;
+			return i18next.t('pathVal', 'Path: {{val}}', { val: (config.path as string) ?? "" });
 		case "web_watcher":
-			return `URL: ${(config.url as string) ?? ""}`;
+			return i18next.t('urlVal', 'URL: {{val}}', { val: (config.url as string) ?? "" });
 		case "rss":
-			return `Feed: ${(config.feed_url as string) ?? ""}`;
+			return i18next.t('feedVal', 'Feed: {{val}}', { val: (config.feed_url as string) ?? "" });
 		default:
 			return "";
 	}
@@ -172,6 +173,7 @@ interface SinkWithEvent extends IEventRegistration {
 }
 
 export default function Page() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 
 	const [sinks, setSinks] = useState<SinkWithEvent[]>([]);
@@ -249,8 +251,8 @@ export default function Page() {
 		return (
 			<EmptyState
 				icons={[Zap]}
-				title="Not available"
-				description="Active sinks are only available in the desktop app."
+				title={t('notAvailable', 'Not available')}
+				description={t('activeSinksAreOnlyAvailableInTheDesktopApp', 'Active sinks are only available in the desktop app.')}
 			/>
 		);
 	}
@@ -260,9 +262,9 @@ export default function Page() {
 			<div className="h-full flex flex-col max-h-full overflow-auto min-h-0">
 				<div className="container mx-auto px-2 pb-4 flex flex-col h-full gap-6">
 					<div className="flex flex-col gap-2 pt-2">
-						<h1 className="text-3xl font-bold tracking-tight">Active Sinks</h1>
+						<h1 className="text-3xl font-bold tracking-tight">{t('activeSinks', 'Active Sinks')}</h1>
 						<p className="text-muted-foreground">
-							View and manage all active event triggers across all apps
+							{t('viewAndManageAllActiveEventTriggersAcrossAllApps', 'View and manage all active event triggers across all apps')}
 						</p>
 					</div>
 
@@ -272,9 +274,9 @@ export default function Page() {
 						<div className="flex-1 flex justify-center w-full">
 							<EmptyState
 								icons={[Zap, Clock, Globe]}
-								title="No active sinks"
+								title={t('noActiveSinks', 'No active sinks')}
 								className="flex-1 w-full max-w-full"
-								description="Sinks are created when you configure events with triggers like HTTP endpoints, cron jobs, or webhooks. Configure an event to get started."
+								description={t('sinksAreCreatedWhenYouConfigureEventsWithTriggersLikeHttpEndpointsCronJobsOrWebhooksConfigureAnEventToGetStarted', 'Sinks are created when you configure events with triggers like HTTP endpoints, cron jobs, or webhooks. Configure an event to get started.')}
 							/>
 						</div>
 					) : (
@@ -294,21 +296,22 @@ export default function Page() {
 				>
 					<AlertDialogContent>
 						<AlertDialogHeader>
-							<AlertDialogTitle>Disable Sink</AlertDialogTitle>
+							<AlertDialogTitle>{t('disableSink', 'Disable Sink')}</AlertDialogTitle>
 							<AlertDialogDescription>
-								This will disable the &quot;{deleteDialog.sink?.name}&quot;
-								sink. The event configuration will remain, but it won&apos;t be
-								triggered automatically anymore. You can re-enable it by saving
-								the event again.
+								{t(
+									"disableSinkConfirmation",
+									'This will disable the "{{name}}" sink. The event configuration will remain, but it won\'t be triggered automatically anymore. You can re-enable it by saving the event again.',
+									{ name: deleteDialog.sink?.name ?? "" },
+								)}
 							</AlertDialogDescription>
 						</AlertDialogHeader>
 						<AlertDialogFooter>
-							<AlertDialogCancel>Cancel</AlertDialogCancel>
+							<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
 							<AlertDialogAction
 								onClick={handleDelete}
 								className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 							>
-								Disable
+								{t('disable', 'Disable')}
 							</AlertDialogAction>
 						</AlertDialogFooter>
 					</AlertDialogContent>
@@ -344,27 +347,25 @@ function SinksTable({
 	appNames: Record<string, string>;
 	onDelete: (sink: SinkWithEvent) => void;
 }>) {
+	const { t } = useTranslation("common");
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-lg">Registered Sinks</CardTitle>
-				<CardDescription>
-					{sinks.length} active {sinks.length === 1 ? "sink" : "sinks"} across
-					all apps
-				</CardDescription>
+				<CardTitle className="text-lg">{t('registeredSinks', 'Registered Sinks')}</CardTitle>
+				<CardDescription>{t('countActiveSinksAcrossAllApps', { defaultValue_one: "{{count}} active sink across all apps", defaultValue_other: "{{count}} active sinks across all apps", count: sinks.length })}</CardDescription>
 			</CardHeader>
 			<CardContent>
 				<Table>
 					<TableHeader>
 						<TableRow>
-							<TableHead>Event</TableHead>
+							<TableHead>{t('event', 'Event')}</TableHead>
 							<TableHead>Type</TableHead>
 							<TableHead className="hidden md:table-cell">
-								Configuration
+								{t('configuration', 'Configuration')}
 							</TableHead>
-							<TableHead className="hidden lg:table-cell">App</TableHead>
-							<TableHead className="hidden xl:table-cell">Created</TableHead>
-							<TableHead className="text-right">Actions</TableHead>
+							<TableHead className="hidden lg:table-cell">{t('app', 'App')}</TableHead>
+							<TableHead className="hidden xl:table-cell">{t('created', 'Created')}</TableHead>
+							<TableHead className="text-right">{t('actions', 'Actions')}</TableHead>
 						</TableRow>
 					</TableHeader>
 					<TableBody>
@@ -392,6 +393,7 @@ function SinkRow({
 	appName: string;
 	onDelete: () => void;
 }>) {
+	const { t } = useTranslation("common");
 	const config = getSinkTypeConfig(sink.type);
 	const Icon = config.icon;
 	const configSummary = getConfigSummary(sink.config, sink.type);
@@ -455,7 +457,7 @@ function SinkRow({
 									</Button>
 								</Link>
 							</TooltipTrigger>
-							<TooltipContent>Open Flow Board</TooltipContent>
+							<TooltipContent>{t('openFlowBoard', 'Open Flow Board')}</TooltipContent>
 						</Tooltip>
 					)}
 					<Tooltip>
@@ -470,7 +472,7 @@ function SinkRow({
 								</Button>
 							</Link>
 						</TooltipTrigger>
-						<TooltipContent>Go to Event</TooltipContent>
+						<TooltipContent>{t('goToEvent', 'Go to Event')}</TooltipContent>
 					</Tooltip>
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -483,7 +485,7 @@ function SinkRow({
 								<Trash2 className="h-4 w-4" />
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>Disable Sink</TooltipContent>
+						<TooltipContent>{t('disableSink', 'Disable Sink')}</TooltipContent>
 					</Tooltip>
 				</div>
 			</TableCell>

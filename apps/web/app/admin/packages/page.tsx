@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type AdminPackageListResponse,
 	type PackageAdminStatus,
@@ -177,6 +178,7 @@ function PackageRow({ pkg }: { pkg: PackageDetails }) {
 }
 
 function AdminPackageListContent() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 
@@ -251,38 +253,38 @@ function AdminPackageListContent() {
 				<div className="mx-auto max-w-6xl space-y-6">
 					<div className="flex items-center justify-between">
 						<div>
-							<h1 className="text-3xl font-bold">Package Registry</h1>
+							<h1 className="text-3xl font-bold">{t('packageRegistry', 'Package Registry')}</h1>
 							<p className="text-muted-foreground">
-								Review and manage WASM packages
+								{t('reviewAndManageWasmPackages', 'Review and manage WASM packages')}
 							</p>
 						</div>
 						<Button onClick={handleRefresh} variant="outline" size="sm">
 							<RefreshCw className="h-4 w-4 mr-2" />
-							Refresh
+							{t('refresh', 'Refresh')}
 						</Button>
 					</div>
 
 					<div className="grid gap-4 md:grid-cols-4">
 						<StatsCard
-							title="Pending Review"
+							title={t('pendingReview', 'Pending Review')}
 							value={stats.data?.pendingReview ?? 0}
 							icon={<Clock className="h-4 w-4 text-yellow-500" />}
 							loading={stats.isLoading}
 						/>
 						<StatsCard
-							title="Active Packages"
+							title={t('activePackages', 'Active Packages')}
 							value={stats.data?.activePackages ?? 0}
 							icon={<CheckCircle className="h-4 w-4 text-green-500" />}
 							loading={stats.isLoading}
 						/>
 						<StatsCard
-							title="Total Downloads"
+							title={t('totalDownloads', 'Total Downloads')}
 							value={(stats.data?.totalDownloads ?? 0).toLocaleString()}
 							icon={<Download className="h-4 w-4 text-blue-500" />}
 							loading={stats.isLoading}
 						/>
 						<StatsCard
-							title="Total Versions"
+							title={t('totalVersions', 'Total Versions')}
 							value={stats.data?.totalVersions ?? 0}
 							icon={<Package className="h-4 w-4 text-purple-500" />}
 							loading={stats.isLoading}
@@ -291,9 +293,9 @@ function AdminPackageListContent() {
 
 					<Card>
 						<CardHeader>
-							<CardTitle>Packages</CardTitle>
+							<CardTitle>{t('packages', 'Packages')}</CardTitle>
 							<CardDescription>
-								{packages.data?.totalCount ?? 0} total packages
+								{packages.data?.totalCount ?? 0} {t('totalPackages', 'total packages')}
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -301,7 +303,7 @@ function AdminPackageListContent() {
 								<div className="relative flex-1 max-w-sm">
 									<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
 									<Input
-										placeholder="Search packages..."
+										placeholder={t('searchPackages', 'Search packages...')}
 										value={searchQuery}
 										onChange={(e) => setSearchQuery(e.target.value)}
 										className="pl-10"
@@ -314,17 +316,17 @@ function AdminPackageListContent() {
 									}
 								>
 									<SelectTrigger className="w-48">
-										<SelectValue placeholder="Filter by status" />
+										<SelectValue placeholder={t('filterByStatus', 'Filter by status')} />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value="all">All statuses</SelectItem>
+										<SelectItem value="all">{t('allStatuses', 'All statuses')}</SelectItem>
 										<SelectItem value="pending_review">
-											Pending Review
+											{t('pendingReview', 'Pending Review')}
 										</SelectItem>
-										<SelectItem value="active">Active</SelectItem>
-										<SelectItem value="rejected">Rejected</SelectItem>
-										<SelectItem value="deprecated">Deprecated</SelectItem>
-										<SelectItem value="disabled">Disabled</SelectItem>
+										<SelectItem value="active">{t('active', 'Active')}</SelectItem>
+										<SelectItem value="rejected">{t('rejected', 'Rejected')}</SelectItem>
+										<SelectItem value="deprecated">{t('deprecated', 'Deprecated')}</SelectItem>
+										<SelectItem value="disabled">{t('disabled', 'Disabled')}</SelectItem>
 									</SelectContent>
 								</Select>
 							</div>
@@ -340,14 +342,14 @@ function AdminPackageListContent() {
 									<TableHeader>
 										<TableRow>
 											<TableHead>Name</TableHead>
-											<TableHead>Description</TableHead>
-											<TableHead>Version</TableHead>
-											<TableHead>Status</TableHead>
-											<TableHead>Visibility</TableHead>
-											<TableHead>Verified</TableHead>
-											<TableHead className="text-right">Downloads</TableHead>
-											<TableHead>Created</TableHead>
-											<TableHead>Repo</TableHead>
+											<TableHead>{t('description', 'Description')}</TableHead>
+											<TableHead>{t('version', 'Version')}</TableHead>
+											<TableHead>{t('status', 'Status')}</TableHead>
+											<TableHead>{t('visibility', 'Visibility')}</TableHead>
+											<TableHead>{t('verified', 'Verified')}</TableHead>
+											<TableHead className="text-right">{t('downloads', 'Downloads')}</TableHead>
+											<TableHead>{t('created', 'Created')}</TableHead>
+											<TableHead>{t('repo', 'Repo')}</TableHead>
 										</TableRow>
 									</TableHeader>
 									<TableBody>
@@ -357,7 +359,7 @@ function AdminPackageListContent() {
 										{filteredPackages.length === 0 && (
 											<TableRow>
 												<TableCell colSpan={9} className="text-center py-8">
-													No packages found
+													{t('noPackagesFound', 'No packages found')}
 												</TableCell>
 											</TableRow>
 										)}
@@ -367,9 +369,7 @@ function AdminPackageListContent() {
 
 							{totalPages > 1 && (
 								<div className="flex items-center justify-between mt-4">
-									<div className="text-sm text-muted-foreground">
-										Page {page} of {totalPages}
-									</div>
+									<div className="text-sm text-muted-foreground">{t('pagePageOfTotalpages', 'Page {{page}} of {{totalPages}}', { page, totalPages })}</div>
 									<div className="flex gap-2">
 										<Button
 											variant="outline"
@@ -377,7 +377,7 @@ function AdminPackageListContent() {
 											onClick={() => setPage((p) => Math.max(1, p - 1))}
 											disabled={page === 1}
 										>
-											Previous
+											{t('previous', 'Previous')}
 										</Button>
 										<Button
 											variant="outline"
@@ -387,7 +387,7 @@ function AdminPackageListContent() {
 											}
 											disabled={page === totalPages}
 										>
-											Next
+											{t('next', 'Next')}
 										</Button>
 									</div>
 								</div>

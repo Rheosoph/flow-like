@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { isEqual } from "lodash-es";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -209,6 +210,7 @@ export function UsePageContent({
 	embedded = false,
 	onNavigate,
 }: Readonly<UsePageContentProps>) {
+	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
 	const searchParams = useSearchParams();
 	const router = useRouter();
@@ -1015,7 +1017,7 @@ export function UsePageContent({
 				return (
 					<InterfaceLoadError
 						message={
-							isOnline ? "This app's events could not be loaded." : undefined
+							isOnline ? t('thisAppsEventsCouldNotBeLoaded', 'This app\'s events could not be loaded.') : undefined
 						}
 						offline={!isOnline}
 						retrying={events.isFetching}

@@ -67,6 +67,7 @@ impl A2UICopilot {
     pub async fn chat<F>(
         &self,
         current_surface: Option<&Vec<SurfaceComponent>>,
+        current_canvas_settings: Option<&serde_json::Value>,
         selected_component_ids: &[String],
         user_prompt: String,
         current_images: Option<Vec<A2UIChatImage>>,
@@ -78,7 +79,11 @@ impl A2UICopilot {
     where
         F: Fn(String) + Send + Sync + 'static,
     {
-        let context = self.prepare_context(current_surface, selected_component_ids)?;
+        let context = self.prepare_context(
+            current_surface,
+            current_canvas_settings,
+            selected_component_ids,
+        )?;
         let context_json = flow_like_types::json::to_string_pretty(&context)?;
 
         let (model_name, completion_client) = self.get_model(model_id, token).await?;
@@ -430,6 +435,7 @@ impl A2UICopilot {
     fn prepare_context(
         &self,
         current_surface: Option<&Vec<SurfaceComponent>>,
+        current_canvas_settings: Option<&serde_json::Value>,
         selected_component_ids: &[String],
     ) -> Result<A2UIContext> {
         let components = current_surface
@@ -449,6 +455,7 @@ impl A2UICopilot {
             components,
             selected_ids: selected_component_ids.to_vec(),
             component_count: current_surface.map(|s| s.len()).unwrap_or(0),
+            canvas_settings: current_canvas_settings.cloned(),
         })
     }
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useDebounce } from "@uidotdev/usehooks";
 import { Download, HardDrive, Loader2, Package, Search } from "lucide-react";
@@ -58,6 +59,7 @@ export function PackageSearchDialog({
 	excludePackageIds = [],
 	appId,
 }: PackageSearchDialogProps) {
+	const { t } = useTranslation("store");
 	const backend = useBackend();
 	const [search, setSearch] = useState("");
 	const debouncedSearch = useDebounce(search, 300);
@@ -162,17 +164,23 @@ export function PackageSearchDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="sm:max-w-xl">
 				<DialogHeader>
-					<DialogTitle>Add Package</DialogTitle>
+					<DialogTitle>{t("addPackage", "Add Package")}</DialogTitle>
 					<DialogDescription>
 						{isOffline.data
-							? "Add a locally installed package to this project."
-							: "Search the registry and select a package to add."}
+							? t(
+									"addALocallyInstalledPackageToThisProject",
+									"Add a locally installed package to this project.",
+								)
+							: t(
+									"searchTheRegistryAndSelectAPackageToAdd",
+									"Search the registry and select a package to add.",
+								)}
 					</DialogDescription>
 				</DialogHeader>
 				<div className="relative shrink-0">
 					<Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
 					<Input
-						placeholder="Search packages..."
+						placeholder={t("searchPackages", "Search packages...")}
 						value={search}
 						onChange={(e) => setSearch(e.target.value)}
 						className="pl-9"
@@ -181,8 +189,10 @@ export function PackageSearchDialog({
 				</div>
 				{!isOffline.data && totalRemote > 0 && (
 					<div className="shrink-0 px-1 text-[11px] text-muted-foreground">
-						Showing {mergedPackages.length.toLocaleString()} of{" "}
-						{totalRemote.toLocaleString()} packages
+						{t("showingPackages", "Showing {{shown}} of {{total}} packages", {
+							shown: mergedPackages.length.toLocaleString(),
+							total: totalRemote.toLocaleString(),
+						})}
 					</div>
 				)}
 				<DialogBody>
@@ -191,13 +201,19 @@ export function PackageSearchDialog({
 					) : !mergedPackages.length ? (
 						<EmptyState
 							icons={[Package]}
-							title="No results"
+							title={t("noResults", "No results")}
 							description={
 								debouncedSearch
-									? "Try a different search term."
+									? t("tryADifferentSearchTerm", "Try a different search term.")
 									: isOffline.data
-										? "No local packages found. Load a WASM package first."
-										: "Type to search for packages."
+										? t(
+												"noLocalPackagesFoundLoadAWasmPackageFirst",
+												"No local packages found. Load a WASM package first.",
+											)
+										: t(
+												"typeToSearchForPackages",
+												"Type to search for packages.",
+											)
 							}
 						/>
 					) : (
@@ -226,10 +242,10 @@ export function PackageSearchDialog({
 									{remote.isFetchingNextPage ? (
 										<span className="inline-flex items-center gap-2">
 											<Loader2 className="h-3 w-3 animate-spin" />
-											Loading more...
+											{t("loadingMore", "Loading more...")}
 										</span>
 									) : (
-										"Scroll for more"
+										t("scrollForMore", "Scroll for more")
 									)}
 								</div>
 							)}
@@ -258,6 +274,7 @@ function SearchResultItem({
 	isLocal?: boolean;
 	onSelect: () => void;
 }) {
+	const { t } = useTranslation("store");
 	return (
 		<button
 			type="button"
@@ -273,17 +290,18 @@ function SearchResultItem({
 			<div className="min-w-0 flex-1">
 				<div className="flex items-center gap-2">
 					<span className="truncate text-sm font-medium">{name}</span>
-					<Badge variant="outline" className="shrink-0 text-xs">
-						v{latestVersion}
-					</Badge>
+					<Badge
+						variant="outline"
+						className="shrink-0 text-xs"
+					>{`v${latestVersion}`}</Badge>
 					{isLocal && (
 						<Badge variant="secondary" className="shrink-0 text-xs">
-							Local
+							{t("local", "Local")}
 						</Badge>
 					)}
 					{disabled && (
 						<Badge variant="secondary" className="shrink-0 text-xs">
-							Already added
+							{t("alreadyAdded", "Already added")}
 						</Badge>
 					)}
 				</div>

@@ -45,7 +45,9 @@ From the global assistant, FlowPilot can delegate data work to Data Studio. This
 - Running analytics and presenting inline charts
 - Inspecting or executing ontology actions
 
-When Data Studio is open, FlowPilot receives the current app, overlay, and selected-table context. Read-only inspection can proceed directly; data mutations use the current approval mode.
+For normal app use, FlowPilot first inspects the app's active configured Events and prefers the best matching chat, page, REST/API, MCP, or other headless interface. It delegates directly to Data Studio only when you explicitly need raw schema/table/ontology/SQL/DataFusion access, no configured Event covers the request, or an Event reports that it cannot provide the required result. A failed or declined Event is not silently bypassed through the underlying data.
+
+When Data Studio is open, FlowPilot receives the current app, overlay, and selected-table context. Those IDs resolve references such as "this overlay" without overriding Event-first routing. Direct data mutations use the current approval mode.
 
 ### Operate Flow-Like and use your apps
 
@@ -58,6 +60,8 @@ The global FlowPilot can also:
 - Call chat and headless app interfaces on your behalf
 - Pass relevant attached files to an app chat
 - Search and read public web sources when your request needs current external information
+
+In normal request-and-answer use, configured app Events are the primary interface. Direct datasource queries remain available as a deliberate fallback; app-building data work can still go directly to the Data Studio specialist.
 
 ## Where to use FlowPilot
 

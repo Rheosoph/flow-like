@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { TImageElement } from "platejs";
 import type { PlateElementProps } from "platejs/react";
 
@@ -22,6 +23,7 @@ import {
 export const ImageElement = withHOC(
 	ResizableProvider,
 	function ImageElement(props: PlateElementProps<TImageElement>) {
+		const { t } = useTranslation("common");
 		const { align = "center", focused, readOnly, selected } = useMediaState();
 		const width = useResizableValue("width");
 		const src = useEditorAssetUrl(props.element.url);
@@ -70,7 +72,7 @@ export const ImageElement = withHOC(
 								onFocus={(e) => {
 									e.preventDefault();
 								}}
-								placeholder="Write a caption..."
+								placeholder={t('writeACaption', 'Write a caption...')}
 							/>
 						</Caption>
 					</figure>

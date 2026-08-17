@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	ArrowUpIcon,
 	AudioLinesIcon,
@@ -15,6 +16,7 @@ import {
 	type KeyboardEvent,
 	useCallback,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -22,7 +24,7 @@ import { Textarea } from "../../../index";
 import { FRAG, VERT, readTokenRGB, themeIsLight } from "./bubble-shader";
 import { HeroAgentControls } from "./hero-agent-controls";
 import { HeroFileChips, HeroFileInput } from "./hero-file-chips";
-import { HERO_SUGGESTIONS, useHeroComposer } from "./use-hero-composer";
+import { useHeroComposer, useHeroSuggestions } from "./use-hero-composer";
 
 const HERO_BUBBLE_CSS = `
 .hero-bubble-wrap {
@@ -631,21 +633,33 @@ const SATELLITE_META: ReadonlyArray<{
 	},
 ];
 
-const SATELLITES = HERO_SUGGESTIONS.map((label, index) => ({
-	label,
-	...SATELLITE_META[index % SATELLITE_META.length],
-}));
+function useSatellites() {
+	const suggestions = useHeroSuggestions();
+	return useMemo(
+		() =>
+			suggestions.map((label, index) => ({
+				label,
+				...SATELLITE_META[index % SATELLITE_META.length],
+			})),
+		[suggestions],
+	);
+}
 
-const ROTATING_WORDS = ["build", "do", "know", "automate"];
-// the widest verb reserves the heading's height so the rotating word can never
-// reflow it from one line to two (no layout shift as the word cycles)
-const LONGEST_ROTATING_WORD = ROTATING_WORDS.reduce((a, b) =>
-	b.length > a.length ? b : a,
-);
+function useRotatingWords() {
+	const { t } = useTranslation("chat");
+	return useMemo(
+		() => [
+			t("heroVerbBuild", "build"),
+			t("heroVerbDo", "do"),
+			t("heroVerbKnow", "know"),
+			t("heroVerbAutomate", "automate"),
+		],
+		[t],
+	);
+}
+
 const HERO_HEADING_CLASS =
 	"text-[26px] sm:text-3xl md:text-4xl font-bold tracking-tight text-balance";
-
-const HINT_TEXT = "Ask FlowPilot";
 
 type RotatingWordFx = "morph" | "wipe" | "pop";
 
@@ -658,40 +672,35 @@ function wordLetters(word: string) {
 }
 
 function RotatingWord({ fx = "pop" }: Readonly<{ fx?: RotatingWordFx }>) {
-	const [rot, setRot] = useState({
-		prev: null as string | null,
-		cur: ROTATING_WORDS[0],
-		n: 0,
-	});
+	const words = useRotatingWords();
+	const [rot, setRot] = useState({ prev: null as number | null, n: 0 });
 	const [width, setWidth] = useState<number | null>(null);
 	const widthRef = useRef<number | null>(null);
 	const sizerRef = useRef<HTMLSpanElement>(null);
+	const cur = words[rot.n % words.length];
+	const prev = rot.prev === null ? null : words[rot.prev % words.length];
 
 	useEffect(() => {
 		if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 		const id = setInterval(() => {
-			setRot(({ cur, n }) => ({
-				prev: cur,
-				cur: ROTATING_WORDS[(n + 1) % ROTATING_WORDS.length],
-				n: n + 1,
-			}));
+			setRot(({ n }) => ({ prev: n, n: n + 1 }));
 		}, 2600);
 		return () => clearInterval(id);
 	}, []);
 
 	useEffect(() => {
 		const sizer = sizerRef.current;
-		if (!sizer || sizer.textContent !== rot.cur) return;
+		if (!sizer || sizer.textContent !== cur) return;
 		const next = sizer.offsetWidth;
-		const prev = widthRef.current;
+		const previousWidth = widthRef.current;
 		widthRef.current = next;
-		if (prev !== null && next < prev) {
+		if (previousWidth !== null && next < previousWidth) {
 			// shrinking early would slide the "?" over the outgoing word
 			const t = setTimeout(() => setWidth(next), 240);
 			return () => clearTimeout(t);
 		}
 		setWidth(next);
-	}, [rot.cur]);
+	}, [cur]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -737,10 +746,10 @@ function RotatingWord({ fx = "pop" }: Readonly<{ fx?: RotatingWordFx }>) {
 		>
 			{"​"}
 			<span ref={sizerRef} className="hero-rot-sizer">
-				{rot.cur}
+				{cur}
 			</span>
-			{rot.prev !== null && renderWord(rot.prev, "out", `out-${rot.n}`)}
-			{renderWord(rot.cur, "in", `in-${rot.n}`)}
+			{prev !== null && renderWord(prev, "out", `out-${rot.n}`)}
+			{renderWord(cur, "in", `in-${rot.n}`)}
 		</span>
 	);
 }
@@ -760,6 +769,15 @@ function FourPointStar({ size }: Readonly<{ size: number }>) {
 }
 
 export function HeroSearchBarBubble() {
+	const { t } = useTranslation("chat");
+	const satellites = useSatellites();
+	const rotatingWords = useRotatingWords();
+	const hintText = t("askFlowpilot", "Ask FlowPilot");
+	// The widest verb reserves the heading's height so the rotating word can
+	// never reflow it from one line to two (no layout shift as the word cycles).
+	const longestRotatingWord = rotatingWords.reduce((a, b) =>
+		b.length > a.length ? b : a,
+	);
 	const {
 		value,
 		setValue,
@@ -886,7 +904,7 @@ export function HeroSearchBarBubble() {
 		const hintLetters = Array.from(
 			wrap.querySelectorAll<HTMLElement>(".hero-bubble-hint-l"),
 		);
-		const hintDenom = Math.max(HINT_TEXT.length - 1, 1);
+		const hintDenom = Math.max(hintLetters.length - 1, 1);
 		// open/close is click-outside based (not blur) so using the attach/send
 		// buttons inside the composer doesn't collapse it mid-interaction
 		const setOpen = (open: boolean) => {
@@ -1107,15 +1125,24 @@ export function HeroSearchBarBubble() {
 						aria-hidden="true"
 						className={`invisible [grid-area:1/1] ${HERO_HEADING_CLASS}`}
 					>
-						What do you want to {LONGEST_ROTATING_WORD}?
+						{t(
+							"whatDoYouWantToLongest_rotating_word",
+							"What do you want to {{LONGEST_ROTATING_WORD}}?",
+							{ LONGEST_ROTATING_WORD: longestRotatingWord },
+						)}
 					</div>
 					<h1 className={`[grid-area:1/1] ${HERO_HEADING_CLASS}`}>
-						What do you want to <span className="sr-only">build</span>
+						<Trans i18nKey="whatDoYouWantToSpanClassnamesronlybuildspan">
+							What do you want to <span className="sr-only">build</span>
+						</Trans>
 						<RotatingWord />?
 					</h1>
 				</div>
 				<p className="text-sm md:text-base text-muted-foreground">
-					Ask FlowPilot to create apps, find packages, or navigate Flow-Like.
+					{t(
+						"askFlowpilotToCreateAppsFindPackagesOrNavigateFlowlike",
+						"Ask FlowPilot to create apps, find packages, or navigate Flow-Like.",
+					)}
 				</p>
 			</div>
 			<div ref={wrapRef} className="hero-bubble-wrap">
@@ -1174,7 +1201,7 @@ export function HeroSearchBarBubble() {
 				<span className="hero-bubble-hint" aria-hidden="true">
 					<SparklesIcon className="size-4.25" strokeWidth={1.8} />
 					<span className="hero-bubble-hint-text">
-						{[...HINT_TEXT].map((ch, i) => (
+						{[...hintText].map((ch, i) => (
 							<span
 								// biome-ignore lint/suspicious/noArrayIndexKey: fixed static string, index is stable
 								key={i}
@@ -1186,7 +1213,7 @@ export function HeroSearchBarBubble() {
 						))}
 					</span>
 				</span>
-				{SATELLITES.map(({ label, icon: Icon, strokeWidth, style }) => (
+				{satellites.map(({ label, icon: Icon, strokeWidth, style }) => (
 					<button
 						key={label}
 						type="button"
@@ -1209,9 +1236,12 @@ export function HeroSearchBarBubble() {
 							value={value}
 							onChange={(e) => setValue(e.target.value)}
 							onKeyDown={handleKeyDown}
-							placeholder="Ask FlowPilot anything, or describe what you want to build…"
+							placeholder={t(
+								"askFlowpilotAnythingOrDescribeWhatYouWantToBuild",
+								"Ask FlowPilot anything, or describe what you want to build…",
+							)}
 							rows={1}
-							aria-label="Ask FlowPilot"
+							aria-label={t("askFlowpilot", "Ask FlowPilot")}
 							className="min-h-9 max-h-40 resize-none border-0 bg-transparent dark:bg-transparent shadow-none focus-visible:ring-0 py-1.5 px-2 text-[17px] text-foreground placeholder:text-muted-foreground"
 						/>
 					</div>
@@ -1226,7 +1256,7 @@ export function HeroSearchBarBubble() {
 					<button
 						type="button"
 						className="hero-bubble-icon outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-						aria-label="Attach images"
+						aria-label={t("attachImages", "Attach images")}
 						onClick={openFilePicker}
 					>
 						<PaperclipIcon className="size-4.75" strokeWidth={1.8} />
@@ -1234,7 +1264,7 @@ export function HeroSearchBarBubble() {
 					<button
 						type="button"
 						className="hero-bubble-send outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-						aria-label="Send"
+						aria-label={t("send", "Send")}
 						disabled={!canSend}
 						onClick={() => submit(value)}
 					>
@@ -1243,7 +1273,10 @@ export function HeroSearchBarBubble() {
 					<span
 						className="hero-bubble-icon hero-bubble-icon-off"
 						aria-hidden="true"
-						title="Voice input isn't available yet"
+						title={t(
+							"voiceInputIsntAvailableYet",
+							"Voice input isn't available yet",
+						)}
 					>
 						<AudioLinesIcon className="size-4.75" strokeWidth={1.8} />
 					</span>
@@ -1253,7 +1286,7 @@ export function HeroSearchBarBubble() {
 			{/* phone-width fallback: the floating satellites can't sit beside a
 			    narrow bubble, so the suggestions reflow into a chip row below it */}
 			<div className="hero-bubble-mobile-sats">
-				{SATELLITES.map(({ label, icon: Icon, strokeWidth }) => (
+				{satellites.map(({ label, icon: Icon, strokeWidth }) => (
 					<button
 						key={label}
 						type="button"

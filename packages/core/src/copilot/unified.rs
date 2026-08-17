@@ -181,6 +181,7 @@ impl UnifiedCopilot {
         selected_node_ids: &[String],
         // UI context (optional for Board scope)
         current_surface: Option<&Vec<SurfaceComponent>>,
+        current_canvas_settings: Option<&serde_json::Value>,
         selected_component_ids: &[String],
         // Common parameters
         user_prompt: String,
@@ -199,6 +200,7 @@ impl UnifiedCopilot {
             board,
             selected_node_ids,
             current_surface,
+            current_canvas_settings,
             selected_component_ids,
             user_prompt,
             None,
@@ -222,6 +224,7 @@ impl UnifiedCopilot {
         board: Option<&Board>,
         selected_node_ids: &[String],
         current_surface: Option<&Vec<SurfaceComponent>>,
+        current_canvas_settings: Option<&serde_json::Value>,
         selected_component_ids: &[String],
         user_prompt: String,
         raw_user_prompt: Option<String>,
@@ -282,6 +285,7 @@ impl UnifiedCopilot {
             CopilotScope::Frontend => {
                 self.delegate_to_frontend(
                     current_surface,
+                    current_canvas_settings,
                     selected_component_ids,
                     user_prompt,
                     current_images,
@@ -299,6 +303,7 @@ impl UnifiedCopilot {
                     board,
                     selected_node_ids,
                     current_surface,
+                    current_canvas_settings,
                     selected_component_ids,
                     user_prompt,
                     raw_user_prompt,
@@ -453,6 +458,7 @@ impl UnifiedCopilot {
     async fn delegate_to_frontend<F>(
         &self,
         current_surface: Option<&Vec<SurfaceComponent>>,
+        current_canvas_settings: Option<&serde_json::Value>,
         selected_component_ids: &[String],
         user_prompt: String,
         current_images: Option<Vec<ChatImage>>,
@@ -496,6 +502,7 @@ impl UnifiedCopilot {
         let response = copilot
             .chat(
                 current_surface,
+                current_canvas_settings,
                 selected_component_ids,
                 user_prompt,
                 current_images.map(|imgs| {
@@ -533,6 +540,7 @@ impl UnifiedCopilot {
         board: Option<&Board>,
         selected_node_ids: &[String],
         current_surface: Option<&Vec<SurfaceComponent>>,
+        current_canvas_settings: Option<&serde_json::Value>,
         selected_component_ids: &[String],
         user_prompt: String,
         raw_user_prompt: String,
@@ -579,6 +587,7 @@ impl UnifiedCopilot {
             CombinedScopeTarget::Frontend => {
                 self.delegate_to_frontend(
                     current_surface,
+                    current_canvas_settings,
                     selected_component_ids,
                     user_prompt,
                     current_images,
@@ -613,6 +622,7 @@ impl UnifiedCopilot {
                 } else {
                     self.delegate_to_frontend(
                         current_surface,
+                        current_canvas_settings,
                         selected_component_ids,
                         user_prompt.clone(),
                         current_images.clone(),
@@ -633,6 +643,7 @@ impl UnifiedCopilot {
                 let secondary_response = if primary_is_board {
                     self.delegate_to_frontend(
                         current_surface,
+                        current_canvas_settings,
                         selected_component_ids,
                         user_prompt,
                         current_images,
