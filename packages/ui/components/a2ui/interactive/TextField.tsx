@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useRef } from "react";
 import { cn } from "../../../lib/utils";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
@@ -9,6 +9,10 @@ import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import {
+	useBoundInputValue,
+	valueRevisionOf,
+} from "../hooks/use-bound-input-value";
 import {
 	resolveEventDebounceMs,
 	useDebouncedTrigger,
@@ -65,51 +69,27 @@ export function A2UITextField({
 	const debounceMs = resolveEventDebounceMs(
 		useResolved<number>(component.debounceMs),
 	);
-	const { setByPath } = useData();
 	const { schedule, cancel } = useDebouncedTrigger(debounceMs);
-
-	// Check if value is bound to a path (controlled by data context) or literal (local state)
-	const isPathBound = component.value && "path" in component.value;
-
-	// Local state for user input - only used when typing, not for display
-	const [localValue, setLocalValue] = useState(resolvedValue ?? "");
-
-	// Track if user is actively typing (to avoid overwriting their input)
-	const [isUserTyping, setIsUserTyping] = useState(false);
 
 	// The value the `change` event last reported. Tabbing through an untouched
 	// field must not run the configured workflow again.
 	const committedValueRef = useRef(resolvedValue ?? "");
 
-	// Sync local state when resolved value changes from external updates (setValue/clear)
-	// Only sync when user is NOT actively typing
-	useEffect(() => {
-		if (!isUserTyping) {
-			setLocalValue(resolvedValue ?? "");
-			committedValueRef.current = resolvedValue ?? "";
-		}
-	}, [resolvedValue, componentId, isUserTyping]);
+	const rememberExternalValue = useCallback((value: string) => {
+		committedValueRef.current = value;
+	}, []);
 
-	// Reset typing state when component value changes externally
-	useEffect(() => {
-		setIsUserTyping(false);
-	}, [component.value]);
-
-	// For literal values, prefer resolvedValue over localValue (external updates take precedence)
-	// For path bindings, use resolvedValue from data context
-	// Only use localValue when user is actively typing
-	const displayValue = isUserTyping ? localValue : (resolvedValue ?? "");
+	const [displayValue, setValue] = useBoundInputValue<string>(
+		component.value,
+		"",
+		{
+			revision: valueRevisionOf(component),
+			onExternalValue: rememberExternalValue,
+		},
+	);
 
 	const handleChange = (newValue: string) => {
-		// Mark that user is actively typing
-		setIsUserTyping(true);
-		// Update local state for immediate feedback
-		setLocalValue(newValue);
-
-		// If bound to a path, also update the data context
-		if (isPathBound && component.value && "path" in component.value) {
-			setByPath(component.value.path, newValue);
-		}
+		setValue(newValue);
 
 		if (onAction) {
 			onAction({
@@ -129,7 +109,6 @@ export function A2UITextField({
 
 	const commit = (value: string) => {
 		cancel();
-		setIsUserTyping(false);
 		if (!shouldReportCommit(committedValueRef.current, value)) return;
 		committedValueRef.current = value;
 		void triggerEvent("change", component, { value });

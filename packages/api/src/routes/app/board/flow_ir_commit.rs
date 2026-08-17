@@ -1121,7 +1121,8 @@ pub async fn apply_flow_ir_commit(
     // The mutation and its exact success receipt share one compressed board write. A retry can
     // therefore observe either neither or both, including after this process exits immediately
     // after persistence.
-    if let Err(error) = board.save(None).await {
+    let saved = super::scoring::save_board_and_refresh_summary(&state, &app_id, &board).await;
+    if let Err(error) = saved {
         let restore_error = restore_persisted_snapshot(&persisted_original).await;
         let mut diagnostics = vec![format!("Board persistence failed: {error}")];
         if let Some(error) = restore_error {

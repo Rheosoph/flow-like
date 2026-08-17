@@ -9,6 +9,7 @@ use flow_like::flow_like_storage::Path;
 use flow_like::flow_like_storage::files::store::FlowLikeStore;
 use flow_like::hub::{Environment, Hub};
 use flow_like::state::{FlowLikeState, FlowNodeRegistryInner};
+use flow_like::utils::compression::ConditionalRead;
 use flow_like_secrets::{
     EnvProviderConfig, ExposeSecret, ProviderConfig, SecretRef, SecretStore, SecretStoreConfig,
 };
@@ -62,6 +63,51 @@ pub(crate) fn flow_ir_draft_store_key(sub: &str, app_id: &str, board_id: &str) -
 /// collaborators still mutate the same canonical app board and must take the same mutex.
 pub(crate) fn board_mutation_lock_key(app_id: &str, board_id: &str) -> String {
     format!("{}\u{1f}{}", app_id.trim(), board_id.trim())
+}
+
+/// Cache key for one board revision. Versioned snapshots and the floating draft are different
+/// objects with different ETags, so they never share an entry.
+fn board_cache_key(app_id: &str, board_id: &str, version: Option<(u32, u32, u32)>) -> String {
+    match version {
+        Some((maj, min, pat)) => format!(
+            "{}\u{1f}{}\u{1f}{maj}.{min}.{pat}",
+            app_id.trim(),
+            board_id.trim()
+        ),
+        None => format!("{}\u{1f}{}\u{1f}", app_id.trim(), board_id.trim()),
+    }
+}
+
+/// Boards are large (a few MB hydrated); bound the count rather than trying to weigh them.
+const BOARD_CACHE_MAX_ENTRIES: u64 = 64;
+
+/// A hydrated board together with the storage identity it is known to reproduce.
+///
+/// `board` is what `Board::load` produced for the object that carried `e_tag`: `node_updates`
+/// and `cleanup` already applied, per-app WASM metadata and secret filtering **not** applied. It
+/// is shared read-only; every consumer clones before mutating.
+pub struct CachedBoard {
+    pub e_tag: String,
+    pub board: Arc<Board>,
+}
+
+/// A registry of per-key process-local mutexes that forget themselves once nobody holds them.
+fn keyed_local_lock(
+    locks: &parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
+    key: String,
+) -> Arc<flow_like_types::tokio::sync::Mutex<()>> {
+    let mut locks = locks.lock();
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    // Weak entries make cleanup safe: a mutex can disappear only when no holder or waiter has
+    // an Arc, so eviction can never create a second live lock for the same key.
+    if locks.len() >= 4_096 {
+        locks.retain(|_, lock| lock.strong_count() > 0);
+    }
+    let lock = Arc::new(flow_like_types::tokio::sync::Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
 }
 
 const ENSURE_MUTATION_LOCK_SQL: &str =
@@ -246,6 +292,21 @@ pub struct State {
     /// mutex with a database lock row so API replicas enter the same mutation lane.
     board_mutation_locks:
         parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
+    /// Hydrated boards pinned to the object identity they were loaded from. See
+    /// [`State::master_board`] for the validation contract.
+    board_cache: moka::sync::Cache<String, Arc<CachedBoard>>,
+    /// Tokenised board parts per (board revision, WASM catalog); answers sync polls without
+    /// re-serialising. Keyed by the ETag, so it never needs explicit invalidation.
+    pub board_sync_cache:
+        moka::sync::Cache<String, Arc<flow_like::flow::board::sync::BoardSyncSnapshot>>,
+    /// Per-app WASM node catalog; see `app_wasm_nodes_cached`.
+    pub app_wasm_nodes_cache:
+        moka::sync::Cache<String, Arc<crate::routes::app::wasm_catalog::AppWasmNodes>>,
+    /// Serialises concurrent cold loads of one board on this instance so the second reader waits
+    /// for the first hydration instead of repeating it. Distinct from `board_mutation_locks`,
+    /// which a writer already holds while it calls `master_board`.
+    board_load_locks:
+        parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
     pub content_bucket: Arc<FlowLikeStore>,
     pub cdn_bucket: Arc<FlowLikeStore>,
     pub meta_bucket: Arc<FlowLikeStore>,
@@ -297,19 +358,10 @@ impl State {
         app_id: &str,
         board_id: &str,
     ) -> Arc<flow_like_types::tokio::sync::Mutex<()>> {
-        let key = board_mutation_lock_key(app_id, board_id);
-        let mut locks = self.board_mutation_locks.lock();
-        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
-            return lock;
-        }
-        // Weak entries make cleanup safe: a mutex can disappear only when no holder or waiter has
-        // an Arc, so eviction can never create a second live lock for the same board.
-        if locks.len() >= 4_096 {
-            locks.retain(|_, lock| lock.strong_count() > 0);
-        }
-        let lock = Arc::new(flow_like_types::tokio::sync::Mutex::new(()));
-        locks.insert(key, Arc::downgrade(&lock));
-        lock
+        keyed_local_lock(
+            &self.board_mutation_locks,
+            board_mutation_lock_key(app_id, board_id),
+        )
     }
 
     /// Open a transaction and acquire one durable, database-backed mutation lock.
@@ -687,6 +739,19 @@ impl State {
                 .time_to_idle(Duration::from_secs(2 * 60 * 60))
                 .build(),
             board_mutation_locks: parking_lot::Mutex::new(HashMap::new()),
+            board_cache: moka::sync::Cache::builder()
+                .max_capacity(BOARD_CACHE_MAX_ENTRIES)
+                .time_to_idle(Duration::from_secs(30 * 60))
+                .build(),
+            board_sync_cache: moka::sync::Cache::builder()
+                .max_capacity(BOARD_CACHE_MAX_ENTRIES)
+                .time_to_idle(Duration::from_secs(30 * 60))
+                .build(),
+            app_wasm_nodes_cache: moka::sync::Cache::builder()
+                .max_capacity(1_000)
+                .time_to_live(Duration::from_secs(5 * 60))
+                .build(),
+            board_load_locks: parking_lot::Mutex::new(HashMap::new()),
             credentials_cache: cache,
             content_bucket,
             cdn_bucket,
@@ -727,6 +792,7 @@ impl State {
     /// when the app's package list changes (add/update/delete).
     pub fn invalidate_wasm_resolve(&self, app_id: &str) {
         self.wasm_resolve_cache.invalidate(app_id);
+        self.app_wasm_nodes_cache.invalidate(app_id);
     }
 
     pub fn validate_token(&self, token: &str) -> Result<HashMap<String, Value>> {
@@ -797,21 +863,8 @@ impl State {
         app_id: &str,
         state: &AppState,
     ) -> flow_like_types::Result<App> {
-        let credentials = self.master_credentials().await?;
-
-        let app_state = self.state_cache.get("master");
-
-        let app_state = match app_state {
-            Some(state) => state,
-            None => {
-                let state = Arc::new(credentials.to_state(state.clone()).await?);
-                self.state_cache.insert("master".to_string(), state.clone());
-                state
-            }
-        };
-
-        let app = App::load(app_id.to_string(), app_state.clone()).await?;
-
+        let app_state = self.master_state(state).await?;
+        let app = App::load(app_id.to_string(), app_state).await?;
         Ok(app)
     }
 
@@ -851,23 +904,135 @@ impl State {
         state: &AppState,
         version: Option<(u32, u32, u32)>,
     ) -> flow_like_types::Result<Board> {
+        let app_state = self.master_state(state).await?;
+        let cached = self
+            .master_board_shared_with(app_id, board_id, app_state.clone(), version)
+            .await?;
+        let mut board = (*cached.board).clone();
+        // The cached hydration may predate a master-state rotation; hand out the live one so
+        // `save(None)` and command execution never run on retired credentials.
+        board.app_state = Some(app_state);
+        Ok(board)
+    }
+
+    /// The process-wide master `FlowLikeState`, built lazily and rotated by `state_cache`'s TTL.
+    async fn master_state(&self, state: &AppState) -> flow_like_types::Result<Arc<FlowLikeState>> {
+        if let Some(app_state) = self.state_cache.get("master") {
+            return Ok(app_state);
+        }
         let credentials = self.master_credentials().await?;
+        let app_state = Arc::new(credentials.to_state(state.clone()).await?);
+        self.state_cache
+            .insert("master".to_string(), app_state.clone());
+        Ok(app_state)
+    }
 
-        let app_state = self.state_cache.get("master");
+    /// Load a board on master credentials, validated against storage but served from memory.
+    ///
+    /// The cache is keyed by object identity, not by who wrote last: every call issues one
+    /// `If-None-Match` GET carrying the cached ETag. Storage answering `NotModified` proves the
+    /// cached hydration is still what a fresh load would produce, regardless of which replica,
+    /// fork job, CLI, or publish path wrote the object. A changed object arrives in that same
+    /// round trip, so a miss costs exactly what the old unconditional load did.
+    ///
+    /// The returned board is shared. Callers that mutate (WASM hydration, secret filtering,
+    /// commands) must clone first — [`State::master_board`] does that for them.
+    #[tracing::instrument(
+        name = "master_board_shared",
+        skip(self, state),
+        level = "debug",
+        fields(app_id, board_id, version)
+    )]
+    pub async fn master_board_shared(
+        &self,
+        app_id: &str,
+        board_id: &str,
+        state: &AppState,
+        version: Option<(u32, u32, u32)>,
+    ) -> flow_like_types::Result<Arc<CachedBoard>> {
+        let app_state = self.master_state(state).await?;
+        self.master_board_shared_with(app_id, board_id, app_state, version)
+            .await
+    }
 
-        let app_state = match app_state {
-            Some(state) => state,
-            None => {
-                let state = Arc::new(credentials.to_state(state.clone()).await?);
-                self.state_cache.insert("master".to_string(), state.clone());
-                state
+    async fn master_board_shared_with(
+        &self,
+        app_id: &str,
+        board_id: &str,
+        app_state: Arc<FlowLikeState>,
+        version: Option<(u32, u32, u32)>,
+    ) -> flow_like_types::Result<Arc<CachedBoard>> {
+        let cache_key = board_cache_key(app_id, board_id, version);
+        let load_lock = keyed_local_lock(&self.board_load_locks, cache_key.clone());
+        let _single_flight = load_lock.lock().await;
+
+        let cached = self.board_cache.get(&cache_key);
+        let store = Board::meta_store(&app_state).await?;
+        let storage_root = Path::from("apps").child(app_id.to_string());
+        let read = Board::load_proto_if_changed(
+            store,
+            &storage_root,
+            board_id,
+            version,
+            cached.as_ref().map(|entry| entry.e_tag.as_str()),
+        )
+        .await?;
+
+        let (proto, meta) = match read {
+            ConditionalRead::NotModified => {
+                return cached.ok_or_else(|| {
+                    flow_like_types::anyhow!(
+                        "storage reported NotModified for {app_id}/{board_id} without a cached ETag"
+                    )
+                });
             }
+            ConditionalRead::Fresh(proto, meta) => (proto, meta),
         };
 
-        let storage_root = Path::from("apps").child(app_id.to_string());
-        let board = Board::load(storage_root, board_id, app_state, version).await?;
+        let board = Board::from_loaded_proto(proto, storage_root, app_state).await;
+        let entry = Arc::new(CachedBoard {
+            e_tag: meta.e_tag.clone().unwrap_or_default(),
+            board: Arc::new(board),
+        });
+        // An object without an ETag can never be validated, so it is never cached.
+        if meta.e_tag.is_some() {
+            self.board_cache.insert(cache_key, entry.clone());
+        }
+        Ok(entry)
+    }
 
-        Ok(board)
+    /// Pin an in-memory board to the object identity its writer just persisted.
+    ///
+    /// The writer's board is post-`execute_commands`, which ends with the same `node_updates`
+    /// + `cleanup` normalisation `Board::load` applies, so it is what the next load of `put`
+    /// would produce. Seeding makes the read that follows every edit a `NotModified` memory hit
+    /// instead of a decode + hydration. Skipping this is always safe (the next read reloads);
+    /// seeding a board that does **not** match `put` is not, so only call it with the exact
+    /// board whose `save` returned `put`.
+    pub fn seed_board_cache(
+        &self,
+        app_id: &str,
+        board_id: &str,
+        board: Board,
+        put: &flow_like::flow_like_storage::object_store::PutResult,
+    ) {
+        let Some(e_tag) = put.e_tag.clone() else {
+            return;
+        };
+        self.board_cache.insert(
+            board_cache_key(app_id, board_id, None),
+            Arc::new(CachedBoard {
+                e_tag,
+                board: Arc::new(board),
+            }),
+        );
+    }
+
+    /// Drop the cached floating draft. Only needed by writers that produce a board the seed
+    /// contract cannot vouch for; ordinary readers self-heal through the ETag check.
+    pub fn invalidate_board_cache(&self, app_id: &str, board_id: &str) {
+        self.board_cache
+            .invalidate(&board_cache_key(app_id, board_id, None));
     }
 
     /// Load a template on master credentials, for callers that were authorized
@@ -886,20 +1051,9 @@ impl State {
         state: &AppState,
         version: Option<(u32, u32, u32)>,
     ) -> flow_like_types::Result<Board> {
-        let credentials = self.master_credentials().await?;
-
-        let app_state = match self.state_cache.get("master") {
-            Some(state) => state,
-            None => {
-                let state = Arc::new(credentials.to_state(state.clone()).await?);
-                self.state_cache.insert("master".to_string(), state.clone());
-                state
-            }
-        };
-
+        let app_state = self.master_state(state).await?;
         let storage_root = Path::from("apps").child(app_id.to_string());
         let board = Board::load_template(storage_root, template_id, app_state, version).await?;
-
         Ok(board)
     }
 

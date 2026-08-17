@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
-import type { IApp, IBoard } from "../../../lib";
+import type { IApp, IBoardListing } from "../../../lib";
 import { IAppVisibility } from "../../../lib";
 import { formatDuration, formatRelativeTime } from "../../../lib/date";
 import { cn } from "../../../lib/utils";
@@ -175,7 +175,7 @@ export function LaunchPath({
 }: Readonly<{
 	appId: string;
 	app: IApp;
-	boards: IBoard[];
+	boards: IBoardListing[];
 	surfaces: ProjectSurface[];
 	runs: ProjectRunHealth;
 	aiAct: AiActStatus;
@@ -185,9 +185,7 @@ export function LaunchPath({
 	onOpenPanel: (panel: InspectorPanel) => void;
 }>) {
 	const { t } = useTranslation("settings");
-	const boardsWithContent = boards.filter(
-		(board) => Object.keys(board.nodes).length > 0,
-	);
+	const boardsWithContent = boards.filter((board) => board.nodeCount > 0);
 	const hasLogic = boardsWithContent.length > 0;
 	const activeSurfaces = surfaces.filter((surface) => surface.active);
 	const hasTriggers = activeSurfaces.length > 0;
@@ -206,10 +204,7 @@ export function LaunchPath({
 	const completed = stageStates.filter((state) => state === "done").length;
 	const currentIndex = stageStates.findIndex((state) => state === "current");
 
-	const nodeTotal = boards.reduce(
-		(sum, board) => sum + Object.keys(board.nodes).length,
-		0,
-	);
+	const nodeTotal = boards.reduce((sum, board) => sum + board.nodeCount, 0);
 
 	return (
 		<div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)]">
@@ -257,9 +252,9 @@ export function LaunchPath({
 								>
 									<WorkflowIcon className="h-3.5 w-3.5 text-muted-foreground" />
 									<span className="truncate">{board.name}</span>
-									<span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">{t('countNodes', { defaultValue_one: '{{count}} Node', defaultValue_other: '{{count}} Nodes', count: Object.keys(board.nodes).length })}{board.updated_at && (
+									<span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">{t('countNodes', { defaultValue_one: '{{count}} Node', defaultValue_other: '{{count}} Nodes', count: board.nodeCount })}{board.updatedAt && (
 											<span className="hidden md:inline">
-												{formatRelativeTime(board.updated_at, "narrow")}
+												{formatRelativeTime(board.updatedAt, "narrow")}
 											</span>
 										)}
 									</span>

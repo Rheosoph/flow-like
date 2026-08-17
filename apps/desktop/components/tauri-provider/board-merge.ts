@@ -1,4 +1,4 @@
-import type { IBoard, INode } from "@flow-like/flow-like-ui";
+import type { IBoard, INode, IPin } from "@flow-like/flow-like-ui";
 import { isEqual } from "lodash-es";
 
 interface SystemTimeLike {
@@ -66,6 +66,16 @@ export const getRemoteBoardSkipReason = (
 	return null;
 };
 
+const isSensitivePin = (pin: IPin | undefined): boolean =>
+	pin?.options?.sensitive === true;
+
+/**
+ * The server strips secret variable values and sensitive pin literals from every board
+ * response, so a remote `null` on one of those is "not disclosed", not "cleared". Local
+ * execution needs the real values, so they are carried over from the local copy. This has to
+ * run before node merging: the remote node's runtime hash still reflects the value it does not
+ * carry, so the hash fast path would otherwise take the stripped node as-is.
+ */
 const preserveSecretValues = (
 	remoteBoard: IBoard,
 	localBoard?: IBoard,
@@ -81,6 +91,34 @@ const preserveSecretValues = (
 			localVar.default_value != null
 		) {
 			remoteVar.default_value = localVar.default_value;
+		}
+	}
+
+	const preservePins = (
+		remotePins: Record<string, IPin> | undefined,
+		localPins: Record<string, IPin> | undefined,
+	) => {
+		if (!remotePins || !localPins) return;
+		for (const [pinId, remotePin] of Object.entries(remotePins)) {
+			const localPin = localPins[pinId];
+			if (
+				isSensitivePin(remotePin) &&
+				isSensitivePin(localPin) &&
+				remotePin.default_value == null &&
+				localPin.default_value != null
+			) {
+				remotePin.default_value = localPin.default_value;
+			}
+		}
+	};
+	for (const [nodeId, remoteNode] of Object.entries(remoteBoard.nodes ?? {})) {
+		preservePins(remoteNode.pins, localBoard.nodes?.[nodeId]?.pins);
+	}
+	for (const [layerId, remoteLayer] of Object.entries(remoteBoard.layers ?? {})) {
+		const localLayer = localBoard.layers?.[layerId];
+		preservePins(remoteLayer.pins, localLayer?.pins);
+		for (const [nodeId, remoteNode] of Object.entries(remoteLayer.nodes ?? {})) {
+			preservePins(remoteNode.pins, localLayer?.nodes?.[nodeId]?.pins);
 		}
 	}
 

@@ -647,8 +647,8 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 					);
 				}
 
-				const boards = await backend.boardState.getBoards(app.id);
-				const boardId = boards?.[0]?.[0] || "";
+				const boards = await backend.boardState.getBoardSummaries(app.id);
+				const boardId = boards?.[0]?.id || "";
 
 				toast.success(`Project "${name}" created! 🎉`);
 

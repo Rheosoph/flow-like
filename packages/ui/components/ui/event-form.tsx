@@ -132,7 +132,7 @@ export function EventForm({
 		Record<string, IOAuthToken>
 	>({});
 
-	const boards = useInvoke(backend.boardState.getBoards, backend.boardState, [
+	const boards = useInvoke(backend.boardState.getBoardSummaries, backend.boardState, [
 		appId,
 	]);
 	const pages = useInvoke(

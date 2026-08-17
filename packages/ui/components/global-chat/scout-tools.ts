@@ -289,24 +289,28 @@ export async function scoutInspectApp(
 
 	if (sections.includes("boards")) {
 		try {
-			const boards = await backend.boardState.getBoards(appId);
+			// Summaries with node types carry everything the digest lists; the graphs
+			// themselves would be megabytes the Scout never reads.
+			const boards = await backend.boardState.getBoardSummaries(appId, [
+				"node_types",
+			]);
 			const selected = (
 				boardFilter
 					? boards.filter((board) => board.id === boardFilter)
 					: boards
 			).slice(0, MAX_BOARDS);
 			digest.boards = selected.map((board) => {
-				const nodes = Object.values(board.nodes ?? {});
-				const nodeTypes = [...new Set(nodes.map((node) => node.name))];
+				const nodeTypes = board.nodeTypes ?? [];
 				return {
 					board_id: board.id,
 					name: board.name,
 					description: board.description,
-					node_count: nodes.length,
-					layer_count: Object.keys(board.layers ?? {}).length,
-					entry_nodes: nodes
-						.filter((node) => node.start)
-						.map((node) => ({ node_id: node.id, node_type: node.name })),
+					node_count: board.nodeCount,
+					layer_count: board.layerCount,
+					entry_nodes: (board.entryNodes ?? []).map((node) => ({
+						node_id: node.nodeId,
+						node_type: node.nodeType,
+					})),
 					node_types: nodeTypes.slice(0, MAX_NODE_TYPES_PER_BOARD),
 					node_types_truncated: nodeTypes.length > MAX_NODE_TYPES_PER_BOARD,
 				};
@@ -399,12 +403,12 @@ export async function scoutInspectApp(
 
 	if (sections.includes("variables")) {
 		try {
-			const boards = await backend.boardState.getBoards(appId);
+			const boards = await backend.boardState.getBoardVariables(appId);
 			// Secret VALUES never leave the backend; the names still tell the Scout
 			// which credentials a fork would need reconfigured.
 			digest.variables = boards.slice(0, MAX_BOARDS).flatMap((board) =>
 				Object.values(board.variables ?? {}).map((variable) => ({
-					board_id: board.id,
+					board_id: board.board_id,
 					name: variable.name,
 					data_type: variable.data_type,
 					value_type: variable.value_type,

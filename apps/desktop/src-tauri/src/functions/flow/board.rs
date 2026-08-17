@@ -1,12 +1,16 @@
 use crate::{
     functions::TauriFunctionError,
-    state::{TauriFlowLikeState, TauriSettingsState},
+    state::{LocalBoardSnapshot, TauriBoardSyncState, TauriFlowLikeState, TauriSettingsState},
 };
 use flow_like::{
     app::{App, AppVisibility},
     flow::{
         ast::{ApplyFlowScriptResult, RenderOptions, board_to_flowscript},
-        board::{Board, VersionType, commands::GenericCommand},
+        board::{
+            Board, VersionType,
+            commands::GenericCommand,
+            sync::{BoardSyncRequest, BoardSyncResponse, BoardSyncSnapshot},
+        },
         node::Node,
     },
     flow_like_storage::object_store::ObjectStore,
@@ -15,7 +19,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 
 // The AWS API runs behind a synchronous Lambda. Four MiB is the raw command-body ceiling;
@@ -120,6 +124,77 @@ pub async fn get_board(
     }
 
     Err(TauriFunctionError::new("Board not found"))
+}
+
+/// Incremental counterpart of `get_board` for the webview: same protocol as the API's
+/// `POST /board/{id}/sync`, over IPC. The webview holds the last board it assembled and sends its
+/// manifest; only changed parts cross the bridge instead of the whole board on every refetch.
+///
+/// Local boards are the user's own, so — unlike the remote endpoint — nothing is filtered here,
+/// matching what `get_board` returns. Hydration is never requested over IPC (bandwidth is not
+/// the constraint), so the catalog only has to exist, not match a remote one.
+#[tauri::command(async)]
+pub async fn sync_board(
+    handler: AppHandle,
+    app_id: String,
+    board_id: String,
+    version: Option<(u32, u32, u32)>,
+    request: BoardSyncRequest,
+) -> Result<BoardSyncResponse, TauriFunctionError> {
+    let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
+    let board = match flow_like_state.get_board(&board_id, version) {
+        Ok(board) => board,
+        Err(_) => {
+            let app = App::load(app_id, flow_like_state.clone())
+                .await
+                .map_err(|_| TauriFunctionError::new("Board not found"))?;
+            app.open_board(board_id.clone(), Some(true), version)
+                .await
+                .map_err(|_| TauriFunctionError::new("Board not found"))?
+        }
+    };
+
+    let cache_key = match version {
+        Some((maj, min, pat)) => format!("{board_id}-{maj}-{min}-{pat}"),
+        None => board_id.clone(),
+    };
+    let sync_state = handler
+        .try_state::<TauriBoardSyncState>()
+        .map(|state| state.0.clone());
+
+    let board = board.lock().await;
+    let cached = sync_state.as_ref().and_then(|cache| {
+        cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&cache_key)
+            .filter(|entry| entry.updated_at == board.updated_at && entry.hash == board.hash)
+            .map(|entry| entry.snapshot.clone())
+    });
+
+    let snapshot = match cached {
+        Some(snapshot) => snapshot,
+        None => {
+            let snapshot = Arc::new(
+                BoardSyncSnapshot::from_board(&board, &[])
+                    .map_err(|error| TauriFunctionError::new(&format!("board sync: {error}")))?,
+            );
+            if let Some(cache) = sync_state {
+                cache.lock().unwrap_or_else(|e| e.into_inner()).insert(
+                    cache_key,
+                    Arc::new(LocalBoardSnapshot {
+                        updated_at: board.updated_at,
+                        hash: board.hash,
+                        snapshot: snapshot.clone(),
+                    }),
+                );
+            }
+            snapshot
+        }
+    };
+    drop(board);
+
+    Ok(snapshot.diff(&request))
 }
 
 #[tauri::command(async)]

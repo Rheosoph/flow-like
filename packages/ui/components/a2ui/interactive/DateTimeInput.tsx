@@ -6,6 +6,10 @@ import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import {
+	useBoundInputValue,
+	valueRevisionOf,
+} from "../hooks/use-bound-input-value";
 import type { BoundValue, DateTimeInputComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -28,17 +32,16 @@ export function A2UIDateTimeInput({
 }: ComponentProps<DateTimeInputComponent>) {
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
-	const value = useResolved<string>(component.value);
+	const [value, setValue] = useBoundInputValue<string>(component.value, "", {
+		revision: valueRevisionOf(component),
+	});
 	const disabled = useResolved<boolean>(component.disabled);
 	const mode = useResolved<string>(component.mode) ?? "date";
 	const min = useResolved<string>(component.min);
 	const max = useResolved<string>(component.max);
-	const { setByPath } = useData();
 
 	const handleChange = (newValue: string) => {
-		if (component.value && "path" in component.value) {
-			setByPath(component.value.path, newValue);
-		}
+		setValue(newValue);
 		if (onAction) {
 			onAction({
 				type: "userAction",
@@ -61,7 +64,7 @@ export function A2UIDateTimeInput({
 		>
 			<Input
 				type={inputType}
-				value={value ?? ""}
+				value={value}
 				disabled={disabled}
 				min={min}
 				max={max}

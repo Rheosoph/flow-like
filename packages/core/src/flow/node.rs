@@ -33,7 +33,7 @@ pub enum NodeState {
 /// * `governance` - Indicates compliance and auditability with policies and regulations.
 /// * `reliability` - Measures stability, error rates and recoverability.
 /// * `cost` - Represents resource/cost impact for running this node.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct NodeScores {
     pub privacy: u8,
     pub security: u8,
@@ -90,7 +90,7 @@ impl NodeScores {
     }
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct FnRefs {
     pub fn_refs: Vec<String>,
     pub can_reference_fns: bool,
@@ -147,7 +147,7 @@ pub enum NodePermission {
     Functions,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct NodeWasm {
     pub package_id: String,
     #[serde(default)]

@@ -6323,11 +6323,8 @@ mod tests {
 
         let design_system = ".card{color:red}".repeat(1_000);
         assert!(design_system.chars().count() < MAX_UI_CUSTOM_CSS_CHARS);
-        let (_, errors) = validate_ui_components(
-            "root",
-            &json!({ "customCss": design_system }),
-            &components,
-        );
+        let (_, errors) =
+            validate_ui_components("root", &json!({ "customCss": design_system }), &components);
         assert!(
             errors.is_empty(),
             "a full design system must stay under the limit: {errors:?}"

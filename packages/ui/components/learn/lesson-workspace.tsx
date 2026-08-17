@@ -757,7 +757,7 @@ function AppFlowsPane({
 		Boolean(appId),
 	);
 	const boards = useInvoke(
-		backend.boardState.getBoards,
+		backend.boardState.getBoardSummaries,
 		backend.boardState,
 		[appId],
 		Boolean(appId),

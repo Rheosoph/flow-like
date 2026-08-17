@@ -13,6 +13,33 @@ use crate::{event_bus::EventBus, profile::UserProfile, settings::Settings};
 
 pub use crate::functions::recording::state::TauriRecordingState;
 
+/// One tokenised snapshot of a local board, pinned to the revision it was built from.
+pub struct LocalBoardSnapshot {
+    pub updated_at: std::time::SystemTime,
+    pub hash: Option<u64>,
+    pub snapshot: Arc<flow_like::flow::board::sync::BoardSyncSnapshot>,
+}
+
+/// Snapshots answering the webview's incremental `sync_board` IPC calls, keyed like the board
+/// registry (`{board_id}` or `{board_id}-{maj}-{min}-{pat}`).
+///
+/// A snapshot is reused only while the board's `(updated_at, hash)` pair is unchanged; every
+/// desktop mutation path (`execute_commands`, undo/redo, remote upsert) moves at least one of
+/// them. Registry refreshes rewrite node definitions without touching either, so they clear the
+/// map wholesale.
+#[derive(Clone, Default)]
+pub struct TauriBoardSyncState(
+    pub Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<LocalBoardSnapshot>>>>,
+);
+
+impl TauriBoardSyncState {
+    pub fn invalidate_all(app_handle: &AppHandle) {
+        if let Some(state) = app_handle.try_state::<TauriBoardSyncState>() {
+            state.0.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct TauriFlowLikeState(pub Arc<FlowLikeState>);
 impl TauriFlowLikeState {

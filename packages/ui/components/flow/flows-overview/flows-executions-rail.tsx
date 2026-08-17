@@ -168,7 +168,7 @@ export function FlowsExecutionsRail({
 	const entryNames = useMemo(() => {
 		const names = new Map<string, string>();
 		for (const row of rows) {
-			for (const node of Object.values(row.board.nodes ?? {})) {
+			for (const node of row.entryPoints) {
 				names.set(node.id, node.friendly_name || node.name);
 			}
 		}

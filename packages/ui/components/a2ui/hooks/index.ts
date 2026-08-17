@@ -5,6 +5,11 @@ export {
 	useSetDataPath,
 } from "./use-data-binding";
 export { useSurface, useSurfaceComponent } from "./use-surface";
+export {
+	type BoundInputOptions,
+	useBoundInputValue,
+	valueRevisionOf,
+} from "./use-bound-input-value";
 export { useAction, useActionCallback } from "./use-action";
 export { useElementStorage } from "./use-element-storage";
 export { useAssetUrl, useAssetUrls } from "./use-asset-url";

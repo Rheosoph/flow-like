@@ -13,6 +13,10 @@ import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import {
+	useBoundInputValue,
+	valueRevisionOf,
+} from "../hooks/use-bound-input-value";
 import type { BoundValue, SelectComponent } from "../types";
 
 /** Events added after select shipped never inherit `*` or `actions[0]`. */
@@ -46,7 +50,9 @@ export function A2UISelect({
 }: ComponentProps<SelectComponent>) {
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
-	const value = useResolved<string>(component.value);
+	const [value, setValue] = useBoundInputValue<string>(component.value, "", {
+		revision: valueRevisionOf(component),
+	});
 	const options =
 		useResolved<Array<{ value: string; label: string }>>(component.options) ??
 		[];
@@ -57,12 +63,9 @@ export function A2UISelect({
 	const placeholder = resolveStringOrBound(
 		component.placeholder as string | BoundValue | undefined,
 	);
-	const { setByPath } = useData();
 
 	const handleChange = (newValue: string) => {
-		if (component.value && "path" in component.value) {
-			setByPath(component.value.path, newValue);
-		}
+		setValue(newValue);
 		if (onAction) {
 			onAction({
 				type: "userAction",
@@ -80,7 +83,7 @@ export function A2UISelect({
 		void triggerEvent(
 			open ? "open" : "close",
 			component,
-			{ value: value ?? "" },
+			{ value },
 			EXACT_ONLY,
 		);
 	};
@@ -92,7 +95,7 @@ export function A2UISelect({
 		>
 			{label && <Label>{label}</Label>}
 			<Select
-				value={value ?? ""}
+				value={value}
 				onValueChange={handleChange}
 				onOpenChange={handleOpenChange}
 				disabled={disabled}

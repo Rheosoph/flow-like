@@ -17,6 +17,11 @@ import type {
 } from "../../../";
 import type { IJwks, IRealtimeAccess } from "../../../";
 import type {
+	IBoardSummary,
+	IBoardSummaryInclude,
+	IBoardVariables,
+} from "../../../lib/schema/flow/board-summary";
+import type {
 	CanvasSettings,
 	SurfaceComponent,
 } from "../../../components/a2ui/types";
@@ -30,6 +35,15 @@ import type {
 
 export class EmptyBoardState implements IBoardState {
 	getBoards(appId: string): Promise<IBoard[]> {
+		throw new Error("Method not implemented.");
+	}
+	getBoardSummaries(
+		appId: string,
+		include?: IBoardSummaryInclude[],
+	): Promise<IBoardSummary[]> {
+		throw new Error("Method not implemented.");
+	}
+	getBoardVariables(appId: string): Promise<IBoardVariables[]> {
 		throw new Error("Method not implemented.");
 	}
 	getCatalog(appId: string): Promise<INode[]> {

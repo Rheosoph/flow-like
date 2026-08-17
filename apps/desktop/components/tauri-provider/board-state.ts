@@ -14,7 +14,10 @@ import {
 	type IBoard,
 	type IBoardServerResetResult,
 	type IBoardState,
+	type IBoardSummary,
+	type IBoardSummaryInclude,
 	type IBoardSyncStatus,
+	type IBoardVariables,
 	type ICheckFlowScriptReconcileResponse,
 	ICommentType,
 	IConnectionMode,
@@ -52,7 +55,13 @@ import type {
 	CanvasSettings,
 	SurfaceComponent,
 } from "@flow-like/flow-like-ui/components/a2ui/types";
+import type { IProfile } from "@flow-like/flow-like-ui";
 import { ApiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
+import {
+	BoardSyncClient,
+	type IBoardSyncRequest,
+	type IBoardSyncResponse,
+} from "@flow-like/flow-like-ui/lib/board-sync";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { flowPilotDebugLog } from "@flow-like/flow-like-ui/lib/flowpilot-debug";
 import { flowIrCommitDeliveryId } from "@flow-like/flow-like-ui/lib/flowpilot/board-edit-job-delivery";
@@ -374,6 +383,61 @@ export class BoardState implements IBoardState {
 		Promise<{ failed: boolean; pushedBatches: number }>
 	>();
 	private readonly boardMutationSequences = new Map<string, Promise<void>>();
+	/** Remote boards are fetched incrementally; this holds the last assembled copy per board. */
+	private readonly remoteBoardSync = new BoardSyncClient();
+	/**
+	 * Local boards cross the Tauri bridge incrementally too: `get_board` serialises the whole
+	 * board on every refetch, and refetches happen after every own or peer edit. Kept separate
+	 * from `remoteBoardSync` because the two sides hold different revisions of the same board.
+	 */
+	private readonly localBoardSync = new BoardSyncClient();
+
+	/** The local board, transferred as a diff against the last one this client assembled. */
+	private fetchLocalBoard(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+	): Promise<IBoard> {
+		return this.localBoardSync.sync(
+			appId,
+			boardId,
+			version,
+			(request: IBoardSyncRequest) =>
+				invoke<IBoardSyncResponse>("sync_board", {
+					appId,
+					boardId,
+					version,
+					request,
+				}),
+		);
+	}
+
+	/**
+	 * The server's current board, transferred as a diff against the last one this client
+	 * assembled. Semantically identical to a full GET, including for `resetBoardFromServer`.
+	 */
+	private fetchRemoteBoard(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+		profile: IProfile | undefined = this.backend.profile,
+		auth = this.backend.auth,
+	): Promise<IBoard> {
+		if (!profile) throw new Error("No profile set for remote board fetch");
+		const params = version ? `?version=${version.join("_")}` : "";
+		return this.remoteBoardSync.sync(
+			appId,
+			boardId,
+			version,
+			(request: IBoardSyncRequest) =>
+				fetcher<IBoardSyncResponse>(
+					profile,
+					`apps/${appId}/board/${boardId}/sync${params}`,
+					{ method: "POST", body: JSON.stringify(request) },
+					auth,
+				),
+		);
+	}
 
 	constructor(private readonly backend: TauriBackend) {}
 
@@ -730,17 +794,107 @@ export class BoardState implements IBoardState {
 
 		return boards;
 	}
+
+	async getBoardSummaries(
+		appId: string,
+		include?: IBoardSummaryInclude[],
+	): Promise<IBoardSummary[]> {
+		const withNodeTypes = include?.includes("node_types") === true;
+		const withMetrics = include?.includes("metrics") === true;
+		const local: IBoardSummary[] = await invoke("get_app_board_summaries", {
+			appId,
+			withNodeTypes,
+			withMetrics,
+		});
+		const byId = new Map(local.map((summary) => [summary.id, summary]));
+
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline || !this.backend.profile || !this.backend.auth) {
+			return Array.from(byId.values());
+		}
+
+		const query = include?.length ? `?include=${include.join(",")}` : "";
+		let remote: IBoardSummary[];
+		try {
+			remote = await fetcher<IBoardSummary[]>(
+				this.backend.profile,
+				`apps/${appId}/board/summaries${query}`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+		} catch (error) {
+			console.warn(
+				"[BoardState] remote board summaries unavailable, using local:",
+				error,
+			);
+			return Array.from(byId.values());
+		}
+
+		// Boards the server has that this device does not, or that changed remotely, are pulled
+		// through `getBoard` — local-first and incremental — instead of the old full-list download.
+		const stale: string[] = [];
+		for (const summary of remote) {
+			const localSummary = byId.get(summary.id);
+			const remoteNanos = systemTimeToNanos(summary.updatedAt);
+			const localNanos = systemTimeToNanos(localSummary?.updatedAt);
+			if (!localSummary || (remoteNanos > 0 && remoteNanos > localNanos)) {
+				stale.push(summary.id);
+			}
+			// Remote metadata is authoritative for the listing; local wins only when the local
+			// copy is the newer one (queued offline edits).
+			byId.set(
+				summary.id,
+				localSummary && localNanos > remoteNanos
+					? { ...summary, ...localSummary, pages: summary.pages }
+					: summary,
+			);
+		}
+		if (stale.length > 0 && this.backend.queryClient) {
+			this.backend.backgroundTaskHandler(
+				Promise.allSettled(
+					stale.map((boardId) => this.getBoard(appId, boardId)),
+				).then(() => undefined),
+			);
+		}
+
+		return Array.from(byId.values());
+	}
+
+	async getBoardVariables(appId: string): Promise<IBoardVariables[]> {
+		const isOffline = await this.backend.isOffline(appId);
+		if (!isOffline && this.backend.profile && this.backend.auth) {
+			try {
+				return await fetcher<IBoardVariables[]>(
+					this.backend.profile,
+					`apps/${appId}/board/variables`,
+					{ method: "GET" },
+					this.backend.auth,
+				);
+			} catch (error) {
+				console.warn(
+					"[BoardState] remote board variables unavailable, using local:",
+					error,
+				);
+			}
+		}
+		return invoke("get_app_board_variables", { appId });
+	}
+
 	async getCatalog(appId: string): Promise<INode[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline && this.backend.profile && this.backend.auth) {
 			try {
-				return await fetcher<INode[]>(
+				const nodes = await fetcher<INode[]>(
 					this.backend.profile,
 					`apps/${appId}/nodes`,
 					{ method: "GET" },
 					this.backend.auth,
 				);
+				// The remote catalog is what the server compares against when it decides which
+				// nodes may ship lean, so only it may feed remote-board hydration.
+				this.remoteBoardSync.setCatalog(appId, nodes);
+				return nodes;
 			} catch (error) {
 				console.warn(
 					"Failed to fetch remote app catalog, falling back to local catalog:",
@@ -762,26 +916,13 @@ export class BoardState implements IBoardState {
 	): Promise<IBoard> {
 		let board: IBoard;
 		try {
-			board = await invoke("get_board", {
-				appId: appId,
-				boardId: boardId,
-				version: version,
-			});
+			board = await this.fetchLocalBoard(appId, boardId, version);
 		} catch {
 			const isOffline = await this.backend.isOffline(appId);
 			if (isOffline || !this.backend.profile || !this.backend.auth) {
 				throw new Error(`Board not found: ${boardId}`);
 			}
-			let url = `apps/${appId}/board/${boardId}`;
-			if (version) {
-				url += `?version=${version.join("_")}`;
-			}
-			const remoteData = await fetcher<IBoard>(
-				this.backend.profile,
-				url,
-				{ method: "GET" },
-				this.backend.auth,
-			);
+			const remoteData = await this.fetchRemoteBoard(appId, boardId, version);
 			if (typeof version === "undefined") {
 				await invoke("upsert_board", {
 					appId: appId,
@@ -846,13 +987,7 @@ export class BoardState implements IBoardState {
 					return board;
 				}
 
-				const url = `apps/${appId}/board/${boardId}`;
-				const remoteData = await fetcher<IBoard>(
-					this.backend.profile,
-					url,
-					{ method: "GET" },
-					this.backend.auth,
-				);
+				const remoteData = await this.fetchRemoteBoard(appId, boardId);
 
 				if (remoteData) {
 					if (
@@ -916,14 +1051,7 @@ export class BoardState implements IBoardState {
 					return board;
 				}
 
-				const remoteData = await fetcher<IBoard>(
-					this.backend.profile!,
-					`apps/${appId}/board/${boardId}`,
-					{
-						method: "GET",
-					},
-					this.backend.auth,
-				);
+				const remoteData = await this.fetchRemoteBoard(appId, boardId);
 
 				if (!remoteData) {
 					throw new Error("Failed to fetch board data");
@@ -1939,6 +2067,8 @@ export class BoardState implements IBoardState {
 	}
 
 	async closeBoard(boardId: string) {
+		this.remoteBoardSync.forget(undefined, boardId);
+		this.localBoardSync.forget(undefined, boardId);
 		await invoke("close_board", {
 			boardId: boardId,
 		});
@@ -2470,10 +2600,11 @@ export class BoardState implements IBoardState {
 			}
 
 			// Fetch before discarding: a transport failure then leaves the queue exactly as it was.
-			const remoteData = await fetcher<IBoard>(
+			const remoteData = await this.fetchRemoteBoard(
+				appId,
+				boardId,
+				undefined,
 				transportProfile,
-				`apps/${appId}/board/${boardId}`,
-				{ method: "GET" },
 				transportAuth,
 			);
 			if (!remoteData) {
@@ -3259,11 +3390,7 @@ export class BoardState implements IBoardState {
 
 		// Helper to build prerun response from local board
 		const buildLocalPrerun = async (): Promise<IPrerunBoardResponse> => {
-			const board: IBoard = await invoke("get_board", {
-				appId,
-				boardId,
-				version,
-			});
+			const board = await this.fetchLocalBoard(appId, boardId, version);
 
 			const runtimeVariables = Object.values(board.variables)
 				.filter((v) => v.runtime_configured)

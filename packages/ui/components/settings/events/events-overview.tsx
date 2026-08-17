@@ -205,7 +205,7 @@ export function EventsOverview({
 	);
 
 	const boards = useInvoke(
-		backend.boardState.getBoards,
+		backend.boardState.getBoardSummaries,
 		backend.boardState,
 		[appId],
 		appId !== "",

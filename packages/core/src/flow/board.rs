@@ -9,13 +9,14 @@ use crate::{
     app::App,
     state::FlowLikeState,
     utils::compression::{
-        compress_to_file, compress_to_file_create, compress_to_file_update, from_compressed,
-        from_compressed_json, from_compressed_with_meta,
+        ConditionalRead, compress_to_file, compress_to_file_create, compress_to_file_update,
+        from_compressed, from_compressed_if_changed, from_compressed_json,
+        from_compressed_with_meta,
     },
 };
 use commands::GenericCommand;
 use commands::nodes::update_node::UpdateNodeCommand;
-use flow_like_storage::object_store::{self, ObjectStore, UpdateVersion, path::Path};
+use flow_like_storage::object_store::{self, ObjectStore, PutResult, UpdateVersion, path::Path};
 use flow_like_types::proto;
 use flow_like_types::{FromProto, ToProto, create_id, sync::Mutex};
 use futures::StreamExt;
@@ -31,6 +32,8 @@ use tracing::instrument;
 
 pub mod cleanup;
 pub mod commands;
+pub mod summary;
+pub mod sync;
 
 /// Reserved board-ref namespace for host bookkeeping that must be persisted atomically with a
 /// board mutation but must never participate in FlowScript, semantic fingerprints, or user-facing
@@ -367,6 +370,31 @@ fn pin_ids_match(current: &Node, previous: &Node) -> bool {
 }
 
 impl Board {
+    /// The board's variables with secret values removed, plus only the `refs` entries their
+    /// schemas reach. This is what a configuration surface needs and nothing a full board
+    /// transfer would add.
+    pub fn public_variables(&self) -> (HashMap<String, Variable>, HashMap<String, String>) {
+        let mut variables = self.variables.clone();
+        let mut refs = HashMap::new();
+        for variable in variables.values_mut() {
+            if variable.secret {
+                variable.default_value = None;
+            }
+            // Refs may chain (ref → ref → schema); follow every hop the client would.
+            let mut key = variable.schema.clone();
+            while let Some(current) = key.take() {
+                let Some(resolved) = self.refs.get(&current) else {
+                    break;
+                };
+                if refs.insert(current, resolved.clone()).is_some() {
+                    break;
+                }
+                key = Some(resolved.clone());
+            }
+        }
+        (variables, refs)
+    }
+
     /// Create a new board with a unique ID
     /// The board is created in the base directory appended with the ID
     pub fn new(id: Option<String>, base_dir: Path, app_state: Arc<FlowLikeState>) -> Self {
@@ -666,6 +694,20 @@ impl Board {
         // First, sync node schemas for any version mismatches
         // This runs BEFORE on_update so dynamic nodes can still add their pins
         cleanup::sync_node_schema::sync_board_node_schemas(self, &registry.node_registry).await;
+
+        // The schema sync above expands compact schema refs onto every pin, and `Node::hash`
+        // covers `pin.schema`. Without re-baselining, roughly half the nodes on a real board
+        // report "changed" in pass 1 purely from that bookkeeping, which forces a second full
+        // `on_update` pass over every node on every load. Rebase the hashes now so pass 1's
+        // change detector only sees what `on_update` itself did.
+        for node in self.nodes.values_mut() {
+            node.hash();
+        }
+        for layer in self.layers.values_mut() {
+            for node in layer.nodes.values_mut() {
+                node.hash();
+            }
+        }
 
         const MAX_PASSES: usize = 10;
         for _ in 0..MAX_PASSES {
@@ -1677,6 +1719,40 @@ impl Board {
         from_compressed_with_meta(store, path).await
     }
 
+    /// Conditional [`Self::load_proto_with_meta`]: given the `e_tag` of a cached copy, one
+    /// `If-None-Match` GET either confirms the cache (`NotModified`, no body) or delivers the
+    /// changed proto in the same round trip. See [`ConditionalRead`].
+    #[instrument(
+        name = "Board::load_proto_if_changed",
+        skip(store, e_tag),
+        level = "debug"
+    )]
+    pub async fn load_proto_if_changed(
+        store: Arc<dyn ObjectStore>,
+        board_dir: &Path,
+        id: &str,
+        version: Option<(u32, u32, u32)>,
+        e_tag: Option<&str>,
+    ) -> flow_like_types::Result<ConditionalRead<flow_like_types::proto::Board>> {
+        let path = Self::proto_path(board_dir, id, version);
+        from_compressed_if_changed(store, path, e_tag).await
+    }
+
+    /// The object store the board's `.board` file lives in.
+    pub async fn meta_store(
+        app_state: &FlowLikeState,
+    ) -> flow_like_types::Result<Arc<dyn ObjectStore>> {
+        Ok(app_state
+            .config
+            .read()
+            .await
+            .stores
+            .app_meta_store
+            .clone()
+            .ok_or_else(|| flow_like_types::anyhow!("Project store not found"))?
+            .as_generic())
+    }
+
     /// Build a fully-initialised `Board` from a previously-loaded proto.
     /// Runs `node_updates` so dynamic nodes/schema migrations apply against
     /// the caller's registry — this is per-request and must not be cached
@@ -1693,6 +1769,12 @@ impl Board {
 
         board.node_updates(app_state).await;
         board.cleanup();
+        // `node_updates` hashes nodes while their schema refs are expanded; `cleanup` then
+        // compacts them again. Rehash so a loaded board carries the same node hashes as the
+        // board `execute_commands` saves (which hashes after its own cleanup) — the client keys
+        // its rendered-node cache on `node.hash`, and the sync protocol ships it, so a hash that
+        // depends on the code path and not the content invalidates both for nothing.
+        board.hash();
 
         board
     }
@@ -1721,27 +1803,28 @@ impl Board {
         Ok(Self::from_loaded_proto(proto, path, app_state).await)
     }
 
-    pub async fn save(&self, store: Option<Arc<dyn ObjectStore>>) -> flow_like_types::Result<()> {
+    /// Persist the floating draft. Returns the store's [`PutResult`] so a caller that keeps this
+    /// board in memory can pin it to the exact object identity (`e_tag`) it just wrote — that is
+    /// what lets its next read validate the cached copy instead of reloading it.
+    pub async fn save(
+        &self,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<PutResult> {
         let to = self.board_dir.child(format!("{}.board", self.id));
         let store = match store {
             Some(store) => store,
-            None => self
-                .app_state
-                .as_ref()
-                .expect("app_state should always be set")
-                .config
-                .read()
-                .await
-                .stores
-                .app_meta_store
-                .clone()
-                .ok_or(flow_like_types::anyhow!("Project store not found"))?
-                .as_generic(),
+            None => {
+                Self::meta_store(
+                    self.app_state
+                        .as_ref()
+                        .expect("app_state should always be set"),
+                )
+                .await?
+            }
         };
 
         let board = self.to_proto();
-        compress_to_file(store, to, &board).await?;
-        Ok(())
+        compress_to_file(store, to, &board).await
     }
 
     // PAGE FUNCTIONS

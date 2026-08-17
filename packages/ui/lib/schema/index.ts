@@ -54,6 +54,17 @@ export {
 	ILogLevel,
 	type ISystemTime,
 } from "./flow/board";
+export {
+	type IBoardEntryNode,
+	type IBoardFlaggedPattern,
+	type IBoardListing,
+	type IBoardSummary,
+	type IBoardSummaryMetrics,
+	type IBoardSummaryInclude,
+	type IBoardSummaryPage,
+	type IBoardVariables,
+	boardListing,
+} from "./flow/board-summary";
 export type {
 	IEvent,
 	IEventInput,

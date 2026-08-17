@@ -3777,7 +3777,7 @@ export function GlobalToolBridge() {
 						// overlapping run may have created or changed it while this request waited.
 						if (!boardId && !createNewBoard) {
 							const boards = await readCreatedAppWhenReady(
-								() => backend.boardState.getBoards(appId),
+								() => backend.boardState.getBoardSummaries(appId),
 								(candidates) => candidates.length > 0,
 							);
 							boardId = boards?.[0]?.id ?? "";
@@ -3818,7 +3818,7 @@ export function GlobalToolBridge() {
 								createId,
 							});
 							const boardAlreadyExisted = (
-								await backend.boardState.getBoards(appId)
+								await backend.boardState.getBoardSummaries(appId)
 							).some((candidate) => candidate.id === boardId);
 							await backend.boardState.upsertBoard(
 								appId,
@@ -5419,7 +5419,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 						argString(args, "idempotency_key") ||
 						argString(args, "idempotencyKey");
 					if (createMode && !boardId) {
-						const boards = await backend.boardState.getBoards(targetAppId);
+						const boards =
+							await backend.boardState.getBoardSummaries(targetAppId);
 						if (boards.length > 1) {
 							return {
 								status: "error",
@@ -5786,7 +5787,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							);
 							assertRequestActive(request, "UI catalog persistence");
 							const currentBoards =
-								await backend.boardState.getBoards(targetAppId);
+								await backend.boardState.getBoardSummaries(targetAppId);
 							if (boardId) {
 								if (!currentBoards.some((board) => board.id === boardId)) {
 									await backend.boardState.upsertBoard(
