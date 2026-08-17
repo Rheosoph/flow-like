@@ -19,9 +19,10 @@ use flow_like::copilot::{
     UnifiedCopilotResponse,
 };
 use flow_like::flow::board::Board;
+use flow_like::flow::copilot::platform::PlatformToolBridge;
 use flow_like::flow::copilot::{
-    CatalogProvider, FlowIrDraftStore, NodeMetadata, PinMetadata, enrich_node_metadata,
-    score_catalog_metadata,
+    CatalogProvider, FlowIrDraftStore, NodeMetadata, PinMetadata, PlatformSpecialist,
+    enrich_node_metadata, run_specialist_chat, score_catalog_metadata,
 };
 use flow_like::flow::node::{Node, NodeLogic};
 use flow_like::flow::pin::{Pin, PinType};
@@ -29,8 +30,11 @@ use flow_like::flow::variable::VariableType;
 use flow_like::models::llm::ModelUsageContext;
 use flow_like::profile::Profile;
 use flow_like::state::FlowLikeState;
+use flow_like_types::tokio::sync::{mpsc, oneshot};
 use serde::Deserialize;
 use std::{convert::Infallible, sync::Arc, time::Duration};
+
+use super::global_chat::{GlobalChatFrame, ServerPlatformBridge};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/chat", post(copilot_chat))
@@ -104,6 +108,16 @@ pub struct CopilotChatRequest {
     /// Action context for UI (frontend mode)
     #[serde(default)]
     pub action_context: Option<UIActionContext>,
+
+    /// Global-chat run that owns this request. A delegated Data Studio / Scout specialist rides it
+    /// so its browser tool calls reach the endpoint the client already posts results to, and a stop
+    /// of that chat run also stops the specialist.
+    #[serde(default)]
+    pub run_id: Option<String>,
+
+    /// Ontology/overlay the calling Data Studio page has selected, so the specialist defaults to it.
+    #[serde(default)]
+    pub overlay_id: Option<String>,
 
     /// Whether to stream the response
     #[serde(default)]
@@ -641,6 +655,17 @@ pub async fn copilot_chat(
 
     let token = user_access_token(&user);
 
+    // Data Studio and Scout are tool-loop specialists — the UnifiedCopilot has no copilot for them.
+    // They run the shared platform loop instead, with their tools round-tripped to the browser over
+    // this response's own SSE stream.
+    if let Some(specialist) = match payload.scope {
+        CopilotScope::DataStudio => Some(PlatformSpecialist::DataStudio),
+        CopilotScope::Scout => Some(PlatformSpecialist::Scout),
+        _ => None,
+    } {
+        return specialist_chat(state, sub, specialist, payload, token).await;
+    }
+
     let context = if payload.run_context.is_some() || payload.action_context.is_some() {
         Some(flow_like::copilot::UnifiedContext {
             scope: payload.scope,
@@ -813,10 +838,194 @@ pub async fn copilot_chat(
     Ok(<Sse<_> as axum::response::IntoResponse>::into_response(sse))
 }
 
+/// The ids the host already knows, handed to a specialist so it defaults to the app and overlay the
+/// user is looking at instead of asking for them.
+fn specialist_host_context(app_id: Option<&str>, overlay_id: Option<&str>) -> String {
+    fn trimmed(value: Option<&str>) -> Option<&str> {
+        value.map(str::trim).filter(|value| !value.is_empty())
+    }
+    let (app_id, overlay_id) = (trimmed(app_id), trimmed(overlay_id));
+    if app_id.is_none() && overlay_id.is_none() {
+        return String::new();
+    }
+    let mut lines = vec![
+        "## HOST CONTEXT".to_string(),
+        "Tool calls default to these ids when you omit them; never ask the user to repeat them."
+            .to_string(),
+    ];
+    if let Some(app_id) = app_id {
+        lines.push(format!("- app_id: {app_id}"));
+    }
+    if let Some(overlay_id) = overlay_id {
+        lines.push(format!("- overlay_id: {overlay_id}"));
+    }
+    lines.join("\n")
+}
+
+/// Run one nested specialist (`data_studio_agent` / `project_scout`) for the browser.
+///
+/// Every specialist tool executes in the browser, so this is meaningful only as a stream: the SSE
+/// response carries `tool_request` frames alongside tokens, and the client answers them through the
+/// same `/ai/global-chat/{run_id}/tool-result` endpoint the orchestrator's own tools use. The run id
+/// belongs to the owning chat turn, which is why this never mints or sweeps run rows itself — and
+/// why stopping that turn also stops the specialist.
+async fn specialist_chat(
+    state: AppState,
+    sub: String,
+    specialist: PlatformSpecialist,
+    payload: CopilotChatRequest,
+    token: Option<String>,
+) -> Result<axum::response::Response, ApiError> {
+    if !payload.stream {
+        return Err(ApiError::bad_request(
+            "The Data Studio and Scout specialists execute their tools in the browser, so they are available only on the streaming endpoint.",
+        ));
+    }
+    let run_id = payload
+        .run_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|run_id| !run_id.is_empty())
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "A delegated specialist run requires the id of the chat run that owns it.",
+            )
+        })?
+        .to_string();
+    if !super::global_chat::run_owned_by(&state.db, &run_id, &sub).await {
+        return Err(ApiError::FORBIDDEN);
+    }
+    // Same requirement as the orchestrator turn: a hosted Bit bills its model calls against the
+    // user's own session, and without that token the metered proxy 401s mid-run.
+    if token.is_none() {
+        return Err(ApiError::bad_request(
+            "FlowPilot in the browser requires an interactive (OpenID) session; API keys and tokens cannot call hosted models on your behalf.",
+        ));
+    }
+
+    let flow_like_state = master_flow_like_state(&state).await?;
+    let profile = super::global_chat::load_user_profile_opt(&state, &sub, None).await?;
+
+    let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<GlobalChatFrame>();
+    let bridge: Arc<dyn PlatformToolBridge> = Arc::new(ServerPlatformBridge::specialist(
+        state.db.clone(),
+        run_id,
+        sub,
+        frames_tx.clone(),
+        specialist,
+    ));
+    let on_token = move |chunk: String| {
+        let _ = frames_tx.send(GlobalChatFrame::Token(chunk));
+    };
+
+    let context = specialist_host_context(payload.app_id.as_deref(), payload.overlay_id.as_deref());
+    let scope = payload.scope;
+    let (done_tx, mut done_rx) = oneshot::channel::<Result<UnifiedCopilotResponse, String>>();
+    flow_like_types::tokio::spawn(async move {
+        let result = run_specialist_chat(
+            flow_like_state,
+            profile,
+            specialist,
+            context,
+            payload.user_prompt,
+            payload.model_id,
+            token,
+            bridge,
+            Some(on_token),
+        )
+        .await
+        .map(|message| UnifiedCopilotResponse {
+            message,
+            commands: Vec::new(),
+            components: Vec::new(),
+            canvas_settings: None,
+            root_component_id: None,
+            flowscript_workspace: None,
+            flow_ir_commit: None,
+            suggestions: Vec::new(),
+            active_scope: scope,
+        })
+        .map_err(|error| error.to_string());
+        let _ = done_tx.send(result);
+    });
+
+    let stream = async_stream::stream! {
+        let mut frame_stream_open = true;
+        loop {
+            flow_like_types::tokio::select! {
+                frame = frames_rx.recv(), if frame_stream_open => {
+                    match frame {
+                        Some(GlobalChatFrame::Token(token)) => {
+                            yield Ok::<Event, Infallible>(Event::default().event("token").data(token));
+                        }
+                        Some(GlobalChatFrame::ToolRequest(request)) => {
+                            yield Ok::<Event, Infallible>(Event::default().event("tool_request").data(request.to_string()));
+                        }
+                        None => {
+                            frame_stream_open = false;
+                        }
+                    }
+                }
+                result = &mut done_rx => {
+                    // Drain frames the task buffered before finishing so trailing tokens survive
+                    // the select! race.
+                    while let Ok(frame) = frames_rx.try_recv() {
+                        match frame {
+                            GlobalChatFrame::Token(token) => {
+                                yield Ok::<Event, Infallible>(Event::default().event("token").data(token));
+                            }
+                            GlobalChatFrame::ToolRequest(request) => {
+                                yield Ok::<Event, Infallible>(Event::default().event("tool_request").data(request.to_string()));
+                            }
+                        }
+                    }
+                    match result {
+                        Ok(Ok(response)) => {
+                            let json = serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());
+                            yield Ok::<Event, Infallible>(Event::default().event("final").data(json));
+                        }
+                        Ok(Err(error)) => {
+                            let json = serde_json::to_string(&serde_json::json!({ "error": error }))
+                                .unwrap_or_else(|_| "{\"error\":\"unknown\"}".to_string());
+                            yield Ok::<Event, Infallible>(Event::default().event("error").data(json));
+                        }
+                        Err(_closed) => {
+                            yield Ok::<Event, Infallible>(Event::default().event("error").data("{\"error\":\"specialist task cancelled\"}"));
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    };
+
+    let sse = Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .text("keep-alive")
+            .interval(Duration::from_secs(15)),
+    );
+    Ok(<Sse<_> as axum::response::IntoResponse>::into_response(sse))
+}
+
 #[cfg(test)]
 mod tests {
     use super::request_identity_prompt_for;
     use super::resolve_copilot_app_id;
+    use super::specialist_host_context;
+
+    #[test]
+    fn specialist_host_context_names_only_the_ids_it_was_given() {
+        let context = specialist_host_context(Some("app-1"), Some("crm"));
+        assert!(context.contains("- app_id: app-1"));
+        assert!(context.contains("- overlay_id: crm"));
+
+        let app_only = specialist_host_context(Some("app-1"), Some("  "));
+        assert!(app_only.contains("- app_id: app-1"));
+        assert!(!app_only.contains("overlay_id"));
+
+        assert!(specialist_host_context(None, None).is_empty());
+        assert!(specialist_host_context(Some(" "), None).is_empty());
+    }
 
     #[test]
     fn resolves_matching_copilot_app_contexts() {

@@ -20,7 +20,7 @@ import type {
 	IApplyFlowScriptResponse,
 	IFlowScriptDiagnostic,
 } from "../../../state/backend-state/board-state";
-import { useSuppressFabBubble } from "../../../state/fab-suppression";
+import { useSuppressFabBubble } from "../../../state/fab-bubble";
 import {
 	AlertDialog,
 	AlertDialogAction,

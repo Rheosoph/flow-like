@@ -70,10 +70,11 @@ use flow_like::flow::copilot::public_web::{
 };
 use flow_like::flow::copilot::tool_spec::{
     ARCHIVE_LOOKUP_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL,
-    OPEN_URL_TOOL, PlatformToolSpec, cross_board_source_tool_specs, data_studio_tool_specs,
-    find_global_tool_spec, global_assistant_tool_specs, interact_app_page_tool_spec,
+    OPEN_URL_TOOL, PlatformToolSpec, READ_ONLY_DATABASE_OPERATIONS, READ_WRITE_DATABASE_OPERATIONS,
+    cross_board_source_tool_specs, data_studio_database_tool_spec,
+    data_studio_specialist_tool_specs, global_assistant_tool_specs, interact_app_page_tool_spec,
     missing_required_args, public_web_tool_specs, resolve_tool_approval,
-    runtime_execution_tool_specs, scoped_call_app_chat_spec, scout_tool_specs,
+    runtime_execution_tool_specs, scoped_call_app_chat_spec, scout_specialist_tool_specs,
 };
 #[cfg(test)]
 use flow_like::flow::copilot::typed_ir_schema_hint;
@@ -1042,23 +1043,19 @@ fn web_research_session_key(user_prompt: &str, run_id: Option<&str>) -> String {
 /// setup) and cross-app discovery tools (`list_apps`/`describe_app_interface`), then adds the
 /// graph/ontology/action tools generated from the shared Data Studio specs. Public-web research is
 /// intentionally available only to the top-level FlowPilot orchestrator.
-const DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES: [&str; 2] = ["list_apps", "describe_app_interface"];
-
 pub fn create_data_studio_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandler)> {
+    // `database_tool` keeps a hand-written handler for its per-operation approval and delete
+    // confirmation; the rest of the shared specialist set converts straight from its specs.
     let mut tools = vec![create_database_tool(
         bridge.clone(),
         SpecialistDataAccess::ReadWrite,
     )];
     tools.extend(
-        data_studio_tool_specs()
+        data_studio_specialist_tool_specs()
             .iter()
+            .filter(|spec| spec.name != "database_tool")
             .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None)),
     );
-    for name in DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES {
-        if let Some(spec) = find_global_tool_spec(name) {
-            tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None, None));
-        }
-    }
     tools
 }
 
@@ -1088,16 +1085,10 @@ pub fn create_research_tools(
 /// recommends (`fork_app`, `acquire_app`, `create_app`) belong to the global orchestrator, so their
 /// approval prompts surface at the top level. Public-web research is orchestrator-only too.
 pub fn create_scout_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandler)> {
-    let mut tools: Vec<(Tool, ToolHandler)> = scout_tool_specs()
+    scout_specialist_tool_specs()
         .iter()
         .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None))
-        .collect();
-    for name in DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES {
-        if let Some(spec) = find_global_tool_spec(name) {
-            tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None, None));
-        }
-    }
-    tools
+        .collect()
 }
 
 fn frontend_tool_result(
@@ -1245,47 +1236,6 @@ enum SpecialistDataAccess {
     ReadWrite,
 }
 
-const READ_ONLY_DATABASE_OPERATIONS: &[&str] = &["list_tables", "describe_table", "query"];
-const READ_WRITE_DATABASE_OPERATIONS: &[&str] = &[
-    "list_tables",
-    "create_table",
-    "describe_table",
-    "query",
-    "insert",
-    "add_items",
-    "delete",
-    "remove_items",
-    "update",
-    "build_index",
-    "drop_index",
-    "optimize",
-    "add_column",
-    "drop_columns",
-    "alter_column",
-    "delete_table",
-];
-const CREATE_TABLE_FIELD_TYPES: &[&str] = &[
-    "string",
-    "boolean",
-    "int8",
-    "int16",
-    "int32",
-    "int64",
-    "uint8",
-    "uint16",
-    "uint32",
-    "uint64",
-    "float32",
-    "float64",
-    "binary",
-    "date32",
-    "timestamp:ms:UTC",
-    "vector",
-    // Accepted for existing/replayed tool calls. New FlowPilot calls use the canonical type above.
-    "timestamp",
-    "datetime",
-    "timestamp_ms",
-];
 const READ_ONLY_STORAGE_OPERATIONS: &[&str] = &["list_files", "read_file"];
 const READ_WRITE_STORAGE_OPERATIONS: &[&str] =
     &["list_files", "read_file", "create_file", "delete_files"];
@@ -1434,124 +1384,22 @@ fn flowscript_summary(flowscript: &str) -> Value {
     })
 }
 
-fn database_tool_schema(operations: &[&str]) -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "operation": {
-                "type": "string",
-                "enum": operations
-            },
-            "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
-            "table_name": { "type": "string", "description": "Table name for table operations." },
-            "user_scoped": { "type": "boolean", "description": "Use user-scoped storage/database tables." },
-            "include_sample": { "type": "boolean", "description": "For describe_table, include sample rows. Defaults to true. Use false for bounded schema-only discovery." },
-            "fields": {
-                "type": "array",
-                "description": "Explicit fields for create_table. Supported types: string, boolean, int8/int16/int32/int64, uint8/uint16/uint32/uint64, float32/float64, binary, date32 (calendar-only), timestamp:ms:UTC (FlowLike Date/date-time instant), vector. Legacy timestamp/datetime/timestamp_ms spellings remain accepted for replay compatibility but MUST NOT be used in new calls. Vector fields require vector_size.",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                        "name": { "type": "string" },
-                        "type": {
-                            "type": "string",
-                            "enum": CREATE_TABLE_FIELD_TYPES,
-                            "description": "Use timestamp:ms:UTC for a FlowLike Date or any real date-time instant. Legacy timestamp/datetime/timestamp_ms spellings are accepted only for replay compatibility. Use date32 only for a calendar-only value without a time or timezone."
-                        },
-                        "nullable": { "type": "boolean", "description": "Defaults to true." },
-                        "vector_size": { "type": "integer", "minimum": 1 }
-                    },
-                    "required": ["name", "type"]
-                }
-            },
-            "if_not_exists": { "type": "boolean", "description": "For create_table, succeed if the table already exists. Defaults to true." },
-            "confirm_table_name": { "type": "string", "description": "Required for delete_table: repeat table_name exactly. A mismatch rejects the call and deletes nothing." },
-            "query": { "type": "object", "description": "Query payload: {sql, filter, fts_term, vector_query, rerank}." },
-            "offset": { "type": "integer" },
-            "limit": { "type": "integer" },
-            "items": { "type": "array", "items": { "type": "object" } },
-            "filter": { "type": "string", "description": "Delete/update filter expression." },
-            "updates": { "type": "object" },
-            "column": { "type": "string" },
-            "columns": { "type": "array", "items": { "type": "string" } },
-            "index_type": {
-                "type": "string",
-                "enum": ["FullText", "BTree", "Bitmap", "LabelList", "Auto", "full_text", "btree", "bitmap", "label_list", "auto"]
-            },
-            "index_name": { "type": "string" },
-            "optimize": { "type": "boolean" },
-            "keep_versions": { "type": "boolean" },
-            "nullable": { "type": "boolean" },
-            "column_definition": { "type": "object", "description": "For add_column: {name, sql_expression}." }
-        },
-        "required": ["operation"]
-    })
-}
-
 fn create_database_tool(
     bridge: FrontendToolBridge,
     access: SpecialistDataAccess,
 ) -> (Tool, ToolHandler) {
-    let shared_read_only_spec =
-        flow_like::flow::copilot::tool_spec::find_workflow_context_tool_spec("database_tool")
-            .expect("shared database context spec must exist");
-    let (description, operations) = match access {
-        SpecialistDataAccess::ReadOnly => (
-            shared_read_only_spec.description,
-            READ_ONLY_DATABASE_OPERATIONS,
-        ),
-        SpecialistDataAccess::ReadWrite => (
-            r#"Inspect or modify the app's built-in LanceDB/Open Database tables through the frontend backend state.
-
-Use this to understand existing local/user databases before generating DataFusion, Lance, vector,
-full-text, or hybrid search workflows.
-
-Read operations do not ask for approval. Mutating operations show an approval dialog with a
-"don't ask again this session" option.
-
-Operations:
-- list_tables: return project and user-scoped tables.
-- create_table: create an empty table from explicit fields [{name,type,nullable?,vector_size?}].
-  Physical names allow letters, numbers, `_`, `-`, and `.`. Human-facing labels with spaces or
-  punctuation are normalized to stable snake_case identifiers (for example `Library Files` becomes
-  `library_files`); the result returns both `requested_table_name` and the authoritative
-  `table_name`. Continue with the returned `table_name` instead of probing for a separate alias.
-  For a real instant/date-time field, use the exact type `timestamp:ms:UTC`; it is the native
-  Lance/Arrow counterpart of a FlowLike `Date` and its RFC3339 UTC value. `date32` is only for
-  standalone calendar data that is intentionally not exchanged as a board `Date`. Existing table
-  schemas are not implicitly migrated.
-  `if_not_exists` defaults to true; no seed row is inserted. A `partial` result with
-  `explicit_schema_create_not_deployed` means the remote API is older than this client: retain the
-  schema request and continue the workflow build instead of switching to a smoke test.
-  Any failure of a setup operation here (create_table, build_index, optimize) is best effort, never
-  a blocker: report the pending setup and keep building. The workflow creates the table on its first
-  write — for embedding tables that write derives the true vector width, which create_table can only
-  guess — and builds its own indices with the Build Index node after that write.
-- describe_table: schema, indices, and row count. Set `include_sample: false` for bounded schema
-  discovery that an immutable FlowPilot manifest can satisfy; omitted/true also reads sample rows.
-- query: SQL/filter/vector/FTS query via the existing database query API.
-- insert/add_items, delete/remove_items, update.
-- build_index, drop_index, optimize, add_column, drop_columns, alter_column.
-- delete_table: PERMANENTLY drop a whole table — every row AND the table schema are destroyed.
-  This is IRREVERSIBLE: there is no undo, no restore, and no version history to roll back to.
-  Requires `confirm_table_name` to repeat `table_name` exactly; a mismatch rejects the call.
-  Never drop a table to "reset", "clear", "truncate", "re-seed", or "fix" it — use
-  `delete`/`remove_items` with a filter to remove rows while keeping the schema, indices and every
-  ontology/workflow reference intact. Only drop a table the user explicitly asked to delete, and ask
-  first. The result reports the cascade: `ontologies_pruned` (graph overlays whose node/edge
-  mappings referenced the table and were pruned), `saved_queries_referencing` (stored queries whose
-  SQL still names the table — they are NOT deleted and will fail until edited), and `warnings`.
-  Always relay that cascade to the user."#,
-            READ_WRITE_DATABASE_OPERATIONS,
-        ),
+    // Both variants come from core so every backend advertises the identical database surface:
+    // the board/UI specialists get the read-only context tool, Data Studio the write-capable one.
+    let spec = match access {
+        SpecialistDataAccess::ReadOnly => {
+            flow_like::flow::copilot::tool_spec::find_workflow_context_tool_spec("database_tool")
+                .expect("shared database context spec must exist")
+        }
+        SpecialistDataAccess::ReadWrite => data_studio_database_tool_spec(),
     };
-    let schema = database_tool_schema(operations);
-    let schema = if access == SpecialistDataAccess::ReadOnly {
-        (shared_read_only_spec.schema)()
-    } else {
-        schema
-    };
+    let description = spec.description;
+    let schema = (spec.schema)();
+
     let tool = Tool::new("database_tool")
         .description(description)
         .schema(schema);
@@ -3311,8 +3159,9 @@ STYLING TRUTH:
 - Typed style fields (background gradients, border, shadow, exact sizes, transform, filter, backdropFilter, animation, typography, responsiveOverrides) always render — use them for custom values.
 - canvasSettings.customCss (scoped to the surface) covers keyframes, hover/focus, pseudo-elements:
 {"canvasSettings": {"backgroundColor": "bg-background", "customCss": ".animated { animation: fade 1s; } @keyframes fade { from{opacity:0} to{opacity:1} }"}}
-- customCss has no size limit — write a real design system when the page deserves one. It REPLACES
-  the previous stylesheet, so send it complete; omit the field entirely to keep the existing one.
+- customCss is capped at 40,000 characters — room for a real design system, so write one when the
+  page deserves it; a sheet past the limit is rejected whole, never truncated. It REPLACES the
+  previous stylesheet, so send it complete; omit the field entirely to keep the existing one.
 
 EXAMPLE - Simple card:
 {
@@ -4145,6 +3994,10 @@ const BASE_PROPS: &[&str] = &[
 const MAX_UI_COMPONENTS: usize = 120;
 const MAX_UI_COMPONENT_ID_CHARS: usize = 120;
 const MAX_UI_STYLE_STRING_CHARS: usize = 1_000;
+/// Ceiling on a surface stylesheet, mirrored by `MAX_CUSTOM_CSS_CHARS` in
+/// `validateComponents.ts`. A design system for a multi-page app legitimately runs to tens of
+/// kilobytes, so this only catches runaway output.
+const MAX_UI_CUSTOM_CSS_CHARS: usize = 40_000;
 const MAX_UI_ACTIONS: usize = 20;
 /// The action names `ActionHandler.tsx` dispatches. Anything else falls through its `default`
 /// branch into a no-op `userAction`, so the control renders but never runs — keep in sync with
@@ -4751,9 +4604,16 @@ fn validate_canvas_settings(canvas: &Value, errors: &mut Vec<String>) {
         }
         return;
     }
-    // customCss is deliberately unbounded: a design system for a multi-page app legitimately runs
-    // to tens of kilobytes, and CSS cannot be truncated at an arbitrary boundary without
-    // invalidating the stylesheet (see `validateCanvasSettings` in validateComponents.ts).
+    // Rejected whole rather than truncated: CSS cannot be cut at an arbitrary boundary without
+    // invalidating the stylesheet, so the model has to re-send a smaller complete sheet.
+    if let Some(custom_css) = canvas.get("customCss").and_then(|value| value.as_str()) {
+        let chars = custom_css.chars().count();
+        if chars > MAX_UI_CUSTOM_CSS_CHARS {
+            errors.push(format!(
+                "canvasSettings.customCss is {chars} characters; the maximum is {MAX_UI_CUSTOM_CSS_CHARS}. Consolidate the rules and send a complete stylesheet under that limit — it cannot be truncated for you."
+            ));
+        }
+    }
     if let Some(background_image) = canvas
         .get("backgroundImage")
         .and_then(|value| value.as_str())
@@ -4942,8 +4802,17 @@ mod tests {
 
     #[test]
     fn specialist_direct_surfaces_exclude_global_public_web_research() {
-        for global_only_tool in [INTERNET_SEARCH_TOOL, OPEN_URL_TOOL, ARCHIVE_LOOKUP_TOOL] {
-            assert!(!DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES.contains(&global_only_tool));
+        for specs in [
+            data_studio_specialist_tool_specs(),
+            scout_specialist_tool_specs(),
+        ] {
+            let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
+            for global_only_tool in [INTERNET_SEARCH_TOOL, OPEN_URL_TOOL, ARCHIVE_LOOKUP_TOOL] {
+                assert!(!names.contains(&global_only_tool));
+            }
+            // Both nested specialists still identify their target app themselves.
+            assert!(names.contains(&"list_apps"));
+            assert!(names.contains(&"describe_app_interface"));
         }
 
         let mut direct_specialist_tools =
@@ -4954,8 +4823,6 @@ mod tests {
             assert_ne!(tool.name, OPEN_URL_TOOL);
             assert_ne!(tool.name, ARCHIVE_LOOKUP_TOOL);
         }
-        assert!(DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES.contains(&"list_apps"));
-        assert!(DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES.contains(&"describe_app_interface"));
     }
 
     #[test]
@@ -5079,7 +4946,7 @@ mod tests {
             "database:insert"
         );
 
-        let schema = database_tool_schema(READ_WRITE_DATABASE_OPERATIONS);
+        let schema = (data_studio_database_tool_spec().schema)();
         assert!(
             schema
                 .pointer("/properties/confirm_table_name")
@@ -5098,7 +4965,7 @@ mod tests {
 
     #[test]
     fn database_tool_schema_prefers_utc_timestamps_without_rejecting_legacy_calls() {
-        let schema = database_tool_schema(READ_WRITE_DATABASE_OPERATIONS);
+        let schema = (data_studio_database_tool_spec().schema)();
         let field_types = schema
             .pointer("/properties/fields/items/properties/type/enum")
             .and_then(Value::as_array)
@@ -6444,6 +6311,37 @@ mod tests {
                 .iter()
                 .any(|error| error.contains("workflow_event") && error.contains("widget_event")),
             "the rejection must teach the correct contract: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn emit_ui_takes_a_full_design_system_but_rejects_a_runaway_stylesheet() {
+        let components = json!([{
+            "id": "root",
+            "component": { "type": "text", "content": { "literalString": "hi" } }
+        }]);
+
+        let design_system = ".card{color:red}".repeat(1_000);
+        assert!(design_system.chars().count() < MAX_UI_CUSTOM_CSS_CHARS);
+        let (_, errors) = validate_ui_components(
+            "root",
+            &json!({ "customCss": design_system }),
+            &components,
+        );
+        assert!(
+            errors.is_empty(),
+            "a full design system must stay under the limit: {errors:?}"
+        );
+
+        let runaway = ".card{color:red}".repeat(MAX_UI_CUSTOM_CSS_CHARS);
+        let (_, errors) =
+            validate_ui_components("root", &json!({ "customCss": runaway }), &components);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("canvasSettings.customCss")
+                    && error.contains(&MAX_UI_CUSTOM_CSS_CHARS.to_string())),
+            "the rejection must name the field and the limit: {errors:?}"
         );
     }
 

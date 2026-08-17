@@ -24,15 +24,17 @@ use flow_like::flow::copilot::{
     EmitCommandsArgs, FlowScriptCandidateRegression, FlowScriptPendingDelivery,
     FlowScriptRepairTracker, GlobalDataStudioContext, GlobalOpenBoardContext, GraphContext,
     ManifestAudit, ManifestAugmentations, ManifestSource, ManifestSourceStatus, NodeMetadata,
-    PinMetadata, PlanBoardScopeArgs, PlatformContextInput, RunContext, ScopePlanRejection,
-    ScopeStrategy, WorkflowArtifactKind, WorkflowSession, WorkflowSessionPolicy,
-    WorkflowSessionSnapshot, accept_scope_plan, board_fingerprint, build_platform_context,
-    default_flowscript_module_templates, emit_validation_requires_flowscript, enrich_node_metadata,
-    flowscript_workspace_envelope, global_assistant_system_prompt, profile_flowscript_candidate,
-    render_flowscript_modular_partial_result, run_platform_chat, score_catalog_metadata,
-    validate_model_facing_emit_commands_scope, workflow_authoring_defers_runtime_tool,
-    workflow_authoring_tool_allowed, workflow_runtime_verification_deferred_payload,
-    workflow_strategy_fingerprint, workflow_tool_result_succeeded,
+    PinMetadata, PlanBoardScopeArgs, PlatformContextInput, PlatformSpecialist, RunContext,
+    ScopePlanRejection, ScopeStrategy, WorkflowArtifactKind, WorkflowSession,
+    WorkflowSessionPolicy, WorkflowSessionSnapshot, accept_scope_plan, board_fingerprint,
+    build_platform_context, default_flowscript_module_templates,
+    emit_validation_requires_flowscript, enrich_node_metadata, flowscript_workspace_envelope,
+    global_assistant_system_prompt, profile_flowscript_candidate,
+    render_flowscript_modular_partial_result, run_platform_chat, run_specialist_chat,
+    score_catalog_metadata, validate_model_facing_emit_commands_scope,
+    workflow_authoring_defers_runtime_tool, workflow_authoring_tool_allowed,
+    workflow_runtime_verification_deferred_payload, workflow_strategy_fingerprint,
+    workflow_tool_result_succeeded,
 };
 use flow_like::flow::node::Node;
 use flow_like::flow::pin::{Pin, PinType};
@@ -3081,6 +3083,145 @@ async fn copilot_profile(app_handle: &AppHandle) -> Option<Arc<flow_like::profil
     Some(Arc::new(profile.hub_profile))
 }
 
+/// The ids the host already knows, handed to a specialist so it defaults to the app/overlay the
+/// user is actually looking at instead of asking for them or guessing.
+fn specialist_host_context(
+    tool_context: Option<&FrontendToolContext>,
+    host_context_guidance: Option<&str>,
+) -> String {
+    let context_id = |value: Option<&String>| {
+        value
+            .map(|id| id.trim())
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+    };
+    let app_id = context_id(tool_context.and_then(|context| context.app_id.as_ref()));
+    let overlay_id = context_id(tool_context.and_then(|context| context.overlay_id.as_ref()));
+
+    let mut sections: Vec<String> = Vec::new();
+    if app_id.is_some() || overlay_id.is_some() {
+        let mut lines = vec![
+            "## HOST CONTEXT".to_string(),
+            "Tool calls default to these ids when you omit them; never ask the user to repeat them."
+                .to_string(),
+        ];
+        if let Some(app_id) = app_id {
+            lines.push(format!("- app_id: {app_id}"));
+        }
+        if let Some(overlay_id) = overlay_id {
+            lines.push(format!("- overlay_id: {overlay_id}"));
+        }
+        sections.push(lines.join("\n"));
+    }
+    if let Some(guidance) = host_context_guidance
+        .map(str::trim)
+        .filter(|g| !g.is_empty())
+    {
+        sections.push(guidance.to_string());
+    }
+    sections.join("\n\n")
+}
+
+/// Run one nested specialist scope on the Bits/rig backend.
+///
+/// The board and UI specialists are served by the `UnifiedCopilot`; Data Studio and Scout have no
+/// such copilot, so they run the shared platform tool loop with their own prompt and tool set,
+/// dispatching through the same frontend bridge every other backend uses.
+#[allow(clippy::too_many_arguments)]
+async fn run_bits_specialist_chat(
+    app_handle: AppHandle,
+    state: Arc<flow_like::state::FlowLikeState>,
+    scope: CopilotScope,
+    specialist: PlatformSpecialist,
+    user_prompt: String,
+    model_id: Option<String>,
+    auth_token: Option<String>,
+    tool_context: Option<FrontendToolContext>,
+    host_context_guidance: Option<String>,
+    nested: bool,
+    request_id: Option<String>,
+    channel: Channel<String>,
+) -> Result<UnifiedCopilotResponse, String> {
+    let profile = copilot_profile(&app_handle).await;
+    let stream_parent_request_id = scoped_parent_request_id(tool_context.as_ref());
+    let (run_cancellation, _run_registration) = register_copilot_run(
+        request_id
+            .as_deref()
+            .or(stream_parent_request_id.as_deref()),
+    );
+    // Nested specialist runs take the same per-target gate as the board/widget specialists, so two
+    // delegations against one app's data serialize while different apps proceed concurrently.
+    let _nested_run_permit = if nested {
+        Some(
+            acquire_nested_copilot_run_permit(
+                nested_copilot_run_gate(&nested_copilot_run_gate_key(
+                    scope,
+                    None,
+                    tool_context.as_ref(),
+                )),
+                run_cancellation.clone(),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    let context = specialist_host_context(tool_context.as_ref(), host_context_guidance.as_deref());
+    let frontend_bridge = if nested {
+        super::frontend_tool_bridge::FrontendToolBridge::new_with_event(
+            app_handle.clone(),
+            super::frontend_tool_bridge::GLOBAL_FRONTEND_TOOL_EVENT,
+        )
+    } else {
+        super::frontend_tool_bridge::FrontendToolBridge::new(app_handle.clone())
+    }
+    .with_context(tool_context);
+    let bridge: Arc<dyn PlatformToolBridge> = Arc::new(DesktopPlatformBridge {
+        bridge: frontend_bridge,
+        tool_set: match specialist {
+            PlatformSpecialist::DataStudio => FrontendPlatformToolSet::DataStudio,
+            PlatformSpecialist::Scout => FrontendPlatformToolSet::Scout,
+        },
+        cancellation: run_cancellation.clone(),
+        // A delegated specialist is not steerable; the user steers the orchestrator that called it.
+        run_id: None,
+    });
+
+    let on_token = move |token: String| {
+        let _ = channel.send(token);
+    };
+    let specialist_chat = run_specialist_chat(
+        state,
+        profile,
+        specialist,
+        context,
+        user_prompt,
+        model_id,
+        auth_token,
+        bridge,
+        Some(on_token),
+    );
+    let message = tokio::select! {
+        result = specialist_chat => result.map_err(|error| error.to_string())?,
+        _ = run_cancellation.cancelled() => {
+            return Err("FlowPilot Bits run was cancelled".to_string());
+        }
+    };
+
+    Ok(UnifiedCopilotResponse {
+        message,
+        commands: Vec::new(),
+        components: Vec::new(),
+        canvas_settings: None,
+        root_component_id: None,
+        flowscript_workspace: None,
+        flow_ir_commit: None,
+        suggestions: Vec::new(),
+        active_scope: scope,
+    })
+}
+
 /// Unified copilot chat command that handles both board and UI generation
 #[tauri::command]
 pub async fn copilot_chat(
@@ -3279,30 +3420,45 @@ pub async fn copilot_chat(
         };
     }
 
-    // The Bits/rig backend drives the specialized board/UI copilots, which have no data-layer
-    // toolset. The Data Studio agent needs a tool-calling agent backend (Claude Code / Codex /
-    // GitHub Copilot). Return a clear message rather than falling through to the board copilot.
+    // Data Studio and Scout are tool-loop specialists: the board/UI copilots cannot author their
+    // artifacts, so on the Bits backend they run the shared platform loop with their own prompt and
+    // tool set. Their availability is a property of the host, never of the selected model — every
+    // FlowPilot backend advertises the same specialist tools.
     if let Some(specialist) = match scope {
-        CopilotScope::DataStudio => Some("Data Studio agent"),
-        // Both fall through to the UnifiedCopilot otherwise, which rejects them with an
-        // internal-sounding error. On this backend the orchestrator still researches the
-        // web through its own inline loop, so only the delegated form is unavailable.
-        CopilotScope::Scout => Some("project scout"),
-        CopilotScope::Research => Some("research agent"),
+        CopilotScope::DataStudio => Some(PlatformSpecialist::DataStudio),
+        CopilotScope::Scout => Some(PlatformSpecialist::Scout),
         _ => None,
     } {
-        let message = format!(
-            "The {specialist} needs a tool-capable model (Claude Code, Codex, or GitHub Copilot). Select one of those FlowPilot models, then ask again."
-        );
+        return run_bits_specialist_chat(
+            app_handle,
+            state.0.clone(),
+            scope,
+            specialist,
+            user_prompt,
+            model_selection.model_id,
+            token,
+            tool_context,
+            host_context_guidance,
+            nested,
+            request_id,
+            channel,
+        )
+        .await;
+    }
+
+    // The Bits orchestrator runs the sealed researcher in-process (`research_agent` never leaves
+    // the loop), so a delegated Research scope only arrives here from a backend mismatch.
+    if matches!(scope, CopilotScope::Research) {
+        let message = "The delegated research agent runs inside the orchestrator's own loop on this backend; call `research_agent` from the top-level assistant instead of delegating a Research scope.".to_string();
         // A nested run is a delegated specialist call from the frontend tool bridge, which reports
         // a resolved promise as `status: "ok"`. Returning Ok here would hand the orchestrator a
         // capability notice shaped exactly like specialist findings, which it then relays — or
         // rationalizes — as if the work had been done. Fail the call so the bridge reports an error,
-        // and say the failure is permanent: the model is otherwise told (by the prior-art and data
-        // rules) that this delegation is mandatory, and would spend its remaining rounds retrying.
+        // and say the failure is permanent so the model does not spend its remaining rounds
+        // retrying a delegation this host will never serve.
         if nested {
             return Err(format!(
-                "{message} This is a permanent limitation of the selected model, not a transient failure — do not retry this tool in this run; continue without it and tell the user."
+                "{message} This is a permanent property of the selected backend, not a transient failure — do not retry this tool in this run."
             ));
         }
         let _ = channel.send(message.clone());
@@ -4197,6 +4353,8 @@ pub async fn global_chat_delete_memory(
 enum FrontendPlatformToolSet {
     Global,
     BoardRuntime,
+    DataStudio,
+    Scout,
 }
 
 fn frontend_platform_tool_spec(
@@ -4204,8 +4362,8 @@ fn frontend_platform_tool_spec(
     tool_name: &str,
 ) -> Option<flow_like::flow::copilot::tool_spec::PlatformToolSpec> {
     use flow_like::flow::copilot::tool_spec::{
-        find_cross_board_source_tool_spec, find_global_tool_spec, find_runtime_execution_tool_spec,
-        find_workflow_context_tool_spec,
+        find_cross_board_source_tool_spec, find_data_studio_tool_spec, find_global_tool_spec,
+        find_runtime_execution_tool_spec, find_scout_tool_spec, find_workflow_context_tool_spec,
     };
 
     match tool_set {
@@ -4213,6 +4371,10 @@ fn frontend_platform_tool_spec(
         FrontendPlatformToolSet::BoardRuntime => find_runtime_execution_tool_spec(tool_name)
             .or_else(|| find_workflow_context_tool_spec(tool_name))
             .or_else(|| find_cross_board_source_tool_spec(tool_name)),
+        // The specialist sets are exactly what their loop advertises, so a tool outside them has no
+        // spec here and is rejected as unadvertised rather than silently dispatched.
+        FrontendPlatformToolSet::DataStudio => find_data_studio_tool_spec(tool_name),
+        FrontendPlatformToolSet::Scout => find_scout_tool_spec(tool_name),
     }
 }
 
@@ -7292,9 +7454,26 @@ fn summarize_tool_arguments(tool_name: &str, arguments: Option<&serde_json::Valu
             .map(|event_id| format!("event: {event_id}"))
             .unwrap_or_else(|| "Executing event".to_string()),
         "ask_user" => arguments
-            .get("question")
-            .and_then(|value| value.as_str())
-            .map(|question| truncate_for_preview(question, 180))
+            .get("questions")
+            .and_then(|value| value.as_array())
+            .filter(|questions| !questions.is_empty())
+            .map(|questions| {
+                let first = questions
+                    .first()
+                    .and_then(|question| question.get("question"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("Requesting user input");
+                match questions.len() {
+                    1 => truncate_for_preview(first, 180),
+                    count => format!("{} (+{} more)", truncate_for_preview(first, 140), count - 1),
+                }
+            })
+            .or_else(|| {
+                arguments
+                    .get("question")
+                    .and_then(|value| value.as_str())
+                    .map(|question| truncate_for_preview(question, 180))
+            })
             .unwrap_or_else(|| "Requesting user input".to_string()),
         "edit_flowscript" | "write_flowscript" => arguments
             .get("source")
@@ -25536,6 +25715,77 @@ eventsSimple() {
         assert_eq!(
             board.prompt_source, "flow_like::copilot::prompts",
             "all agent backends must use the shared prompt module"
+        );
+    }
+
+    #[test]
+    fn bits_specialists_advertise_exactly_the_agent_backend_tool_policy() {
+        use flow_like::flow::copilot::tool_spec::{
+            data_studio_specialist_tool_specs, scout_specialist_tool_specs,
+        };
+
+        // The Bits loop advertises these specs directly, while the agent-CLI backends filter their
+        // SDK tools through `specialist_tool_policy`. A model must not gain or lose authority by
+        // switching backends, so the two lists are one contract.
+        for (scope, specs) in [
+            (
+                CopilotScope::DataStudio,
+                data_studio_specialist_tool_specs(),
+            ),
+            (CopilotScope::Scout, scout_specialist_tool_specs()),
+        ] {
+            let advertised = specs
+                .iter()
+                .map(|spec| spec.name)
+                .collect::<HashSet<&'static str>>();
+            assert_eq!(
+                advertised,
+                specialist_tool_policy(scope, false, false),
+                "the Bits and agent-CLI tool sets for {scope:?} have drifted"
+            );
+            // Every advertised tool must also resolve a spec through the bridge, or its approval
+            // policy and timeout would silently fall back to the unspecced defaults.
+            for name in advertised {
+                let tool_set = match scope {
+                    CopilotScope::DataStudio => FrontendPlatformToolSet::DataStudio,
+                    _ => FrontendPlatformToolSet::Scout,
+                };
+                assert!(
+                    frontend_platform_tool_spec(tool_set, name).is_some(),
+                    "{scope:?} bridge cannot resolve the spec for {name}"
+                );
+                assert!(
+                    global_orchestrator_tool_scope_error(tool_set, name).is_none(),
+                    "{scope:?} must be allowed to call its own tool {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn specialist_host_context_names_the_ids_the_host_already_knows() {
+        let context = specialist_host_context(
+            Some(&FrontendToolContext {
+                app_id: Some("app-1".to_string()),
+                overlay_id: Some("crm".to_string()),
+                ..Default::default()
+            }),
+            Some("## HOST RUN CONTEXT\nrun-1"),
+        );
+        assert!(context.contains("- app_id: app-1"));
+        assert!(context.contains("- overlay_id: crm"));
+        assert!(context.contains("## HOST RUN CONTEXT"));
+
+        assert!(specialist_host_context(None, None).is_empty());
+        assert!(
+            specialist_host_context(
+                Some(&FrontendToolContext {
+                    app_id: Some("   ".to_string()),
+                    ..Default::default()
+                }),
+                None,
+            )
+            .is_empty()
         );
     }
 

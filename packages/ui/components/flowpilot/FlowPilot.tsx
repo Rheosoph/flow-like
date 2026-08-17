@@ -29,6 +29,14 @@ import { useCopilotSDK, useInvoke } from "../../hooks";
 import { copilotBackendConnectionCoordinator } from "../../hooks/copilot-backend-coordinator";
 import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime-tool-executor";
 import { IBitTypes, filterHostableLlmModels, isFreeLlmModel } from "../../lib";
+import {
+	type AskUserAnswerPayload,
+	type AskUserDraft,
+	type AskUserForm,
+	askUserAnswerPayload,
+	initialAskUserDrafts,
+	parseAskUserArguments,
+} from "../../lib/ask-user";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import { flowPilotCommandApplyDiagnostics } from "../../lib/flowpilot-command-apply";
 import {
@@ -54,6 +62,7 @@ import {
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import { toolEndPlanStepStatus } from "../../state/global-chat/copilot-stream-steps";
+import { AskUserQuestions } from "../global-chat/ask-user-questions";
 
 import {
 	ChatAiDisclosure,
@@ -82,7 +91,6 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { ScrollArea } from "../ui/scroll-area";
-import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ContextNodes } from "./ContextNodes";
 import { HistoryPanel } from "./HistoryPanel";
@@ -392,12 +400,6 @@ interface FrontendToolResponse {
 	error?: string;
 }
 
-interface FrontendToolChoice {
-	label: string;
-	value?: unknown;
-	description?: string;
-}
-
 type FrontendToolDialogState =
 	| {
 			type: "approval";
@@ -407,9 +409,8 @@ type FrontendToolDialogState =
 	| {
 			type: "ask";
 			request: FrontendToolRequest;
-			mode: "freeform" | "single_choice" | "multiple_choice";
-			answer: string;
-			selected: Set<number>;
+			form: AskUserForm;
+			drafts: AskUserDraft[];
 	  };
 
 interface FrontendToolQueuedDialog {
@@ -1188,42 +1189,14 @@ function FlowPilotImpl({
 
 	const requestFrontendUserInput = useCallback(
 		(request: FrontendToolRequest): Promise<unknown> => {
-			const args = request.arguments;
-			const mode =
-				getArgString(args, "mode") === "multiple_choice"
-					? "multiple_choice"
-					: getArgString(args, "mode") === "single_choice"
-						? "single_choice"
-						: "freeform";
-			const choices = Array.isArray(args.choices)
-				? (args.choices as FrontendToolChoice[])
-				: [];
-			const defaultValue = args.default_value ?? args.defaultValue;
-			const selected = new Set<number>();
-
-			if (mode !== "freeform" && choices.length > 0) {
-				const defaultIndex = choices.findIndex(
-					(choice) =>
-						choice.value === defaultValue ||
-						choice.label === defaultValue ||
-						(defaultValue === undefined && selected.size === 0),
-				);
-				selected.add(defaultIndex >= 0 ? defaultIndex : 0);
-			}
-
+			const form = parseAskUserArguments(request.arguments);
 			return new Promise((resolve) => {
 				openFrontendToolDialog(
 					{
 						type: "ask",
 						request,
-						mode,
-						answer:
-							typeof defaultValue === "string"
-								? defaultValue
-								: defaultValue === undefined
-									? ""
-									: JSON.stringify(defaultValue),
-						selected,
+						form,
+						drafts: initialAskUserDrafts(form),
 					},
 					resolve,
 				);
@@ -1278,12 +1251,15 @@ function FlowPilotImpl({
 			try {
 				lease.assertActive("approval handling");
 				if (request.toolName === "ask_user") {
-					const answer = await requestFrontendUserInput(request);
+					const payload = (await requestFrontendUserInput(
+						request,
+					)) as AskUserAnswerPayload;
 					lease.assertActive("question response");
+					// `{ answer }` for a lone question, `{ answers: { [id]: value } }` for a form.
 					return {
 						requestId: request.requestId,
 						approved: true,
-						result: { status: "ok", answer },
+						result: { status: "ok", ...payload },
 					};
 				}
 
@@ -3022,7 +2998,13 @@ function FlowPilotImpl({
 					if (canvasSettingsMatch) {
 						try {
 							const settings = JSON.parse(canvasSettingsMatch[1]);
-							setPendingCanvasSettings(validateCanvasSettings(settings));
+							const canvasWarnings: string[] = [];
+							setPendingCanvasSettings(
+								validateCanvasSettings(settings, canvasWarnings),
+							);
+							if (canvasWarnings.length > 0) {
+								setValidationWarnings((prev) => [...prev, ...canvasWarnings]);
+							}
 						} catch {
 							// Invalid JSON in canvas settings
 						}
@@ -3384,11 +3366,16 @@ function FlowPilotImpl({
 					);
 				}
 
+				const canvasWarnings: string[] = [];
 				const validatedCanvasSettings = validateCanvasSettings(
 					response.canvas_settings,
+					canvasWarnings,
 				);
 				if (validatedCanvasSettings) {
 					setPendingCanvasSettings(validatedCanvasSettings);
+				}
+				if (canvasWarnings.length > 0) {
+					setValidationWarnings((prev) => [...prev, ...canvasWarnings]);
 				}
 
 				// Handle generated components — validate before showing
@@ -4212,10 +4199,14 @@ const FrontendToolRequestDialog = memo(function FrontendToolRequestDialog({
 	if (!dialog) return null;
 
 	const args = dialog.request.arguments;
-	const choices = Array.isArray(args.choices)
-		? (args.choices as FrontendToolChoice[])
-		: [];
+	// A lone question titles the dialog; a batched intake form labels its own questions, so the
+	// title stays generic and the card body carries the detail.
+	const single =
+		dialog.type === "ask" && dialog.form.questions.length === 1
+			? dialog.form.questions[0]
+			: undefined;
 	const question =
+		single?.question ??
 		getArgString(args, "question") ??
 		dialog.request.approval?.title ??
 		"FlowPilot request";
@@ -4224,32 +4215,12 @@ const FrontendToolRequestDialog = memo(function FrontendToolRequestDialog({
 			? (dialog.request.approval?.description ??
 				"Approve this FlowPilot action?")
 			: getArgString(args, "description") ||
-				getArgString(args, "placeholder") ||
+				single?.placeholder ||
 				"Provide the value FlowPilot needs to continue.";
 
 	const resolveAsk = () => {
 		if (dialog.type !== "ask") return;
-		if (dialog.mode === "freeform") {
-			onResolve(dialog.answer);
-			return;
-		}
-		const selectedChoices = Array.from(dialog.selected)
-			.sort((a, b) => a - b)
-			.map((index) => choices[index])
-			.filter(Boolean)
-			.map((choice) => choice.value ?? choice.label);
-		onResolve(
-			dialog.mode === "single_choice"
-				? (selectedChoices[0] ?? null)
-				: selectedChoices,
-		);
-	};
-
-	const updateAsk = (
-		patch: Partial<Extract<FrontendToolDialogState, { type: "ask" }>>,
-	) => {
-		if (dialog.type !== "ask") return;
-		onDialogChange({ ...dialog, ...patch });
+		onResolve(askUserAnswerPayload(dialog.form, dialog.drafts));
 	};
 
 	return (
@@ -4301,55 +4272,13 @@ const FrontendToolRequestDialog = memo(function FrontendToolRequestDialog({
 								Don&apos;t ask again for this action this session
 							</label>
 						</>
-					) : dialog.mode === "freeform" ? (
-						<Textarea
-							value={dialog.answer}
-							placeholder={
-								getArgString(args, "placeholder") ?? "Enter value..."
-							}
-							className="min-h-28 resize-none"
-							onChange={(event) => updateAsk({ answer: event.target.value })}
-						/>
 					) : (
-						<div className="space-y-2">
-							{choices.map((choice, index) => {
-								const selected = dialog.selected.has(index);
-								return (
-									<button
-										key={`${choice.label}-${index}`}
-										type="button"
-										className={cn(
-											"flex w-full items-start gap-3 rounded-lg border p-3 text-left transition-colors",
-											selected
-												? "border-primary/50 bg-primary/10"
-												: "border-border/50 bg-background/70 hover:bg-muted/40",
-										)}
-										onClick={() => {
-											const next = new Set(dialog.selected);
-											if (dialog.mode === "single_choice") {
-												next.clear();
-												next.add(index);
-											} else if (next.has(index)) {
-												next.delete(index);
-											} else {
-												next.add(index);
-											}
-											updateAsk({ selected: next });
-										}}
-									>
-										<Checkbox checked={selected} className="mt-0.5" />
-										<div className="min-w-0">
-											<div className="text-sm font-medium">{choice.label}</div>
-											{choice.description && (
-												<div className="mt-0.5 text-xs text-muted-foreground">
-													{choice.description}
-												</div>
-											)}
-										</div>
-									</button>
-								);
-							})}
-						</div>
+						<AskUserQuestions
+							form={dialog.form}
+							drafts={dialog.drafts}
+							onDraftsChange={(drafts) => onDialogChange({ ...dialog, drafts })}
+							size="comfortable"
+						/>
 					)}
 				</DialogBody>
 				<DialogFooter>

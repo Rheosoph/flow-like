@@ -44,8 +44,10 @@ use super::stream::{
 };
 use super::tool_spec::{
     ARCHIVE_LOOKUP_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL,
-    OPEN_URL_TOOL, PlatformToolSpec, RESEARCH_AGENT_TOOL, find_global_tool_spec,
-    global_assistant_tool_specs, public_web_tool_specs, resolve_tool_effect, spec_arg_str,
+    OPEN_URL_TOOL, PlatformToolSpec, RESEARCH_AGENT_TOOL, data_studio_specialist_tool_specs,
+    find_data_studio_tool_spec, find_global_tool_spec, find_scout_tool_spec,
+    global_assistant_tool_specs, public_web_tool_specs, resolve_tool_effect,
+    scout_specialist_tool_specs, spec_arg_str,
 };
 use super::types::{ChatImage, ChatMessage, ChatRole, PlanStepStatus};
 use crate::bit::{Bit, BitModelPreference, BitTypes, LLMParameters};
@@ -57,6 +59,7 @@ use crate::state::FlowLikeState;
 pub const PLATFORM_TOOL_IMAGE_URLS_FIELD: &str = "_flowpilot_image_urls";
 
 const MAX_PLATFORM_TOOL_ROUNDS: usize = 8;
+const MAX_SPECIALIST_TOOL_ROUNDS: usize = 12;
 const MAX_SEARCH_QUERY_CHARS: usize = 512;
 const MAX_SEARCH_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_SEARCH_TITLE_CHARS: usize = 300;
@@ -117,6 +120,70 @@ fn parse_image_media_type(value: &str) -> Option<ImageMediaType> {
     }
 }
 
+/// Which FlowPilot surface a rig/Bits loop is serving.
+///
+/// The surface picks the advertised tool set and the round budget; everything else about the loop
+/// — streaming frames, approval policy, steering, cancellation — is identical. Nested specialists
+/// exist here so a profile ("Bits") model serves them exactly like the agent-CLI backends do,
+/// instead of the delegation failing for everyone who is not on Claude Code / Codex / Copilot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlatformSurface {
+    /// Root global orchestrator: the full global tool set plus the sealed public-web fallback.
+    Orchestrator,
+    /// Nested read-only prior-art researcher behind `project_scout`.
+    Scout,
+    /// Nested tables/overlays specialist behind `data_studio_agent`.
+    DataStudio,
+}
+
+impl PlatformSurface {
+    fn tool_specs(self, memory_enabled: bool) -> Vec<PlatformToolSpec> {
+        match self {
+            Self::Orchestrator => platform_loop_tool_specs(memory_enabled),
+            Self::Scout => scout_specialist_tool_specs(),
+            Self::DataStudio => data_studio_specialist_tool_specs(),
+        }
+    }
+
+    /// Tool rounds before the reserved synthesis turn. A specialist spends rounds on concrete
+    /// artifacts (tables, overlays, inspected apps) rather than on delegation, so it gets a longer
+    /// budget than the orchestrator that fans work out to it.
+    fn max_tool_rounds(self) -> usize {
+        match self {
+            Self::Orchestrator => MAX_PLATFORM_TOOL_ROUNDS,
+            Self::Scout | Self::DataStudio => MAX_SPECIALIST_TOOL_ROUNDS,
+        }
+    }
+
+    fn exhausted_budget_notice(self) -> &'static str {
+        match self {
+            Self::Orchestrator => {
+                "The research tools completed, but the model did not produce a final synthesis within the tool budget."
+            }
+            Self::Scout | Self::DataStudio => {
+                "The specialist's tools completed, but it did not produce a final report within the tool budget. Treat any work it started as unverified."
+            }
+        }
+    }
+
+    fn unclosed_answer_notice(self, had_narration: bool) -> &'static str {
+        match (self, had_narration) {
+            (Self::Orchestrator, false) => {
+                "The research run ended without a usable final synthesis. No additional web action was taken; please retry or narrow the question."
+            }
+            (Self::Orchestrator, true) => {
+                "\n\nThe run ended without a final synthesis — the notes above are mid-run narration, not a complete answer. Please retry or narrow the question."
+            }
+            (_, false) => {
+                "The specialist run ended without a final report. Nothing further was attempted; retry with a narrower instruction."
+            }
+            (_, true) => {
+                "\n\nThe specialist run ended without a final report — the notes above are mid-run narration, not a complete result. Treat the work as incomplete."
+            }
+        }
+    }
+}
+
 /// Executes the global assistant's platform tools. Implemented by the desktop crate over the
 /// FrontendToolBridge (with per-tool approval); returns the tool result as a string for the model.
 #[async_trait]
@@ -174,7 +241,13 @@ fn merge_steering_into_prompt(prompt: &mut rig::message::Message, steering: &[St
 /// default because their side-effect policy is not available here. Ordering is based on effect,
 /// not approval timing: preparing a deferred-approval board edit remains an execute operation.
 fn platform_tool_requires_ordered_execution(name: &str, arguments: &Value) -> bool {
-    let Some(spec) = find_global_tool_spec(name) else {
+    // A specialist loop advertises its own tools, so their effect has to be resolved from the same
+    // sets — otherwise every one of its inspections would be treated as an unknown mutation and
+    // serialized behind the others.
+    let Some(spec) = find_global_tool_spec(name)
+        .or_else(|| find_data_studio_tool_spec(name))
+        .or_else(|| find_scout_tool_spec(name))
+    else {
         return true;
     };
     resolve_tool_effect(&spec, arguments).requires_ordered_execution()
@@ -460,9 +533,13 @@ impl PlatformCopilot {
 
     /// Run the platform assistant loop for a profile model, dispatching platform tools through the
     /// supplied bridge and streaming tagged frames via `on_token`. Returns the final assistant text.
+    ///
+    /// `surface` selects which FlowPilot role this loop serves — the root orchestrator or one of the
+    /// nested specialists — and with it the advertised tool set and round budget.
     #[allow(clippy::too_many_arguments)]
     pub async fn chat<F>(
         &self,
+        surface: PlatformSurface,
         mut system_prompt: String,
         user_prompt: String,
         current_images: Option<Vec<ChatImage>>,
@@ -483,7 +560,8 @@ impl PlatformCopilot {
             system_prompt.push_str(&memory.prompt_sections(&user_prompt).await);
         }
 
-        let tool_specs = platform_loop_tool_specs(memory.is_some());
+        let max_tool_rounds = surface.max_tool_rounds();
+        let tool_specs = surface.tool_specs(memory.is_some());
         let advertised_tool_names: HashSet<String> = tool_specs
             .iter()
             .map(|spec| spec.name.to_string())
@@ -572,7 +650,7 @@ impl PlatformCopilot {
         // Tool rounds and answer generation have separate budgets. The last iteration deliberately
         // advertises no tools, guaranteeing that a search/open chain cannot consume the final turn
         // and leave the user without a synthesis.
-        for iteration in 0..=MAX_PLATFORM_TOOL_ROUNDS {
+        for iteration in 0..=max_tool_rounds {
             // A stopped run must stop spending immediately. The outer `select!` only fires between
             // awaits it owns, so with a long tool round in flight it can be minutes late.
             if bridge.is_cancelled().await {
@@ -581,7 +659,7 @@ impl PlatformCopilot {
             // Round boundaries are the one place a user turn can be added without breaking the
             // assistant → tool-result ordering providers require.
             merge_steering_into_prompt(&mut current_prompt, &bridge.drain_steering().await);
-            let tools_enabled = iteration < MAX_PLATFORM_TOOL_ROUNDS;
+            let tools_enabled = iteration < max_tool_rounds;
             let tools_for_round = if tools_enabled {
                 tool_definitions.clone()
             } else {
@@ -749,9 +827,7 @@ impl PlatformCopilot {
                     if !full_response.is_empty() && !full_response.ends_with('\n') {
                         full_response.push_str("\n\n");
                     }
-                    full_response.push_str(
-                        "The research tools completed, but the model did not produce a final synthesis within the tool budget.",
-                    );
+                    full_response.push_str(surface.exhausted_budget_notice());
                     // The turn is now explicitly closed out; the terminal guard must not add a
                     // second notice on top of this one.
                     answer_closed = true;
@@ -1089,13 +1165,17 @@ impl PlatformCopilot {
             };
             let tool_result_message = rig::message::Message::User { content: combined };
 
-            let synthesis_next = iteration + 1 == MAX_PLATFORM_TOOL_ROUNDS;
+            let synthesis_next = iteration + 1 == max_tool_rounds;
             let web_research_round = tool_calls.iter().any(|tool_call| {
                 matches!(
                     tool_call.function.name.as_str(),
                     INTERNET_SEARCH_TOOL | OPEN_URL_TOOL | ARCHIVE_LOOKUP_TOOL
                 )
             });
+            // A specialist holds no public-web tools at all, so the citation and privacy-boundary
+            // notices below describe a policy that cannot apply to it.
+            let web_policy_applies = surface == PlatformSurface::Orchestrator;
+            let round_entered_private_context = round_entered_private_context && web_policy_applies;
             if tool_images.is_empty()
                 && !synthesis_next
                 && !web_research_round
@@ -1109,7 +1189,11 @@ impl PlatformCopilot {
                 // agent iteration so every vision-capable provider actually receives it.
                 current_history.push(tool_result_message);
                 let mut image_contents = Vec::new();
-                if synthesis_next {
+                if synthesis_next && !web_policy_applies {
+                    image_contents.push(UserContent::text(
+                        "The tool budget is complete. Produce your final report now from the work already done. Do not call more tools. State exactly what was created or changed, name every identifier the caller must reuse, and list what remains unfinished instead of implying it succeeded.",
+                    ));
+                } else if synthesis_next {
                     let citation_allowlist =
                         citation_allowlist_text(&web_research_session.opened_urls());
                     image_contents.push(UserContent::text(format!(
@@ -1151,18 +1235,15 @@ impl PlatformCopilot {
         // `full_response` non-empty — that narration is not a synthesis. The notice is appended
         // rather than substituted so the text the user already watched stream is preserved.
         if !answer_closed {
-            if full_response.trim().is_empty() {
-                let fallback = "The research run ended without a usable final synthesis. No additional web action was taken; please retry or narrow the question.".to_string();
-                if let Some(callback) = &on_token {
-                    callback(fallback.clone());
-                }
-                full_response = fallback;
-            } else {
-                let fallback = "\n\nThe run ended without a final synthesis — the notes above are mid-run narration, not a complete answer. Please retry or narrow the question.";
-                if let Some(callback) = &on_token {
-                    callback(fallback.to_string());
-                }
+            let had_narration = !full_response.trim().is_empty();
+            let fallback = surface.unclosed_answer_notice(had_narration);
+            if let Some(callback) = &on_token {
+                callback(fallback.to_string());
+            }
+            if had_narration {
                 full_response.push_str(fallback);
+            } else {
+                full_response = fallback.to_string();
             }
         }
 
@@ -1928,6 +2009,59 @@ mod tests {
         assert!(!names.contains(&OPEN_URL_TOOL));
         assert!(!names.contains(&ARCHIVE_LOOKUP_TOOL));
         assert!(names.contains(&MEMORY_SEARCH_TOOL));
+    }
+
+    /// A specialist surface must never inherit the orchestrator's delegation or public-web reach:
+    /// it holds exactly its own tools, so it can neither re-delegate nor make an outbound request.
+    #[test]
+    fn specialist_surfaces_hold_only_their_own_tools() {
+        for surface in [PlatformSurface::Scout, PlatformSurface::DataStudio] {
+            let names: Vec<&str> = surface
+                .tool_specs(true)
+                .iter()
+                .map(|spec| spec.name)
+                .collect();
+            assert!(!names.is_empty());
+            for forbidden in [
+                RESEARCH_AGENT_TOOL,
+                INTERNET_SEARCH_TOOL,
+                OPEN_URL_TOOL,
+                ARCHIVE_LOOKUP_TOOL,
+                MEMORY_SEARCH_TOOL,
+                MEMORY_STORE_TOOL,
+                "data_studio_agent",
+                "project_scout",
+                "flowpilot_board",
+                "flowpilot_widget",
+            ] {
+                assert!(
+                    !names.contains(&forbidden),
+                    "{surface:?} must not advertise {forbidden}"
+                );
+            }
+            assert!(names.contains(&"list_apps"));
+            assert!(surface.max_tool_rounds() >= MAX_PLATFORM_TOOL_ROUNDS);
+        }
+
+        let scout: Vec<&str> = PlatformSurface::Scout
+            .tool_specs(false)
+            .iter()
+            .map(|spec| spec.name)
+            .collect();
+        // Read-only by construction: the mutating counterparts stay with the orchestrator so their
+        // approval prompts surface where the user is watching.
+        for mutating in ["fork_app", "acquire_app", "create_app", "database_tool"] {
+            assert!(!scout.contains(&mutating));
+        }
+        assert!(scout.contains(&"fork_preview"));
+
+        let data: Vec<&str> = PlatformSurface::DataStudio
+            .tool_specs(false)
+            .iter()
+            .map(|spec| spec.name)
+            .collect();
+        assert!(data.contains(&"database_tool"));
+        assert!(data.contains(&"graph_overlay_tool"));
     }
 
     #[test]

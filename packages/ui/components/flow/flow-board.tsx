@@ -180,6 +180,7 @@ import {
 	useAssistantSurface,
 } from "../../state/assistant-surface";
 import { useBackend } from "../../state/backend-state";
+import { useRequestFabBubble } from "../../state/fab-bubble";
 import { useFlowBoardParentState } from "../../state/flow-board-parent-state";
 import { useRunExecutionStore } from "../../state/run-execution-state";
 import {
@@ -379,6 +380,9 @@ export function FlowBoard({
 	externalAssistant?: boolean;
 }>) {
 	const { t } = useTranslation("flow");
+	// Without an in-interface FlowPilot button the floating bubble is this board's only way into the
+	// assistant, so ask for it exactly when we drop our own.
+	useRequestFabBubble(externalAssistant);
 	const {
 		pushCommand,
 		pushCommands,

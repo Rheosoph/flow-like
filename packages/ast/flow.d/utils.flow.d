@@ -1117,6 +1117,38 @@ declare function mapSetRef({ varRef: string, key: string, value: any }): void;
  */
 declare function utilsMdHtmlToMd({ html: string, skippedTags?: string[] }): string;
 
+/**
+ * Renders GitHub-flavoured Markdown as HTML
+ * @param markdown — Markdown source to render
+ * @param allowHtml (optional) — Pass raw HTML in the source through to the output. Leave off for untrusted input.
+ * @param smartPunctuation (optional) — Convert quotes, dashes and ellipses to typographic equivalents
+ * @returns html — The rendered HTML
+ * @impure has side effects / drives control flow
+ */
+declare function utilsMdMdToHtml({ markdown: string, allowHtml?: bool, smartPunctuation?: bool }): string;
+
+/**
+ * Converts a rich text document (plate_json) into HTML, keeping alignment, colours, columns and table spans that Markdown cannot express
+ * @param document — Rich text document, with or without the plate_json:: prefix
+ * @param images (optional) — How to render image nodes
+ * @param fullDocument (optional) — Wrap the output in a complete HTML document with default styling
+ * @param title (optional) — Document title, used only when Full Document is enabled
+ * @returns html — The converted HTML
+ * @returns media — Every image, video, audio and file reference found in the document
+ * @impure has side effects / drives control flow
+ */
+declare function utilsMdPlateToHtml({ document: string, images?: string, fullDocument?: bool, title?: string }): { html: string, media: string[] };
+
+/**
+ * Converts a rich text document (plate_json) into GitHub-flavoured Markdown
+ * @param document — Rich text document, with or without the plate_json:: prefix
+ * @param images (optional) — How to render image nodes
+ * @returns markdown — The converted Markdown
+ * @returns media — Every image, video, audio and file reference found in the document
+ * @impure has side effects / drives control flow
+ */
+declare function utilsMdPlateToMd({ document: string, images?: string }): { markdown: string, media: string[] };
+
 
 // === Utils/Math/Vector ===
 

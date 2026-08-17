@@ -12,7 +12,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use super::memory::AssistantMemory;
-use super::platform::{PlatformCopilot, PlatformToolBridge};
+use super::platform::{PlatformCopilot, PlatformSurface, PlatformToolBridge};
 use super::types::{ChatImage, ChatMessage};
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
@@ -115,7 +115,7 @@ These ownership boundaries are strict:
 
 Never author specialist-owned artifacts yourself or ask one specialist to perform another's work. Resolve "this board/data/page" from supplied open-context IDs without asking again. Use exact context or tool-returned IDs; never invent state or silently switch to a similarly named app.
 
-Ask only for a genuinely blocking choice; otherwise use safe defaults or explicit placeholders. Act only on the current user's profiles and apps. Mutations and executions use the tool's approval flow. Requested, declined, timed-out, or unknown approval/execution is not success. Never claim completion until a terminal tool result proves it, and never repeat a successful mutation.
+Outside BUILD intake, ask only for a genuinely blocking choice; otherwise use safe defaults or explicit placeholders. Act only on the current user's profiles and apps. Mutations and executions use the tool's approval flow. Requested, declined, timed-out, or unknown approval/execution is not success. Never claim completion until a terminal tool result proves it, and never repeat a successful mutation.
 
 Default to DIRECT. Do not create a dependency plan for an ordinary one-call, one-app, or simple two-app task; call the needed tools directly. Activate COMPLEX SOLVE only when the request is reasonably likely to require at least three distinct apps/interfaces, or is intrinsically complex because it has dependent stages, source reconciliation, branching actions/approvals, or explicit verification and recovery. A long prompt, calling `list_apps`, or two independent calls is not by itself complex. If direct execution later reveals this threshold, escalate then; otherwise stay DIRECT. Stop when the acceptance contract is met; do not spend calls on redundant confirmation."#;
 
@@ -139,9 +139,46 @@ When COMPLEX SOLVE is active, make a private dependency plan with the goal, succ
 
 DIRECT or COMPLEX SOLVE work is complete only when the requested output has been obtained or performed, dependencies are resolved, and material failures or evidence gaps are stated."#;
 
+const INTAKE_PLAYBOOK: &str = r#"## BUILD INTAKE
+
+A BUILD request is almost always shorter than the artifact it implies, and a misread costs a whole build run. Resolve intent ONCE, before `project_scout` and before any dispatch:
+
+1. Read the request against the BUILD SPEC CHECKLIST. Whatever the request, open context, attachments, memory, the target's current state, or a documented Flow-Like default already settles is RESOLVED — never ask it back.
+2. An unresolved item is a GAP only when two reasonable readings produce materially different artifacts: a different trigger, stored shape, surface, or notion of done. Cosmetic or easily-changed-later choices are never gaps — take the default.
+3. No gaps: skip intake and build. Never open intake to confirm what you know or to make the user repeat themselves.
+4. Otherwise call `ask_user` ONCE with every gap as an entry of `questions`, most consequential first, phrased in the user's vocabulary rather than tool/node/Event/column names, each with a recommended `default_value` so accepting the card unchanged is a complete answer.
+5. At most two intake passes per build, the second only when an answer opened a genuinely new gap. A dismissed, cancelled, or timed-out intake is not a stop: continue on the recommended defaults and say which ones you assumed.
+6. Never run intake for DIRECT, COMPLEX SOLVE, or GUIDE work, for a small edit to an identified target, or when the user asked you to just start — and never for anything a tool can inspect: schemas, inventories, routes, IDs, and board state are read, not asked.
+
+### BUILD SPEC CHECKLIST
+- Trigger: manual/quick action, page or form, chat, schedule (plus timezone), REST/API, MCP, deeplink, daemon.
+- Input: the fields it receives, their types, which are required.
+- Data: what is persisted, under which table and column names, and what identifies a record.
+- Behavior: the steps from trigger to result, including the failure branch.
+- Output: where the result lands — page/widget, chat reply, stored row, outbound call, file.
+- Done: the observable condition that finishes this, and the sample the user would check it with."#;
+
+const BUILD_BRIEF_PLAYBOOK: &str = r#"## BUILD BRIEF
+
+Intake answers are not a spec. Before the first dispatch, restate the whole request as ONE brief in Flow-Like's own terms and lead your reply with it — compact, scannable, no preamble — then dispatch in the SAME turn. Never wait for approval of the brief; the user corrects it by interrupting.
+
+The brief fixes the shared contract: app/board IDs, trigger and Event type, page ID/route, snake_case physical table and column names with types, widget/element/action IDs, and the acceptance contract. Each specialist `instruction` restates the part it owns, reusing those exact identifiers verbatim; a specialist never re-derives a name you already fixed. Ambiguity left in the brief is ambiguity every specialist resolves differently.
+
+### TRANSLATING THE REQUEST
+Users describe outcomes; specialists need Flow-Like nouns. Resolve these silently — they are house style, not gaps to ask about:
+- "time", "when", "date", "timestamp" on a record → explicit `created_at` / `updated_at` columns typed Lance `timestamp:ms:UTC`, written on every insert/update from the `Now` node's `Date` output. Never a preformatted string, never a clock-time-only field.
+- "every day/Monday", "regularly", "automatically" → an events_simple entry registered as a `cron` Event with an explicit IANA timezone, never a wait or loop in the board.
+- "a form", "a page", "a button", "a dashboard" → a page plus widgets from `flowpilot_widget` and its own page Event at a named route; its handlers stay board logic — one board per page unless pages share helpers or data.
+- "save", "store", "keep a list", "history" → an Open Database (LanceDB) table with snake_case physical names and an explicit id column.
+- "search", "find similar", "ask my documents" → that same table plus embedding and vector/hybrid-search nodes, never an external vector service.
+- "notify", "send", "tell me" → a named channel and destination; when nothing in the request or the app's interfaces names one, that is a GAP.
+- "and then …" chains → ONE board. Boards of an app cannot call each other, so connected stages stay in one board and reusable stages become function layers. A chain, not separate pages.
+- Counts, money, durations → an explicit numeric type and unit on column and pin, never a string.
+Where a default would genuinely be wrong here, intake already asked. Where you must still guess, guess, build, and state the assumption."#;
+
 const BUILD_PLAYBOOK: &str = r#"## BUILD
 
-Before creating a new app or workflow from scratch, call `project_scout`; skip it only for a small edit to an existing target or a foundation the user already selected. Scout is read-only. Execute its plan dependency-first:
+Run BUILD INTAKE and lead with the BUILD BRIEF before the steps below. Before creating a new app or workflow from scratch, call `project_scout`; skip it only for a small edit to an existing target or a foundation the user already selected. Scout is read-only. Execute its plan dependency-first:
 - Run the base `fork_app`, `acquire_app`, or `create_app` step first.
 - After `fork_app`, retarget every source board reference through the returned `board_id_map`; never send a source board ID to the fork.
 - Route scout parts by `source.kind`: FlowScript/board/Event/template → `flowpilot_board`, data-schema → `data_studio_agent`, passing `locator` unchanged so the specialist fetches the source itself.
@@ -150,7 +187,7 @@ Before creating a new app or workflow from scratch, call `project_scout`; skip i
 
 After create/fork, pin the returned destination `app_id` for the entire build. A transient error never authorizes switching to an older similarly named app.
 
-For a multi-surface build, declare one shared contract before dispatch: app/board IDs, page ID/route, widget/element/action IDs, and snake_case physical table/field names. For a new additional board, choose its `board_id` up front and pass it to `flowpilot_board` with `create_new_board=true`. Pass the same contract to every dispatched specialist and run independent specialists together. Sequence only identities that truly must be returned first — contract table/field names are not among them: tables are created on the workflow's first write, so never hold `flowpilot_board`/`flowpilot_widget` back for `data_studio_agent`. Dispatch `data_studio_agent` only for work only it can do (overlays for genuinely graph-shaped data, indexes, migrations, seeding, existing-schema discovery), never to pre-create simple tables. Propagate an EXISTING schema's authoritative identifiers into workflow instructions. For a newly designed temporal field shared by storage and workflow, pair Lance `timestamp:ms:UTC` with FlowScript `Date`; an existing schema remains authoritative.
+For a multi-surface build, declare one shared contract before dispatch: app/board IDs, page ID/route, widget/element/action IDs, and snake_case physical table/field names. For each additional board (one per page), choose its `board_id` up front and pass it to `flowpilot_widget` and `flowpilot_board` with `create_new_board=true`. Pass the same contract to every dispatched specialist and run independent specialists together. Sequence only identities that truly must be returned first — contract table/field names are not among them: tables are created on the workflow's first write, so never hold `flowpilot_board`/`flowpilot_widget` back for `data_studio_agent`. Dispatch `data_studio_agent` only for work only it can do (overlays for genuinely graph-shaped data, indexes, migrations, seeding, existing-schema discovery), never to pre-create simple tables. Propagate an EXISTING schema's authoritative identifiers into workflow instructions. For a newly designed temporal field shared by storage and workflow, pair Lance `timestamp:ms:UTC` with FlowScript `Date`; an existing schema remains authoritative.
 
 UI scaffolding is not workflow logic. Requested behavior is incomplete until `flowpilot_board` edit succeeds. Preserve the full workflow acceptance contract across every retry; never substitute a smoke test, reduced slice, empty Event, or diagnostic workflow unless the user explicitly requests a partial prototype.
 
@@ -193,7 +230,15 @@ pub fn global_assistant_system_prompt_for(capability: WebResearchCapability) -> 
         WebResearchCapability::Delegated => DELEGATED_WEB_PLAYBOOK,
         WebResearchCapability::Inline => INLINE_WEB_PLAYBOOK,
     };
-    [FLOWPILOT_CORE, TASK_ROUTING_PLAYBOOK, BUILD_PLAYBOOK, web].join("\n\n")
+    [
+        FLOWPILOT_CORE,
+        TASK_ROUTING_PLAYBOOK,
+        INTAKE_PLAYBOOK,
+        BUILD_BRIEF_PLAYBOOK,
+        BUILD_PLAYBOOK,
+        web,
+    ]
+    .join("\n\n")
 }
 /// Render the open-board section injected into the assistant context. Kept separate so the wording
 /// (which the model relies on to route board questions to `flowpilot_board`) lives in one place.
@@ -474,6 +519,7 @@ where
     let assistant = PlatformCopilot::new(state, profile);
     assistant
         .chat(
+            PlatformSurface::Orchestrator,
             system_prompt,
             user_prompt,
             current_images,
@@ -482,6 +528,69 @@ where
             token,
             bridge,
             memory,
+            on_token,
+        )
+        .await
+}
+
+/// Which nested specialist a Bits-backed run is serving. The scopes listed here are the ones the
+/// orchestrator delegates to but the board/UI copilots cannot author, so before this existed a
+/// profile ("Bits") model had no way to run them at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlatformSpecialist {
+    Scout,
+    DataStudio,
+}
+
+impl PlatformSpecialist {
+    fn surface(self) -> PlatformSurface {
+        match self {
+            Self::Scout => PlatformSurface::Scout,
+            Self::DataStudio => PlatformSurface::DataStudio,
+        }
+    }
+
+    fn system_prompt(self, context: &str) -> String {
+        match self {
+            Self::Scout => crate::copilot::prompts::scout_system_prompt(context),
+            Self::DataStudio => crate::copilot::prompts::data_studio_system_prompt(context),
+        }
+    }
+}
+
+/// Run one nested specialist (`project_scout` / `data_studio_agent`) on a profile ("Bits") model.
+///
+/// This is the Bits counterpart of the agent-CLI backends' specialist sessions: same prompts, same
+/// tool sets, same host bridge — so delegation no longer depends on the user having Claude Code,
+/// Codex or GitHub Copilot selected. Specialists get no memory tools and no history: they are
+/// answered entirely from the instruction the orchestrator hands them.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_specialist_chat<F>(
+    state: Arc<FlowLikeState>,
+    profile: Option<Arc<Profile>>,
+    specialist: PlatformSpecialist,
+    context: String,
+    user_prompt: String,
+    model_id: Option<String>,
+    token: Option<String>,
+    bridge: Arc<dyn PlatformToolBridge>,
+    on_token: Option<F>,
+) -> flow_like_types::Result<String>
+where
+    F: Fn(String) + Send + Sync + 'static,
+{
+    let assistant = PlatformCopilot::new(state, profile);
+    assistant
+        .chat(
+            specialist.surface(),
+            specialist.system_prompt(&context),
+            user_prompt,
+            None,
+            Vec::new(),
+            model_id,
+            token,
+            bridge,
+            None,
             on_token,
         )
         .await
@@ -624,6 +733,82 @@ mod tests {
         assert!(prompt.contains("checkout link"));
     }
 
+    /// Boards are the serialization unit: one board per page keeps each board small enough to commit
+    /// on its own and lets independent pages build in the same wave. Without this the orchestrator
+    /// funnels every page into the app's first board and serializes the whole build behind it.
+    #[test]
+    fn pages_default_to_their_own_board_unless_they_overlap() {
+        let prompt = global_assistant_system_prompt();
+
+        assert!(prompt.contains("one board per page unless pages share helpers or data"));
+        assert!(prompt.contains("For each additional board (one per page)"));
+        assert!(
+            prompt.contains("A chain, not separate pages."),
+            "the connected-chain rule must not be read as a rule against per-page boards"
+        );
+    }
+
+    #[test]
+    fn intake_runs_once_before_dispatch_and_only_for_build() {
+        let prompt = global_assistant_system_prompt();
+
+        let intake = prompt.find("## BUILD INTAKE").unwrap();
+        let brief = prompt.find("## BUILD BRIEF").unwrap();
+        let build = prompt.find("## BUILD\n").unwrap();
+        assert!(
+            intake < brief && brief < build,
+            "intake must be read before the brief, and both before the BUILD steps"
+        );
+
+        assert!(prompt.contains("before `project_scout` and before any dispatch"));
+        assert!(prompt.contains("Run BUILD INTAKE and lead with the BUILD BRIEF"));
+        assert!(prompt.contains("call `ask_user` ONCE with every gap as an entry of `questions`"));
+        assert!(prompt.contains("recommended `default_value`"));
+        assert!(prompt.contains("At most two intake passes per build"));
+        assert!(prompt.contains("timed-out intake is not a stop"));
+        assert!(prompt.contains("Never run intake for DIRECT, COMPLEX SOLVE, or GUIDE work"));
+        assert!(prompt.contains("never for anything a tool can inspect"));
+        assert!(prompt.contains("### BUILD SPEC CHECKLIST"));
+        for item in [
+            "Trigger:",
+            "Input:",
+            "Data:",
+            "Behavior:",
+            "Output:",
+            "Done:",
+        ] {
+            assert!(prompt.contains(item), "checklist is missing {item}");
+        }
+        // The core contract's blanket no-questions rule must not cancel intake out.
+        assert!(prompt.contains("Outside BUILD intake, ask only for a genuinely blocking choice"));
+    }
+
+    #[test]
+    fn brief_is_authored_in_flow_like_nouns_and_never_blocks_dispatch() {
+        let prompt = global_assistant_system_prompt();
+
+        assert!(prompt.contains("Intake answers are not a spec"));
+        assert!(prompt.contains("lead your reply with it"));
+        assert!(prompt.contains("dispatch in the SAME turn"));
+        assert!(prompt.contains("Never wait for approval of the brief"));
+        assert!(prompt.contains("reusing those exact identifiers verbatim"));
+
+        // The translation rules are the point of the brief: a vague request must reach the
+        // specialists already carrying Flow-Like's own nouns. `created_at`/`updated_at` is the
+        // canonical case — "add the time per entry" used to reach the specialist unresolved.
+        assert!(prompt.contains("### TRANSLATING THE REQUEST"));
+        assert!(
+            prompt.contains("`created_at` / `updated_at` columns typed Lance `timestamp:ms:UTC`")
+        );
+        assert!(prompt.contains("`Now` node's `Date` output"));
+        assert!(prompt.contains("never a clock-time-only field"));
+        assert!(prompt.contains("registered as a `cron` Event with an explicit IANA timezone"));
+        assert!(prompt.contains("Open Database (LanceDB) table with snake_case physical names"));
+        assert!(prompt.contains("Boards of an app cannot call each other"));
+        assert!(prompt.contains("that is a GAP"));
+        assert!(prompt.contains("they are house style, not gaps to ask about"));
+    }
+
     #[test]
     fn prompt_referenced_tools_exist_for_each_backend() {
         let shared: std::collections::HashSet<_> = global_assistant_tool_specs(false)
@@ -641,6 +826,7 @@ mod tests {
             "acquire_app",
             "create_app",
             "upsert_event",
+            "ask_user",
         ] {
             assert!(shared.contains(name), "missing shared tool {name}");
         }
@@ -656,17 +842,19 @@ mod tests {
             first, second,
             "runtime context must not mutate the stable prompt"
         );
-        // Reviewed 2026-08-14: +~0.3 KB for the BUILD data-lane ordering rule (data setup is
-        // best-effort and must never gate the board/widget lanes) and runtime-verification
-        // consumer routing (call_app_event / call_app_chat / interact_app_page).
+        // Reviewed 2026-08-17: +~4 KB for BUILD INTAKE and the BUILD BRIEF (spec checklist, the
+        // single batched `ask_user` pass, and the vague-request → Flow-Like-noun translation
+        // rules). This block is part of the stable cached prefix, so the cost is paid once per
+        // conversation; it replaces build runs lost to a misread request, which cost far more.
         assert!(
-            first.len() <= 12_500,
-            "standard prompt grew beyond the reviewed 12.5 KB budget: {} bytes",
+            first.len() <= 17_000,
+            "standard prompt grew beyond the reviewed 17 KB budget: {} bytes",
             first.len()
         );
         assert!(
-            first.split_whitespace().count() <= 1_800,
-            "standard prompt grew beyond the reviewed word budget"
+            first.split_whitespace().count() <= 2_500,
+            "standard prompt grew beyond the reviewed word budget: {} words",
+            first.split_whitespace().count()
         );
     }
 
