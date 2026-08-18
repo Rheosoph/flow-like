@@ -1,5 +1,5 @@
 "use client";
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
+import { i18n as i18next } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { useDebounce } from "@uidotdev/usehooks";
 import {
@@ -1101,7 +1101,6 @@ const FlowNodeInner = memo(
 );
 
 function FlowNode(props: NodeProps<FlowNode>) {
-	const { t } = useTranslation("flow");
 	const [isHovered, setIsHovered] = useState(false);
 	const [commentMenu, setCommentMenu] = useState(false);
 	const [renameMenu, setRenameMenu] = useState(false);
@@ -1167,7 +1166,7 @@ function FlowNode(props: NodeProps<FlowNode>) {
 
 		const newPin: IPin = {
 			name: "auto_handle_error",
-			description: t('handlesNodeErrorsForYou', 'Handles Node Errors for you.'),
+			description: i18next.t("handlesNodeErrorsForYou", "Handles Node Errors for you.", { ns: "flow" }),
 			pin_type: IPinType.Output,
 			value_type: IValueType.Normal,
 			data_type: IVariableType.Execution,
@@ -1181,7 +1180,7 @@ function FlowNode(props: NodeProps<FlowNode>) {
 
 		const stringPin: IPin = {
 			name: "auto_handle_error_string",
-			description: t('handlesNodeErrorsForYou', 'Handles Node Errors for you.'),
+			description: i18next.t("handlesNodeErrorsForYou", "Handles Node Errors for you.", { ns: "flow" }),
 			pin_type: IPinType.Output,
 			value_type: IValueType.Normal,
 			data_type: IVariableType.String,
@@ -1257,7 +1256,7 @@ function FlowNode(props: NodeProps<FlowNode>) {
 					parent_id: (selectedNodes[0].data.node as INode).layer,
 					coordinates: [minX, minY, 0],
 					in_coordinates: undefined,
-					name: t('collapsed', 'Collapsed'),
+					name: i18next.t("collapsed", "Collapsed", { ns: "flow" }),
 					type: ILayerType.Collapsed,
 					variables: {},
 				},
