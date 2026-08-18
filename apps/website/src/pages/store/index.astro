@@ -72,14 +72,14 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 				</p>
 				<div class="flex items-center justify-center gap-4">
 					<a
-						href="/store/packages"
+						href="/store/packages/"
 						class="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-foreground text-background font-medium hover:opacity-90 transition-opacity"
 					>
 						<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
 						Browse Packages
 					</a>
 					<a
-						href="/store/apps"
+						href="/store/apps/"
 						class="inline-flex items-center gap-2 px-6 py-3 rounded-lg border border-border font-medium hover:bg-muted/50 transition-colors"
 					>
 						<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
@@ -99,7 +99,7 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 	<section class="max-w-7xl mx-auto px-6 py-16">
 		<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
 			<a
-				href="/store/packages"
+				href="/store/packages/"
 				class="group relative rounded-2xl border border-border bg-card p-8 hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5 transition-all duration-300 overflow-hidden"
 			>
 				<div class="absolute top-0 right-0 w-48 h-48 bg-primary/[0.03] rounded-full blur-2xl -translate-y-1/2 translate-x-1/4 group-hover:bg-primary/[0.06] transition-colors duration-300"></div>
@@ -121,7 +121,7 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 				</div>
 			</a>
 			<a
-				href="/store/apps"
+				href="/store/apps/"
 				class="group relative rounded-2xl border border-border bg-card p-8 hover:border-emerald-500/30 hover:shadow-lg hover:shadow-emerald-500/5 transition-all duration-300 overflow-hidden"
 			>
 				<div class="absolute top-0 right-0 w-48 h-48 bg-emerald-500/[0.03] rounded-full blur-2xl -translate-y-1/2 translate-x-1/4 group-hover:bg-emerald-500/[0.06] transition-colors duration-300"></div>
@@ -154,7 +154,7 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 					<p class="text-sm text-muted-foreground">Ready-to-use automation solutions</p>
 				</div>
 				<a
-					href="/store/apps"
+					href="/store/apps/"
 					class="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
 				>
 					View all
@@ -172,7 +172,7 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 						const thumbnail = meta?.thumbnail;
 						return (
 							<a
-								href={`/store/apps/${app.id}`}
+								href={`/store/apps/${app.id}/`}
 								class="group relative block rounded-2xl border border-border bg-card overflow-hidden hover:border-foreground/20 hover:shadow-xl transition-all duration-300"
 							>
 								{thumbnail ? (
@@ -249,7 +249,7 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 						const icon = meta?.icon;
 						return (
 							<a
-								href={`/store/apps/${app.id}`}
+								href={`/store/apps/${app.id}/`}
 								class="group block rounded-xl border border-border bg-card p-5 hover:border-foreground/20 hover:shadow-md transition-all duration-200"
 							>
 								<div class="flex items-center gap-3 mb-3">
@@ -301,7 +301,7 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 					<p class="text-sm text-muted-foreground">Community-built nodes and integrations</p>
 				</div>
 				<a
-					href="/store/packages"
+					href="/store/packages/"
 					class="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
 				>
 					View all
@@ -316,7 +316,7 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 					const icon = meta?.icon;
 					return (
 						<a
-							href={`/store/packages/${pkg.id}`}
+							href={`/store/packages/${pkg.id}/`}
 							class="group block rounded-xl border border-border bg-card p-5 hover:border-foreground/20 hover:shadow-md transition-all duration-200"
 						>
 							<div class="flex items-start gap-3 mb-3">

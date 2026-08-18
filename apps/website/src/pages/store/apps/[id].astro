@@ -199,9 +199,9 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 							<div class="min-w-0">
 								<!-- Breadcrumb -->
 								<nav class="flex items-center gap-1.5 text-xs text-muted-foreground mb-2">
-									<a href="/store" class="hover:text-foreground transition-colors">Store</a>
+									<a href="/store/" class="hover:text-foreground transition-colors">Store</a>
 									<span class="opacity-50">/</span>
-									<a href="/store/apps" class="hover:text-foreground transition-colors">Apps</a>
+									<a href="/store/apps/" class="hover:text-foreground transition-colors">Apps</a>
 									<span class="opacity-50">/</span>
 									<span class="text-foreground truncate max-w-[200px]">{displayName}</span>
 								</nav>
@@ -540,7 +540,7 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 			<div class="max-w-6xl mx-auto px-6">
 				<div class="flex items-center justify-between mb-8">
 					<h2 class="text-xl font-semibold">More from the Store</h2>
-					<a href="/store/apps" class="text-sm text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1">
+					<a href="/store/apps/" class="text-sm text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1">
 						Browse all apps
 						<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
 					</a>
@@ -548,7 +548,7 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 				<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
 					{relatedApps.map((ra) => (
 						<a
-							href={`/store/apps/${ra.id}`}
+							href={`/store/apps/${ra.id}/`}
 							class="group flex items-start gap-4 p-4 rounded-xl bg-card border border-border hover:border-foreground/20 hover:shadow-md transition-all"
 						>
 							{ra.icon ? (

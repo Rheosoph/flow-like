@@ -150,10 +150,10 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 	<article class="max-w-5xl mx-auto px-6 pb-16 pt-20">
 		<!-- Breadcrumb -->
 		<nav class="flex items-center gap-2 text-sm text-muted-foreground mb-8">
-			<a href="/store" class="hover:text-foreground transition-colors">Store</a>
+			<a href="/store/" class="hover:text-foreground transition-colors">Store</a>
 			<span>/</span>
 			<a
-				href="/store/packages"
+				href="/store/packages/"
 				class="hover:text-foreground transition-colors">Packages</a
 			>
 			<span>/</span>
@@ -519,7 +519,7 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 			<div class="max-w-5xl mx-auto px-6">
 				<div class="flex items-center justify-between mb-8">
 					<h2 class="text-xl font-semibold">More Packages</h2>
-					<a href="/store/packages" class="text-sm text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1">
+					<a href="/store/packages/" class="text-sm text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1">
 						Browse all packages
 						<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
 					</a>
@@ -527,7 +527,7 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 				<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
 					{relatedPackages.map((rp) => (
 						<a
-							href={`/store/packages/${rp.id}`}
+							href={`/store/packages/${rp.id}/`}
 							class="group flex items-start gap-4 p-4 rounded-xl bg-card border border-border hover:border-foreground/20 hover:shadow-md transition-all"
 						>
 							{rp.icon ? (

@@ -19,6 +19,7 @@ import {
 	Lightbulb,
 	Lock,
 	type LucideIcon,
+	MessageSquareHeart,
 	Package,
 	Plus,
 	RefreshCw,
@@ -355,6 +356,7 @@ const ADMIN_SECTIONS: AdminSection[] = [
 			{ label: "Issues", href: "/admin/telemetry/issues" },
 			{ label: "Traces", href: "/admin/telemetry/traces" },
 			{ label: "Alerts", href: "/admin/telemetry/alerts" },
+			{ label: "Prompt feedback", href: "/admin/telemetry/prompt-feedback" },
 			{ label: "Query builder", href: "/admin/telemetry/query" },
 			{ label: "Dashboards", href: "/admin/telemetry/dashboards" },
 		],
@@ -368,6 +370,17 @@ const ADMIN_SECTIONS: AdminSection[] = [
 		permission: GlobalPermission.Admin,
 		actionLabel: "Open Issues",
 		color: "text-amber-500",
+		feature: "telemetry",
+	},
+	{
+		title: "FlowPilot feedback",
+		description:
+			"Assistant turns users rated, with the prompt, the model that ran it, and why it went wrong.",
+		icon: MessageSquareHeart,
+		href: "/admin/telemetry/prompt-feedback",
+		permission: GlobalPermission.Admin,
+		actionLabel: "Open Prompt Feedback",
+		color: "text-lime-500",
 		feature: "telemetry",
 	},
 	{

@@ -347,3 +347,91 @@ export interface ITelemetrySpanOperation {
 export interface ITelemetrySpanStatsResponse {
 	operations: ITelemetrySpanOperation[];
 }
+
+/** One rated FlowPilot assistant turn. Mirrors `PromptFeedbackRecord`. */
+export interface IPromptFeedbackRecord {
+	id: string;
+	messageId: string;
+	conversationId?: string | null;
+	userId?: string | null;
+	/** 5 for a positive rating, 1 for a negative one. */
+	rating: number;
+	comment: string;
+	provider?: string | null;
+	model?: string | null;
+	reasoningEffort?: string | null;
+	outcome?: string | null;
+	autoMode?: boolean | null;
+	surface?: string | null;
+	durationMs?: number | null;
+	totalTokens?: number | null;
+	promptPreview: string;
+	responsePreview: string;
+	hasTranscript: boolean;
+	createdAt: string;
+}
+
+export interface IPromptFeedbackFacetCount {
+	key: string;
+	count: number;
+	negative: number;
+}
+
+export interface IPromptFeedbackTrendPoint {
+	ts: string;
+	positive: number;
+	negative: number;
+}
+
+export interface IPromptFeedbackSummary {
+	total: number;
+	positive: number;
+	negative: number;
+	/** Share of ratings that were positive, 0..100. */
+	satisfaction?: number | null;
+	raters: number;
+	conversations: number;
+	withComment: number;
+	byModel: IPromptFeedbackFacetCount[];
+	byProvider: IPromptFeedbackFacetCount[];
+	byOutcome: IPromptFeedbackFacetCount[];
+	trend: IPromptFeedbackTrendPoint[];
+}
+
+export interface IPromptFeedbackFilters {
+	providers: string[];
+	models: string[];
+	outcomes: string[];
+}
+
+export interface IPromptFeedbackResponse {
+	items: IPromptFeedbackRecord[];
+	total: number;
+	page: number;
+	pageSize: number;
+	hours: number;
+	/** True when the scan cap was reached and the summary covers only the most recent ratings. */
+	truncated: boolean;
+	summary: IPromptFeedbackSummary;
+	filters: IPromptFeedbackFilters;
+}
+
+export interface IPromptFeedbackTranscriptEntry {
+	role: string;
+	content: string;
+	timestamp: number;
+}
+
+export interface IPromptFeedbackDetail {
+	record: IPromptFeedbackRecord;
+	prompt: string;
+	response: string;
+	runContext?: Record<string, unknown> | null;
+	usage?: Record<string, unknown> | null;
+	steps: string[];
+	tools: string[];
+	appRefs: string[];
+	transcript?: IPromptFeedbackTranscriptEntry[] | null;
+	transcriptTruncated: boolean;
+	canContact: boolean;
+}

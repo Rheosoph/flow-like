@@ -2145,14 +2145,13 @@ async fn step_core(
         return Ok((Vec::new(), traces));
     }
 
-    if USE_DEPENDENCY_GRAPH {
-        if let Err(err) =
-            InternalNode::trigger_with_dependencies(&mut context, &mut None, false, dependencies)
-                .await
-        {
-            eprintln!("[Error] executing node: {:?}", err);
-        }
-    } else if let Err(err) = InternalNode::trigger(&mut context, &mut None, false).await {
+    let outcome = if USE_DEPENDENCY_GRAPH {
+        InternalNode::trigger_with_dependencies(&mut context, &mut None, false, dependencies).await
+    } else {
+        InternalNode::trigger(&mut context, &mut None, false).await
+    };
+
+    if let Err(err) = &outcome {
         eprintln!("[Error] executing node: {:?}", err);
     }
 
@@ -2172,6 +2171,12 @@ async fn step_core(
             connected_nodes.push(connected_node);
         }
         return Ok((connected_nodes, traces));
+    }
+
+    // The node errored but the board handled it: `handle_error` already ran the whole
+    // `On Error` branch, so there is nothing left to queue and the run has not failed.
+    if outcome.is_ok() {
+        return Ok((Vec::new(), traces));
     }
 
     // Flag this run as having node errors so RunStatus reflects the failure

@@ -177,6 +177,15 @@ pub fn routes() -> Router<AppState> {
             get(telemetry::telemetry_engagement),
         )
         .route("/telemetry/flowpilot", get(telemetry::telemetry_flowpilot))
+        // FlowPilot prompt feedback
+        .route(
+            "/telemetry/prompt-feedback",
+            get(telemetry::prompt_feedback::list_prompt_feedback),
+        )
+        .route(
+            "/telemetry/prompt-feedback/{feedback_id}",
+            get(telemetry::prompt_feedback::get_prompt_feedback),
+        )
         // Crash issues and release health
         .route(
             "/telemetry/issues",

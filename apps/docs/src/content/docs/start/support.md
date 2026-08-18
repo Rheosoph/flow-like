@@ -7,7 +7,7 @@ sidebar:
 
 For help or project feedback:
 
-- Join the [Discord community](https://discord.gg/KTWMrS2) for usage questions.
+- Join the [Discord community](https://discord.gg/mdBA9kMjFJ) for usage questions.
 - Open a [GitHub issue](https://github.com/Rheosoph/flow-like/issues) for a
   reproducible bug or feature request.
 - Email [contact@flow-like.com](mailto:contact@flow-like.com) for questions

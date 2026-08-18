@@ -45,7 +45,7 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 >
 	<section class="max-w-7xl mx-auto px-6 pt-12 pb-20">
 		<nav class="flex items-center gap-2 text-sm text-muted-foreground mb-8">
-			<a href="/store" class="hover:text-foreground transition-colors">Store</a>
+			<a href="/store/" class="hover:text-foreground transition-colors">Store</a>
 			<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
 			<span class="text-foreground font-medium">Apps</span>
 		</nav>
@@ -69,7 +69,7 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 					const thumbnail = meta?.thumbnail;
 					return (
 						<a
-							href={`/store/apps/${app.id}`}
+							href={`/store/apps/${app.id}/`}
 							class="group block rounded-2xl border border-border bg-card overflow-hidden hover:border-foreground/20 hover:shadow-xl transition-all duration-300"
 						>
 							{thumbnail ? (

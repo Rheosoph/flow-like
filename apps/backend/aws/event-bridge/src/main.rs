@@ -123,6 +123,97 @@ fn build_idempotency_key(payload: &ScheduledEventPayload, request_id: &str) -> S
     format!("lambda-request:{}", request_id)
 }
 
+/// Split an EventBridge Scheduler ARN
+/// (`arn:aws:scheduler:<region>:<account>:schedule/<group>/<name>`) into its
+/// group and schedule name.
+fn parse_schedule_arn(arn: &str) -> Option<(&str, &str)> {
+    let resource = arn.splitn(6, ':').nth(5)?;
+    let mut parts = resource.split('/');
+
+    if parts.next()? != "schedule" {
+        return None;
+    }
+
+    let group_name = parts.next().filter(|value| !value.is_empty())?;
+    let schedule_name = parts.next().filter(|value| !value.is_empty())?;
+
+    if parts.next().is_some() {
+        return None;
+    }
+
+    Some((group_name, schedule_name))
+}
+
+/// Recognize the API's own "this event has no active sink" answer.
+///
+/// A bare 404 is not enough to act on: a misrouted or misconfigured
+/// `API_BASE_URL` also answers 404, and reaping on that would delete every
+/// schedule in the account. Only the API's structured NOT_FOUND naming this
+/// event counts.
+fn is_missing_sink_response(body: &str, event_id: &str) -> bool {
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    let Some(error) = parsed.get("error") else {
+        return false;
+    };
+
+    if error.get("code").and_then(|code| code.as_str()) != Some("NOT_FOUND") {
+        return false;
+    }
+
+    error
+        .get("message")
+        .and_then(|message| message.as_str())
+        .is_some_and(|message| message.contains("No active sink") && message.contains(event_id))
+}
+
+/// Delete the schedule that just fired for an event the API no longer has a
+/// sink for.
+///
+/// `EventSink` rows cascade away with their app or event while the schedule
+/// itself lives in EventBridge, so an orphan keeps firing into a 404 forever.
+/// The firing is the only signal that the orphan exists, so it is also the only
+/// place it can reap itself.
+async fn delete_orphaned_schedule(event_id: &str, schedule_arn: &str) {
+    let Some((group_name, schedule_name)) = parse_schedule_arn(schedule_arn) else {
+        tracing::warn!(
+            event_id = %event_id,
+            schedule_arn = %schedule_arn,
+            "Could not parse schedule ARN; leaving orphaned schedule in place"
+        );
+        return;
+    };
+
+    let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+    let client = aws_sdk_scheduler::Client::new(&aws_config);
+
+    match client
+        .delete_schedule()
+        .group_name(group_name)
+        .name(schedule_name)
+        // Fresh token per attempt so a retry after a transient failure can
+        // actually re-delete rather than replay a cached success.
+        .client_token(flow_like_types::create_id())
+        .send()
+        .await
+    {
+        Ok(_) => tracing::warn!(
+            event_id = %event_id,
+            group_name = %group_name,
+            schedule_name = %schedule_name,
+            "Deleted orphaned schedule; the API has no active sink for this event"
+        ),
+        Err(e) => tracing::error!(
+            event_id = %event_id,
+            group_name = %group_name,
+            schedule_name = %schedule_name,
+            error = %e,
+            "Failed to delete orphaned schedule"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,6 +258,56 @@ mod tests {
             build_idempotency_key(&payload, "request-1"),
             "lambda-request:request-1"
         );
+    }
+
+    #[test]
+    fn parses_group_and_name_from_schedule_arn() {
+        assert_eq!(
+            parse_schedule_arn(
+                "arn:aws:scheduler:eu-west-1:725302850608:schedule/flow-like-dev/flow-like-cron-abc"
+            ),
+            Some(("flow-like-dev", "flow-like-cron-abc"))
+        );
+    }
+
+    #[test]
+    fn rejects_arns_that_are_not_schedules() {
+        assert_eq!(
+            parse_schedule_arn("arn:aws:lambda:eu-west-1:725302850608:function:some-fn"),
+            None
+        );
+        assert_eq!(
+            parse_schedule_arn("arn:aws:scheduler:eu-west-1:725302850608:schedule/only-group"),
+            None
+        );
+        assert_eq!(parse_schedule_arn("not-an-arn"), None);
+    }
+
+    #[test]
+    fn detects_missing_sink_response() {
+        let body =
+            r#"{"error":{"code":"NOT_FOUND","message":"No active sink found for event evt-1"}}"#;
+
+        assert!(is_missing_sink_response(body, "evt-1"));
+    }
+
+    #[test]
+    fn ignores_unrelated_not_found_responses() {
+        // A misrouted API_BASE_URL answers 404 too; reaping on that would delete
+        // every schedule in the account.
+        assert!(!is_missing_sink_response(
+            "<html>404 Not Found</html>",
+            "evt-1"
+        ));
+        assert!(!is_missing_sink_response(
+            r#"{"error":{"code":"NOT_FOUND","message":"Route not found"}}"#,
+            "evt-1"
+        ));
+        // Right shape, but about a different event.
+        assert!(!is_missing_sink_response(
+            r#"{"error":{"code":"NOT_FOUND","message":"No active sink found for event evt-2"}}"#,
+            "evt-1"
+        ));
     }
 }
 
@@ -236,6 +377,20 @@ async fn event_bridge_handler(event: LambdaEvent<ScheduledEventPayload>) -> Resu
                 event_id = %payload.event_id,
                 "API returned client error — not retrying"
             );
+
+            if status == StatusCode::NOT_FOUND && is_missing_sink_response(&body, &payload.event_id)
+            {
+                match schedule_arn {
+                    Some(arn) => delete_orphaned_schedule(&payload.event_id, arn).await,
+                    // Schedules created before the target input carried Scheduler
+                    // context cannot be identified, so they are left alone.
+                    None => tracing::warn!(
+                        event_id = %payload.event_id,
+                        "Sink is gone but the payload carries no schedule ARN; cannot reap this schedule"
+                    ),
+                }
+            }
+
             return Ok(());
         }
 

@@ -356,36 +356,23 @@ async fn materialize_missing_flow_paths(
 
     for (index, file) in files.iter_mut().enumerate() {
         let supplied_flow_path = file.flow_path.clone();
-        let target_flow_path = match supplied_flow_path {
-            Some(flow_path) if flow_path_exists(context, &flow_path).await? => {
-                flow_paths.push(flow_path);
-                continue;
-            }
-            Some(flow_path) => flow_path,
-            None => {
-                let file_name = flow_path_file_name(file, index);
-                let object_path = Path::from("files").child(file_name.as_str());
-                FlowPath::new(
-                    object_path.as_ref().to_string(),
-                    store_ref
-                        .as_ref()
-                        .expect("memory store exists when a file URL must be materialized")
-                        .clone(),
-                    None,
-                )
-            }
-        };
+
+        if let Some(flow_path) = supplied_flow_path.clone()
+            && flow_path_exists(context, &flow_path).await?
+        {
+            flow_paths.push(flow_path);
+            continue;
+        }
 
         let Some(url) = file.signed_url().map(str::to_string) else {
-            if file.flow_path.is_some() {
+            match supplied_flow_path {
                 // Preserve the prior behavior for FlowPaths that cannot be checked or repaired
                 // because the frontend did not provide a signed/local source URL.
-                flow_paths.push(target_flow_path);
-            } else {
-                context.log_message(
+                Some(flow_path) => flow_paths.push(flow_path),
+                None => context.log_message(
                     "File input item did not contain a URL or FlowPath; skipping FlowPath creation",
                     LogLevel::Warn,
-                );
+                ),
             }
             continue;
         };
@@ -404,15 +391,29 @@ async fn materialize_missing_flow_paths(
         }
 
         let file_name = flow_path_file_name(file, index);
-        if file.flow_path.is_some() {
-            context.log_message(
-                &format!(
-                    "Uploaded file \"{}\" was missing from its execution store; materializing it from the signed URL",
-                    file_name
-                ),
-                LogLevel::Info,
-            );
-        }
+        let target_flow_path = match supplied_flow_path {
+            Some(flow_path) => {
+                context.log_message(
+                    &format!(
+                        "Uploaded file \"{}\" was missing from its execution store; materializing it from the signed URL",
+                        file_name
+                    ),
+                    LogLevel::Info,
+                );
+                flow_path
+            }
+            None => {
+                let store_ref = store_ref.as_ref().ok_or_else(|| {
+                    flow_like_types::anyhow!(
+                        "No execution store was prepared for uploaded file \"{}\"",
+                        file_name
+                    )
+                })?;
+                let object_path = Path::from("files").child(file_name.as_str());
+                FlowPath::new(object_path.as_ref().to_string(), store_ref.clone(), None)
+            }
+        };
+
         let (bytes, content_type) = download_file_input_url(&client, &url, &file_name).await?;
         if file.mime_type.is_none() {
             file.mime_type = content_type;
