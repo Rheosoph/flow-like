@@ -348,9 +348,15 @@
 }
 
 /* University lessons use the shared Plate renderer, but need a calmer reading
-   surface than compact editor or chat contexts. Text stays at a book-like
-   measure while screenshots and diagrams may use the wider article canvas. */
+   surface than compact editor or chat contexts. The article is the wide canvas:
+   the editor root is padded down to the reading measure and media blocks pull
+   back out to the figure canvas with negative margins. Nothing ever exceeds the
+   article, so the renderer's overflow clip only trims genuinely oversized
+   content — never a diagram. Both widths are consumed inside the article, whose
+   inline size is what `cqi` measures. */
 .fl-lesson-article {
+	--fl-lesson-measure: 45rem;
+	--fl-lesson-figure-canvas: min(56rem, 100cqi);
 	container-type: inline-size;
 }
 
@@ -360,8 +366,7 @@
  * uses (serif for prose, sans for chrome, mono for labels).
  */
 .fl-lesson-prose {
-	width: min(100%, 66ch);
-	margin-inline: auto;
+	width: 100%;
 	color: var(--foreground);
 	font-family: var(--font-serif);
 	font-size: 1.0625rem;
@@ -376,6 +381,19 @@
 
 .fl-lesson-prose :is(code, kbd, samp, pre) {
 	font-family: var(--font-mono);
+}
+
+/* Padding, not per-block centring: Plate writes indent as an inline
+   `margin-left` on list and indented blocks, which would defeat auto margins. */
+.fl-lesson-prose [data-slate-editor] {
+	padding-inline: max(0px, calc((100% - var(--fl-lesson-measure)) / 2));
+}
+
+.fl-lesson-prose [data-slate-editor] > :has(> figure, > div > figure) {
+	margin-inline: min(
+		0px,
+		calc((var(--fl-lesson-measure) - var(--fl-lesson-figure-canvas)) / 2)
+	);
 }
 
 .fl-lesson-prose [data-slate-editor] > p {
@@ -448,20 +466,17 @@
 }
 
 /*
- * Figures break out of the 66ch reading column to the full article width. The
- * editor writes the stored resize width onto the figure as an inline style,
- * which outranks `width` here — `max-width` is what actually keeps a wide image
- * inside the column, so it must stay a real cap and never `none`.
+ * A figure fills its block, which the negative margins above already hold at
+ * the figure canvas. The editor writes the stored resize width onto the figure
+ * as an inline style, which outranks `width` here — `max-width` is what actually
+ * keeps a wide image inside the canvas, so it must stay a real cap and never `none`.
  */
 .fl-lesson-prose figure {
-	position: relative;
-	left: 50%;
 	display: block;
-	width: min(56rem, 100cqi);
-	max-width: min(56rem, 100cqi);
+	width: 100%;
+	max-width: 100%;
 	margin-block: 1.75rem;
-	margin-inline: 0;
-	transform: translateX(-50%);
+	margin-inline: auto;
 	text-align: center;
 }
 
@@ -476,9 +491,12 @@
 	min-width: 0;
 }
 
+/* Sized from the image itself: wide screenshots fill the figure, tall ones are
+   capped by height and keep their aspect ratio instead of being letterboxed. */
 .fl-lesson-prose figure img {
 	display: block;
-	width: 100%;
+	width: auto;
+	max-width: 100%;
 	height: auto;
 	max-height: min(70vh, 52rem);
 	margin-inline: auto;
@@ -492,7 +510,7 @@
 .fl-lesson-prose figure[data-lesson-media-caption]::after {
 	display: block;
 	height: auto;
-	max-width: 66ch;
+	max-width: var(--fl-lesson-measure);
 	margin: 0.625rem auto 0;
 	color: var(--muted-foreground);
 	font-size: 0.8125rem;
@@ -509,7 +527,6 @@
 	align-items: center;
 	justify-content: center;
 	padding: 2rem;
-	transform: translateX(-50%);
 	border: 1px dashed var(--border);
 	border-radius: var(--radius-lg);
 	background: color-mix(in oklch, var(--muted) 35%, transparent);
