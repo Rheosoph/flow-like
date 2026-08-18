@@ -1,6 +1,7 @@
 import type {
 	IApplyFlowScriptResponse,
 	IBoard,
+	IBoardMutationOptions,
 	IBoardState,
 	IConnectionMode,
 	IExecutionMode,
@@ -17,11 +18,6 @@ import type {
 } from "../../../";
 import type { IJwks, IRealtimeAccess } from "../../../";
 import type {
-	IBoardSummary,
-	IBoardSummaryInclude,
-	IBoardVariables,
-} from "../../../lib/schema/flow/board-summary";
-import type {
 	CanvasSettings,
 	SurfaceComponent,
 } from "../../../components/a2ui/types";
@@ -32,6 +28,11 @@ import type {
 	UnifiedChatMessage,
 	UnifiedCopilotResponse,
 } from "../../../lib/schema/copilot";
+import type {
+	IBoardSummary,
+	IBoardSummaryInclude,
+	IBoardVariables,
+} from "../../../lib/schema/flow/board-summary";
 
 export class EmptyBoardState implements IBoardState {
 	getBoards(appId: string): Promise<IBoard[]> {
@@ -151,6 +152,7 @@ export class EmptyBoardState implements IBoardState {
 		appId: string,
 		boardId: string,
 		command: IGenericCommand,
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand> {
 		throw new Error("Method not implemented.");
 	}
@@ -158,6 +160,7 @@ export class EmptyBoardState implements IBoardState {
 		appId: string,
 		boardId: string,
 		commands: IGenericCommand[],
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand[]> {
 		throw new Error("Method not implemented.");
 	}

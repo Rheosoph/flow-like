@@ -207,6 +207,12 @@ pub struct PackageSummary {
     pub rating_count: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<MetaSummary>,
+    /// Capability tags derived from the package's declared permissions, most
+    /// sensitive first (`net.http`, `oauth`, `models`, `storage.user`, …).
+    /// Empty when the package declares no permissions — always serialized, so
+    /// clients can tell "declares nothing" apart from "server predates this".
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
 /// Search filters for registry queries

@@ -19,11 +19,6 @@ import type {
 } from "../../lib";
 import type { IJwks, IRealtimeAccess } from "../../lib";
 import type {
-	IBoardSummary,
-	IBoardSummaryInclude,
-	IBoardVariables,
-} from "../../lib/schema/flow/board-summary";
-import type {
 	BoardEditJob,
 	BoardEditJobDeliveryClaim,
 	BoardEditJobResolution,
@@ -37,6 +32,11 @@ import type {
 	UnifiedChatMessage,
 	UnifiedCopilotResponse,
 } from "../../lib/schema/copilot";
+import type {
+	IBoardSummary,
+	IBoardSummaryInclude,
+	IBoardVariables,
+} from "../../lib/schema/flow/board-summary";
 import type { BoardCommand } from "../../lib/schema/flow/copilot";
 import type { IPrerunBoardResponse } from "./types";
 
@@ -111,6 +111,18 @@ export interface IBoardServerResetResult {
 	discardedBatches: number;
 	/** Batches pushed to the server before anything was discarded. */
 	pushedBatches: number;
+}
+
+/**
+ * Optional hooks for board mutations.
+ *
+ * `onBoard` receives the board as it stands after the mutation when the backend obtained it in
+ * the same round trip (the sync tail of a merged apply, applied onto the held revision). A caller
+ * that gets it can hand it to the query cache and skip its refetch; a backend that cannot produce
+ * it simply never calls back and the caller refetches as before.
+ */
+export interface IBoardMutationOptions {
+	onBoard?: (board: IBoard) => void;
 }
 
 export interface IBoardState {
@@ -253,12 +265,14 @@ export interface IBoardState {
 		appId: string,
 		boardId: string,
 		command: IGenericCommand,
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand>;
 
 	executeCommands(
 		appId: string,
 		boardId: string,
 		commands: IGenericCommand[],
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand[]>;
 
 	applyFlowScript(

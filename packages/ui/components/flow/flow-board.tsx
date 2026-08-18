@@ -161,6 +161,7 @@ import {
 	shouldIgnoreBoardClipboardEvent,
 } from "../../lib/flow-board-utils";
 import { toastError, toastSuccess } from "../../lib/messages";
+import { isWebkitLite } from "../../lib/platform";
 import { getRuntimeConfiguredVariables } from "../../lib/runtime-vars-utils";
 import { IAppVisibility } from "../../lib/schema/app/app";
 import type { IBit } from "../../lib/schema/bit/bit";
@@ -320,8 +321,16 @@ const FlowCanvas = memo(function FlowCanvas({
 			<MiniMap
 				pannable
 				zoomable
-				bgColor="color-mix(in oklch, var(--background) 80%, transparent)"
-				maskColor="color-mix(in oklch, var(--foreground) 10%, transparent)"
+				bgColor={
+					isWebkitLite()
+						? "var(--background)"
+						: "color-mix(in oklch, var(--background) 80%, transparent)"
+				}
+				maskColor={
+					isWebkitLite()
+						? "rgb(127 127 127 / 0.15)"
+						: "color-mix(in oklch, var(--foreground) 10%, transparent)"
+				}
 				nodeColor={miniMapNodeColor}
 			/>
 			<Background
@@ -2428,36 +2437,39 @@ export function FlowBoard({
 	);
 
 	const miniMapNodeColor = useCallback((node: Node) => {
-		if (node.type === "layerNode")
-			return `color-mix(in oklch, var(--foreground) 50%, transparent)`;
+		// The minimap SVG repaints on every pan/zoom frame; WebKit rasterizes
+		// oklch color-mix fills slowly enough that a large board stutters, so it
+		// gets flat token colors while Chromium keeps the translucent tint.
+		const tint = (token: string, percent: number) =>
+			isWebkitLite()
+				? `var(${token})`
+				: `color-mix(in oklch, var(${token}) ${percent}%, transparent)`;
+
+		if (node.type === "layerNode") return tint("--foreground", 50);
 
 		if (node.type === "node") {
 			const nodeData: INode = node.data.node as INode;
-			if (nodeData.event_callback)
-				return `color-mix(in oklch, var(--primary) 80%, transparent)`;
-			if (nodeData.start)
-				return `color-mix(in oklch, var(--primary) 80%, transparent)`;
+			if (nodeData.event_callback || nodeData.start)
+				return tint("--primary", 80);
 			if (
 				!Object.values(nodeData.pins).find(
 					(pin) => pin.data_type === IVariableType.Execution,
 				)
 			) {
-				return `color-mix(in oklch, var(--tertiary) 80%, transparent)`;
+				return tint("--tertiary", 80);
 			}
-			return `color-mix(in oklch, var(--muted) 80%, transparent)`;
+			return tint("--muted", 80);
 		}
 		if (node.type === "commentNode") {
 			const commentData: IComment = node.data.comment as IComment;
-			let color =
-				commentData.color ??
-				`color-mix(in oklch, var(--muted) 80%, transparent)`;
+			let color = commentData.color ?? tint("--muted", 80);
 
 			if (color.startsWith("#")) {
 				color = hexToRgba(color, 0.3);
 			}
 			return color;
 		}
-		return `color-mix(in oklch, var(--primary) 60%, transparent)`;
+		return tint("--primary", 60);
 	}, []);
 
 	const onConnect = useCallback(

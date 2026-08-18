@@ -2,19 +2,20 @@
 //!
 //! A board is split into independently versioned **parts**: a small `meta` record, the
 //! `variables`, `comments`, `layers` and `refs` maps, and one node **segment** per effective
-//! layer. Every part carries an opaque revision token (a canonical-JSON digest of exactly the
-//! bytes that part ships). Clients echo the tokens they hold; the server answers with only the
-//! parts whose token differs. Tokens are never computed client-side, so their derivation is free
-//! to change without a protocol bump.
+//! layer. Every part carries an opaque revision token (a digest of exactly the bytes that part
+//! ships). Clients echo the tokens they hold; the server answers with only the parts whose token
+//! differs. Tokens are never computed client-side, so their derivation is free to change without
+//! a protocol bump.
 //!
 //! Three properties are load-bearing and each guards a specific corruption:
 //!
 //! - **Segments partition on `node.layer`, not `Layer.nodes`.** The canvas filters the flat
 //!   `Board.nodes` map by `node.layer`; `Layer.nodes` is a legacy parallel map that is empty on
 //!   real boards. Segmenting on it would ship empty segments while the real nodes never move.
-//! - **A returned segment replaces the client's node set for that segment wholesale.** It is never
-//!   merged, so a node that changed layer (and therefore appears in two changed segments) cannot
-//!   linger in the one it left.
+//! - **A returned segment replaces the client's node set for that segment wholesale** — unless it
+//!   is a *patch* (`base` set), which applies node upserts and removals onto exactly the segment
+//!   revision named by `base`. Either way a node that changed layer (and therefore appears in two
+//!   changed segments) cannot linger in the one it left.
 //! - **Tokens digest the wire payload, not `Node::hash`.** `Node::hash` skips `pin.id`, `node.id`,
 //!   `error`, `version` and more, and dynamic `on_update` pins re-mint ids without changing it. A
 //!   token built from it could report "unchanged" while every pin id differed.
@@ -23,11 +24,49 @@
 //! catalog-owned field, on the node and on each of its pins, is byte-identical to the registry
 //! definition. Roughly forty catalog `on_update`s rewrite `data_type`/`value_type`/`friendly_name`
 //! dynamically (`reroute`, `struct_*`, `a2ui_*` …); an allowlist would corrupt exactly those.
+//!
+//! # Tokens are 128 bits
+//!
+//! A token is the first [`TOKEN_BYTES`] (16) bytes of a blake3 digest, base64url without padding:
+//! 22 characters instead of 64 hex. A manifest carries two tokens per layer (definition + segment)
+//! and rides on **every** sync and every merged apply, so on a board with 80 layers the difference
+//! is ~7 KB per request — millions of requests a day make that the dominant recurring byte cost
+//! of the protocol, which is why it was not left at 256 bits "to be safe".
+//!
+//! Why 128 is not a safety trade-off here:
+//! - A collision needs two revisions of the *same part of the same board* to truncate to the same
+//!   16 bytes. Accidentally: ~1e-21 over a billion revisions of one segment (birthday bound
+//!   n²/2¹²⁹). Deliberately: 2⁶⁴ blake3 evaluations against one's own board.
+//! - The consequence of one would be that **one client keeps one stale part** until that part
+//!   next changes or the board is reopened (the first load is always full). Tokens never enter
+//!   an authorization or write decision, they are computed *after* secret filtering, and the
+//!   server never trusts a client token as evidence about the stored board — so stored data cannot
+//!   be affected.
+//! - The primitives underneath already sit at this tier: the board cache is validated by S3 ETags
+//!   (MD5, 128 bits) and node ids are ~128-bit random ids.
+//!
+//! Client-side verification ("apply, hash locally, compare") was considered and rejected: it
+//! would require the client to reproduce the server's canonical bytes (f32 coordinates, u64
+//! hashes beyond 2⁵³, optional-field omission, hydration reversal) — a cross-language canonical
+//! form, i.e. a protocol of its own. A manifest checksum without content hashing only detects a
+//! collision when nothing else changed in the same request, so it was not built either.
+//!
+//! # Patches and deltas (`BoardSyncRequest::patch`)
+//!
+//! A client that opts in may receive, for a changed segment, a **patch** instead of the whole
+//! segment whenever the server can resolve the *client's* token to a segment it still holds in
+//! memory (the "base"). The patch carries only the nodes whose payload differs from the base plus
+//! the ids that vanished, and names the base token so the client can verify it applies onto what
+//! it holds. Bases are opportunistic — an in-memory index fed by every snapshot built on that
+//! process; a miss ships the whole segment exactly as before. Under the same opt-in the response
+//! replaces the full manifest echo with a `manifest_delta` relative to the request.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 use std::time::SystemTime;
 
-use flow_like_types::base64::engine::general_purpose::STANDARD as BASE64;
+use flow_like_types::base64::Engine;
+use flow_like_types::base64::engine::general_purpose::{STANDARD as BASE64, URL_SAFE_NO_PAD};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +78,10 @@ use crate::flow::variable::{Variable, VariableType};
 
 /// Segment id for nodes that live on the board root (`node.layer` is `None` or empty).
 pub const ROOT_SEGMENT: &str = "__root__";
+
+/// Bytes of the blake3 digest a part token keeps. See the module docs before changing this: the
+/// value is a deliberate byte-cost decision, and every change forces one full refetch per client.
+pub const TOKEN_BYTES: usize = 16;
 
 /// The effective layer a node is drawn on. `Some("")` and `None` are the same thing to the
 /// canvas, so they must be the same segment here.
@@ -132,6 +175,10 @@ mod base64_bytes {
 
 /// A pin on the sync wire. Graph identity is always present; catalog-owned metadata is present
 /// unless the owning node was shipped lean (see [`SyncNode::hydrate`]).
+///
+/// Every field type is order-stable under serialisation (no `HashMap`/`HashSet`): segment tokens
+/// stream this struct straight into the hasher, so an unordered map here would make tokens differ
+/// between replicas and turn every sync into a resend.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct SyncPin {
     pub id: String,
@@ -210,7 +257,7 @@ impl SyncPin {
     }
 }
 
-/// A node on the sync wire.
+/// A node on the sync wire. Same order-stability rule as [`SyncPin`]: no unordered maps.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct SyncNode {
     pub id: String,
@@ -237,11 +284,14 @@ pub struct SyncNode {
     pub wasm: Option<NodeWasm>,
     /// Users can rename nodes, so this is instance data and always ships.
     pub friendly_name: String,
-    pub pins: HashMap<String, SyncPin>,
+    pub pins: BTreeMap<String, SyncPin>,
 
     /// `true` when catalog-owned fields (below, and on every pin) were omitted and the client
     /// must rebuild them from its catalog entry for `name`. The client can distinguish "omitted"
     /// from "genuinely absent" only through this flag, which is why it is explicit on the wire.
+    ///
+    /// Always `false` on a node stored in a snapshot; [`BoardSyncSnapshot::diff`] sets it on the
+    /// shipped clone. Stored nodes are therefore pure payload and compare as revisions.
     #[serde(rename = "h", default, skip_serializing_if = "is_false")]
     pub hydrate: bool,
 
@@ -265,12 +315,11 @@ pub struct SyncNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_providers: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub required_oauth_scopes: Option<HashMap<String, Vec<String>>>,
+    pub required_oauth_scopes: Option<BTreeMap<String, Vec<String>>>,
 }
 
 impl SyncNode {
-    /// Full wire form of `node`. `hydrate` starts `false`; [`Self::mark_hydratable`] decides it
-    /// after the segment token is taken, so the token never depends on the server's catalog.
+    /// Full wire form of `node`, `hydrate == false`.
     pub fn from_node(node: &Node) -> Self {
         Self {
             id: node.id.clone(),
@@ -300,19 +349,19 @@ impl SyncNode {
             event_callback: node.event_callback,
             only_offline: Some(node.only_offline),
             oauth_providers: node.oauth_providers.clone(),
-            required_oauth_scopes: node.required_oauth_scopes.clone(),
+            required_oauth_scopes: node.required_oauth_scopes.as_ref().map(|scopes| {
+                scopes
+                    .iter()
+                    .map(|(provider, scopes)| (provider.clone(), scopes.clone()))
+                    .collect()
+            }),
         }
     }
 
-    /// Record whether a client holding `catalog` could rebuild this node's catalog-owned fields.
+    /// Whether a client holding `catalog` could rebuild this node's catalog-owned fields.
     /// `refs` is the board's ref table, needed to compare content-addressed descriptions.
-    pub fn mark_hydratable(
-        &mut self,
-        node: &Node,
-        catalog: Option<&Node>,
-        refs: &HashMap<String, String>,
-    ) {
-        self.hydrate = catalog.is_some_and(|catalog| Self::matches_catalog(node, catalog, refs));
+    pub fn hydratable(node: &Node, catalog: Option<&Node>, refs: &HashMap<String, String>) -> bool {
+        catalog.is_some_and(|catalog| Self::matches_catalog(node, catalog, refs))
     }
 
     /// The node as shipped to a client that asked for hydration: catalog-owned fields removed
@@ -375,12 +424,25 @@ impl SyncNode {
     }
 }
 
-/// One node segment: the nodes of one effective layer plus the token identifying this revision
-/// of that set.
+/// One node segment on the wire and in a snapshot.
+///
+/// Without `base`, `nodes` is the complete node set of the segment and replaces the client's
+/// wholesale. With `base`, this is a **patch** onto the client's segment revision `base`: `nodes`
+/// are upserts, `removed` are ids that no longer exist. `hash` is always the token of the
+/// resulting revision.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct SyncSegment {
     pub hash: String,
-    pub nodes: HashMap<String, SyncNode>,
+    pub nodes: BTreeMap<String, SyncNode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<String>,
+    /// Ids of nodes a hydrating client may rebuild from its catalog. Server-side only; the
+    /// decision reaches the wire as [`SyncNode::hydrate`] on each shipped node.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub hydratable: BTreeSet<String>,
 }
 
 /// Every part token of one board revision. The client stores this verbatim and echoes it as the
@@ -397,6 +459,23 @@ pub struct BoardSyncManifest {
     /// One token per layer *definition* (pins, variables, coordinates, cache …), keyed by layer
     /// id — independent of the layer's node segment, so a rename ships one small record.
     pub layers: BTreeMap<String, String>,
+    pub segments: BTreeMap<String, String>,
+}
+
+/// The tokens of the current revision that differ from the ones in the request. Absent parts kept
+/// their token; removed layers/segments are listed on the response's `dropped_*` fields. Applying
+/// this onto the request's manifest yields the full manifest of the revision.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default, PartialEq)]
+pub struct BoardSyncManifestDelta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variables: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub layers: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub segments: BTreeMap<String, String>,
 }
 
@@ -417,6 +496,10 @@ pub struct BoardSyncRequest {
     /// The client holds a node catalog for this app and will rebuild catalog-owned fields.
     #[serde(default)]
     pub hydrate: bool,
+    /// The client understands segment patches (`SyncSegment::base`) and manifest deltas. Off for
+    /// every client that predates them, which is what keeps them safe to serve.
+    #[serde(default)]
+    pub patch: bool,
 }
 
 impl BoardSyncRequest {
@@ -428,6 +511,7 @@ impl BoardSyncRequest {
             layers: manifest.layers.clone(),
             segments: manifest.segments.clone(),
             hydrate,
+            patch: false,
         }
     }
 }
@@ -435,9 +519,15 @@ impl BoardSyncRequest {
 /// The parts that changed. Absent parts are unchanged; a segment or layer listed in the request
 /// but in neither the changed map nor the dropped list is unchanged; one the client never listed
 /// is always present.
+///
+/// Exactly one of `manifest` and `manifest_delta` is set: the full manifest for clients that did
+/// not opt into patches, the delta for those that did.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct BoardSyncResponse {
-    pub manifest: BoardSyncManifest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<BoardSyncManifest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_delta: Option<BoardSyncManifestDelta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<BoardMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -461,20 +551,55 @@ pub struct BoardSyncResponse {
 }
 
 // ----------------------------------------------------------------------------------------------
+// Tokens
+// ----------------------------------------------------------------------------------------------
+
+fn token_hasher(part: &'static str) -> blake3::Hasher {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"flow-like.board-sync/v2\0");
+    hasher.update(part.as_bytes());
+    hasher.update(b"\0");
+    hasher
+}
+
+fn encode_token(digest: blake3::Hash) -> String {
+    URL_SAFE_NO_PAD.encode(&digest.as_bytes()[..TOKEN_BYTES])
+}
+
+/// Opaque revision token for a part whose serialisation may contain unordered maps: the value is
+/// first canonicalised (sorted keys) so two replicas serialising the same `HashMap` agree, then
+/// streamed into the hasher.
+pub fn part_token<T: Serialize>(part: &'static str, value: &T) -> flow_like_types::Result<String> {
+    let value = super::commands::canonicalize_json(flow_like_types::json::to_value(value)?);
+    let mut hasher = token_hasher(part);
+    serde_json::to_writer(&mut hasher, &value)?;
+    Ok(encode_token(hasher.finalize()))
+}
+
+/// Token for a value whose serialisation is already order-stable (`BTreeMap`/`BTreeSet`/structs
+/// only — [`SyncSegment::nodes`]). Streams straight into the hasher: no intermediate `Value`, no
+/// intermediate `String`.
+fn ordered_part_token<T: Serialize>(
+    part: &'static str,
+    value: &T,
+) -> flow_like_types::Result<String> {
+    let mut hasher = token_hasher(part);
+    serde_json::to_writer(&mut hasher, value)?;
+    Ok(encode_token(hasher.finalize()))
+}
+
+// ----------------------------------------------------------------------------------------------
 // Snapshot: computed once per board revision, diffed per request
 // ----------------------------------------------------------------------------------------------
 
-/// Opaque revision token for one part: blake3 over the canonical JSON of the payload. Canonical
-/// so two replicas serialising the same `HashMap` in different orders agree.
-pub fn part_token<T: Serialize>(part: &'static str, value: &T) -> flow_like_types::Result<String> {
-    let value = super::commands::canonicalize_json(flow_like_types::json::to_value(value)?);
-    let encoded = canonical_json::ser::to_string(&value)?;
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"flow-like.board-sync/v1\0");
-    hasher.update(part.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(encoded.as_bytes());
-    Ok(hasher.finalize().to_hex().to_string())
+/// Resolves a segment token the *client* holds to the segment it denotes, if this process still
+/// has it. Returning `None` is always correct (the whole segment ships); returning a segment whose
+/// `hash` differs from the token is a caller bug and is ignored.
+pub type SegmentBaseResolver<'a> = &'a dyn Fn(&str) -> Option<Arc<SyncSegment>>;
+
+/// A resolver for callers without a base index.
+pub fn no_segment_bases(_token: &str) -> Option<Arc<SyncSegment>> {
+    None
 }
 
 /// A board split into parts, each with its token. Build once per board revision (the API caches
@@ -491,7 +616,7 @@ pub struct BoardSyncSnapshot {
     /// Ref keys each layer definition reaches.
     layer_refs: HashMap<String, Vec<String>>,
     refs: HashMap<String, String>,
-    segments: HashMap<String, SyncSegment>,
+    segments: HashMap<String, Arc<SyncSegment>>,
     /// Ref keys each segment reaches.
     segment_refs: HashMap<String, Vec<String>>,
 }
@@ -525,6 +650,21 @@ fn node_refs(node: &Node, refs: &HashMap<String, String>, out: &mut Vec<String>)
     }
 }
 
+/// [`node_refs`] for a stored (full-form) wire node — what a patch has at hand.
+fn sync_node_refs(node: &SyncNode, refs: &HashMap<String, String>, out: &mut Vec<String>) {
+    if let Some(description) = &node.description {
+        collect_ref_chain(description, refs, out);
+    }
+    for pin in node.pins.values() {
+        if let Some(description) = &pin.description {
+            collect_ref_chain(description, refs, out);
+        }
+        if let Some(schema) = &pin.schema {
+            collect_ref_chain(schema, refs, out);
+        }
+    }
+}
+
 fn variable_refs(variable: &Variable, refs: &HashMap<String, String>, out: &mut Vec<String>) {
     if let Some(schema) = &variable.schema {
         collect_ref_chain(schema, refs, out);
@@ -554,12 +694,24 @@ impl BoardSyncSnapshot {
     /// app's WASM nodes); it decides hydration eligibility and nothing else. Pass an empty slice
     /// to disable hydration.
     pub fn from_board(board: &Board, catalog: &[Node]) -> flow_like_types::Result<Self> {
+        Self::from_board_incremental(board, catalog, None)
+    }
+
+    /// [`Self::from_board`], reusing the token of every segment whose node payload is identical
+    /// to `previous` — the snapshot of an earlier revision of the same board, when the caller
+    /// still has one. Reuse is decided by comparing the payloads, never by trusting `previous`, so
+    /// any earlier revision (or none) is a valid input; only the hashing cost changes.
+    pub fn from_board_incremental(
+        board: &Board,
+        catalog: &[Node],
+        previous: Option<&BoardSyncSnapshot>,
+    ) -> flow_like_types::Result<Self> {
         let catalog_by_name: HashMap<&str, &Node> = catalog
             .iter()
             .map(|node| (node.name.as_str(), node))
             .collect();
 
-        let mut buckets: HashMap<String, HashMap<String, SyncNode>> = HashMap::new();
+        let mut buckets: HashMap<String, BTreeMap<String, SyncNode>> = HashMap::new();
         for (id, node) in &board.nodes {
             buckets
                 .entry(node_segment(node).to_string())
@@ -570,23 +722,36 @@ impl BoardSyncSnapshot {
         let mut segments = HashMap::with_capacity(buckets.len());
         let mut segment_tokens = BTreeMap::new();
         let mut segment_refs = HashMap::with_capacity(buckets.len());
-        for (segment_id, mut nodes) in buckets {
-            // Token first: it must identify the revision, not how one client receives it.
-            let hash = part_token("segment", &nodes)?;
+        for (segment_id, nodes) in buckets {
+            // The token identifies the payload — never how one client receives it (hydration is
+            // decided below and never enters it) and never which catalog was in force.
+            let hash = match previous.and_then(|previous| previous.segments.get(&segment_id)) {
+                Some(earlier) if earlier.nodes == nodes => earlier.hash.clone(),
+                _ => ordered_part_token("segment", &nodes)?,
+            };
+            let mut hydratable = BTreeSet::new();
             let mut reached = Vec::new();
-            for (id, sync_node) in nodes.iter_mut() {
+            for id in nodes.keys() {
                 if let Some(node) = board.nodes.get(id) {
-                    sync_node.mark_hydratable(
-                        node,
-                        catalog_by_name.get(node.name.as_str()).copied(),
-                        &board.refs,
-                    );
+                    let catalog = catalog_by_name.get(node.name.as_str()).copied();
+                    if SyncNode::hydratable(node, catalog, &board.refs) {
+                        hydratable.insert(id.clone());
+                    }
                     node_refs(node, &board.refs, &mut reached);
                 }
             }
             segment_tokens.insert(segment_id.clone(), hash.clone());
             segment_refs.insert(segment_id.clone(), dedup(reached));
-            segments.insert(segment_id, SyncSegment { hash, nodes });
+            segments.insert(
+                segment_id,
+                Arc::new(SyncSegment {
+                    hash,
+                    nodes,
+                    base: None,
+                    removed: Vec::new(),
+                    hydratable,
+                }),
+            );
         }
 
         let mut layer_tokens = BTreeMap::new();
@@ -626,43 +791,139 @@ impl BoardSyncSnapshot {
         })
     }
 
+    /// The segments of this revision, keyed by segment id. Feed these into a base index so later
+    /// requests holding one of their tokens can be answered with patches.
+    pub fn segments(&self) -> impl Iterator<Item = (&String, &Arc<SyncSegment>)> {
+        self.segments.iter()
+    }
+
+    /// The segment of this revision with token `token`, if any. Linear in the number of layers;
+    /// suitable as a base resolver over a handful of recent snapshots.
+    pub fn segment_by_token(&self, token: &str) -> Option<Arc<SyncSegment>> {
+        self.segments
+            .values()
+            .find(|segment| segment.hash == token)
+            .cloned()
+    }
+
+    fn ship_node(node: &SyncNode, hydratable: bool, hydrate: bool) -> SyncNode {
+        let mut shipped = node.clone();
+        if hydrate && hydratable {
+            shipped.hydrate = true;
+            shipped.lean()
+        } else {
+            shipped.full()
+        }
+    }
+
+    fn manifest_delta(&self, request: &BoardSyncRequest) -> BoardSyncManifestDelta {
+        let manifest = &self.manifest;
+        let differs = |held: &Option<String>, current: &String| {
+            (held.as_ref() != Some(current)).then(|| current.clone())
+        };
+        BoardSyncManifestDelta {
+            meta: differs(&request.meta, &manifest.meta),
+            variables: differs(&request.variables, &manifest.variables),
+            comments: differs(&request.comments, &manifest.comments),
+            layers: manifest
+                .layers
+                .iter()
+                .filter(|(id, token)| request.layers.get(*id) != Some(token))
+                .map(|(id, token)| (id.clone(), token.clone()))
+                .collect(),
+            segments: manifest
+                .segments
+                .iter()
+                .filter(|(id, token)| request.segments.get(*id) != Some(token))
+                .map(|(id, token)| (id.clone(), token.clone()))
+                .collect(),
+        }
+    }
+
     /// The parts of this revision that `request` does not already hold, plus every ref those
-    /// parts reference.
-    pub fn diff(&self, request: &BoardSyncRequest) -> BoardSyncResponse {
+    /// parts reference. `resolve_base` turns a segment token the client holds into the segment it
+    /// denotes so a changed segment can ship as a patch; pass [`no_segment_bases`] to always ship
+    /// whole segments.
+    pub fn diff(
+        &self,
+        request: &BoardSyncRequest,
+        resolve_base: SegmentBaseResolver<'_>,
+    ) -> BoardSyncResponse {
         let changed = |held: &Option<String>, current: &str| held.as_deref() != Some(current);
         let manifest = &self.manifest;
         let mut needed_refs: Vec<&str> = Vec::new();
+        let mut patch_refs: Vec<String> = Vec::new();
 
-        let segments: HashMap<String, SyncSegment> = self
-            .segments
-            .iter()
-            .filter(|(id, segment)| request.segments.get(*id) != Some(&segment.hash))
-            .map(|(id, segment)| {
-                if let Some(keys) = self.segment_refs.get(id) {
-                    needed_refs.extend(keys.iter().map(String::as_str));
-                }
-                let nodes = segment
-                    .nodes
-                    .iter()
-                    .map(|(node_id, node)| {
-                        let node = node.clone();
-                        let node = if request.hydrate {
-                            node.lean()
-                        } else {
-                            node.full()
-                        };
-                        (node_id.clone(), node)
-                    })
-                    .collect();
-                (
-                    id.clone(),
+        let mut segments: HashMap<String, SyncSegment> = HashMap::new();
+        for (id, segment) in &self.segments {
+            let held = request.segments.get(id);
+            if held == Some(&segment.hash) {
+                continue;
+            }
+            let base = held
+                .filter(|_| request.patch)
+                .and_then(|token| resolve_base(token))
+                .filter(|base| Some(&base.hash) == held);
+
+            let shipped = match base {
+                Some(base) => {
+                    let mut nodes = BTreeMap::new();
+                    for (node_id, node) in &segment.nodes {
+                        if base.nodes.get(node_id) == Some(node) {
+                            continue;
+                        }
+                        sync_node_refs(node, &self.refs, &mut patch_refs);
+                        nodes.insert(
+                            node_id.clone(),
+                            Self::ship_node(
+                                node,
+                                segment.hydratable.contains(node_id),
+                                request.hydrate,
+                            ),
+                        );
+                    }
+                    let removed = base
+                        .nodes
+                        .keys()
+                        .filter(|node_id| !segment.nodes.contains_key(*node_id))
+                        .cloned()
+                        .collect();
                     SyncSegment {
                         hash: segment.hash.clone(),
                         nodes,
-                    },
-                )
-            })
-            .collect();
+                        base: Some(base.hash.clone()),
+                        removed,
+                        hydratable: BTreeSet::new(),
+                    }
+                }
+                None => {
+                    if let Some(keys) = self.segment_refs.get(id) {
+                        needed_refs.extend(keys.iter().map(String::as_str));
+                    }
+                    SyncSegment {
+                        hash: segment.hash.clone(),
+                        nodes: segment
+                            .nodes
+                            .iter()
+                            .map(|(node_id, node)| {
+                                (
+                                    node_id.clone(),
+                                    Self::ship_node(
+                                        node,
+                                        segment.hydratable.contains(node_id),
+                                        request.hydrate,
+                                    ),
+                                )
+                            })
+                            .collect(),
+                        base: None,
+                        removed: Vec::new(),
+                        hydratable: BTreeSet::new(),
+                    }
+                }
+            };
+            segments.insert(id.clone(), shipped);
+        }
 
         let dropped_segments = request
             .segments
@@ -695,6 +956,7 @@ impl BoardSyncSnapshot {
             self.variables.clone()
         });
 
+        needed_refs.extend(patch_refs.iter().map(String::as_str));
         needed_refs.sort_unstable();
         needed_refs.dedup();
         let refs = needed_refs
@@ -706,11 +968,19 @@ impl BoardSyncSnapshot {
             })
             .collect();
 
+        let (manifest, manifest_delta) = if request.patch {
+            (None, Some(self.manifest_delta(request)))
+        } else {
+            (Some(manifest.clone()), None)
+        };
+
         BoardSyncResponse {
-            manifest: manifest.clone(),
-            meta: changed(&request.meta, &manifest.meta).then(|| self.meta.clone()),
+            manifest,
+            manifest_delta,
+            meta: changed(&request.meta, &self.manifest.meta).then(|| self.meta.clone()),
             variables,
-            comments: changed(&request.comments, &manifest.comments).then(|| self.comments.clone()),
+            comments: changed(&request.comments, &self.manifest.comments)
+                .then(|| self.comments.clone()),
             layers,
             dropped_layers,
             refs,
@@ -762,6 +1032,17 @@ mod tests {
         board
     }
 
+    fn manifest_of(response: &BoardSyncResponse) -> BoardSyncManifest {
+        response.manifest.clone().expect("full manifest")
+    }
+
+    fn patching(manifest: &BoardSyncManifest) -> BoardSyncRequest {
+        BoardSyncRequest {
+            patch: true,
+            ..BoardSyncRequest::from_manifest(manifest, false)
+        }
+    }
+
     #[test]
     fn root_segment_absorbs_empty_and_missing_layer() {
         let catalog = catalog_node();
@@ -780,13 +1061,15 @@ mod tests {
         let board = board_with(vec![placed(&catalog, None), placed(&catalog, Some("l"))]);
         let snapshot = BoardSyncSnapshot::from_board(&board, &[]).expect("snapshot");
         let request = BoardSyncRequest::from_manifest(&snapshot.manifest, false);
-        let response = snapshot.diff(&request);
+        let response = snapshot.diff(&request, &no_segment_bases);
         assert!(response.meta.is_none());
         assert!(response.variables.is_none());
         assert!(response.refs.is_empty());
         assert!(response.layers.is_empty());
         assert!(response.segments.is_empty());
         assert!(response.dropped_segments.is_empty());
+        assert_eq!(manifest_of(&response), snapshot.manifest);
+        assert!(response.manifest_delta.is_none());
     }
 
     #[test]
@@ -794,10 +1077,30 @@ mod tests {
         let catalog = catalog_node();
         let board = board_with(vec![placed(&catalog, None), placed(&catalog, Some("l"))]);
         let snapshot = BoardSyncSnapshot::from_board(&board, &[]).expect("snapshot");
-        let response = snapshot.diff(&BoardSyncRequest::default());
+        let response = snapshot.diff(&BoardSyncRequest::default(), &no_segment_bases);
         assert!(response.meta.is_some());
         assert!(response.variables.is_some());
         assert_eq!(response.segments.len(), 2);
+        assert!(response.segments.values().all(|s| s.base.is_none()));
+    }
+
+    #[test]
+    fn tokens_are_128_bit_base64url() {
+        let catalog = catalog_node();
+        let board = board_with(vec![placed(&catalog, None)]);
+        let snapshot = BoardSyncSnapshot::from_board(&board, &[]).expect("snapshot");
+        for token in [
+            &snapshot.manifest.meta,
+            &snapshot.manifest.segments[ROOT_SEGMENT],
+        ] {
+            assert_eq!(token.len(), 22, "16 bytes → 22 unpadded base64url chars");
+            assert!(
+                token
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+                "url-safe alphabet only: {token}"
+            );
+        }
     }
 
     #[test]
@@ -818,7 +1121,7 @@ mod tests {
         board.nodes.insert(b.id.clone(), b.clone());
 
         let before = BoardSyncSnapshot::from_board(&board, &[]).expect("before");
-        let full = before.diff(&BoardSyncRequest::default());
+        let full = before.diff(&BoardSyncRequest::default(), &no_segment_bases);
         assert!(full.refs.contains_key("desc-a") && full.refs.contains_key("desc-b"));
         assert!(
             !full.refs.contains_key("orphan"),
@@ -829,7 +1132,10 @@ mod tests {
         let mut edited = board.clone();
         edited.nodes.get_mut(&a.id).unwrap().coordinates = Some((1.0, 0.0, 0.0));
         let after = BoardSyncSnapshot::from_board(&edited, &[]).expect("after");
-        let response = after.diff(&BoardSyncRequest::from_manifest(&before.manifest, false));
+        let response = after.diff(
+            &BoardSyncRequest::from_manifest(&before.manifest, false),
+            &no_segment_bases,
+        );
         assert_eq!(
             response.segments.keys().collect::<Vec<_>>(),
             vec![ROOT_SEGMENT]
@@ -843,7 +1149,10 @@ mod tests {
             .insert("desc-a2".into(), "A's new description".into());
         renamed.nodes.get_mut(&a.id).unwrap().description = "desc-a2".into();
         let third = BoardSyncSnapshot::from_board(&renamed, &[]).expect("third");
-        let response = third.diff(&BoardSyncRequest::from_manifest(&after.manifest, false));
+        let response = third.diff(
+            &BoardSyncRequest::from_manifest(&after.manifest, false),
+            &no_segment_bases,
+        );
         assert!(response.refs.contains_key("desc-a2"));
         assert!(
             !response.refs.contains_key("desc-b"),
@@ -877,7 +1186,10 @@ mod tests {
         let mut renamed = board.clone();
         renamed.layers.get_mut("l2").unwrap().name = "Second (renamed)".into();
         let after = BoardSyncSnapshot::from_board(&renamed, &[]).expect("after");
-        let response = after.diff(&BoardSyncRequest::from_manifest(&before.manifest, false));
+        let response = after.diff(
+            &BoardSyncRequest::from_manifest(&before.manifest, false),
+            &no_segment_bases,
+        );
         assert_eq!(response.layers.keys().collect::<Vec<_>>(), vec!["l2"]);
         assert!(
             response.segments.is_empty(),
@@ -888,7 +1200,10 @@ mod tests {
         let mut removed = renamed.clone();
         removed.layers.remove("l1");
         let third = BoardSyncSnapshot::from_board(&removed, &[]).expect("third");
-        let response = third.diff(&BoardSyncRequest::from_manifest(&after.manifest, false));
+        let response = third.diff(
+            &BoardSyncRequest::from_manifest(&after.manifest, false),
+            &no_segment_bases,
+        );
         assert_eq!(response.dropped_layers, vec!["l1".to_string()]);
         assert!(response.layers.is_empty());
     }
@@ -904,7 +1219,10 @@ mod tests {
         node.layer = Some("l".into());
         let after =
             BoardSyncSnapshot::from_board(&board_with(vec![node, other]), &[]).expect("after");
-        let response = after.diff(&BoardSyncRequest::from_manifest(&before.manifest, false));
+        let response = after.diff(
+            &BoardSyncRequest::from_manifest(&before.manifest, false),
+            &no_segment_bases,
+        );
         assert!(response.meta.is_none());
         assert_eq!(response.segments.len(), 1, "layer l gained a node");
         assert!(response.segments.contains_key("l"));
@@ -919,7 +1237,7 @@ mod tests {
                 .expect("snapshot");
         let mut request = BoardSyncRequest::from_manifest(&snapshot.manifest, false);
         request.segments.insert("ghost".into(), "x".into());
-        let response = snapshot.diff(&request);
+        let response = snapshot.diff(&request, &no_segment_bases);
         assert_eq!(response.dropped_segments, vec!["ghost".to_string()]);
     }
 
@@ -962,6 +1280,136 @@ mod tests {
     }
 
     #[test]
+    fn incremental_build_reuses_tokens_and_agrees_with_a_full_build() {
+        let catalog = catalog_node();
+        let a = placed(&catalog, None);
+        let b = placed(&catalog, Some("l"));
+        let board = board_with(vec![a.clone(), b]);
+        let previous = BoardSyncSnapshot::from_board(&board, &[]).expect("previous");
+
+        let mut edited = board.clone();
+        edited.nodes.get_mut(&a.id).unwrap().coordinates = Some((5.0, 5.0, 0.0));
+        let full = BoardSyncSnapshot::from_board(&edited, &[]).expect("full");
+        let incremental = BoardSyncSnapshot::from_board_incremental(&edited, &[], Some(&previous))
+            .expect("incremental");
+        assert_eq!(full.manifest, incremental.manifest);
+        assert_eq!(
+            previous.manifest.segments["l"], incremental.manifest.segments["l"],
+            "untouched segment keeps its token"
+        );
+        assert_ne!(
+            previous.manifest.segments[ROOT_SEGMENT],
+            incremental.manifest.segments[ROOT_SEGMENT]
+        );
+        // A previous snapshot of an unrelated board is harmless: reuse is by comparison.
+        let unrelated = BoardSyncSnapshot::from_board(
+            &board_with(vec![placed(&catalog, Some("elsewhere"))]),
+            &[],
+        )
+        .expect("unrelated");
+        let against_unrelated =
+            BoardSyncSnapshot::from_board_incremental(&edited, &[], Some(&unrelated))
+                .expect("incremental vs unrelated");
+        assert_eq!(full.manifest, against_unrelated.manifest);
+    }
+
+    #[test]
+    fn a_known_base_turns_a_changed_segment_into_a_node_patch() {
+        let catalog = catalog_node();
+        let moved = placed(&catalog, None);
+        let stays = placed(&catalog, None);
+        let gone = placed(&catalog, None);
+        let board = board_with(vec![moved.clone(), stays.clone(), gone.clone()]);
+        let before = BoardSyncSnapshot::from_board(&board, &[]).expect("before");
+
+        let mut edited = board.clone();
+        edited.nodes.get_mut(&moved.id).unwrap().coordinates = Some((9.0, 9.0, 0.0));
+        edited.nodes.remove(&gone.id);
+        let added = placed(&catalog, None);
+        edited.nodes.insert(added.id.clone(), added.clone());
+        let after = BoardSyncSnapshot::from_board(&edited, &[]).expect("after");
+
+        let resolver = |token: &str| before.segment_by_token(token);
+        let response = after.diff(&patching(&before.manifest), &resolver);
+        let root = &response.segments[ROOT_SEGMENT];
+        assert_eq!(
+            root.base.as_deref(),
+            Some(before.manifest.segments[ROOT_SEGMENT].as_str())
+        );
+        assert_eq!(root.hash, after.manifest.segments[ROOT_SEGMENT]);
+        let mut upserted: Vec<_> = root.nodes.keys().cloned().collect();
+        upserted.sort();
+        let mut expected = vec![moved.id.clone(), added.id.clone()];
+        expected.sort();
+        assert_eq!(upserted, expected, "only the changed and the new node ship");
+        assert_eq!(root.removed, vec![gone.id.clone()]);
+
+        // The manifest comes back as a delta relative to the request.
+        assert!(response.manifest.is_none());
+        let delta = response.manifest_delta.expect("delta");
+        assert_eq!(delta.segments.len(), 1);
+        assert_eq!(
+            delta.segments[ROOT_SEGMENT],
+            after.manifest.segments[ROOT_SEGMENT]
+        );
+        assert!(delta.layers.is_empty());
+        assert!(delta.variables.is_none());
+        assert!(delta.meta.is_none(), "same fixed timestamps");
+    }
+
+    #[test]
+    fn patches_need_the_opt_in_and_a_matching_base() {
+        let catalog = catalog_node();
+        let node = placed(&catalog, None);
+        let board = board_with(vec![node.clone(), placed(&catalog, None)]);
+        let before = BoardSyncSnapshot::from_board(&board, &[]).expect("before");
+        let mut edited = board.clone();
+        edited.nodes.get_mut(&node.id).unwrap().coordinates = Some((1.0, 1.0, 0.0));
+        let after = BoardSyncSnapshot::from_board(&edited, &[]).expect("after");
+        let resolver = |token: &str| before.segment_by_token(token);
+
+        let legacy = after.diff(
+            &BoardSyncRequest::from_manifest(&before.manifest, false),
+            &resolver,
+        );
+        let root = &legacy.segments[ROOT_SEGMENT];
+        assert!(root.base.is_none(), "no opt-in, no patch");
+        assert_eq!(root.nodes.len(), 2);
+        assert!(legacy.manifest.is_some() && legacy.manifest_delta.is_none());
+
+        // A resolver that answers with the wrong segment for a token is ignored.
+        let lying = |_: &str| after.segment_by_token(&after.manifest.segments[ROOT_SEGMENT]);
+        let response = after.diff(&patching(&before.manifest), &lying);
+        assert!(response.segments[ROOT_SEGMENT].base.is_none());
+        assert_eq!(response.segments[ROOT_SEGMENT].nodes.len(), 2);
+
+        // Unknown token: whole segment.
+        let response = after.diff(&patching(&before.manifest), &no_segment_bases);
+        assert!(response.segments[ROOT_SEGMENT].base.is_none());
+    }
+
+    #[test]
+    fn a_patch_ships_only_the_refs_its_upserts_need() {
+        let catalog = catalog_node();
+        let mut a = placed(&catalog, None);
+        let mut b = placed(&catalog, None);
+        let mut board = board_with(vec![]);
+        board.refs.insert("desc-a".into(), "A".into());
+        board.refs.insert("desc-b".into(), "B".into());
+        a.description = "desc-a".into();
+        b.description = "desc-b".into();
+        board.nodes.insert(a.id.clone(), a.clone());
+        board.nodes.insert(b.id.clone(), b.clone());
+        let before = BoardSyncSnapshot::from_board(&board, &[]).expect("before");
+        let mut edited = board.clone();
+        edited.nodes.get_mut(&a.id).unwrap().coordinates = Some((2.0, 0.0, 0.0));
+        let after = BoardSyncSnapshot::from_board(&edited, &[]).expect("after");
+        let resolver = |token: &str| before.segment_by_token(token);
+        let response = after.diff(&patching(&before.manifest), &resolver);
+        assert_eq!(response.refs.keys().collect::<Vec<_>>(), vec!["desc-a"]);
+    }
+
+    #[test]
     fn hydration_is_exact_comparison_not_an_allowlist() {
         let catalog = catalog_node();
         let pristine = placed(&catalog, None);
@@ -986,20 +1434,30 @@ mod tests {
         ]);
         let snapshot = BoardSyncSnapshot::from_board(&board, std::slice::from_ref(&catalog))
             .expect("snapshot");
-        let root = &snapshot.segments[ROOT_SEGMENT].nodes;
-        assert!(root[&pristine.id].hydrate);
+        let root = &snapshot.segments[ROOT_SEGMENT];
         assert!(
-            root[&renamed.id].hydrate,
+            root.nodes.values().all(|node| !node.hydrate),
+            "stored = payload"
+        );
+        assert!(root.hydratable.contains(&pristine.id));
+        assert!(
+            root.hydratable.contains(&renamed.id),
             "friendly_name is instance data, not a disqualifier"
         );
-        assert!(!root[&retyped.id].hydrate, "dynamic pin type");
-        assert!(!root[&older.id].hydrate, "version mismatch");
-        assert!(!root[&extra_pin.id].hydrate, "pin missing from catalog");
+        assert!(!root.hydratable.contains(&retyped.id), "dynamic pin type");
+        assert!(!root.hydratable.contains(&older.id), "version mismatch");
+        assert!(
+            !root.hydratable.contains(&extra_pin.id),
+            "pin missing from catalog"
+        );
 
-        let hydrated = snapshot.diff(&BoardSyncRequest {
-            hydrate: true,
-            ..Default::default()
-        });
+        let hydrated = snapshot.diff(
+            &BoardSyncRequest {
+                hydrate: true,
+                ..Default::default()
+            },
+            &no_segment_bases,
+        );
         let lean = &hydrated.segments[ROOT_SEGMENT].nodes[&pristine.id];
         assert!(lean.hydrate);
         assert!(lean.description.is_none());
@@ -1009,7 +1467,7 @@ mod tests {
         assert!(full.hydrate, "a rename alone must not disqualify hydration");
         assert_eq!(full.friendly_name, "Call something");
 
-        let plain = snapshot.diff(&BoardSyncRequest::default());
+        let plain = snapshot.diff(&BoardSyncRequest::default(), &no_segment_bases);
         let node = &plain.segments[ROOT_SEGMENT].nodes[&pristine.id];
         assert!(
             !node.hydrate,
@@ -1050,7 +1508,11 @@ mod tests {
         board.nodes.insert(node.id.clone(), node.clone());
         let snapshot = BoardSyncSnapshot::from_board(&board, std::slice::from_ref(&catalog))
             .expect("snapshot");
-        assert!(snapshot.segments[ROOT_SEGMENT].nodes[&node.id].hydrate);
+        assert!(
+            snapshot.segments[ROOT_SEGMENT]
+                .hydratable
+                .contains(&node.id)
+        );
     }
 
     #[test]
@@ -1065,7 +1527,11 @@ mod tests {
             std::slice::from_ref(&catalog),
         )
         .expect("snapshot");
-        assert!(!snapshot.segments[ROOT_SEGMENT].nodes[&node.id].hydrate);
+        assert!(
+            !snapshot.segments[ROOT_SEGMENT]
+                .hydratable
+                .contains(&node.id)
+        );
     }
 
     #[test]
@@ -1077,7 +1543,7 @@ mod tests {
         }
         let snapshot =
             BoardSyncSnapshot::from_board(&board_with(vec![node.clone()]), &[]).expect("snapshot");
-        let response = snapshot.diff(&BoardSyncRequest::default());
+        let response = snapshot.diff(&BoardSyncRequest::default(), &no_segment_bases);
         let json = flow_like_types::json::to_value(&response).expect("json");
         let pins = &json["segments"][ROOT_SEGMENT]["nodes"][&node.id]["pins"];
         let encoded = pins
@@ -1089,5 +1555,94 @@ mod tests {
         let round: BoardSyncResponse =
             flow_like_types::json::from_value(json.clone()).expect("roundtrip");
         assert_eq!(flow_like_types::json::to_value(&round).expect("json"), json);
+    }
+
+    /// Timing harness, not a test:
+    /// `cargo test -p flow-like --release board_sync_timing -- --ignored --nocapture`.
+    /// Prints the cost of a full build, an incremental rebuild after a one-node edit, and the two
+    /// diff shapes on a synthetic 1000-node / 80-layer board.
+    #[test]
+    #[ignore]
+    fn board_sync_timing() {
+        use std::time::Instant;
+        let catalog = catalog_node();
+        let mut nodes = Vec::with_capacity(1000);
+        for index in 0..1000 {
+            let layer = if index % 5 == 0 {
+                None
+            } else {
+                Some(format!("layer-{}", index % 80))
+            };
+            let mut node = placed(&catalog, layer.as_deref());
+            node.coordinates = Some((index as f32, (index * 2) as f32, 0.0));
+            for pin in node.pins.values_mut() {
+                pin.default_value = Some(format!("\"value-{index}\"").into_bytes());
+                pin.schema = Some(format!("schema-{}", index % 10));
+            }
+            nodes.push(node);
+        }
+        let mut board = board_with(nodes.clone());
+        for index in 0..10 {
+            board.refs.insert(
+                format!("schema-{index}"),
+                format!(
+                    "{{\"type\":\"object\",\"properties\":{{\"p{index}\":{{\"type\":\"string\"}}}}}}"
+                ),
+            );
+        }
+        for index in 0..80 {
+            let id = format!("layer-{index}");
+            board.layers.insert(
+                id.clone(),
+                Layer::new(
+                    id,
+                    format!("Layer {index}"),
+                    super::super::LayerType::Collapsed,
+                ),
+            );
+        }
+
+        let started = Instant::now();
+        let previous = BoardSyncSnapshot::from_board(&board, &[]).expect("full");
+        let full_build = started.elapsed();
+
+        let mut edited = board.clone();
+        let edited_id = nodes[7].id.clone();
+        edited.nodes.get_mut(&edited_id).unwrap().coordinates = Some((-1.0, -1.0, 0.0));
+        let started = Instant::now();
+        let rebuilt = BoardSyncSnapshot::from_board(&edited, &[]).expect("full again");
+        let full_rebuild = started.elapsed();
+        let started = Instant::now();
+        let incremental = BoardSyncSnapshot::from_board_incremental(&edited, &[], Some(&previous))
+            .expect("incremental");
+        let incremental_rebuild = started.elapsed();
+        assert_eq!(rebuilt.manifest, incremental.manifest);
+
+        let request = BoardSyncRequest::from_manifest(&previous.manifest, false);
+        let started = Instant::now();
+        let whole = incremental.diff(&request, &no_segment_bases);
+        let whole_diff = started.elapsed();
+        let whole_bytes = flow_like_types::json::to_vec(&whole).expect("json").len();
+
+        let resolver = |token: &str| previous.segment_by_token(token);
+        let started = Instant::now();
+        let patched = incremental.diff(&patching(&previous.manifest), &resolver);
+        let patch_diff = started.elapsed();
+        let patch_bytes = flow_like_types::json::to_vec(&patched).expect("json").len();
+
+        let manifest_bytes = flow_like_types::json::to_vec(&previous.manifest)
+            .expect("json")
+            .len();
+        println!(
+            "nodes={} layers={}",
+            edited.nodes.len(),
+            edited.layers.len()
+        );
+        println!("full build           {full_build:?}");
+        println!("full rebuild         {full_rebuild:?}");
+        println!("incremental rebuild  {incremental_rebuild:?}");
+        println!("diff, whole segment  {whole_diff:?} → {whole_bytes} bytes");
+        println!("diff, node patch     {patch_diff:?} → {patch_bytes} bytes");
+        println!("manifest             {manifest_bytes} bytes");
     }
 }

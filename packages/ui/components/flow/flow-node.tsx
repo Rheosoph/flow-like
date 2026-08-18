@@ -8,7 +8,7 @@ import {
 	type NodeProps,
 	Position,
 	useReactFlow,
-	useUpdateNodeInternals,
+	useStoreApi,
 } from "@xyflow/react";
 import {
 	BanIcon,
@@ -139,6 +139,42 @@ export type FlowNode = Node<
 	"node"
 >;
 
+type FlowStoreApi = ReturnType<typeof useStoreApi>;
+type NodeInternalsUpdates = Parameters<
+	ReturnType<FlowStoreApi["getState"]>["updateNodeInternals"]
+>[0];
+
+const pendingInternalsUpdates = new WeakMap<FlowStoreApi, Set<string>>();
+
+/**
+ * React Flow's own hook schedules one animation frame per call, and each
+ * store update re-runs every subscriber selector, so N nodes re-measuring in
+ * the same tick cost O(N²). Collect the ids and flush them in one store call.
+ */
+function scheduleNodeInternalsUpdate(store: FlowStoreApi, nodeId: string) {
+	const pending = pendingInternalsUpdates.get(store);
+	if (pending) {
+		pending.add(nodeId);
+		return;
+	}
+	const ids = new Set([nodeId]);
+	pendingInternalsUpdates.set(store, ids);
+	requestAnimationFrame(() => {
+		pendingInternalsUpdates.delete(store);
+		const { domNode, updateNodeInternals } = store.getState();
+		const updates: NodeInternalsUpdates = new Map();
+		for (const id of ids) {
+			const nodeElement = domNode?.querySelector<HTMLDivElement>(
+				`.react-flow__node[data-id="${id}"]`,
+			);
+			if (nodeElement) updates.set(id, { id, nodeElement, force: true });
+		}
+		if (updates.size > 0) {
+			updateNodeInternals(updates, { triggerFitView: false });
+		}
+	});
+}
+
 const FlowNodeInner = memo(
 	({
 		props,
@@ -184,7 +220,7 @@ const FlowNodeInner = memo(
 		const div = useRef<HTMLDivElement>(null);
 		const reactFlow = useReactFlow();
 		const { getNode } = useReactFlow();
-		const updateNodeInternals = useUpdateNodeInternals();
+		const flowStore = useStoreApi();
 		const remoteSelections = props.data.remoteSelections ?? [];
 		const displayedRemoteSelections = useMemo(
 			() => remoteSelections.slice(0, 3),
@@ -505,10 +541,20 @@ const FlowNodeInner = memo(
 			[parsePins, visiblePins],
 		);
 
+		const pinLayoutKey = useMemo(
+			() =>
+				visiblePins.map((p) => `${p.id}:${p.index}:${p.pin_type}`).join("|"),
+			[visiblePins],
+		);
+		const measuredPinLayout = useRef<string | null>(null);
 		useEffect(() => {
-			// Update React Flow internals when pins change (handles may have changed)
-			updateNodeInternals(props.id);
-		}, [visiblePins, props.id, updateNodeInternals]);
+			// React Flow measures handles itself when the node mounts (its
+			// ResizeObserver); only later pin layout changes need a re-measure.
+			if (measuredPinLayout.current === pinLayoutKey) return;
+			const isMount = measuredPinLayout.current === null;
+			measuredPinLayout.current = pinLayoutKey;
+			if (!isMount) scheduleNodeInternalsUpdate(flowStore, props.id);
+		}, [pinLayoutKey, props.id, flowStore]);
 
 		useEffect(() => {
 			if (isReroute) return;

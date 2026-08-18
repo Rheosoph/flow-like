@@ -5,6 +5,7 @@ import {
 	type IApplyFlowIrCommitResponse,
 	type IApplyFlowScriptResponse,
 	type IBoard,
+	type IBoardMutationOptions,
 	type IBoardState,
 	type IBoardSummary,
 	type IBoardSummaryInclude,
@@ -140,6 +141,23 @@ function handleProgressEvent(event: IIntercomEvent): void {
 	const payload = event.payload as ProgressToastData;
 	if (!payload?.id) return;
 	showProgressToast(payload);
+}
+
+/**
+ * `POST /board/{id}` answers with a bare command list for requests without `sync`, and with
+ * `{commands, sync}` when the request carried the held manifest. Both are accepted so a client
+ * talking to a hub of either generation keeps working.
+ */
+type ExecuteCommandsWire =
+	| IGenericCommand[]
+	| { commands: IGenericCommand[]; sync?: IBoardSyncResponse | null };
+
+function normalizeExecuteCommandsWire(wire: ExecuteCommandsWire): {
+	commands: IGenericCommand[];
+	sync: IBoardSyncResponse | undefined;
+} {
+	if (Array.isArray(wire)) return { commands: wire, sync: undefined };
+	return { commands: wire.commands ?? [], sync: wire.sync ?? undefined };
 }
 
 export class WebBoardState implements IBoardState {
@@ -742,25 +760,51 @@ export class WebBoardState implements IBoardState {
 		appId: string,
 		boardId: string,
 		command: IGenericCommand,
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand> {
-		const results = await apiPost<IGenericCommand[]>(
-			`apps/${appId}/board/${boardId}`,
-			{ commands: [command] },
-			this.backend.auth,
+		const results = await this.executeCommands(
+			appId,
+			boardId,
+			[command],
+			options,
 		);
 		return results[0];
 	}
 
+	/**
+	 * One round trip: the batch travels with the held sync manifest and the hub answers with the
+	 * commands plus the diff against the revision it produced. The diff is applied onto the held
+	 * board only if it is still the revision the manifest described (see
+	 * `BoardSyncClient.ingest`); otherwise the caller refetches as before.
+	 */
 	async executeCommands(
 		appId: string,
 		boardId: string,
 		commands: IGenericCommand[],
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand[]> {
-		return apiPost<IGenericCommand[]>(
+		const sync = this.boardSync.syncRequest(appId, boardId, undefined);
+		const wire = await apiPost<ExecuteCommandsWire>(
 			`apps/${appId}/board/${boardId}`,
-			{ commands },
+			sync ? { commands, sync } : { commands },
 			this.backend.auth,
 		);
+		const { commands: results, sync: tail } =
+			normalizeExecuteCommandsWire(wire);
+		if (sync && tail && options?.onBoard) {
+			const board = this.boardSync.ingest(
+				appId,
+				boardId,
+				undefined,
+				sync,
+				tail,
+			);
+			if (board) {
+				await this.presignMediaComments(appId, boardId, board);
+				options.onBoard(board);
+			}
+		}
+		return results;
 	}
 
 	async applyFlowScript(

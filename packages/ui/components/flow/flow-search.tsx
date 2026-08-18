@@ -326,28 +326,22 @@ function useSearchIndex(board: IBoard | undefined, enabled: boolean) {
 				},
 				combineWith: "OR",
 			},
+			// Prefix matching is handled at query time (`prefix: true`), so the
+			// index only needs whole tokens plus camelCase parts.
 			tokenize: (text) => {
-				// Split on common separators
-				const tokens = text.toLowerCase().split(/[\s\-_./\\:,;'"()[\]{}|<>]+/);
-				const additionalTokens: string[] = [];
-
+				const tokens = text.split(/[\s\-_./\\:,;'"()[\]{}|<>]+/);
+				const out: string[] = [];
 				for (const token of tokens) {
+					if (token.length === 0) continue;
+					out.push(token.toLowerCase());
 					if (token.length > 2) {
-						// Split camelCase and PascalCase
 						const camelParts = token.split(/(?=[A-Z])/);
 						if (camelParts.length > 1) {
-							additionalTokens.push(...camelParts.map((p) => p.toLowerCase()));
-						}
-						// Also add substrings for partial matching
-						if (token.length > 4) {
-							// Add prefix substrings
-							for (let i = 3; i < Math.min(token.length, 8); i++) {
-								additionalTokens.push(token.slice(0, i));
-							}
+							for (const part of camelParts) out.push(part.toLowerCase());
 						}
 					}
 				}
-				return [...tokens, ...additionalTokens].filter((t) => t.length > 0);
+				return out;
 			},
 		});
 

@@ -14,10 +14,32 @@ use crate::{event_bus::EventBus, profile::UserProfile, settings::Settings};
 pub use crate::functions::recording::state::TauriRecordingState;
 
 /// One tokenised snapshot of a local board, pinned to the revision it was built from.
+///
+/// `previous` keeps the last few revisions' snapshots alive so a webview that still holds one
+/// of their segment tokens gets a node-level patch instead of the whole segment (see
+/// `BoardSyncSnapshot::diff`), and so the next build reuses tokens incrementally.
 pub struct LocalBoardSnapshot {
     pub updated_at: std::time::SystemTime,
     pub hash: Option<u64>,
     pub snapshot: Arc<flow_like::flow::board::sync::BoardSyncSnapshot>,
+    pub previous: Vec<Arc<flow_like::flow::board::sync::BoardSyncSnapshot>>,
+}
+
+/// Revisions retained per board for patch bases: the current one plus this many earlier ones.
+pub const LOCAL_BOARD_SNAPSHOT_HISTORY: usize = 3;
+
+impl LocalBoardSnapshot {
+    /// The segment carrying `token` in this or one of the retained earlier revisions.
+    pub fn segment_by_token(
+        &self,
+        token: &str,
+    ) -> Option<Arc<flow_like::flow::board::sync::SyncSegment>> {
+        self.snapshot.segment_by_token(token).or_else(|| {
+            self.previous
+                .iter()
+                .find_map(|snapshot| snapshot.segment_by_token(token))
+        })
+    }
 }
 
 /// Snapshots answering the webview's incremental `sync_board` IPC calls, keyed like the board

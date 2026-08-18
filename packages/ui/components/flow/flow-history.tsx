@@ -10,15 +10,29 @@ import {
 	remoteBoardAppliedHandler,
 	rollbackRedoBatch,
 	rollbackUndoBatch,
-	stampStacks,
 	takeRedo,
 	takeUndo,
 } from "../../lib/flow-history-stacks";
 import type { BoardEditReceiptHistoryMode } from "../../lib/flowpilot/board-edit-job-delivery";
 import { toastWarning } from "../../lib/messages";
 
-interface IStackItem extends IHistoryStacks {
+/**
+ * The stacks are persisted as one JSON string. On desktop, IndexedDB is a
+ * SQLite shim whose structured-clone encoder type-walks every stored value —
+ * several full passes per write — so a nested object holding up to
+ * MAX_STACK_SIZE batches of full node payloads froze the UI for hundreds of
+ * milliseconds after every board edit. A string is encoded in one cheap pass.
+ * Rows written before `payload` existed still carry the inline legacy shape.
+ */
+interface IStackItem extends Partial<IHistoryStacks> {
 	key: string;
+	payload?: string;
+}
+
+/** Kept apart from the stacks so re-stamping never rewrites the whole history. */
+interface IStackMeta {
+	key: string;
+	boardStamp?: string;
 }
 
 interface IHistoryDelivery {
@@ -30,6 +44,7 @@ interface IHistoryDelivery {
 
 class UndoRedoDB extends Dexie {
 	stacks!: Dexie.Table<IStackItem, string>;
+	meta!: Dexie.Table<IStackMeta, string>;
 	deliveries!: Dexie.Table<IHistoryDelivery, string>;
 
 	constructor() {
@@ -41,6 +56,11 @@ class UndoRedoDB extends Dexie {
 			stacks: "key",
 			deliveries: "key, boardKey, createdAt",
 		});
+		this.version(3).stores({
+			stacks: "key",
+			meta: "key",
+			deliveries: "key, boardKey, createdAt",
+		});
 	}
 }
 
@@ -48,8 +68,12 @@ const db = new UndoRedoDB();
 
 const historyKey = (appId: string, boardId: string) => `${appId}_${boardId}`;
 
+const deleteStacks = async (key: string) => {
+	await Promise.all([db.stacks.delete(key), db.meta.delete(key)]);
+};
+
 export const clearBoardHistory = async (appId: string, boardId: string) => {
-	await db.stacks.delete(historyKey(appId, boardId));
+	await deleteStacks(historyKey(appId, boardId));
 };
 
 // Remote board applies must invalidate persisted stacks even when the board
@@ -62,18 +86,35 @@ if (typeof window !== "undefined") {
 	);
 }
 
-const readStacks = (data: IStackItem | undefined): IHistoryStacks =>
-	data
-		? {
-				undoStack: data.undoStack ?? [],
-				redoStack: data.redoStack ?? [],
-				boardStamp: data.boardStamp,
-				deliveryIds: data.deliveryIds ?? [],
-			}
-		: emptyStacks();
+const decodeStacks = (data: IStackItem | undefined): IHistoryStacks => {
+	if (!data) return emptyStacks();
+	const decoded: Partial<IHistoryStacks> = data.payload
+		? JSON.parse(data.payload)
+		: data;
+	return {
+		undoStack: decoded.undoStack ?? [],
+		redoStack: decoded.redoStack ?? [],
+		boardStamp: decoded.boardStamp,
+		deliveryIds: decoded.deliveryIds ?? [],
+	};
+};
+
+const readStacks = async (key: string): Promise<IHistoryStacks> => {
+	const [data, meta] = await Promise.all([
+		db.stacks.get(key),
+		db.meta.get(key),
+	]);
+	const stacks = decodeStacks(data);
+	if (!meta && stacks.boardStamp) {
+		// Legacy rows carried the stamp inline; move it once so the next write can drop it.
+		await db.meta.put({ key, boardStamp: stacks.boardStamp });
+	}
+	return { ...stacks, boardStamp: meta?.boardStamp ?? stacks.boardStamp };
+};
 
 const writeStacks = async (key: string, stacks: IHistoryStacks) => {
-	await db.stacks.put({ key, ...stacks });
+	const { boardStamp: _boardStamp, ...rest } = stacks;
+	await db.stacks.put({ key, payload: JSON.stringify(rest) });
 };
 
 const toastStaleHistory = (action: "Undo" | "Redo") => {
@@ -87,19 +128,19 @@ export const useUndoRedo = (appId: string, boardId: string) => {
 	const key = historyKey(appId, boardId);
 
 	const clearHistory = async () => {
-		await db.stacks.delete(key);
+		await deleteStacks(key);
 	};
 
 	const pushCommand = async (command: IGenericCommand, append = false) => {
-		await db.transaction("rw", db.stacks, async () => {
-			const stacks = readStacks(await db.stacks.get(key));
+		await db.transaction("rw", db.stacks, db.meta, async () => {
+			const stacks = await readStacks(key);
 			await writeStacks(key, pushBatch(stacks, [command], append));
 		});
 	};
 
 	const pushCommands = async (commands: IGenericCommand[]) => {
-		await db.transaction("rw", db.stacks, async () => {
-			const stacks = readStacks(await db.stacks.get(key));
+		await db.transaction("rw", db.stacks, db.meta, async () => {
+			const stacks = await readStacks(key);
 			await writeStacks(key, pushBatch(stacks, commands));
 		});
 	};
@@ -110,10 +151,9 @@ export const useUndoRedo = (appId: string, boardId: string) => {
 		historyMode: BoardEditReceiptHistoryMode = "append",
 	) => {
 		const deliveryKey = `${key}\u001f${deliveryId}`;
-		await db.transaction("rw", db.stacks, db.deliveries, async () => {
+		await db.transaction("rw", db.stacks, db.meta, db.deliveries, async () => {
 			if (await db.deliveries.get(deliveryKey)) return;
-			const data = await db.stacks.get(key);
-			const stacks = readStacks(data);
+			const stacks = await readStacks(key);
 			// Migrate the former stack-local marker without duplicating its history batch.
 			if (stacks.deliveryIds?.includes(deliveryId)) {
 				await db.deliveries.put({
@@ -131,7 +171,7 @@ export const useUndoRedo = (appId: string, boardId: string) => {
 				// A rehydrated native apply may predate newer user edits. Recording its inverse batch
 				// on top would make Undo replay history out of order, so atomically invalidate the
 				// stack while retaining the exactly-once delivery marker.
-				await db.stacks.delete(key);
+				await deleteStacks(key);
 			}
 			await db.deliveries.put({
 				key: deliveryKey,
@@ -143,19 +183,18 @@ export const useUndoRedo = (appId: string, boardId: string) => {
 	};
 
 	const stampHistory = async (stamp?: string) => {
-		await db.transaction("rw", db.stacks, async () => {
-			const data = await db.stacks.get(key);
-			if (!data) return;
-			await writeStacks(key, stampStacks(readStacks(data), stamp));
+		await db.transaction("rw", db.stacks, db.meta, async () => {
+			if ((await db.stacks.where("key").equals(key).count()) === 0) return;
+			await db.meta.put({ key, boardStamp: stamp });
 		});
 	};
 
 	const undo = async (currentStamp?: string) => {
-		const result = await db.transaction("rw", db.stacks, async () => {
-			const stacks = readStacks(await db.stacks.get(key));
+		const result = await db.transaction("rw", db.stacks, db.meta, async () => {
+			const stacks = await readStacks(key);
 			const taken = takeUndo(stacks, currentStamp);
 			if (taken.stale) {
-				await db.stacks.delete(key);
+				await deleteStacks(key);
 				return taken;
 			}
 			if (taken.batch) {
@@ -172,11 +211,11 @@ export const useUndoRedo = (appId: string, boardId: string) => {
 	};
 
 	const redo = async (currentStamp?: string) => {
-		const result = await db.transaction("rw", db.stacks, async () => {
-			const stacks = readStacks(await db.stacks.get(key));
+		const result = await db.transaction("rw", db.stacks, db.meta, async () => {
+			const stacks = await readStacks(key);
 			const taken = takeRedo(stacks, currentStamp);
 			if (taken.stale) {
-				await db.stacks.delete(key);
+				await deleteStacks(key);
 				return taken;
 			}
 			if (taken.batch) {
@@ -193,8 +232,8 @@ export const useUndoRedo = (appId: string, boardId: string) => {
 	};
 
 	const rollbackUndo = async (commands: IGenericCommand[]) => {
-		await db.transaction("rw", db.stacks, async () => {
-			const stacks = readStacks(await db.stacks.get(key));
+		await db.transaction("rw", db.stacks, db.meta, async () => {
+			const stacks = await readStacks(key);
 			const rolledBack = rollbackUndoBatch(stacks, commands);
 			if (rolledBack === stacks) return;
 			await writeStacks(key, rolledBack);
@@ -202,8 +241,8 @@ export const useUndoRedo = (appId: string, boardId: string) => {
 	};
 
 	const rollbackRedo = async (commands: IGenericCommand[]) => {
-		await db.transaction("rw", db.stacks, async () => {
-			const stacks = readStacks(await db.stacks.get(key));
+		await db.transaction("rw", db.stacks, db.meta, async () => {
+			const stacks = await readStacks(key);
 			const rolledBack = rollbackRedoBatch(stacks, commands);
 			if (rolledBack === stacks) return;
 			await writeStacks(key, rolledBack);

@@ -160,6 +160,10 @@ pub struct PackageSummary {
     pub primary_category: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secondary_category: Option<String>,
+    /// Capability tags derived from the package's declared permissions,
+    /// most sensitive first. See `PackagePermissions::capability_tags`.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
 /// Registry configuration
@@ -779,6 +783,7 @@ mod tests {
                 visibility: "public".to_string(),
                 primary_category: None,
                 secondary_category: None,
+                capabilities: vec!["net.http".to_string()],
             }],
             total_count: 1,
             offset: 0,
