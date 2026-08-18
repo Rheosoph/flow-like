@@ -18,6 +18,23 @@ mod helper;
 pub mod local_store;
 pub mod smb_store;
 
+/// How an object on a [`FlowLikeStore::Local`] store is addressed when signing.
+///
+/// Local stores have no signing endpoint, so a "signed URL" is really a choice
+/// of transport. Both forms are needed: the desktop webview can only render the
+/// asset protocol, while anything outside the app can only read inline bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+pub enum LocalUrlMode {
+    /// Tauri asset protocol URL. Renders in the desktop webview and carries the
+    /// absolute filesystem path, which the upload path decodes back to write
+    /// files. Unreachable outside the app.
+    #[default]
+    Asset,
+    /// Inline `data:` URL. Self-contained, so it survives leaving the app, at
+    /// the cost of base64-expanding the whole file into the URL.
+    Inline,
+}
+
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub struct StorageItem {
     pub location: String,
@@ -256,6 +273,25 @@ impl FlowLikeStore {
     }
 
     pub async fn sign(&self, method: &str, path: &Path, expires_after: Duration) -> Result<Url> {
+        self.sign_with_mode(method, path, expires_after, LocalUrlMode::Asset)
+            .await
+    }
+
+    /// Like [`FlowLikeStore::sign`], but lets the caller choose how a
+    /// [`FlowLikeStore::Local`] object is addressed. Every other backend ignores
+    /// `mode` and signs exactly as [`FlowLikeStore::sign`] does.
+    ///
+    /// Use [`LocalUrlMode::Inline`] when the URL leaves the app — model
+    /// providers, HTTP clients, anything that cannot speak the Tauri asset
+    /// protocol. Inlining only applies to GET: there is nothing to read for an
+    /// upload, so other methods keep the asset form regardless of `mode`.
+    pub async fn sign_with_mode(
+        &self,
+        method: &str,
+        path: &Path,
+        expires_after: Duration,
+        mode: LocalUrlMode,
+    ) -> Result<Url> {
         let method = match method.to_uppercase().as_str() {
             "GET" => reqwest::Method::GET,
             "PUT" => reqwest::Method::PUT,
@@ -284,7 +320,9 @@ impl FlowLikeStore {
                 // Auto-detect Tauri environment
                 let is_tauri = cfg!(feature = "tauri") || std::env::var("TAURI_ENV").is_ok();
 
-                if is_tauri {
+                let inline = mode == LocalUrlMode::Inline && method == reqwest::Method::GET;
+
+                if is_tauri && !inline {
                     #[cfg(any(windows, target_os = "android"))]
                     let base = "http://asset.localhost/";
                     #[cfg(not(any(windows, target_os = "android")))]
@@ -488,5 +526,79 @@ mod tests {
             base_key,
             signed_url_cache_key("GET", &other_credential, TTL)
         );
+    }
+}
+
+#[cfg(test)]
+mod local_url_mode_tests {
+    use super::*;
+
+    const TTL: Duration = Duration::from_secs(3600);
+
+    fn local_store_with_file(name: &str, bytes: &[u8]) -> (std::path::PathBuf, FlowLikeStore) {
+        let dir = std::env::temp_dir().join(format!("flow-like-sign-{name}"));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join(name), bytes).expect("fixture file");
+        let store = LocalObjectStore::new(dir.clone()).expect("local store");
+        (dir, FlowLikeStore::Local(Arc::new(store)))
+    }
+
+    #[tokio::test]
+    async fn inline_mode_returns_a_self_contained_data_url() {
+        let (dir, store) = local_store_with_file("inline.txt", b"hello");
+
+        let url = store
+            .sign_with_mode("GET", &Path::from("inline.txt"), TTL, LocalUrlMode::Inline)
+            .await
+            .expect("inline sign");
+
+        assert!(
+            url.as_str().starts_with("data:"),
+            "expected a data URL, got {url}"
+        );
+        assert!(
+            url.as_str().ends_with(&STANDARD.encode("hello")),
+            "payload should be the file's bytes, got {url}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Only observable under the Tauri branch. Without that feature a local
+    /// store already inlined every method, and that predates this mode.
+    #[cfg(feature = "tauri")]
+    #[tokio::test]
+    async fn inline_mode_never_applies_to_uploads() {
+        let (dir, store) = local_store_with_file("upload.txt", b"hello");
+
+        let url = store
+            .sign_with_mode("PUT", &Path::from("upload.txt"), TTL, LocalUrlMode::Inline)
+            .await
+            .expect("put sign");
+
+        assert!(
+            !url.as_str().starts_with("data:"),
+            "a PUT target must stay addressable, got {url}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sign_keeps_addressing_local_files_the_way_it_always_has() {
+        let (dir, store) = local_store_with_file("legacy.txt", b"hello");
+
+        let default = store
+            .sign("GET", &Path::from("legacy.txt"), TTL)
+            .await
+            .expect("default sign");
+        let explicit = store
+            .sign_with_mode("GET", &Path::from("legacy.txt"), TTL, LocalUrlMode::Asset)
+            .await
+            .expect("asset sign");
+
+        assert_eq!(default, explicit, "sign() must stay the Asset-mode call");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
