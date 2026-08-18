@@ -7,6 +7,9 @@
 //! - **`EXECUTION_BACKEND`**: Used for `/invoke` (streaming/sync) endpoints
 //! - **`ASYNC_EXECUTION_BACKEND`**: Used for `/invoke/async` endpoints
 //!
+//! A third variable, **`LAMBDA_TENANT_ISOLATION`**, is read only by the Lambda
+//! backends and is documented under "Isolation & Security Model" below.
+//!
 //! Both support the same backend options, allowing different backends for
 //! realtime streaming vs background batch processing. Accepted values are
 //! `lambda_invoke`, `lambda_stream`, `kubernetes_job`, `sqs`, `azure_queue`,
@@ -36,14 +39,26 @@
 //!
 //! ### Lambda (HTTP / LambdaInvoke / LambdaStream)
 //!
-//! AWS Lambda provides **strong isolation** via AWS Firecracker microVMs:
-//! - Each execution runs in its own microVM with hardware-level isolation
-//! - Memory is wiped between invocations from different tenants
-//! - No shared filesystem between executions
-//! - Cold starts create fresh environments; warm starts reuse the same microVM
-//!   for the **same function** only (not shared across tenants)
+//! Every execution runs inside a Firecracker microVM, so a run is isolated from
+//! the host and from the runs executing beside it. It is **not** isolated from
+//! the runs that came before it: by default a warm execution environment is
+//! reused across invocations of the same function no matter which subject
+//! triggered them, and it carries process memory and a `/tmp` scratch directory
+//! across that reuse.
 //!
-//! **Best for**: Multi-tenant workloads requiring strong isolation guarantees.
+//! `LAMBDA_TENANT_ISOLATION=sub` closes that gap on the `LambdaInvoke` and
+//! `LambdaStream` backends. Each invocation carries a tenant id derived from the
+//! subject, and AWS binds an execution environment to one tenant for its
+//! lifetime rather than reusing it for another. Three constraints come with it:
+//! the executor function must have been created with
+//! `TenancyConfig.TenantIsolationMode=PER_TENANT` (a create-only property, so it
+//! cannot be added to a running function), the `Http` backend cannot participate
+//! because Lambda Function URLs do not support tenant isolation, and warm
+//! capacity stops being shared — AWS caps tenant-bound environments at 2,500 per
+//! 1,000 configured concurrency and bills each environment creation.
+//!
+//! **Best for**: Multi-tenant workloads. Set the flag when runs from different
+//! subjects must not share an execution environment.
 //!
 //! ### Kubernetes Warm Pool (HTTP → K8s Deployment)
 //!
@@ -87,7 +102,7 @@
 //!
 //! | Requirement | Recommended Backend |
 //! |-------------|---------------------|
-//! | Multi-tenant SaaS | Lambda (strongest isolation) |
+//! | Multi-tenant SaaS | Lambda with `LAMBDA_TENANT_ISOLATION=sub` |
 //! | Low latency | HTTP → Warm Pool (K8s/Lambda) |
 //! | Untrusted code | KubernetesJob or Lambda |
 //! | Batch processing | SQS, Pub/Sub, Kafka, or Redis (decoupled, retry built-in) |
@@ -618,6 +633,38 @@ impl Dispatcher {
         Ok((dispatch_response, response))
     }
 
+    /// The tenant id this invocation must carry, or `None` when the deployment
+    /// has not opted in.
+    ///
+    /// Resolved from `LAMBDA_TENANT_ISOLATION` rather than from `DispatchConfig`:
+    /// `DispatchConfig::from_env` is infallible by construction, so a flag
+    /// parsed there could only swallow a bad value or panic, and swallowing is
+    /// the one outcome this gate must not have.
+    #[cfg(feature = "lambda")]
+    fn lambda_tenant_id_for(
+        &self,
+        request: &DispatchRequest,
+    ) -> Result<Option<String>, DispatchError> {
+        let enabled = *LAMBDA_TENANT_ISOLATION
+            .as_ref()
+            .map_err(|error| DispatchError::Configuration(error.clone()))?;
+        if !enabled {
+            return Ok(None);
+        }
+
+        let tenant_id = lambda_tenant_id(&request.user_id);
+        // The subject never reaches AWS, so this line is the only place the
+        // mapping exists — without it a tenant id in CloudWatch cannot be
+        // traced back to the run that produced it.
+        tracing::debug!(
+            run_id = %request.run_id,
+            user_id = %request.user_id,
+            tenant_id = %tenant_id,
+            "Lambda tenant isolation active"
+        );
+        Ok(Some(tenant_id))
+    }
+
     /// Dispatch via AWS Lambda SDK invocation (async, fire-and-forget)
     #[cfg(feature = "lambda")]
     async fn dispatch_lambda_invoke(
@@ -640,14 +687,21 @@ impl Dispatcher {
         let payload = serde_json::to_vec(&apigw_event)
             .map_err(|e| DispatchError::Serialization(e.to_string()))?;
 
-        client
+        let tenant_id = self.lambda_tenant_id_for(request)?;
+
+        let mut invoke = client
             .invoke()
             .function_name(function_name)
             .invocation_type(aws_sdk_lambda::types::InvocationType::Event)
-            .payload(aws_sdk_lambda::primitives::Blob::new(payload))
+            .payload(aws_sdk_lambda::primitives::Blob::new(payload));
+        if let Some(tenant_id) = tenant_id.as_deref() {
+            invoke = invoke.tenant_id(tenant_id);
+        }
+
+        invoke
             .send()
             .await
-            .map_err(|e| DispatchError::Lambda(e.to_string()))?;
+            .map_err(|e| lambda_dispatch_error(e, tenant_id.is_some()))?;
 
         Ok(DispatchResponse {
             job_id: job_id.to_string(),
@@ -680,13 +734,20 @@ impl Dispatcher {
         let payload = serde_json::to_vec(&apigw_event)
             .map_err(|e| DispatchError::Serialization(e.to_string()))?;
 
-        let response = client
+        let tenant_id = self.lambda_tenant_id_for(request)?;
+
+        let mut invoke = client
             .invoke_with_response_stream()
             .function_name(function_name)
-            .payload(aws_sdk_lambda::primitives::Blob::new(payload))
+            .payload(aws_sdk_lambda::primitives::Blob::new(payload));
+        if let Some(tenant_id) = tenant_id.as_deref() {
+            invoke = invoke.tenant_id(tenant_id);
+        }
+
+        let response = invoke
             .send()
             .await
-            .map_err(|e| DispatchError::Lambda(e.to_string()))?;
+            .map_err(|e| lambda_dispatch_error(e, tenant_id.is_some()))?;
 
         let event_stream = response.event_stream;
         let stream = futures::stream::unfold(event_stream, |mut receiver| async move {
@@ -1348,6 +1409,115 @@ async fn attach_executor_iam_auth(
         ));
     }
     Ok(builder)
+}
+
+/// Environment switch that binds each executor invocation to a tenant-specific
+/// Lambda execution environment. Unset means no tenant id is sent at all, which
+/// is the only shape a function created without `TenancyConfig` accepts.
+#[cfg(any(feature = "lambda", test))]
+const LAMBDA_TENANT_ISOLATION_VAR: &str = "LAMBDA_TENANT_ISOLATION";
+
+/// Domain separator mixed into every tenant digest.
+///
+/// `storage_path_segment` already derives its disambiguating suffix from a bare
+/// `blake3::hash(sub)`, so an undomained digest here would open with the same
+/// twelve hex characters as that subject's storage path and let either value
+/// confirm the other. The `v1` names the derivation: changing it re-tenants
+/// every caller and buys a full round of cold starts, so it has to be a
+/// deliberate edit rather than an incidental one.
+#[cfg(any(feature = "lambda", test))]
+const LAMBDA_TENANT_ID_DOMAIN: &str = "flow-like:lambda-tenant:v1:";
+
+/// Hex characters kept from the tenant digest. 32 is 128 bits, far past the
+/// point where two subjects could collide into one execution environment.
+#[cfg(any(feature = "lambda", test))]
+const LAMBDA_TENANT_ID_HEX_CHARS: usize = 32;
+
+/// Whether `LAMBDA_TENANT_ISOLATION` asks for per-subject execution
+/// environments.
+///
+/// An unrecognized value is refused rather than read as `false`. The backend
+/// parser above can afford to fall back to `http` on a typo because the wrong
+/// transport announces itself immediately; this flag cannot, because failing
+/// open costs exactly the isolation the operator believes they configured and
+/// nothing in a successful invocation reports its absence.
+#[cfg(any(feature = "lambda", test))]
+fn lambda_tenant_isolation_enabled(raw: Option<&str>) -> Result<bool, String> {
+    let Some(value) = raw.map(str::trim) else {
+        return Ok(false);
+    };
+
+    match value.to_ascii_lowercase().as_str() {
+        "" | "off" | "false" | "0" | "none" | "disabled" => Ok(false),
+        "sub" | "user" | "user_id" | "true" | "1" | "on" | "enabled" => Ok(true),
+        other => Err(format!(
+            "{LAMBDA_TENANT_ISOLATION_VAR}={other:?} is not a recognized value; use `sub` to \
+             give every subject its own execution environment, or `off` to disable"
+        )),
+    }
+}
+
+/// The parsed flag, resolved once.
+///
+/// The environment cannot change under a running process, and `std::env::var`
+/// takes a process-wide lock and allocates on every read, so the parse is
+/// memoized rather than repeated per dispatch. A rejected value is cached as
+/// the error string and re-reported on every attempt, which keeps a
+/// misconfigured deployment failing consistently instead of only on the first
+/// invocation.
+#[cfg(feature = "lambda")]
+static LAMBDA_TENANT_ISOLATION: std::sync::LazyLock<Result<bool, String>> =
+    std::sync::LazyLock::new(|| {
+        lambda_tenant_isolation_enabled(std::env::var(LAMBDA_TENANT_ISOLATION_VAR).ok().as_deref())
+    });
+
+/// The `X-Amz-Tenant-Id` value Lambda routes an execution by.
+///
+/// The subject is hashed rather than passed through. AWS accepts only
+/// `[a-zA-Z0-9._:/=+\-@ ]` in a tenant id, which excludes the `|` that
+/// federated subjects such as `auth0|123` carry and that `validate_path_component`
+/// deliberately admits; a raw subject would also land in the `tenantId` field of
+/// CloudWatch platform events, readable by anyone holding log access; and a
+/// digest is case-stable where AWS leaves tenant-id matching undocumented.
+///
+/// The derivation is total. Every subject yields a valid id, including the
+/// `sink:` and `inbound:` placeholders that five of the dispatch routes
+/// substitute when no user is attached — those isolate per sink and per event
+/// definition rather than per user, which is the intended reading of a run that
+/// has no user, not a defect.
+#[cfg(any(feature = "lambda", test))]
+fn lambda_tenant_id(subject: &str) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(LAMBDA_TENANT_ID_DOMAIN.as_bytes());
+    hasher.update(subject.as_bytes());
+    format!(
+        "u{}",
+        &hasher.finalize().to_hex()[..LAMBDA_TENANT_ID_HEX_CHARS]
+    )
+}
+
+/// Render an AWS SDK failure with its full source chain.
+///
+/// `SdkError`'s own `Display` prints the bare string `"service error"` — the
+/// modelled exception, the status and the message all hang off `source()`.
+/// A tenancy mismatch arrives as `InvalidParameterValueException`, so without
+/// the chain an operator whose executor function predates `TenancyConfig` reads
+/// `Lambda error: service error` and has nothing to act on. AWS reports the
+/// mismatch identically in both directions and does not publish the message
+/// text, so the tenancy hint is appended from local state rather than parsed
+/// out of the response.
+#[cfg(feature = "lambda")]
+fn lambda_dispatch_error<E: std::error::Error>(error: E, tenant_isolated: bool) -> DispatchError {
+    let rendered = aws_sdk_lambda::error::DisplayErrorContext(error).to_string();
+    if !tenant_isolated {
+        return DispatchError::Lambda(rendered);
+    }
+
+    DispatchError::Lambda(format!(
+        "{rendered} — {LAMBDA_TENANT_ISOLATION_VAR} is enabled, so the executor function must \
+         have been created with TenancyConfig.TenantIsolationMode=PER_TENANT; that property is \
+         create-only and cannot be added to an existing function"
+    ))
 }
 
 /// Wrap executor payload in API Gateway v2 HTTP event format.
@@ -2592,5 +2762,119 @@ mod tests {
         assert!(!executor_auth_requires_gcp_id_token(Some("backend_jwt")));
         assert!(!executor_auth_requires_gcp_id_token(Some("gcp_id_tokens")));
         assert!(!executor_auth_requires_gcp_id_token(None));
+    }
+
+    #[test]
+    fn tenant_isolation_flag_accepts_only_documented_values() {
+        for enabling in [
+            "sub", "SUB", "  sub\n", "user", "user_id", "true", "1", "on", "enabled",
+        ] {
+            assert_eq!(
+                lambda_tenant_isolation_enabled(Some(enabling)),
+                Ok(true),
+                "{enabling:?} should enable tenant isolation"
+            );
+        }
+
+        for disabling in ["", "   ", "off", "OFF", "false", "0", "none", "disabled"] {
+            assert_eq!(
+                lambda_tenant_isolation_enabled(Some(disabling)),
+                Ok(false),
+                "{disabling:?} should disable tenant isolation"
+            );
+        }
+
+        assert_eq!(lambda_tenant_isolation_enabled(None), Ok(false));
+
+        // A typo must not read as "disabled": silently dropping the tenant id
+        // would leave the operator believing runs are isolated when they share
+        // execution environments.
+        for typo in ["subs", "per_tenant", "yes", "sub sub"] {
+            assert!(
+                lambda_tenant_isolation_enabled(Some(typo)).is_err(),
+                "{typo:?} should be refused rather than silently disabling"
+            );
+        }
+    }
+
+    /// Every character AWS accepts in `X-Amz-Tenant-Id`, per the `Invoke`
+    /// constraint `[a-zA-Z0-9\._:\/=+\-@ ]+` with a length of 1..=256.
+    fn is_aws_tenant_id(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 256
+            && value.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(c, '.' | '_' | ':' | '/' | '=' | '+' | '-' | '@' | ' ')
+            })
+    }
+
+    #[test]
+    fn tenant_ids_are_aws_shaped_for_every_subject_shape() {
+        let long_subject = "x".repeat(300);
+        let subjects = [
+            "",
+            "local",
+            "sink:abc123",
+            "inbound:xyz789",
+            "5f8d0d55-b1c4-4f3a-9c2e-0a1b2c3d4e5f",
+            // Federated subjects carry `|`, which AWS's tenant charset rejects.
+            "auth0|123",
+            "google-oauth2|1234567890",
+            "user@example.com",
+            "Ünïcödé-サブジェクト",
+            long_subject.as_str(),
+        ];
+
+        for subject in subjects {
+            let tenant = lambda_tenant_id(subject);
+            assert!(
+                is_aws_tenant_id(&tenant),
+                "{subject:?} produced a tenant id AWS would reject: {tenant:?}"
+            );
+            assert_eq!(tenant.len(), 1 + LAMBDA_TENANT_ID_HEX_CHARS);
+            assert_eq!(
+                tenant,
+                lambda_tenant_id(subject),
+                "derivation must be stable across calls"
+            );
+        }
+    }
+
+    #[test]
+    fn distinct_subjects_never_share_an_execution_environment() {
+        let collision_bait = [
+            "auth0|123",
+            "auth0:123",
+            "auth0_123",
+            "auth0123",
+            // AWS does not document whether tenant ids are case-folded, so the
+            // derivation emits lowercase hex and distinguishes these itself.
+            "Alice",
+            "alice",
+            "",
+            "user",
+        ];
+
+        let mut seen = std::collections::HashSet::new();
+        for subject in collision_bait {
+            assert!(
+                seen.insert(lambda_tenant_id(subject)),
+                "{subject:?} collided with an earlier subject"
+            );
+        }
+    }
+
+    #[test]
+    fn tenant_ids_are_domain_separated_from_storage_path_digests() {
+        // `storage_path_segment` appends the first 12 hex characters of a bare
+        // `blake3::hash(sub)`. Sharing that digest would let a storage prefix
+        // confirm a tenant id for the same subject.
+        let subject = "auth0|123";
+        let bare = blake3::hash(subject.as_bytes()).to_hex();
+        let tenant = lambda_tenant_id(subject);
+        assert!(
+            !tenant[1..].starts_with(&bare[..12]),
+            "tenant id must not reuse the storage-path digest"
+        );
     }
 }
