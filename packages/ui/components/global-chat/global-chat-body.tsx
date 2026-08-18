@@ -67,7 +67,16 @@ import { createComposerActivity } from "../../lib/composer-activity";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
 import { isTauri } from "../../lib/platform";
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
-import type { IMessage } from "../../state/global-chat/global-chat-db";
+import {
+	type IMessage,
+	globalChatDb,
+} from "../../state/global-chat/global-chat-db";
+import {
+	FLOWPILOT_RATING_WITHDRAWN,
+	buildFlowPilotFeedbackContext,
+	flowPilotRatingForUi,
+	submitFlowPilotFeedback,
+} from "../../state/global-chat/global-chat-feedback";
 import {
 	type MemoryEntry,
 	clearGlobalChatMemory,
@@ -362,6 +371,13 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		[],
 		true,
 	);
+	// Mirrored into a ref for the same reason as `auth`: the rating callback must keep a stable
+	// identity or MessageComponent's memo re-renders the whole transcript on every profile refetch.
+	const settingsProfileRef = useRef(settingsProfile.data);
+	useEffect(() => {
+		settingsProfileRef.current = settingsProfile.data;
+	}, [settingsProfile.data]);
+
 	// Read the profile's INSTALLED bits directly rather than intersecting a remote catalog search
 	// with profile.bits strings — the latter silently misses embeddings whose stored hub prefix
 	// differs from the search hub, which is exactly why the memory picker never appeared.
@@ -706,6 +722,19 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				agentSelection: turnSelection,
 				label: trimmed,
 				sourceAttachments: [...attachments],
+				// Stamped onto the persisted message so a rating months later still knows how this
+				// turn ran — none of it is recoverable once the run record is dropped.
+				runContext: {
+					effective_model_id: effectiveModelId,
+					auto_mode: state.autoMode,
+					memory_enabled: Boolean(state.embeddingModelId),
+					surface: variant,
+					mode: boardContext ? "board" : "global",
+					board_app_id: boardContext?.app_id,
+					board_id: boardContext?.board_id,
+					user_message_id: userMessage.id,
+					attachment_count: attachments.length,
+				},
 				inputPreview: {
 					prompt: trimmed,
 					attachments: allFiles.map((file) => ({
@@ -783,6 +812,89 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			});
 		},
 		[appendMessage, backend, variant],
+	);
+
+	// Rate one assistant turn. The local write is authoritative and happens first: a thumb the user
+	// pressed must stay pressed whether or not the network agrees, and message.tsx toasts a failure
+	// if this rejects — so a successful local save must never rethrow a failed upload.
+	//
+	// Stable by construction (refs, not props) because MessageComponent memo-compares this callback
+	// by identity, and a new one re-renders every message in the transcript.
+	const handleMessageUpdate = useCallback(
+		async (messageId: string, updates: Partial<IMessage>) => {
+			const store = useGlobalChatStore.getState();
+			const existing =
+				(await globalChatDb.messages.get(messageId).catch(() => undefined)) ??
+				store.messages.find((message) => message.id === messageId);
+			if (!existing) return;
+
+			// An explicit `ratingSettings: undefined` means "clear it" — spreading alone would leave a
+			// present-but-undefined key, which Dexie then persists.
+			const merged: IMessage = { ...existing, ...updates };
+			const { ratingSettings: _cleared, ...withoutSettings } = merged;
+			const next: IMessage =
+				Object.prototype.hasOwnProperty.call(updates, "ratingSettings") &&
+				updates.ratingSettings === undefined
+					? withoutSettings
+					: merged;
+
+			// Store first so the thumb fills immediately — this transcript renders from Zustand, not
+			// from a live Dexie query, so a database write alone would not repaint anything.
+			store.commitMessage(next);
+			await persistGlobalChatMessage(next);
+
+			const ratingChanged = Object.prototype.hasOwnProperty.call(
+				updates,
+				"rating",
+			);
+			const settingsChanged = Object.prototype.hasOwnProperty.call(
+				updates,
+				"ratingSettings",
+			);
+			if (!ratingChanged && !settingsChanged) return;
+
+			// FlowPilot runs signed-out on desktop against local providers. There is no account to
+			// attribute a rating to there, so the local row is the terminal state.
+			const profile = settingsProfileRef.current?.hub_profile;
+			if (!profile?.hub || !authRef.current?.isAuthenticated) return;
+
+			const rating = flowPilotRatingForUi(next.rating);
+			try {
+				await submitFlowPilotFeedback(backend.apiState, profile, {
+					feedback_id: next.id,
+					rating,
+					comment: next.ratingSettings?.comment?.trim() ?? "",
+					context: buildFlowPilotFeedbackContext(
+						next,
+						useGlobalChatStore.getState().messages,
+						{
+							includeTranscript: Boolean(
+								next.ratingSettings?.includeChatHistory,
+							),
+							canContact: Boolean(next.ratingSettings?.canContact),
+						},
+					),
+				});
+			} catch (error) {
+				// A hub that predates this route, an offline desktop, or a dropped connection all end
+				// here. The rating is already stored locally, so this is a sync gap, not a user error
+				// — but say so, because message.tsx is about to toast an unqualified success.
+				console.warn(
+					"[FlowPilot] Failed to upload message feedback:",
+					rating === FLOWPILOT_RATING_WITHDRAWN ? "withdrawal" : "rating",
+					error,
+				);
+				if (rating !== FLOWPILOT_RATING_WITHDRAWN) {
+					toast.warning(
+						i18next.t(
+							"ratingSavedOnThisDeviceOnly",
+							"Rating saved on this device — it could not be sent to the server.",
+						),
+					);
+				}
+			}
+		},
+		[backend.apiState],
 	);
 
 	// Answer an app-chat dialog raised during a call_app_chat run. Responding unblocks the app's
@@ -1484,6 +1596,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								config={GLOBAL_CHAT_CONFIG}
 								activeInteractions={activeInteractions}
 								onRespondToInteraction={handleRespondToInteraction}
+								onMessageUpdate={handleMessageUpdate}
 								showAiDisclosure
 								inlinePrompt={
 									toolPrompt ? (

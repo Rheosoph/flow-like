@@ -1040,6 +1040,15 @@ impl InternalNode {
         true
     }
 
+    /// Route a node failure into the board's `On Error` branch.
+    ///
+    /// `Ok(())` means the board handled it: the error branch and everything downstream of
+    /// it ran to completion, so callers continue rather than unwinding, and the run is not
+    /// marked failed. `Err` means nothing was wired to handle it (or the handler chain
+    /// itself failed), and the error must keep propagating.
+    ///
+    /// The node stays in [`NodeState::Error`] either way — it did fail, and the editor
+    /// should show that — so a caller cannot use the state to tell the two apart.
     pub async fn handle_error(
         context: &mut ExecutionContext,
         error: &str,
@@ -1201,15 +1210,13 @@ impl InternalNode {
         if !InternalNode::trigger_missing_dependencies(context, recursion_guard, false).await {
             context.log_message("Failed to trigger missing dependencies", LogLevel::Error);
             context.end_trace();
-            InternalNode::handle_error(
+            return InternalNode::handle_error(
                 context,
                 "Failed to trigger missing dependencies",
                 recursion_guard,
             )
-            .await?;
-            return Err(InternalNodeError::DependencyFailed(
-                context.node.node_id().to_string(),
-            ));
+            .await
+            .map_err(|_| InternalNodeError::DependencyFailed(context.node.node_id().to_string()));
         }
 
         // this node
@@ -1219,8 +1226,7 @@ impl InternalNode {
                 &format!("Failed to execute node: {}", err_string),
                 LogLevel::Error,
             );
-            InternalNode::handle_error(context, &err_string, recursion_guard).await?;
-            return Err(InternalNodeError::ExecutionFailed(err_string));
+            return InternalNode::handle_error(context, &err_string, recursion_guard).await;
         }
 
         // successors (DFS; fresh guard per successor to mirror old semantics)
@@ -1233,8 +1239,7 @@ impl InternalNode {
                         &format!("Failed to get successors: {}", err_string),
                         LogLevel::Error,
                     );
-                    InternalNode::handle_error(context, &err_string, recursion_guard).await?;
-                    return Err(InternalNodeError::ExecutionFailed(err_string));
+                    return InternalNode::handle_error(context, &err_string, recursion_guard).await;
                 }
             };
 
@@ -1265,18 +1270,17 @@ impl InternalNode {
                     sub.end_trace();
                     context.push_sub_context(&mut sub);
                     handled?;
-                    return Err(InternalNodeError::ExecutionFailed(err_string));
+                    continue;
                 }
 
                 if let Err(e) = run_node_logic_only(&mut sub, &mut local_guard).await {
                     let err_string = e.into_message();
-                    let _ = sub.activate_exec_pin("auto_handle_error").await;
-                    let _ = sub
-                        .set_pin_value("auto_handle_error_string", json!(err_string.clone()))
-                        .await;
+                    let handled =
+                        InternalNode::handle_error(&mut sub, &err_string, &mut local_guard).await;
                     sub.end_trace();
                     context.push_sub_context(&mut sub);
-                    return Err(InternalNodeError::ExecutionFailed(err_string));
+                    handled?;
+                    continue;
                 }
 
                 match next.node.get_connected_exec(true, context).await {
@@ -1293,7 +1297,7 @@ impl InternalNode {
                         sub.end_trace();
                         context.push_sub_context(&mut sub);
                         handled?;
-                        return Err(InternalNodeError::ExecutionFailed(err_string));
+                        continue;
                     }
                 }
 
@@ -1332,10 +1336,9 @@ impl InternalNode {
         // 1) Execute precomputed dependencies iteratively (no recursion)
         if !exec_deps_from_map(context, recursion_guard, dependencies).await {
             let err = "Failed to trigger mapped dependencies".to_string();
-            InternalNode::handle_error(context, &err, recursion_guard).await?;
-            return Err(InternalNodeError::DependencyFailed(
-                node.node_id().to_string(),
-            ));
+            return InternalNode::handle_error(context, &err, recursion_guard)
+                .await
+                .map_err(|_| InternalNodeError::DependencyFailed(node.node_id().to_string()));
         }
 
         // 2) Run this node (no successors here)
@@ -1359,8 +1362,7 @@ impl InternalNode {
             finish_debug_log(context, &mut log_message);
             context.end_trace();
             context.set_state(NodeState::Error).await;
-            InternalNode::handle_error(context, &err_string, recursion_guard).await?;
-            return Err(InternalNodeError::ExecutionFailed(err_string));
+            return InternalNode::handle_error(context, &err_string, recursion_guard).await;
         }
 
         context.set_state(NodeState::Success).await;
@@ -1377,8 +1379,7 @@ impl InternalNode {
                         &format!("Failed to get successors: {}", err_string.clone()),
                         LogLevel::Error,
                     );
-                    InternalNode::handle_error(context, &err_string, recursion_guard).await?;
-                    return Err(InternalNodeError::ExecutionFailed(err_string));
+                    return InternalNode::handle_error(context, &err_string, recursion_guard).await;
                 }
             };
 
@@ -1410,19 +1411,18 @@ impl InternalNode {
                     sub.end_trace();
                     context.push_sub_context(&mut sub);
                     handled?;
-                    return Err(InternalNodeError::ExecutionFailed(err_string));
+                    continue;
                 }
 
                 // Run successor node
                 if let Err(e) = run_node_logic_only(&mut sub, &mut local_guard).await {
                     let err_string = e.into_message();
-                    let _ = sub.activate_exec_pin("auto_handle_error").await;
-                    let _ = sub
-                        .set_pin_value("auto_handle_error_string", json!(err_string.clone()))
-                        .await;
+                    let handled =
+                        InternalNode::handle_error(&mut sub, &err_string, &mut local_guard).await;
                     sub.end_trace();
                     context.push_sub_context(&mut sub);
-                    return Err(InternalNodeError::ExecutionFailed(err_string));
+                    handled?;
+                    continue;
                 }
 
                 // Enqueue its successors (DFS)
@@ -1440,7 +1440,7 @@ impl InternalNode {
                         sub.end_trace();
                         context.push_sub_context(&mut sub);
                         handled?;
-                        return Err(InternalNodeError::ExecutionFailed(err_string));
+                        continue;
                     }
                 }
 

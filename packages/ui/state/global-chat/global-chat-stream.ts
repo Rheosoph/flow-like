@@ -26,6 +26,7 @@ import {
 } from "./copilot-stream-steps";
 import {
 	GLOBAL_CHAT_APP_ID,
+	type IChatRunContext,
 	type IMessage,
 	globalChatDb,
 } from "./global-chat-db";
@@ -210,6 +211,9 @@ export function makeGlobalChatMessage(
  */
 const deletedConversations = new Set<string>();
 
+/** Version tag on every persisted {@link IChatRunContext}, so stored ratings survive shape changes. */
+export const RUN_CONTEXT_SCHEMA = "flowpilot.run-context/v1";
+
 export async function persistGlobalChatMessage(message: IMessage) {
 	if (deletedConversations.has(message.sessionId)) return;
 	try {
@@ -329,6 +333,12 @@ interface DriveOptions {
 	/** Exact files from the owning user turn, captured before concurrent turns can change history. */
 	sourceAttachments?: IMessage["files"];
 	/**
+	 * Caller-only execution facts the engine cannot see (auto mode, memory, surface, the owning user
+	 * message id). Merged into the message's persisted {@link IChatRunContext} so a rating months
+	 * later still knows how the turn ran.
+	 */
+	runContext?: Partial<IChatRunContext>;
+	/**
 	 * Transport hook. Drives the underlying run and forwards every raw FlowPilot stream chunk to
 	 * `onChunk`; resolves with the transport's result (the desktop Tauri command's return value or,
 	 * on the web, the final `UnifiedCopilotResponse`). This is the ONE seam that differs between the
@@ -367,6 +377,7 @@ export async function driveGlobalChatStream({
 	isResume,
 	inputPreview,
 	sourceAttachments,
+	runContext,
 	start,
 }: DriveOptions) {
 	const store = useGlobalChatStore;
@@ -375,6 +386,23 @@ export async function driveGlobalChatStream({
 	let lastCheckpoint = 0;
 	let streamFailure: string | undefined;
 	const turnSelection = beginGlobalChatTurnSelection(runId, agentSelection);
+	const runStartedAt = Date.now();
+	// Stamped BEFORE the first checkpoint, not at finalize: a turn that crashes, is cancelled, or
+	// never finalizes is exactly the one worth rating, and it must still say which model ran it.
+	const restoredContext = responseMessage.run_context;
+	responseMessage.run_context = {
+		schema: RUN_CONTEXT_SCHEMA,
+		provider: turnSelection.provider,
+		model_id: turnSelection.selectedModelId,
+		reasoning_effort: turnSelection.reasoningEffort,
+		started_at_ms: runStartedAt,
+		...runContext,
+		// A re-attached run keeps the checkpoint's identity: its own run record is gone, so
+		// `beginGlobalChatTurnSelection` above resolved against the live picker and would otherwise
+		// relabel the turn with whatever model the user has selected right now.
+		...restoredContext,
+		resumed: Boolean(isResume) || Boolean(restoredContext?.resumed),
+	};
 	const owningAttachments =
 		sourceAttachments ??
 		(() => {
@@ -611,6 +639,18 @@ export async function driveGlobalChatStream({
 			responseMessage.tools = [];
 			responseMessage.usage_stats =
 				acc.usageStats.length > 0 ? acc.usageStats : undefined;
+			// The run record dies at `endRun` a few lines below, taking its steer log and start
+			// time with it — fold what a reviewer needs into the message while it still exists.
+			const finishedRun = store.getState().runs[runId];
+			const endedAt = Date.now();
+			responseMessage.run_context = {
+				...(responseMessage.run_context ?? { schema: RUN_CONTEXT_SCHEMA }),
+				ended_at_ms: endedAt,
+				duration_ms: endedAt - (finishedRun?.startedAt ?? runStartedAt),
+				outcome: debugOutcome,
+				error: streamFailure,
+				steer_count: finishedRun?.steers.length ?? 0,
+			};
 			store.getState().setRunMessage(runId, { ...responseMessage });
 			const folded = store.getState().runs[runId]?.message ?? responseMessage;
 			const finalized: IMessage = {
@@ -796,6 +836,7 @@ export function resumeGlobalChatStream() {
 			responseMessage.widgets = checkpoint.widgets;
 			responseMessage.app_refs = checkpoint.app_refs;
 			responseMessage.timestamp = checkpoint.timestamp;
+			responseMessage.run_context = checkpoint.run_context;
 		}
 		void driveGlobalChatStream({
 			responseMessage,

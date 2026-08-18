@@ -78,9 +78,15 @@ use crate::{
     state::AppState,
 };
 
+pub mod feedback;
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", post(global_chat))
+        .route(
+            "/feedback",
+            axum::routing::put(feedback::upsert_global_chat_feedback),
+        )
         .route("/{run_id}/tool-result", post(global_chat_tool_result))
         .route("/{run_id}/cancel", post(global_chat_cancel))
         .route("/{run_id}/steer", post(global_chat_steer))

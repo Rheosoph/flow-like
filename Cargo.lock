@@ -1609,6 +1609,8 @@ dependencies = [
 name = "aws-event-bridge"
 version = "0.1.0"
 dependencies = [
+ "aws-config",
+ "aws-sdk-scheduler",
  "flow-like-types",
  "lambda_runtime 1.1.2",
  "mimalloc",

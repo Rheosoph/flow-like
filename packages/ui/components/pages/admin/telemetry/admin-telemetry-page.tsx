@@ -12,6 +12,7 @@ import {
 	GitBranch,
 	Layers,
 	Lock,
+	MessageSquareHeart,
 	MonitorSmartphone,
 	RefreshCw,
 	Zap,
@@ -755,6 +756,12 @@ export function AdminTelemetryPage({
 								<Link href={`${basePath}/traces`}>
 									<GitBranch className="mr-1 h-3.5 w-3.5" />
 									{t('traces', 'Traces')}
+								</Link>
+							</Button>
+							<Button asChild variant="outline" size="sm">
+								<Link href={`${basePath}/prompt-feedback`}>
+									<MessageSquareHeart className="mr-1 h-3.5 w-3.5" />
+									{t('promptFeedback', 'Prompt feedback')}
 								</Link>
 							</Button>
 							<Button variant="outline" size="sm" onClick={refresh}>

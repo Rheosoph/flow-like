@@ -1,10 +1,11 @@
 import Dexie, { type EntityTable } from "dexie";
 import type {
+	IChatRunContext,
 	IMessage,
 	ISession,
 } from "../../components/interfaces/chat-default/chat-db";
 
-export type { IMessage, ISession };
+export type { IChatRunContext, IMessage, ISession };
 
 /** Synthetic appId used for the global platform assistant (not tied to a single Flow-Like app). */
 export const GLOBAL_CHAT_APP_ID = "global";

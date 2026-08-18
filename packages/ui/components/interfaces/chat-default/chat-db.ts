@@ -135,6 +135,48 @@ export interface IChatUsageStat {
 	stats: ILLMUsageStats;
 }
 
+/**
+ * How one assistant turn was actually executed, stamped on the message while the run is alive.
+ *
+ * Nothing here is recoverable afterwards: the run record (which holds the pinned provider/model)
+ * is deleted the moment the turn ends, `getGlobalChatTurnSelection` then silently falls back to
+ * whatever the model picker currently shows, and `debug_report` is never even built outside dev.
+ * A rating arrives minutes later, so without this field the answer to "which model produced this?"
+ * is a guess. Kept flat and ids-only on purpose — it is rewritten on every ~1s checkpoint, and
+ * desktop Dexie writes pay a steep serialization cost for nested values.
+ */
+export interface IChatRunContext {
+	/** Payload version, so a stored rating stays readable when the shape grows. */
+	schema: string;
+	provider?: string;
+	/** Raw picker model id. */
+	model_id?: string;
+	/** The prefixed id actually handed to the backend. */
+	effective_model_id?: string;
+	reasoning_effort?: string;
+	auto_mode?: boolean;
+	memory_enabled?: boolean;
+	/** Which FlowPilot surface started the turn. */
+	surface?: string;
+	/** Conversation scope: platform-wide, a board copilot, or the UI builder. */
+	mode?: string;
+	board_app_id?: string;
+	board_id?: string;
+	/** The user turn this reply answers. Steering commits later user messages, so a
+	 * "previous message" scan can attribute the wrong prompt. */
+	user_message_id?: string;
+	attachment_count?: number;
+	started_at_ms?: number;
+	ended_at_ms?: number;
+	duration_ms?: number;
+	/** "ok" | "partial" | "error" | "timeout" — mirrors the debug report's outcome. */
+	outcome?: string;
+	terminal_code?: string;
+	error?: string;
+	steer_count?: number;
+	resumed?: boolean;
+}
+
 export interface IMessage {
 	id: string;
 	appId: string;
@@ -158,6 +200,8 @@ export interface IMessage {
 	app_refs?: string[];
 	/** Persisted, bounded lifecycle report for debugging one complete agent turn. */
 	debug_report?: IAgentDebugReport;
+	/** How this assistant turn was executed. Global chat only; see {@link IChatRunContext}. */
+	run_context?: IChatRunContext;
 	/** a2ui widgets embedded in this message (from the Push Widget node). */
 	widgets?: IChatWidget[];
 }
