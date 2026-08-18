@@ -894,12 +894,11 @@ pub fn infer_ner(
     let mut window = declared;
     let mut votes: Vec<Option<TokenVote>> = vec![None; ids.len()];
     let mut num_labels = 0usize;
-    let mut window_count = 0usize;
 
     // `max_position_embeddings` is a claim, not a guarantee: an export can bake in a shorter limit,
     // and a family whose position offset we do not model overshoots by a token or two. Rather than
     // hand a confusing runtime error to the user, walk the window down and try again.
-    loop {
+    let window_count = loop {
         let content_window = window.saturating_sub(prefix + suffix);
         if content_window == 0 {
             return Err(anyhow!(
@@ -912,7 +911,7 @@ pub fn infer_ner(
         votes.iter_mut().for_each(|vote| *vote = None);
         let mut failure = None;
         let planned = plan_windows(content.clone(), content_window, &word_ids);
-        window_count = planned.len();
+        let planned_count = planned.len();
 
         for span in planned {
             let mut window_ids = Vec::with_capacity(prefix + span.len() + suffix);
@@ -940,7 +939,7 @@ pub fn infer_ner(
         }
 
         match failure {
-            None => break,
+            None => break planned_count,
             // Padding to a fixed length means the graph dictates the size; halving it cannot help.
             Some(WindowError::Inference(_)) if pad_to.is_none() && window > MIN_WINDOW_RETRY => {
                 window = (window / 2).max(MIN_WINDOW_RETRY);
@@ -955,7 +954,7 @@ pub fn infer_ner(
             }
             Some(other) => return Err(other.into_error()),
         }
-    }
+    };
 
     let label_names: Vec<String> = if options.labels.is_empty() {
         if num_labels != CONLL_2003_LABELS.len() {

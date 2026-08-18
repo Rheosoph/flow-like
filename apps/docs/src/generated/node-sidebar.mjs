@@ -2473,6 +2473,10 @@ export const generatedNodeSidebar = [
         "slug": "nodes/control/control-for-each"
       },
       {
+        "label": "For Each (Batch)",
+        "slug": "nodes/control/control-for-each-batch"
+      },
+      {
         "label": "For Each (Break)",
         "slug": "nodes/control/control-for-each-with-break"
       },
@@ -2487,6 +2491,10 @@ export const generatedNodeSidebar = [
       {
         "label": "Parallel For Each",
         "slug": "nodes/control/control-par-for-each"
+      },
+      {
+        "label": "Parallel For Each (Batch)",
+        "slug": "nodes/control/control-par-for-each-batch"
       },
       {
         "label": "Reroute",

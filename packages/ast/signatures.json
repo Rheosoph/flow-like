@@ -17628,6 +17628,63 @@
       "doc": "Loops over an Array"
     },
     {
+      "node_type": "control_for_each_batch",
+      "display": "controlForEachBatch",
+      "friendly": "For Each (Batch)",
+      "category": "Control",
+      "inputs": [
+        {
+          "name": "array",
+          "ty": {
+            "base": "any",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Array to Loop"
+        },
+        {
+          "name": "batch_size",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Maximum number of elements per batch. Values below 1 are clamped to 1."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "batch",
+          "ty": {
+            "base": "any",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "The current slice, holding up to Batch Size elements"
+        },
+        {
+          "name": "index",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Zero based index of the current batch"
+        },
+        {
+          "name": "start_index",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Index of the first element of this batch inside the source array"
+        }
+      ],
+      "impure": true,
+      "doc": "Loops over an Array in batches, running the body once per slice of up to Batch Size elements"
+    },
+    {
       "node_type": "control_for_each_row",
       "display": "controlForEachRow",
       "friendly": "For Each Row",
@@ -17822,6 +17879,72 @@
       ],
       "impure": true,
       "doc": "Loops over an Array in Parallel"
+    },
+    {
+      "node_type": "control_par_for_each_batch",
+      "display": "controlParForEachBatch",
+      "friendly": "Parallel For Each (Batch)",
+      "category": "Control",
+      "inputs": [
+        {
+          "name": "array",
+          "ty": {
+            "base": "any",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Array to Loop"
+        },
+        {
+          "name": "batch_size",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Maximum number of elements per batch. Values below 1 are clamped to 1."
+        },
+        {
+          "name": "max_concurrent",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Maximum number of concurrent body executions (0 = unlimited)"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "batch",
+          "ty": {
+            "base": "any",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "The current slice, holding up to Batch Size elements"
+        },
+        {
+          "name": "index",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Zero based index of the current batch"
+        },
+        {
+          "name": "start_index",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Index of the first element of this batch inside the source array"
+        }
+      ],
+      "impure": true,
+      "doc": "Loops over an Array in batches, running the body for multiple batches in parallel"
     },
     {
       "node_type": "control_sequence",
@@ -65202,6 +65325,16 @@
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
         },
         {
+          "name": "config",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "HuggingFace config.json of the model. Supplies the id2label mapping that decides which class index means which entity type, and max_position_embeddings, which sets how many tokens fit in one window. Left empty, the node looks for config.json next to the tokenizer. Strongly recommended: label orderings differ between models of the same size, and a wrong one mislabels every entity.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
           "name": "text",
           "ty": {
             "base": "string",
@@ -65217,7 +65350,7 @@
             "container": "Array"
           },
           "optional": false,
-          "doc": "Entity label names in model output order (e.g. ['O', 'B-PER', 'I-PER', 'B-ORG', ...]). If empty, uses CoNLL-2003 default."
+          "doc": "Entity label names in model output order (e.g. ['O', 'B-PER', 'I-PER', 'B-ORG', ...]). Overrides the Config pin. If both are empty, the node falls back to the CoNLL-2003 ordering of dslim/bert-base-NER."
         },
         {
           "name": "scheme",
@@ -65237,15 +65370,6 @@
           },
           "optional": true,
           "doc": "Minimum confidence threshold for entity extraction (0.0-1.0)"
-        },
-        {
-          "name": "max_length",
-          "ty": {
-            "base": "int",
-            "container": "Normal"
-          },
-          "optional": true,
-          "doc": "Maximum sequence length for tokenization (default: 512)"
         }
       ],
       "outputs": [
@@ -65257,7 +65381,7 @@
           },
           "optional": false,
           "doc": "Full NER result with entities and token predictions",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"NerResult\",\"description\":\"NER result containing all recognized entities\",\"type\":\"object\",\"properties\":{\"entities\":{\"description\":\"Recognized entities\",\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/NamedEntity\"}},\"tokens\":{\"description\":\"Token-level predictions\",\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/TokenPrediction\"}},\"text\":{\"description\":\"Original input text\",\"type\":\"string\"}},\"required\":[\"entities\",\"tokens\",\"text\"],\"$defs\":{\"NamedEntity\":{\"description\":\"A recognized named entity\",\"type\":\"object\",\"properties\":{\"text\":{\"description\":\"The entity text\",\"type\":\"string\"},\"entity_type\":{\"description\":\"Entity type (PER, ORG, LOC, etc.)\",\"type\":\"string\"},\"start_char\":{\"description\":\"Character start position in original text\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"end_char\":{\"description\":\"Character end position in original text (exclusive)\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"start_token\":{\"description\":\"Start token index\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"end_token\":{\"description\":\"End token index (exclusive)\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"confidence\":{\"description\":\"Average confidence score\",\"type\":\"number\",\"format\":\"float\"}},\"required\":[\"text\",\"entity_type\",\"start_char\",\"end_char\",\"start_token\",\"end_token\",\"confidence\"]},\"TokenPrediction\":{\"description\":\"Token-level NER prediction\",\"type\":\"object\",\"properties\":{\"token\":{\"description\":\"Token text (may include ## for wordpiece)\",\"type\":\"string\"},\"label\":{\"description\":\"Predicted label (raw from model)\",\"type\":\"string\"},\"confidence\":{\"description\":\"Confidence score\",\"type\":\"number\",\"format\":\"float\"},\"start\":{\"description\":\"Character offset start\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"end\":{\"description\":\"Character offset end\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0}},\"required\":[\"token\",\"label\",\"confidence\",\"start\",\"end\"]}}}"
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"NerResult\",\"description\":\"NER result containing all recognized entities\",\"type\":\"object\",\"properties\":{\"entities\":{\"description\":\"Recognized entities\",\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/NamedEntity\"}},\"tokens\":{\"description\":\"Token-level predictions\",\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/TokenPrediction\"}},\"text\":{\"description\":\"Original input text\",\"type\":\"string\"},\"window\":{\"description\":\"Tokens per window the model actually ran on, including special tokens. Below the model's\\ndeclared limit means the graph refused that limit and the window was walked down.\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"windows\":{\"description\":\"Number of overlapping windows the text was split across. More than one means the input was\\nlonger than a single pass and was chunked, not truncated.\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0}},\"required\":[\"entities\",\"tokens\",\"text\",\"window\",\"windows\"],\"$defs\":{\"NamedEntity\":{\"description\":\"A recognized named entity\",\"type\":\"object\",\"properties\":{\"text\":{\"description\":\"The entity text\",\"type\":\"string\"},\"entity_type\":{\"description\":\"Entity type (PER, ORG, LOC, etc.)\",\"type\":\"string\"},\"start_char\":{\"description\":\"Character start position in original text\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"end_char\":{\"description\":\"Character end position in original text (exclusive)\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"start_token\":{\"description\":\"Start token index\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"end_token\":{\"description\":\"End token index (exclusive)\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"confidence\":{\"description\":\"Average confidence score\",\"type\":\"number\",\"format\":\"float\"}},\"required\":[\"text\",\"entity_type\",\"start_char\",\"end_char\",\"start_token\",\"end_token\",\"confidence\"]},\"TokenPrediction\":{\"description\":\"Token-level NER prediction\",\"type\":\"object\",\"properties\":{\"token\":{\"description\":\"Token text (may include ## for wordpiece)\",\"type\":\"string\"},\"label\":{\"description\":\"Predicted label (raw from model)\",\"type\":\"string\"},\"confidence\":{\"description\":\"Confidence score\",\"type\":\"number\",\"format\":\"float\"},\"start\":{\"description\":\"Character offset start\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"end\":{\"description\":\"Character offset end\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0}},\"required\":[\"token\",\"label\",\"confidence\",\"start\",\"end\"]}}}"
         },
         {
           "name": "entities",
@@ -65280,7 +65404,7 @@
         }
       ],
       "impure": true,
-      "doc": "Extract named entities (persons, organizations, locations, dates, etc.) from text using ONNX models. Supports BERT, RoBERTa, and other transformer-based NER models with automatic tokenization. Download models from: BERT-base-NER (https://huggingface.co/dslim/bert-base-NER), Multilingual NER (https://huggingface.co/Davlan/bert-base-multilingual-cased-ner-hrl), spaCy NER (https://huggingface.co/spacy). Download tokenizer.json from the same model repository."
+      "doc": "Extract named entities (persons, organizations, locations, dates, etc.) from text using ONNX models. Supports BERT, RoBERTa, and other transformer-based NER models with automatic tokenization. Download models from: BERT-base-NER (https://huggingface.co/dslim/bert-base-NER), Multilingual NER (https://huggingface.co/Davlan/bert-base-multilingual-cased-ner-hrl), spaCy NER (https://huggingface.co/spacy). Text longer than the model's window is split into overlapping chunks rather than truncated, so entities are found throughout a long document. Download tokenizer.json and config.json from the same model repository — config.json carries the id2label mapping that names the entity types and the sequence length the model accepts."
     },
     {
       "node_type": "onnx_session_info",

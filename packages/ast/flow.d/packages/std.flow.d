@@ -20,6 +20,17 @@ declare function controlBranch({ condition?: bool }): void;
 declare function controlForEach({ array: any[] }): { value: any, index: int };
 
 /**
+ * Loops over an Array in batches, running the body once per slice of up to Batch Size elements
+ * @param array — Array to Loop
+ * @param batchSize (optional) — Maximum number of elements per batch. Values below 1 are clamped to 1.
+ * @returns batch — The current slice, holding up to Batch Size elements
+ * @returns index — Zero based index of the current batch
+ * @returns startIndex — Index of the first element of this batch inside the source array
+ * @impure has side effects / drives control flow
+ */
+declare function controlForEachBatch({ array: any[], batchSize?: int }): { batch: any[], index: int, startIndex: int };
+
+/**
  * Loops over an Array; allows breaking early from inside the loop body.
  * @param break (optional) — Trigger this to terminate the active loop early (callable from inside Loop Body)
  * @param array — Array to Loop
@@ -45,6 +56,18 @@ declare function controlParExecution({ threadModel?: string }): void;
  * @impure has side effects / drives control flow
  */
 declare function controlParForEach({ array: any[], maxConcurrent?: int }): { value: any, index: int };
+
+/**
+ * Loops over an Array in batches, running the body for multiple batches in parallel
+ * @param array — Array to Loop
+ * @param batchSize (optional) — Maximum number of elements per batch. Values below 1 are clamped to 1.
+ * @param maxConcurrent (optional) — Maximum number of concurrent body executions (0 = unlimited)
+ * @returns batch — The current slice, holding up to Batch Size elements
+ * @returns index — Zero based index of the current batch
+ * @returns startIndex — Index of the first element of this batch inside the source array
+ * @impure has side effects / drives control flow
+ */
+declare function controlParForEachBatch({ array: any[], batchSize?: int, maxConcurrent?: int }): { batch: any[], index: int, startIndex: int };
 
 /**
  * Sequential Execution

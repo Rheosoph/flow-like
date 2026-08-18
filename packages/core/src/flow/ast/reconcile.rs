@@ -2162,7 +2162,12 @@ fn default_node_output_pin(node: &Node) -> Option<String> {
         [pin] => Some(pin.name.clone()),
         many => many
             .iter()
-            .find(|p| matches!(p.name.as_str(), "result" | "value" | "output" | "out"))
+            .find(|p| {
+                matches!(
+                    p.name.as_str(),
+                    "result" | "value" | "output" | "out" | "batch"
+                )
+            })
             .map(|p| p.name.clone()),
     }
 }
@@ -2794,7 +2799,12 @@ fn default_metadata_output_pin(meta: &NodeMetadata) -> Option<String> {
         [pin] => Some(pin.name.clone()),
         many => many
             .iter()
-            .find(|p| matches!(p.name.as_str(), "result" | "value" | "output" | "out"))
+            .find(|p| {
+                matches!(
+                    p.name.as_str(),
+                    "result" | "value" | "output" | "out" | "batch"
+                )
+            })
             .map(|p| p.name.clone()),
     }
 }
