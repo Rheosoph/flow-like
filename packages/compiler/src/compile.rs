@@ -422,8 +422,14 @@ fn validate_storage_url(
             }
         }
         CompilationStorageProvider::AwsS3 => {
-            let is_public_s3 = (host.starts_with("s3.") || host.contains(".s3."))
-                && (host.ends_with(".amazonaws.com") || host.ends_with(".amazonaws.com.cn"));
+            // S3 Express One Zone signs against the zonal endpoint
+            // `<bucket>--<az>--x-s3.s3express-<az>.<region>.amazonaws.com`, which
+            // carries no `.s3.` label. It is still an AWS-operated endpoint, so it
+            // belongs with the public hosts rather than behind the allowlist that
+            // exists for third-party S3-compatible endpoints.
+            let is_public_s3 =
+                (host.starts_with("s3.") || host.contains(".s3.") || host.contains(".s3express-"))
+                    && (host.ends_with(".amazonaws.com") || host.ends_with(".amazonaws.com.cn"));
             if !is_public_s3 && !explicitly_allowed {
                 return Err(invalid_job(format!(
                     "signed S3 URL origin {origin} is not an approved endpoint; add {origin} to COMPILER_ALLOWED_STORAGE_HOSTS to use an S3-compatible endpoint such as Cloudflare R2 or MinIO"
@@ -1165,5 +1171,23 @@ mod tests {
 
         let fragment = format!("{public}#frag");
         assert!(check_s3(&fragment, &CompilerConfig::default()).is_err());
+    }
+
+    #[test]
+    fn s3_express_zonal_endpoint_needs_no_allowlist() {
+        let path = "wasm/pkg_123/1.2.3/node.wasm";
+        let express = format!(
+            "https://flow-meta-bucket-prod--euw1-az1--x-s3.s3express-euw1-az1.eu-west-1.amazonaws.com/{path}?{}",
+            aws_query()
+        );
+        assert!(check_s3(&express, &CompilerConfig::default()).is_ok());
+
+        // The AWS suffix is what makes it trusted, not the `s3express-` label.
+        let lookalike = express.replacen(
+            "s3express-euw1-az1.eu-west-1.amazonaws.com",
+            "s3express-euw1-az1.example.com",
+            1,
+        );
+        assert!(check_s3(&lookalike, &CompilerConfig::default()).is_err());
     }
 }
