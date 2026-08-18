@@ -321,20 +321,20 @@ declare function onnxFaceEmbedding({ model: Struct, image: Struct, inputSize?: i
 declare function onnxGliner({ model: Struct, tokenizer: Struct, text: string, labels: string[], threshold?: float, maxWidth?: int, multiLabel?: bool, mergeAdjacent?: bool }): { result: Struct, entities: Struct[], entityCount: int };
 
 /**
- * Extract named entities (persons, organizations, locations, dates, etc.) from text using ONNX models. Supports BERT, RoBERTa, and other transformer-based NER models with automatic tokenization. Download models from: BERT-base-NER (https://huggingface.co/dslim/bert-base-NER), Multilingual NER (https://huggingface.co/Davlan/bert-base-multilingual-cased-ner-hrl), spaCy NER (https://huggingface.co/spacy). Download tokenizer.json from the same model repository.
+ * Extract named entities (persons, organizations, locations, dates, etc.) from text using ONNX models. Supports BERT, RoBERTa, and other transformer-based NER models with automatic tokenization. Download models from: BERT-base-NER (https://huggingface.co/dslim/bert-base-NER), Multilingual NER (https://huggingface.co/Davlan/bert-base-multilingual-cased-ner-hrl), spaCy NER (https://huggingface.co/spacy). Text longer than the model's window is split into overlapping chunks rather than truncated, so entities are found throughout a long document. Download tokenizer.json and config.json from the same model repository — config.json carries the id2label mapping that names the entity types and the sequence length the model accepts.
  * @param model — ONNX NER Model Session
  * @param tokenizer — HuggingFace tokenizer.json file for BERT/RoBERTa tokenization. Download from the same model repository.
+ * @param config — HuggingFace config.json of the model. Supplies the id2label mapping that decides which class index means which entity type, and max_position_embeddings, which sets how many tokens fit in one window. Left empty, the node looks for config.json next to the tokenizer. Strongly recommended: label orderings differ between models of the same size, and a wrong one mislabels every entity.
  * @param text — Input text to analyze for named entities
- * @param labels — Entity label names in model output order (e.g. ['O', 'B-PER', 'I-PER', 'B-ORG', ...]). If empty, uses CoNLL-2003 default.
+ * @param labels — Entity label names in model output order (e.g. ['O', 'B-PER', 'I-PER', 'B-ORG', ...]). Overrides the Config pin. If both are empty, the node falls back to the CoNLL-2003 ordering of dslim/bert-base-NER.
  * @param scheme (optional) — Tagging scheme: BIO, BIOES, IOB, or BILOU
  * @param threshold (optional) — Minimum confidence threshold for entity extraction (0.0-1.0)
- * @param maxLength (optional) — Maximum sequence length for tokenization (default: 512)
  * @returns result — Full NER result with entities and token predictions
  * @returns entities — Extracted named entities as array
  * @returns entityCount — Number of entities found
  * @impure has side effects / drives control flow
  */
-declare function onnxNer({ model: Struct, tokenizer: Struct, text: string, labels: string[], scheme?: Struct, threshold?: float, maxLength?: int }): { result: Struct, entities: Struct[], entityCount: int };
+declare function onnxNer({ model: Struct, tokenizer: Struct, config: Struct, text: string, labels: string[], scheme?: Struct, threshold?: float }): { result: Struct, entities: Struct[], entityCount: int };
 
 
 // === AI/ML/ONNX/OCR ===

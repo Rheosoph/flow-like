@@ -97,8 +97,12 @@ impl NodeLogic for RowLoopNode {
             }
 
             // Set outputs for this iteration
-            value.set_value(json!(obj)).await;
-            index.set_value(FlowValue::from(i as i64)).await;
+            let row_value = json!(obj);
+            let index_value = FlowValue::from(i as i64);
+            context.override_pin_value_if_active(&value.id, &row_value);
+            context.override_pin_value_if_active(&index.id, &index_value);
+            value.set_value(row_value).await;
+            index.set_value(index_value).await;
 
             // Trigger connected nodes
             for node in connected.iter() {

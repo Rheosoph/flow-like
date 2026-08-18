@@ -363,5 +363,22 @@
 	"writeAReview": "Bewertung schreiben",
 	"yanked": "Zurückgezogen",
 	"youMightAlsoLike": "Das könnte dir auch gefallen",
-	"yours": "Deine"
+	"yours": "Deine",
+	"capabilityA2ui": "",
+	"capabilityCache": "",
+	"capabilityModels": "",
+	"capabilityNetDns": "",
+	"capabilityNetHttp": "",
+	"capabilityNetTcp": "",
+	"capabilityNetUdp": "",
+	"capabilityNetWs": "",
+	"capabilityOauth": "",
+	"capabilityStorageCache": "",
+	"capabilityStorageNode": "",
+	"capabilityStorageUploads": "",
+	"capabilityStorageUser": "",
+	"capabilityStreaming": "",
+	"capabilityVariables": "",
+	"new": "",
+	"noPermissionsRequested": ""
 }

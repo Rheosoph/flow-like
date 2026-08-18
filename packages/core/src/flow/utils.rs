@@ -156,9 +156,12 @@ pub async fn evaluate_pin_value(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, sync::Arc};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        sync::Arc,
+    };
 
-    use flow_like_types::tokio;
+    use flow_like_types::{json::json, tokio};
 
     use super::{InlineVisitedPins, evaluate_pin_value, evaluate_pin_value_reference};
     use crate::flow::{
@@ -223,5 +226,28 @@ mod tests {
             .await
             .expect_err("cycle must be rejected");
         assert!(error.to_string().contains("circular dependency"));
+    }
+
+    /// The shared cell is the only value source a loop pin has once the reader walks
+    /// past its own pin, so a loop that publishes iterations there alone is visible to
+    /// every branch sharing the graph. Mirroring into the scope is what keeps a nested
+    /// loop's iteration private, and this is the resolution rule that makes it work.
+    #[tokio::test]
+    async fn an_active_scope_shadows_the_shared_cell_at_the_source_pin() {
+        let source = internal_pin(0);
+        let consumer = internal_pin(1);
+        consumer.init_depends_on(vec![Arc::downgrade(&source)]);
+        source.set_value(json!("shared")).await;
+
+        let unscoped = evaluate_pin_value(consumer.clone(), &None)
+            .await
+            .expect("shared cell resolves without a scope");
+        assert_eq!(unscoped, json!("shared"));
+
+        let scope = Some(BTreeMap::from([(source.id.clone(), json!("scoped"))]));
+        let scoped = evaluate_pin_value(consumer, &scope)
+            .await
+            .expect("scope resolves through the dependency chain");
+        assert_eq!(scoped, json!("scoped"));
     }
 }

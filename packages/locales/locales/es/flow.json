@@ -934,5 +934,8 @@
 	"xl1280px": "xl · 1280px",
 	"yAxis": "Eje Y",
 	"yAxisTitle": "Título del eje Y",
-	"you": "Tú"
+	"you": "Tú",
+	"failedToLoadAssets": "",
+	"loading": "",
+	"noMatchingAssetsValHidden": ""
 }

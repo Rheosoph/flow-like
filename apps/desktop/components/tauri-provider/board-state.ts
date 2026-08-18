@@ -12,6 +12,7 @@ import {
 	type IApplyFlowIrCommitResponse,
 	type IApplyFlowScriptResponse,
 	type IBoard,
+	type IBoardMutationOptions,
 	type IBoardServerResetResult,
 	type IBoardState,
 	type IBoardSummary,
@@ -42,6 +43,7 @@ import {
 	type UnifiedChatMessage,
 	type UnifiedCopilotResponse,
 	checkOAuthTokens,
+	dispatchBoardDelivered,
 	dispatchBoardSyncChanged,
 	dispatchBoardSyncRecoveryRequest,
 	extractOAuthRequirementsFromBoard,
@@ -970,6 +972,9 @@ export class BoardState implements IBoardState {
 		// before execution begins (used on the /use page and execution paths).
 		if (forceFresh) {
 			try {
+				// Deliver whatever the last interactive edit left in the outbox first, so the remote
+				// snapshot fetched below is not older than the board that was just committed here.
+				await this.settleOutbox(appId, boardId);
 				const pendingSync = await this.backend.getOfflineSyncCommands(
 					appId,
 					boardId,
@@ -1853,6 +1858,9 @@ export class BoardState implements IBoardState {
 					"Profile, auth or query client not set. Cannot push board update.",
 				);
 			}
+			// A background delivery of the last interactive edit must land before the remote undo/redo
+			// executes, or the server would undo a different history than the one on screen.
+			await this.settleOutbox(appId, boardId);
 			await this.assertNoPendingNativeBoardDelivery(appId, boardId);
 
 			// Undo must ship as a single request — a chunked/partial undo would
@@ -1903,6 +1911,9 @@ export class BoardState implements IBoardState {
 					"Profile, auth or query client not set. Cannot push board update.",
 				);
 			}
+			// A background delivery of the last interactive edit must land before the remote undo/redo
+			// executes, or the server would undo a different history than the one on screen.
+			await this.settleOutbox(appId, boardId);
 			await this.assertNoPendingNativeBoardDelivery(appId, boardId);
 
 			// Redo must ship as a single request — a chunked/partial redo would
@@ -2767,6 +2778,7 @@ export class BoardState implements IBoardState {
 		commands: IGenericCommand[],
 		idempotencyKey?: string,
 		remoteIdentity?: CommandSyncRemoteIdentity,
+		{ awaitDelivery = true }: { awaitDelivery?: boolean } = {},
 	): Promise<{ deliveryComplete: boolean; blockedReason?: string }> {
 		if (commands.length === 0) return { deliveryComplete: true };
 		const durableIdempotencyKey = idempotencyKey ?? `board-sync:${createId()}`;
@@ -2839,9 +2851,23 @@ export class BoardState implements IBoardState {
 			return { deliveryComplete: true };
 		}
 
+		if (!awaitDelivery) {
+			void this.deliverOutbox(appId, boardId).catch((error: unknown) => {
+				console.error("[BoardState] background outbox delivery failed:", error);
+			});
+			return { deliveryComplete: true };
+		}
+		await this.deliverOutbox(appId, boardId);
+		return { deliveryComplete: true };
+	}
+
+	/**
+	 * Drain the outbox to the hub, then once more if a drain that was already running snapshotted
+	 * the queue before the latest journal write. Announces delivery to the window so the canvas
+	 * can tell peers to refetch, and surfaces a failure as the queued-edits toast.
+	 */
+	private async deliverOutbox(appId: string, boardId: string): Promise<void> {
 		let drain = await this.drainOfflineSyncQueue(appId, boardId);
-		// An already-running drain may have snapshotted the queue immediately before this journal
-		// write. Once it settles, run one more pass so the newly appended entry is not deferred.
 		if (!drain.failed) {
 			const remaining = await this.backend.getOfflineSyncCommands(
 				appId,
@@ -2853,53 +2879,50 @@ export class BoardState implements IBoardState {
 		}
 		if (drain.failed) {
 			this.notifyEditsQueued(appId, boardId, drain.failure);
+			return;
 		}
-		return { deliveryComplete: true };
+		dispatchBoardDelivered(appId, boardId);
+	}
+
+	/**
+	 * Wait until nothing is left in the board's outbox that a remote-mutating action could
+	 * overtake. No-op when the outbox is empty; a failed drain leaves the entries queued and the
+	 * caller proceeds against a hub that is behind — the same situation an offline period leaves.
+	 */
+	private async settleOutbox(appId: string, boardId: string): Promise<void> {
+		const pending = await this.backend.getOfflineSyncCommands(appId, boardId);
+		if (!pending.some(commandSyncHasPendingMutation)) return;
+		await this.deliverOutbox(appId, boardId);
 	}
 
 	async executeCommand(
 		appId: string,
 		boardId: string,
 		command: IGenericCommand,
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand> {
-		return await this.sequenceBoardMutation(appId, boardId, async () => {
-			const remoteIdentity = await this.remoteBoardDeliveryIdentity(
-				appId,
-				boardId,
-			);
-			if (remoteIdentity) {
-				// Reject an obviously unsyncable caller payload before committing it locally. Some
-				// commands acquire undo metadata during execution, so the returned command is checked
-				// and durably journaled again below.
-				chunkCommandsForSync([command]);
-			}
-			// The native side returns the executed command plus any node state `on_update` derived
-			// from it. All of it must reach the server as one batch, or a later ConnectPin will
-			// reference a dynamic pin id the Hub never minted.
-			const executedCommands = await invoke<IGenericCommand[]>(
-				"execute_command",
-				{
-					appId,
-					boardId,
-					command,
-				},
-			);
-
-			await this.syncExecutedCommandsToServer(
-				appId,
-				boardId,
-				executedCommands,
-				undefined,
-				remoteIdentity,
-			);
-			return executedCommands[0] ?? command;
-		});
+		const executed = await this.executeCommands(
+			appId,
+			boardId,
+			[command],
+			options,
+		);
+		return executed[0] ?? command;
 	}
 
+	/**
+	 * Local commit first, in one IPC round trip that also returns the board diff against what the
+	 * webview holds (`sync`), so the caller can skip its refetch. Hub delivery is journaled to the
+	 * outbox before returning — that is the durability guarantee — and then drained in the
+	 * background: the outbox is the single ordering source and drains are single-flight per board,
+	 * so a later edit can never overtake this one, and every remote-mutating path settles the
+	 * outbox before it acts (`settleOutbox`).
+	 */
 	async executeCommands(
 		appId: string,
 		boardId: string,
 		commands: IGenericCommand[],
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand[]> {
 		return await this.sequenceBoardMutation(appId, boardId, async () => {
 			const remoteIdentity = await this.remoteBoardDeliveryIdentity(
@@ -2907,16 +2930,44 @@ export class BoardState implements IBoardState {
 				boardId,
 			);
 			if (remoteIdentity) {
+				// Reject an obviously unsyncable caller payload before committing it locally. Some
+				// commands acquire undo metadata during execution, so the returned commands are checked
+				// and durably journaled again below.
 				chunkCommandsForSync(commands);
 			}
-			const executedCommands = await invoke<IGenericCommand[]>(
-				"execute_commands",
-				{
+			const sync = this.localBoardSync.syncRequest(appId, boardId, undefined);
+			// The native side returns the executed commands plus any node state `on_update` derived
+			// from them. All of it must reach the server as one batch, or a later ConnectPin will
+			// reference a dynamic pin id the Hub never minted.
+			const result = await invoke<{
+				commands: IGenericCommand[];
+				sync?: IBoardSyncResponse | null;
+			}>("execute_commands", {
+				appId,
+				boardId,
+				commands,
+				sync,
+			});
+			const executedCommands = result.commands;
+
+			if (sync && result.sync && options?.onBoard) {
+				const board = this.localBoardSync.ingest(
 					appId,
 					boardId,
-					commands,
-				},
-			);
+					undefined,
+					sync,
+					result.sync,
+				);
+				if (board) {
+					await this.presignMediaComments(
+						appId,
+						boardId,
+						board,
+						!remoteIdentity,
+					);
+					options.onBoard(board);
+				}
+			}
 
 			await this.syncExecutedCommandsToServer(
 				appId,
@@ -2924,6 +2975,7 @@ export class BoardState implements IBoardState {
 				executedCommands,
 				undefined,
 				remoteIdentity,
+				{ awaitDelivery: false },
 			);
 			return executedCommands;
 		});

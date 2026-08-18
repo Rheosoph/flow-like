@@ -99,7 +99,7 @@ export function LessonContent({
 
 	return (
 		<article className="fl-lesson-article mx-auto flex w-full max-w-5xl flex-col gap-7 md:gap-8">
-			<header className="mx-auto w-full max-w-[66ch] space-y-2.5">
+			<header className="mx-auto w-full max-w-(--fl-lesson-measure) space-y-2.5">
 				<h1 className="text-balance text-2xl font-semibold tracking-tight md:text-3xl">
 					{lesson.title}
 				</h1>

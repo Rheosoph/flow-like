@@ -4,6 +4,13 @@ export const BOARD_SYNC_CHANGED_EVENT = "flow:board-sync-changed";
 /** Asks the mounted recovery dialog to open. Toasts must not render a dialog themselves. */
 export const BOARD_SYNC_RECOVERY_EVENT = "flow:open-board-sync-recovery";
 
+/**
+ * Emitted once a board's queued edits have reached the hub. On desktop the local commit returns
+ * before delivery, so peers can only be told to refetch when this fires — a `boardUpdate` ping
+ * sent at commit time would have them fetch a hub that does not have the edit yet.
+ */
+export const BOARD_DELIVERED_EVENT = "flow:board-delivered";
+
 export interface BoardSyncEventDetail {
 	appId: string;
 	boardId: string;
@@ -26,6 +33,10 @@ export function dispatchBoardSyncRecoveryRequest(
 	boardId: string,
 ): void {
 	dispatchBoardSyncEvent(BOARD_SYNC_RECOVERY_EVENT, { appId, boardId });
+}
+
+export function dispatchBoardDelivered(appId: string, boardId: string): void {
+	dispatchBoardSyncEvent(BOARD_DELIVERED_EVENT, { appId, boardId });
 }
 
 export function isBoardSyncEventFor(

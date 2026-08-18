@@ -82,6 +82,13 @@ fn board_cache_key(app_id: &str, board_id: &str, version: Option<(u32, u32, u32)
 
 /// Boards are large (a few MB hydrated); bound the count rather than trying to weigh them.
 const BOARD_CACHE_MAX_ENTRIES: u64 = 64;
+/// Total nodes retained across all indexed segment bases (see `State::board_segment_bases`).
+const BOARD_SEGMENT_BASE_MAX_NODES: u64 = 200_000;
+
+/// Key of a segment in `State::board_segment_bases`.
+pub(crate) fn segment_base_key(app_id: &str, board_id: &str, token: &str) -> String {
+    format!("{}\u{1f}{}\u{1f}{token}", app_id.trim(), board_id.trim())
+}
 
 /// A hydrated board together with the storage identity it is known to reproduce.
 ///
@@ -359,6 +366,17 @@ pub struct State {
     /// re-serialising. Keyed by the ETag, so it never needs explicit invalidation.
     pub board_sync_cache:
         moka::sync::Cache<String, Arc<flow_like::flow::board::sync::BoardSyncSnapshot>>,
+    /// The most recent snapshot built for a board on this instance, keyed like `board_cache`.
+    /// Only ever the *starting point* of the next build (`from_board_incremental` reuses tokens
+    /// by payload comparison), so a stale or foreign entry costs hashing time, never correctness.
+    pub board_snapshot_heads:
+        moka::sync::Cache<String, Arc<flow_like::flow::board::sync::BoardSyncSnapshot>>,
+    /// Segments of recently built snapshots by `(app, board, token)`, so a client's segment token
+    /// can be resolved to the payload it denotes and answered with a node-level patch. Fed by every
+    /// snapshot build on this instance; a miss ships the whole segment. Scoped by app and board so
+    /// a token can never address another tenant's data even in theory.
+    pub board_segment_bases:
+        moka::sync::Cache<String, Arc<flow_like::flow::board::sync::SyncSegment>>,
     /// Per-app WASM node catalog; see `app_wasm_nodes_cached`.
     pub app_wasm_nodes_cache:
         moka::sync::Cache<String, Arc<crate::routes::app::wasm_catalog::AppWasmNodes>>,
@@ -846,6 +864,21 @@ impl State {
                 .max_capacity(BOARD_CACHE_MAX_ENTRIES)
                 .time_to_idle(Duration::from_secs(30 * 60))
                 .build(),
+            board_snapshot_heads: moka::sync::Cache::builder()
+                .max_capacity(BOARD_CACHE_MAX_ENTRIES)
+                .time_to_idle(Duration::from_secs(30 * 60))
+                .build(),
+            board_segment_bases: moka::sync::Cache::builder()
+                // Weighed by node count: a handful of 1000-node boards' worth of recent
+                // revisions, not a handful of entries.
+                .weigher(
+                    |_key, segment: &Arc<flow_like::flow::board::sync::SyncSegment>| {
+                        u32::try_from(segment.nodes.len().max(1)).unwrap_or(u32::MAX)
+                    },
+                )
+                .max_capacity(BOARD_SEGMENT_BASE_MAX_NODES)
+                .time_to_idle(Duration::from_secs(30 * 60))
+                .build(),
             app_wasm_nodes_cache: moka::sync::Cache::builder()
                 .max_capacity(1_000)
                 .time_to_live(Duration::from_secs(5 * 60))
@@ -1171,23 +1204,34 @@ impl State {
     /// instead of a decode + hydration. Skipping this is always safe (the next read reloads);
     /// seeding a board that does **not** match `put` is not, so only call it with the exact
     /// board whose `save` returned `put`.
+    ///
+    /// Returns the seeded entry so the writer can build the revision's sync snapshot from the
+    /// very board it just persisted (see `routes::app::board::sync_board::seed_board_revision`).
+    /// `None` when the object carried no ETag and therefore cannot be validated later.
     pub fn seed_board_cache(
         &self,
         app_id: &str,
         board_id: &str,
         board: Board,
         put: &flow_like::flow_like_storage::object_store::PutResult,
-    ) {
-        let Some(e_tag) = put.e_tag.clone() else {
-            return;
-        };
-        self.board_cache.insert(
-            board_cache_key(app_id, board_id, None),
-            Arc::new(CachedBoard {
-                e_tag,
-                board: Arc::new(board),
-            }),
-        );
+    ) -> Option<Arc<CachedBoard>> {
+        let e_tag = put.e_tag.clone()?;
+        let entry = Arc::new(CachedBoard {
+            e_tag,
+            board: Arc::new(board),
+        });
+        self.board_cache
+            .insert(board_cache_key(app_id, board_id, None), entry.clone());
+        Some(entry)
+    }
+
+    /// Key under which `board_snapshot_heads` remembers the last snapshot built for a board.
+    pub fn board_snapshot_head_key(
+        app_id: &str,
+        board_id: &str,
+        version: Option<(u32, u32, u32)>,
+    ) -> String {
+        board_cache_key(app_id, board_id, version)
     }
 
     /// Drop the cached floating draft. Only needed by writers that produce a board the seed

@@ -355,19 +355,235 @@ describe("BoardSyncClient", () => {
 		expect(board.nodes.a.description).toBe("d");
 	});
 
-	test("concurrent syncs share one round trip", async () => {
+	test("a sync that arrives mid-flight is answered by a request sent after it", async () => {
 		const client = new BoardSyncClient();
-		let calls = 0;
-		const transport = async () => {
-			calls++;
-			return fullResponse();
+		const requests: IBoardSyncRequest[] = [];
+		const transport = async (request: IBoardSyncRequest) => {
+			requests.push(request);
+			return requests.length === 1
+				? fullResponse()
+				: { manifest: fullResponse().manifest };
 		};
-		const [a, b] = await Promise.all([
+		const [a, b, c] = await Promise.all([
+			client.sync("app", "b", undefined, transport),
 			client.sync("app", "b", undefined, transport),
 			client.sync("app", "b", undefined, transport),
 		]);
-		expect(calls).toBe(1);
+		// One in-flight fetch plus one shared follow-up — never the stale in-flight answer.
+		expect(requests).toHaveLength(2);
+		expect(requests[1].segments).toEqual({
+			[ROOT_SEGMENT]: "s-root",
+			l1: "s-l1",
+		});
 		expect(a).toBe(b);
+		expect(b).toBe(c);
+	});
+
+	test("ingest applies a merged-apply tail only onto the exact base it was computed against", async () => {
+		const client = new BoardSyncClient();
+		await client.sync("app", "b", undefined, async () => fullResponse());
+		const base = client.syncRequest("app", "b", undefined);
+		if (!base) throw new Error("a held board must yield a request");
+		expect(base.patch).toBe(true);
+		expect(base.segments).toEqual({ [ROOT_SEGMENT]: "s-root", l1: "s-l1" });
+
+		const tail: IBoardSyncResponse = {
+			manifest_delta: { meta: "m2", segments: { l1: "s-l1-2" } },
+			meta: meta(2),
+			segments: {
+				l1: {
+					hash: "s-l1-2",
+					base: "s-l1",
+					nodes: { c: wireNode("c", "l1") },
+					removed: ["b"],
+				},
+			},
+		};
+		const board = client.ingest("app", "b", undefined, base, tail);
+		if (!board) throw new Error("the tail matches the held base");
+		expect(Object.keys(board.nodes).sort()).toEqual(["a", "c"]);
+		expect(client.peek("app", "b")).toBe(board);
+		expect(client.syncRequest("app", "b", undefined)?.segments).toEqual({
+			[ROOT_SEGMENT]: "s-root",
+			l1: "s-l1-2",
+		});
+		expect(client.syncRequest("app", "b", undefined)?.meta).toBe("m2");
+
+		// The same tail again: the held revision has moved on, so it is refused.
+		expect(client.ingest("app", "b", undefined, base, tail)).toBeUndefined();
+		expect(client.peek("app", "b")).toBe(board);
+	});
+
+	test("a plain sync whose response arrives after an ingest is discarded and re-asked", async () => {
+		const client = new BoardSyncClient();
+		await client.sync("app", "b", undefined, async () => fullResponse());
+		const base = client.syncRequest("app", "b", undefined);
+		if (!base) throw new Error("a held board must yield a request");
+
+		const requests: IBoardSyncRequest[] = [];
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const transport = async (request: IBoardSyncRequest) => {
+			requests.push(request);
+			if (requests.length === 1) {
+				await gate;
+				// Computed against the old base: it must not roll the ingest back.
+				return {
+					manifest: fullResponse().manifest,
+				} satisfies IBoardSyncResponse;
+			}
+			expect(request.meta).toBe("m2");
+			return { manifest_delta: {} } satisfies IBoardSyncResponse;
+		};
+		const pending = client.sync("app", "b", undefined, transport);
+		const ingested = client.ingest("app", "b", undefined, base, {
+			manifest_delta: { meta: "m2" },
+			meta: meta(2),
+		});
+		expect(ingested?.updated_at.secs_since_epoch).toBe(2);
+		release();
+		const board = await pending;
+		expect(requests).toHaveLength(2);
+		expect(board.updated_at.secs_since_epoch).toBe(2);
+	});
+});
+
+describe("patches", () => {
+	const held = () => applyBoardSync(undefined, fullResponse(), undefined).board;
+	const request = (): IBoardSyncRequest => ({
+		...manifest({ [ROOT_SEGMENT]: "s-root", l1: "s-l1" }),
+		patch: true,
+	});
+
+	test("upserts and removals apply onto the held segment, untouched nodes keep identity", () => {
+		const first = applyBoardSync(
+			undefined,
+			{
+				...fullResponse(),
+				segments: {
+					[ROOT_SEGMENT]: {
+						hash: "s-root",
+						nodes: { a: wireNode("a", null), x: wireNode("x", null) },
+					},
+					l1: { hash: "s-l1", nodes: { b: wireNode("b", "l1") } },
+				},
+			},
+			undefined,
+		).board;
+		const {
+			board,
+			manifest: next,
+			unpatchable,
+		} = applyBoardSync(
+			first,
+			{
+				manifest_delta: {
+					meta: "m2",
+					segments: { [ROOT_SEGMENT]: "s-root-2" },
+				},
+				meta: meta(2),
+				segments: {
+					[ROOT_SEGMENT]: {
+						hash: "s-root-2",
+						base: "s-root",
+						nodes: { y: wireNode("y", null) },
+						removed: ["x"],
+					},
+				},
+			},
+			undefined,
+			request(),
+		);
+		expect(unpatchable.size).toBe(0);
+		expect(Object.keys(board.nodes).sort()).toEqual(["a", "b", "y"]);
+		expect(board.nodes.a).toBe(first.nodes.a);
+		expect(board.nodes.b).toBe(first.nodes.b);
+		expect(next).toEqual(
+			manifest({ [ROOT_SEGMENT]: "s-root-2", l1: "s-l1" }, { meta: "m2" }),
+		);
+	});
+
+	test("a patch onto a base the client did not send is refused, not applied", () => {
+		const first = held();
+		const { board, unpatchable } = applyBoardSync(
+			first,
+			{
+				manifest_delta: { segments: { l1: "s-l1-2" } },
+				segments: {
+					l1: {
+						hash: "s-l1-2",
+						base: "some-other-revision",
+						nodes: { c: wireNode("c", "l1") },
+						removed: ["b"],
+					},
+				},
+			},
+			undefined,
+			request(),
+		);
+		expect(unpatchable.has("l1")).toBe(true);
+		expect(Object.keys(board.nodes).sort()).toEqual(["a", "b"]);
+	});
+
+	test("the manifest is rebuilt from the request, the delta and the drops", () => {
+		const { manifest: next } = applyBoardSync(
+			held(),
+			{
+				manifest_delta: {
+					variables: "v2",
+					layers: { l2: "layer-l2" },
+					segments: { l2: "s-l2" },
+				},
+				variables: {},
+				layers: { l2: layerDef("l2") },
+				dropped_layers: ["l1"],
+				dropped_segments: ["l1"],
+				segments: { l2: { hash: "s-l2", nodes: { q: wireNode("q", "l2") } } },
+			},
+			undefined,
+			request(),
+		);
+		expect(next).toEqual({
+			meta: "m1",
+			variables: "v2",
+			comments: "c1",
+			layers: { l2: "layer-l2" },
+			segments: { [ROOT_SEGMENT]: "s-root", l2: "s-l2" },
+		});
+	});
+
+	test("the client re-requests refused patches whole", async () => {
+		const client = new BoardSyncClient();
+		await client.sync("app", "b", undefined, async () => fullResponse());
+		const requests: IBoardSyncRequest[] = [];
+		const transport = async (request: IBoardSyncRequest) => {
+			requests.push(request);
+			if (requests.length === 1) {
+				return {
+					manifest_delta: { segments: { l1: "s-l1-2" } },
+					segments: {
+						l1: {
+							hash: "s-l1-2",
+							base: "not-what-you-sent",
+							nodes: { c: wireNode("c", "l1") },
+						},
+					},
+				} satisfies IBoardSyncResponse;
+			}
+			expect(request.segments?.l1).toBeUndefined();
+			expect(request.segments?.[ROOT_SEGMENT]).toBe("s-root");
+			return {
+				manifest_delta: { segments: { l1: "s-l1-2" } },
+				segments: {
+					l1: { hash: "s-l1-2", nodes: { c: wireNode("c", "l1") } },
+				},
+			} satisfies IBoardSyncResponse;
+		};
+		const board = await client.sync("app", "b", undefined, transport);
+		expect(requests).toHaveLength(2);
+		expect(Object.keys(board.nodes).sort()).toEqual(["a", "c"]);
 	});
 });
 

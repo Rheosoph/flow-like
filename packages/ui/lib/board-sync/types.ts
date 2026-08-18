@@ -31,6 +31,19 @@ export interface IBoardSyncManifest {
 	segments: Record<string, string>;
 }
 
+/**
+ * The tokens of the current revision that differ from the request's. Absent parts kept their
+ * token; removed layers/segments are on the response's `dropped_*` lists. Applied onto the
+ * request's manifest this yields the revision's full manifest.
+ */
+export interface IBoardSyncManifestDelta {
+	meta?: string | null;
+	variables?: string | null;
+	comments?: string | null;
+	layers?: Record<string, string>;
+	segments?: Record<string, string>;
+}
+
 export interface IBoardSyncRequest {
 	meta?: string;
 	variables?: string;
@@ -39,6 +52,11 @@ export interface IBoardSyncRequest {
 	segments?: Record<string, string>;
 	/** The client holds this app's node catalog and will rebuild catalog-owned fields. */
 	hydrate?: boolean;
+	/**
+	 * The client understands segment patches (`ISyncSegment.base`) and manifest deltas. Sent by
+	 * every client built from this module; the server never sends either without it.
+	 */
+	patch?: boolean;
 }
 
 export interface IBoardMeta {
@@ -105,13 +123,22 @@ export interface ISyncNode {
 	required_oauth_scopes?: Record<string, string[]> | null;
 }
 
+/**
+ * Without `base`: the segment's complete node set, replacing the held one wholesale. With
+ * `base`: a patch onto the held segment revision `base` — `nodes` are upserts, `removed` are ids
+ * that no longer exist. `hash` is always the token of the resulting revision.
+ */
 export interface ISyncSegment {
 	hash: string;
 	nodes: Record<string, ISyncNode>;
+	base?: string | null;
+	removed?: string[];
 }
 
 export interface IBoardSyncResponse {
-	manifest: IBoardSyncManifest;
+	/** Exactly one of `manifest` and `manifest_delta` is set (the delta only under `patch`). */
+	manifest?: IBoardSyncManifest | null;
+	manifest_delta?: IBoardSyncManifestDelta | null;
 	meta?: IBoardMeta | null;
 	variables?: Record<string, IVariable> | null;
 	comments?: Record<string, IComment> | null;

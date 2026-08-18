@@ -280,10 +280,25 @@ function buildSearchDocuments(board: IBoard | undefined): SearchResult[] {
 	return results;
 }
 
-function useSearchIndex(board: IBoard | undefined) {
-	const documents = useMemo(() => buildSearchDocuments(board), [board]);
+interface BuiltSearchIndex {
+	board: IBoard | undefined;
+	documents: SearchResult[];
+	index: MiniSearch<SearchResult>;
+	docMap: Map<string, SearchResult>;
+}
 
-	const { index, docMap } = useMemo(() => {
+/**
+ * Indexing a large board blocks the main thread for tens to hundreds of
+ * milliseconds, so the index is only (re)built while the search UI is open and
+ * is reused across open/close cycles as long as the board object is unchanged.
+ */
+function useSearchIndex(board: IBoard | undefined, enabled: boolean) {
+	const cache = useRef<BuiltSearchIndex | null>(null);
+
+	const built = useMemo(() => {
+		if (!enabled) return cache.current;
+		if (cache.current?.board === board) return cache.current;
+		const documents = buildSearchDocuments(board);
 		const miniSearch = new MiniSearch<SearchResult>({
 			fields: [
 				"name",
@@ -311,43 +326,39 @@ function useSearchIndex(board: IBoard | undefined) {
 				},
 				combineWith: "OR",
 			},
+			// Prefix matching is handled at query time (`prefix: true`), so the
+			// index only needs whole tokens plus camelCase parts.
 			tokenize: (text) => {
-				// Split on common separators
-				const tokens = text.toLowerCase().split(/[\s\-_./\\:,;'"()[\]{}|<>]+/);
-				const additionalTokens: string[] = [];
-
+				const tokens = text.split(/[\s\-_./\\:,;'"()[\]{}|<>]+/);
+				const out: string[] = [];
 				for (const token of tokens) {
+					if (token.length === 0) continue;
+					out.push(token.toLowerCase());
 					if (token.length > 2) {
-						// Split camelCase and PascalCase
 						const camelParts = token.split(/(?=[A-Z])/);
 						if (camelParts.length > 1) {
-							additionalTokens.push(...camelParts.map((p) => p.toLowerCase()));
-						}
-						// Also add substrings for partial matching
-						if (token.length > 4) {
-							// Add prefix substrings
-							for (let i = 3; i < Math.min(token.length, 8); i++) {
-								additionalTokens.push(token.slice(0, i));
-							}
+							for (const part of camelParts) out.push(part.toLowerCase());
 						}
 					}
 				}
-				return [...tokens, ...additionalTokens].filter((t) => t.length > 0);
+				return out;
 			},
 		});
 
-		const map = new Map<string, SearchResult>();
+		const docMap = new Map<string, SearchResult>();
 		for (const doc of documents) {
-			map.set(doc.id, doc);
+			docMap.set(doc.id, doc);
 		}
 
 		miniSearch.addAll(documents);
-		return { index: miniSearch, docMap: map };
-	}, [documents]);
+		cache.current = { board, documents, index: miniSearch, docMap };
+		return cache.current;
+	}, [board, enabled]);
 
 	const search = useCallback(
 		(query: string): SearchResult[] => {
-			if (!query.trim()) return [];
+			if (!built || !query.trim()) return [];
+			const { index, docMap } = built;
 
 			const results = index.search(query, {
 				prefix: true,
@@ -378,10 +389,10 @@ function useSearchIndex(board: IBoard | undefined) {
 				.slice(0, 100)
 				.map((item) => item.result);
 		},
-		[index, docMap],
+		[built],
 	);
 
-	return { search, totalDocuments: documents.length };
+	return { search, totalDocuments: built?.documents.length ?? 0 };
 }
 
 function highlightMatch(text: string, query: string): React.ReactNode {
@@ -635,7 +646,7 @@ export const FlowSearch = memo(
 	}: FlowSearchProps) => {
 		const [query, setQuery] = useState("");
 		const [selectedIndex, setSelectedIndex] = useState(0);
-		const { search, totalDocuments } = useSearchIndex(board);
+		const { search, totalDocuments } = useSearchIndex(board, open);
 		const inputRef = useRef<HTMLInputElement>(null);
 
 		const results = useMemo(() => search(query), [search, query]);

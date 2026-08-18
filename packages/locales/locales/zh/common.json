@@ -2696,5 +2696,13 @@
 	"youtubeVideoThumbnail": "YouTube 视频缩略图",
 	"youveOutgrownYourPlan": "您的套餐已不够用",
 	"zoomIn": "放大",
-	"zoomOut": "缩小"
+	"zoomOut": "缩小",
+	"cannotIdentifyRowToUpdate": "",
+	"countHidden_one": "",
+	"countLabels_one": "",
+	"countMore_one": "",
+	"countOfTotalCollapsed_one": "",
+	"hidesObjectsWithCountOrFewerConnectionsInThisView_one": "",
+	"now": "",
+	"showingCountOfTotalObjectsAroundName_one": ""
 }

@@ -276,6 +276,12 @@ export interface PackageSummary {
 	metadata?: MetaSummary;
 	avgRating?: number | null;
 	ratingCount?: number;
+	/**
+	 * Capability tags derived from the package's declared permissions, most
+	 * sensitive first (`net.http`, `oauth`, `models`, `storage.user`, …).
+	 * Absent on registries that predate the field.
+	 */
+	capabilities?: string[];
 }
 
 export interface SearchResults {

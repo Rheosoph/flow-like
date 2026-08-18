@@ -1,6 +1,10 @@
-import type { UseQueryResult } from "@tanstack/react-query";
+import { type UseQueryResult, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangleIcon, XIcon } from "lucide-react";
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import {
+	BOARD_DELIVERED_EVENT,
+	isBoardSyncEventFor,
+} from "../lib/board-sync-events";
 import { getErrorMessage } from "../lib/error-message";
 import { boardFingerprint } from "../lib/flow-history-stacks";
 import {
@@ -17,6 +21,7 @@ import type {
 	IApplyFlowIrCommitResponse,
 	IApplyFlowScriptResponse,
 } from "../state/backend-state/board-state";
+import { injectData } from "./use-invoke";
 
 interface ExecuteCommandsOptions {
 	refetch?: boolean;
@@ -58,12 +63,46 @@ export function useCommandExecution({
 	stampHistory,
 }: UseCommandExecutionProps) {
 	const awarenessRef = useRef<any | undefined>(undefined);
+	const queryClient = useQueryClient();
 	const refetchBoardAndStampHistory = useCallback(async () => {
 		const refreshed = await board.refetch();
 		if (refreshed.error) throw refreshed.error;
 		await stampHistory(boardFingerprint(refreshed.data));
 		return refreshed;
 	}, [board.refetch, stampHistory]);
+	/**
+	 * A mutation that already returned the resulting board (the sync tail of a merged apply,
+	 * applied onto the held revision) hands it straight to the query cache instead of refetching:
+	 * same data, same object identities for untouched nodes, no round trip.
+	 */
+	const injectBoardAndStampHistory = useCallback(
+		async (nextBoard: IBoard) => {
+			const backend = useBackendStore.getState().backend;
+			if (!backend) return undefined;
+			const injected = injectData(
+				queryClient,
+				backend.boardState.getBoard,
+				[appId, boardId],
+				nextBoard,
+			);
+			await stampHistory(boardFingerprint(nextBoard));
+			return injected;
+		},
+		[appId, boardId, queryClient, stampHistory],
+	);
+	// On desktop the local commit returns before the hub has the edit; peers are pinged again
+	// once delivery lands so their refetch finds it.
+	useEffect(() => {
+		if (typeof window === "undefined") return;
+		const handleDelivered = (event: Event) => {
+			if (!isBoardSyncEventFor(event, appId, boardId)) return;
+			awarenessRef.current?.setLocalStateField("boardUpdate", Date.now());
+		};
+		window.addEventListener(BOARD_DELIVERED_EVENT, handleDelivered);
+		return () => {
+			window.removeEventListener(BOARD_DELIVERED_EVENT, handleDelivered);
+		};
+	}, [appId, boardId]);
 	const preserveApplyErrorAfterRefetch = useCallback(
 		async (operation: string, error: unknown): Promise<Error> => {
 			const primaryMessage = getErrorMessage(error, "Unknown error");
@@ -81,7 +120,11 @@ export function useCommandExecution({
 		[refetchBoardAndStampHistory],
 	);
 	const settleCommittedMutation = useCallback(
-		async (pushHistory: () => Promise<void>, shouldRefetch: boolean) => {
+		async (
+			pushHistory: () => Promise<void>,
+			shouldRefetch: boolean,
+			resultingBoard?: IBoard,
+		) => {
 			const followupErrors: string[] = [];
 			try {
 				await pushHistory();
@@ -92,7 +135,15 @@ export function useCommandExecution({
 			}
 
 			let refreshed: Awaited<ReturnType<typeof board.refetch>> | undefined;
-			if (shouldRefetch || followupErrors.length > 0) {
+			if (resultingBoard && shouldRefetch && followupErrors.length === 0) {
+				try {
+					refreshed = await injectBoardAndStampHistory(resultingBoard);
+				} catch (error) {
+					followupErrors.push(
+						`board update failed: ${getErrorMessage(error, "Unknown board update error")}`,
+					);
+				}
+			} else if (shouldRefetch || followupErrors.length > 0) {
 				try {
 					refreshed = await refetchBoardAndStampHistory();
 				} catch (error) {
@@ -112,7 +163,7 @@ export function useCommandExecution({
 			}
 			return refreshed;
 		},
-		[refetchBoardAndStampHistory],
+		[injectBoardAndStampHistory, refetchBoardAndStampHistory],
 	);
 
 	const executeCommand = useCallback(
@@ -132,11 +183,17 @@ export function useCommandExecution({
 			console.log("[executeCommand] Executing:", command.command_type, command);
 
 			let result: IGenericCommand;
+			let resultingBoard: IBoard | undefined;
 			try {
 				result = await backend.boardState.executeCommand(
 					appId,
 					boardId,
 					command,
+					{
+						onBoard: (next) => {
+							resultingBoard = next;
+						},
+					},
 				);
 			} catch (error) {
 				const recoveredError = await preserveApplyErrorAfterRefetch(
@@ -152,7 +209,11 @@ export function useCommandExecution({
 				throw recoveredError;
 			}
 			console.log("[executeCommand] Success:", command.command_type, result);
-			await settleCommittedMutation(() => pushCommand(result, append), true);
+			await settleCommittedMutation(
+				() => pushCommand(result, append),
+				true,
+				resultingBoard,
+			);
 			awarenessRef.current?.setLocalStateField("boardUpdate", Date.now());
 			return result;
 		},
@@ -185,11 +246,17 @@ export function useCommandExecution({
 			if (commands.length === 0) return;
 
 			let result: IGenericCommand[];
+			let resultingBoard: IBoard | undefined;
 			try {
 				result = await backend.boardState.executeCommands(
 					appId,
 					boardId,
 					commands,
+					{
+						onBoard: (next) => {
+							resultingBoard = next;
+						},
+					},
 				);
 			} catch (error) {
 				const recoveredError = await preserveApplyErrorAfterRefetch(
@@ -203,6 +270,7 @@ export function useCommandExecution({
 			await settleCommittedMutation(
 				() => pushCommands(result),
 				options.refetch !== false,
+				resultingBoard,
 			);
 			awarenessRef.current?.setLocalStateField("boardUpdate", Date.now());
 			return result;

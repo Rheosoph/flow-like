@@ -50,7 +50,9 @@ pub(crate) const BREAK_STRUCT_PREFIX: &str = "__break_struct_field__";
 /// body and continues the enclosing chain from `done`.
 const LOOP_NODES: &[(&str, &str)] = &[
     ("control_for_each", "forEach"),
+    ("control_for_each_batch", "forEachBatch"),
     ("control_par_for_each", "forEachParallel"),
+    ("control_par_for_each_batch", "forEachParallelBatch"),
     ("control_while_loop", "while"),
 ];
 

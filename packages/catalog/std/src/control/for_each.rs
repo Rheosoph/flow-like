@@ -84,8 +84,11 @@ impl NodeLogic for LoopNode {
         context.activate_exec_pin_ref(&exec_item).await?;
         for (i, item) in array_value.iter().enumerate() {
             let item = item.to_owned();
+            let index_value = flow_like_types::Value::from(i);
+            context.override_pin_value_if_active(&value.id, &item);
+            context.override_pin_value_if_active(&index.id, &index_value);
             value.set_value(item).await;
-            index.set_value(flow_like_types::Value::from(i)).await;
+            index.set_value(index_value).await;
             for node in connected.iter() {
                 let mut sub_context = context.create_sub_context(node).await;
                 let run = InternalNode::trigger(&mut sub_context, &mut None, true).await;

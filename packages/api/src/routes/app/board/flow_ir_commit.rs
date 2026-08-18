@@ -1122,21 +1122,24 @@ pub async fn apply_flow_ir_commit(
     // therefore observe either neither or both, including after this process exits immediately
     // after persistence.
     let saved = super::scoring::save_board_and_refresh_summary(&state, &app_id, &board).await;
-    if let Err(error) = saved {
-        let restore_error = restore_persisted_snapshot(&persisted_original).await;
-        let mut diagnostics = vec![format!("Board persistence failed: {error}")];
-        if let Some(error) = restore_error {
-            diagnostics.push(format!(
-                "Restoring the persisted board snapshot also failed: {error}"
-            ));
+    let put = match saved {
+        Ok(put) => put,
+        Err(error) => {
+            let restore_error = restore_persisted_snapshot(&persisted_original).await;
+            let mut diagnostics = vec![format!("Board persistence failed: {error}")];
+            if let Some(error) = restore_error {
+                diagnostics.push(format!(
+                    "Restoring the persisted board snapshot also failed: {error}"
+                ));
+            }
+            return Ok(Json(ApplyFlowIrCommitResult::apply_error(
+                "IR_COMMIT_SAVE_FAILED",
+                "The compiled workflow batch could not be persisted. The claim remains retryable.",
+                apply_result.board_commands,
+                diagnostics,
+            )));
         }
-        return Ok(Json(ApplyFlowIrCommitResult::apply_error(
-            "IR_COMMIT_SAVE_FAILED",
-            "The compiled workflow batch could not be persisted. The claim remains retryable.",
-            apply_result.board_commands,
-            diagnostics,
-        )));
-    }
+    };
 
     if let Some(store) = store
         && !store.acknowledge_applied_commit(
@@ -1162,6 +1165,7 @@ pub async fn apply_flow_ir_commit(
             "The FlowScript claim acknowledgement raced after its mutation and durable receipt were persisted; keeping the canonical applied board"
         );
     }
+    super::sync_board::seed_board_revision(&state, &app_id, &board_id, board, &put).await;
     Ok(Json(result))
 }
 

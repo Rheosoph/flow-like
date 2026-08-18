@@ -899,5 +899,8 @@
 	"xl1280px": "xl · 1280px",
 	"yAxis": "Y축",
 	"yAxisTitle": "Y축 제목",
-	"you": "나"
+	"you": "나",
+	"failedToLoadAssets": "",
+	"loading": "",
+	"noMatchingAssetsValHidden": ""
 }
