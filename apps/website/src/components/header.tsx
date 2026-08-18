@@ -612,7 +612,7 @@ function MobileMenu({
 								)}
 							</a>
 							<a
-								href="https://discord.com/invite/KTWMrS2/"
+								href="https://discord.com/invite/mdBA9kMjFJ/"
 								target="_blank"
 								rel="noreferrer"
 								className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg bg-muted/50 hover:bg-muted transition-colors duration-300"
@@ -922,7 +922,7 @@ export function Header() {
 								<BsGithub className="w-4 h-4" />
 							</a>
 							<a
-								href="https://discord.com/invite/KTWMrS2/"
+								href="https://discord.com/invite/mdBA9kMjFJ/"
 								target="_blank"
 								rel="noreferrer"
 								aria-label="Discord"

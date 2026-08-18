@@ -189,9 +189,7 @@ export function BlogFooter() {
 						<FooterLink href="/privacy-policy">
 							{t("footer.privacy")}
 						</FooterLink>
-						<FooterLink href="https://great-co.de/legal-notice" external>
-							{t("footer.legal")}
-						</FooterLink>
+						<FooterLink href="/legal-notice">{t("footer.legal")}</FooterLink>
 						<FooterLink href="/thirdparty">
 							{t("footer.link.thirdParty")}
 						</FooterLink>
