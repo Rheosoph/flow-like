@@ -122,6 +122,7 @@ export function BlogFooter() {
 						<FooterLink href={localizeHref("/integrations")}>
 							{t("footer.link.integrations")}
 						</FooterLink>
+						<FooterLink href="/store/">{t("footer.link.store")}</FooterLink>
 						<FooterLink href={localizeHref("/whitelabel")}>
 							{t("footer.link.whitelabel")}
 						</FooterLink>

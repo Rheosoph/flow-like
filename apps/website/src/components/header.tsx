@@ -17,6 +17,7 @@ import {
 	LuFileText,
 	LuGlobe,
 	LuLandmark,
+	LuPackage,
 	LuScale,
 	LuServer,
 	LuShieldCheck,
@@ -556,6 +557,12 @@ function MobileMenu({
 								onClick={onClose}
 							/>
 							<MobileNavItem
+								href="/store/"
+								icon={LuPackage}
+								label={t("header.store")}
+								onClick={onClose}
+							/>
+							<MobileNavItem
 								href="/blog/"
 								icon={LuFileText}
 								label={t("header.blog")}
@@ -849,6 +856,11 @@ export function Header() {
 			label: t("header.integrations"),
 			href: localizeHref(lang, "/integrations"),
 			icon: LuGlobe,
+		},
+		{
+			label: t("header.store"),
+			href: "/store/",
+			icon: LuPackage,
 		},
 		{
 			label: t("header.security"),
