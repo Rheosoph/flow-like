@@ -12,12 +12,13 @@
 //! Downloads are cached; delete `tests/models/ner/` to reclaim the disk space.
 
 use flow_like_catalog_onnx::load::external_data_candidates;
-use flow_like_catalog_onnx::ner::{NerOptions, NerResult, infer_ner};
+use flow_like_catalog_onnx::ner::{
+    NerOptions, NerResult, infer_ner, labels_from_config, max_sequence_from_config,
+};
 use flow_like_model_provider::ml::ort::{
     session::{Session, builder::GraphOptimizationLevel},
     value::ValueType,
 };
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::panic::AssertUnwindSafe;
@@ -600,26 +601,6 @@ fn fetch(repo: &str, hf_path: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// Read `id2label` out of a HuggingFace `config.json`, ordered by class index.
-fn labels_from_config(path: &Path) -> Option<Vec<String>> {
-    let raw = fs::read_to_string(path).ok()?;
-    let config: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let id2label = config.get("id2label")?.as_object()?;
-
-    let mut ordered: BTreeMap<usize, String> = BTreeMap::new();
-    for (key, value) in id2label {
-        ordered.insert(key.parse::<usize>().ok()?, value.as_str()?.to_string());
-    }
-
-    if ordered.is_empty() {
-        return None;
-    }
-    if ordered.keys().copied().ne(0..ordered.len()) {
-        return None;
-    }
-    Some(ordered.into_values().collect())
-}
-
 fn describe_type(value_type: &ValueType) -> String {
     match value_type {
         ValueType::Tensor { ty, shape, .. } => format!("{ty:?}{shape}"),
@@ -848,10 +829,11 @@ fn run_case(case: &Case) -> Row {
         }
     };
 
-    let labels = case
+    let config_json = case
         .config
         .and_then(|config| fetch(case.repo, config).ok())
-        .and_then(|path| labels_from_config(&path));
+        .and_then(|path| fs::read_to_string(path).ok());
+    let labels = config_json.as_deref().and_then(labels_from_config);
     row.labels = match &labels {
         Some(labels) => format!("{} from config.json", labels.len()),
         None => "none in config.json".to_string(),
@@ -885,7 +867,7 @@ fn run_case(case: &Case) -> Row {
     let options = NerOptions {
         labels: labels.clone().unwrap_or_default(),
         threshold: 0.5,
-        max_length: 512,
+        max_length: config_json.as_deref().and_then(max_sequence_from_config),
     };
 
     let mut summaries = Vec::new();
