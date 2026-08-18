@@ -119,9 +119,15 @@ impl NodeLogic for BatchLoopNode {
                 break;
             }
 
-            batch_pin.set_value(Value::Array(chunk.to_vec())).await;
-            index_pin.set_value(Value::from(i)).await;
-            start_index_pin.set_value(Value::from(i * batch_size)).await;
+            let batch = Value::Array(chunk.to_vec());
+            let index = Value::from(i);
+            let start_index = Value::from(i * batch_size);
+            context.override_pin_value_if_active(&batch_pin.id, &batch);
+            context.override_pin_value_if_active(&index_pin.id, &index);
+            context.override_pin_value_if_active(&start_index_pin.id, &start_index);
+            batch_pin.set_value(batch).await;
+            index_pin.set_value(index).await;
+            start_index_pin.set_value(start_index).await;
 
             for node in connected.iter() {
                 let mut sub_context = context.create_sub_context(node).await;

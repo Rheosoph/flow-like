@@ -114,8 +114,12 @@ impl NodeLogic for ForEachWithBreakNode {
 
         'outer: for (i, item) in array.iter().enumerate() {
             // Publish per-iteration values
-            value.set_value(item.to_owned()).await;
-            index.set_value(Value::from(i)).await;
+            let item = item.to_owned();
+            let index_value = Value::from(i);
+            context.override_pin_value_if_active(&value.id, &item);
+            context.override_pin_value_if_active(&index.id, &index_value);
+            value.set_value(item).await;
+            index.set_value(index_value).await;
 
             // Trigger connected body nodes sequentially
             let connected = exec_item.get_connected_nodes();
@@ -140,7 +144,6 @@ impl NodeLogic for ForEachWithBreakNode {
                 // Check if a Break was requested during the body execution
                 match context.evaluate_pin_ref(break_pin.clone()).await {
                     Ok(should_break) => {
-                        println!("ForEach(Break): breaking at index {} - {}", i, should_break);
                         if should_break {
                             context.log_message(
                                 &format!("ForEach(Break): breaking at index {}", i),
@@ -150,7 +153,6 @@ impl NodeLogic for ForEachWithBreakNode {
                         }
                     }
                     Err(err) => {
-                        eprintln!("Error checking Break pin: {:?}", err);
                         context.log_message(
                             &format!("Error checking Break pin: {:?}", err),
                             LogLevel::Error,

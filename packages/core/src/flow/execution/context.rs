@@ -453,6 +453,19 @@ impl ExecutionContext {
         }
     }
 
+    /// Mirror a pin value into an already active isolation scope.
+    ///
+    /// Sequential loops publish their iteration pins straight onto the shared pin cell,
+    /// which is correct on a linear exec path but leaks across siblings once the loop
+    /// runs inside a parallel body or a function invocation. Mirroring keeps those reads
+    /// branch-private. No scope is created here: without one, the surrounding path
+    /// already expects shared-pin semantics.
+    pub fn override_pin_value_if_active(&mut self, pin_id: &str, value: &Value) {
+        if let Some(overrides) = &mut self.context_pin_overrides {
+            overrides.insert(pin_id.to_string(), value.clone());
+        }
+    }
+
     pub fn clear_pin_override(&mut self, pin_id: &str) {
         if let Some(overrides) = &mut self.context_pin_overrides {
             overrides.remove(pin_id);

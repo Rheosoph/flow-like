@@ -140,7 +140,9 @@ impl NodeLogic for BufferedCsvReaderNode {
             total_rows += 1;
             if chunk.len() as u64 == chunk_size {
                 chunk_count += 1;
-                value.set_value(to_value(&chunk)?).await;
+                let chunk_value = to_value(&chunk)?;
+                context.override_pin_value_if_active(&value.id, &chunk_value);
+                value.set_value(chunk_value).await;
                 chunk = Vec::with_capacity(chunk_size as usize);
                 for node in &flow {
                     let mut sub_context = context.create_sub_context(node).await;
@@ -158,7 +160,9 @@ impl NodeLogic for BufferedCsvReaderNode {
 
         if !chunk.is_empty() {
             chunk_count += 1;
-            value.set_value(to_value(&chunk)?).await;
+            let chunk_value = to_value(&chunk)?;
+            context.override_pin_value_if_active(&value.id, &chunk_value);
+            value.set_value(chunk_value).await;
             for node in &flow {
                 let mut sub_context = context.create_sub_context(node).await;
                 let run = InternalNode::trigger(&mut sub_context, &mut None, true).await;
