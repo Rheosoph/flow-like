@@ -10,12 +10,11 @@ use flow_like::flow::{
 use flow_like_types::{
     async_trait,
     json::json,
-    reqwest,
     sync::{DashMap, Mutex},
 };
 use std::sync::Arc;
 
-use super::{HttpRequest, HttpResponse, StreamingCallback};
+use super::{GuardedHttpClient, HttpRequest, HttpResponse, StreamingCallback};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -100,7 +99,7 @@ impl NodeLogic for StreamingHttpFetchNode {
         context.activate_exec_pin_ref(&streaming_pin).await?;
 
         let request: HttpRequest = context.evaluate_pin("request").await?;
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let connected_nodes = Arc::new(DashMap::new());
         let connected = streaming_pin.get_connected_nodes();
         for node in connected {

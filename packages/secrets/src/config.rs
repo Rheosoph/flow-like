@@ -5,6 +5,9 @@ use std::time::Duration;
 #[derive(Clone, Debug)]
 pub struct SecretStoreConfig {
     pub global_prefix: Option<String>,
+    /// Whether an exact-name process environment variable may override every
+    /// configured provider. Enabled by default for backwards compatibility.
+    pub allow_env_override: bool,
     pub cache_ttl: Duration,
     pub negative_cache_ttl: Duration,
     pub max_cache_entries: usize,
@@ -15,6 +18,7 @@ impl Default for SecretStoreConfig {
     fn default() -> Self {
         Self {
             global_prefix: None,
+            allow_env_override: true,
             cache_ttl: Duration::from_secs(300),
             negative_cache_ttl: Duration::from_secs(30),
             max_cache_entries: 10_000,
@@ -24,6 +28,11 @@ impl Default for SecretStoreConfig {
 }
 
 impl SecretStoreConfig {
+    pub fn with_allow_env_override(mut self, allow_env_override: bool) -> Self {
+        self.allow_env_override = allow_env_override;
+        self
+    }
+
     pub fn with_provider(mut self, provider: ProviderConfig) -> Self {
         self.providers.push(provider);
         self
@@ -129,6 +138,9 @@ pub struct AzureKeyVaultProviderConfig {
     pub prefix: Option<String>,
     pub credential: AzureCredentialConfig,
     pub verify_challenge_resource: bool,
+    /// Whether a prefixed lookup may fall back to the unprefixed secret name.
+    /// Enabled by default for backwards compatibility.
+    pub fallback_to_unprefixed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -181,6 +193,7 @@ impl Default for AzureKeyVaultProviderConfig {
             prefix: None,
             credential: AzureCredentialConfig::default(),
             verify_challenge_resource: true,
+            fallback_to_unprefixed: true,
         }
     }
 }

@@ -288,6 +288,7 @@ impl PackagePermissions {
             } else {
                 Some(self.network.allowed_hosts.clone())
             },
+            execution_environment: Default::default(),
         }
     }
 

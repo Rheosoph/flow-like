@@ -16,7 +16,7 @@ use crate::data::path::FlowPath;
 use flow_like::bit::Bit;
 use flow_like::flow::node::NodeLogic;
 use flow_like::flow::{
-    execution::context::ExecutionContext,
+    execution::{ExecutionEnvironment, context::ExecutionContext},
     node::Node,
     pin::{PinOptions, ValueType},
     variable::VariableType,
@@ -26,6 +26,8 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "execute")]
 use crate::data::datafusion::query::batches_to_csv_table;
+#[cfg(feature = "execute")]
+use crate::data::datafusion::session::create_session_context;
 #[cfg(feature = "execute")]
 use crate::data::excel::grid::{
     SheetGrid, Workbook, normalize_table_name, parse_a1_range, truncate_chars, unique_table_name,
@@ -44,7 +46,7 @@ use crate::data::excel::table_detect::{
 #[cfg(feature = "execute")]
 use flow_like::flow::execution::LogLevel;
 #[cfg(feature = "execute")]
-use flow_like_storage::datafusion::prelude::SessionContext;
+use flow_like_storage::datafusion::prelude::{SessionConfig, SessionContext};
 #[cfg(feature = "execute")]
 use flow_like_types::tokio;
 #[cfg(feature = "execute")]
@@ -163,6 +165,7 @@ struct SheetToolbox {
     encode_opts: EncodeOptions,
     styles: flow_like_types::sync::Mutex<Option<Option<Arc<SheetStyles>>>>,
     df: flow_like_types::sync::Mutex<Option<Arc<SessionContext>>>,
+    execution_environment: ExecutionEnvironment,
 }
 
 #[cfg(feature = "execute")]
@@ -274,7 +277,10 @@ impl SheetToolbox {
             if let Some(ctx) = &*guard {
                 ctx.clone()
             } else {
-                let ctx = Arc::new(SessionContext::new());
+                let ctx = Arc::new(create_session_context(
+                    SessionConfig::new(),
+                    self.execution_environment,
+                ));
                 let mut registered: Vec<String> = Vec::new();
                 let tables: Vec<(String, DetectedTable)> = if self.candidates.is_empty() {
                     crate::data::excel::table_detect::whole_sheet_table(
@@ -889,6 +895,7 @@ impl NodeLogic for ExtractExcelTablesAINode {
                 encode_opts: encode_opts.clone(),
                 styles: flow_like_types::sync::Mutex::new(None),
                 df: flow_like_types::sync::Mutex::new(None),
+                execution_environment: context.execution_environment(),
             });
             toolbox.set_preloaded_styles(prep.styles.clone());
 

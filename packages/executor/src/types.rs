@@ -14,6 +14,10 @@ pub type BoardVersion = (u32, u32, u32);
 /// The API is responsible for resolving events to board_id + board_version before dispatch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionRequest {
+    /// Broker job identifier. Queue runtimes bind their ownership lease to
+    /// this value; direct runtimes may leave it empty.
+    #[serde(default)]
+    pub job_id: String,
     /// Credentials for storage access (meta, content, logs buckets)
     pub credentials: SharedCredentials,
     /// Application ID
@@ -150,6 +154,7 @@ impl TryFrom<DispatchPayload> for ExecutionRequest {
         };
 
         Ok(Self {
+            job_id: p.job_id,
             credentials,
             app_id: p.app_id,
             board_id: p.board_id,

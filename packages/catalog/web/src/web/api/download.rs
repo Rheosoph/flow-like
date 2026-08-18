@@ -5,9 +5,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::FlowPath;
-use flow_like_types::{async_trait, reqwest};
+use flow_like_types::async_trait;
 
-use super::HttpRequest;
+use super::{GuardedHttpClient, HttpRequest};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -71,7 +71,7 @@ impl NodeLogic for HttpDownloadNode {
         let request: HttpRequest = context.evaluate_pin("request").await?;
         let flow_path: FlowPath = context.evaluate_pin("flow_path").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         request
             .download_to_path(&client, &flow_path, context)
             .await?;

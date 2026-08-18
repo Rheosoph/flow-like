@@ -91,9 +91,7 @@ struct ParsedHttpRequestPayload {
 }
 
 fn authorization_token_from_headers(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
+    crate::middleware::jwt::viewer_authorization(headers)
         .map(normalize_authorization_token)
         .filter(|token| !token.is_empty())
         .map(ToOwned::to_owned)
@@ -331,21 +329,7 @@ fn sanitize_request_file_name(filename: Option<&str>, fallback_index: usize) -> 
 }
 
 fn sanitize_store_path_segment(value: &str, fallback: &str) -> String {
-    let mut sanitized = String::with_capacity(value.len().min(80));
-    for ch in value.chars().take(80) {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
-            sanitized.push(ch);
-        } else {
-            sanitized.push('_');
-        }
-    }
-
-    let sanitized = sanitized.trim_matches(|ch| ch == '.' || ch == '_');
-    if sanitized.is_empty() {
-        fallback.to_string()
-    } else {
-        sanitized.to_string()
-    }
+    crate::credentials::storage_path_segment(value, fallback)
 }
 
 fn flow_path_value(path: &str) -> serde_json::Value {
@@ -945,11 +929,15 @@ pub async fn trigger_http(
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get credentials: {}", e)))?;
     let request_file_store = credentials
-        .to_store(false)
+        .to_store_type(flow_like::credentials::StoreType::Tmp)
         .await
-        .map_err(|e| ApiError::internal_error(anyhow!("Failed to create file store: {}", e)))?;
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to create scratch store: {}", e)))?;
+    // Offloaded under the executing subject's own scratch directory rather than a
+    // shared tmp/global one: the executor downstream reads this file with the same
+    // credentials, and an Azure directory SAS signs exactly one directory.
     let request_file_prefix = format!(
-        "tmp/global/apps/{}/runs/{}/request",
+        "tmp/user/{}/apps/{}/runs/{}/request",
+        sanitize_store_path_segment(&executor_subject, "user"),
         sanitize_store_path_segment(&app_id, "app"),
         sanitize_store_path_segment(&run_id, "run")
     );
@@ -1989,9 +1977,7 @@ pub async fn trigger_service(
     Json(request): Json<ServiceTriggerRequest>,
 ) -> Result<Json<ServiceTriggerResponse>, ApiError> {
     // Extract and validate Bearer token
-    let auth_header = headers
-        .get("authorization")
-        .and_then(|h| h.to_str().ok())
+    let auth_header = crate::middleware::jwt::viewer_authorization(&headers)
         .ok_or_else(|| ApiError::unauthorized("Missing Authorization header"))?;
 
     let token = auth_header
@@ -2164,9 +2150,7 @@ pub async fn get_cron_sinks(
     headers: HeaderMap,
 ) -> Result<Json<Vec<CronScheduleInfo>>, ApiError> {
     // Extract and validate Bearer token
-    let auth_header = headers
-        .get("authorization")
-        .and_then(|h| h.to_str().ok())
+    let auth_header = crate::middleware::jwt::viewer_authorization(&headers)
         .ok_or_else(|| ApiError::unauthorized("Missing Authorization header"))?;
 
     let token = auth_header
@@ -2271,9 +2255,7 @@ pub async fn get_sink_configs(
     axum::extract::Query(query): axum::extract::Query<SinkConfigsQuery>,
 ) -> Result<Json<Vec<SinkConfigInfo>>, ApiError> {
     // Extract and validate Bearer token
-    let auth_header = headers
-        .get("authorization")
-        .and_then(|h| h.to_str().ok())
+    let auth_header = crate::middleware::jwt::viewer_authorization(&headers)
         .ok_or_else(|| ApiError::unauthorized("Missing Authorization header"))?;
 
     let token = auth_header

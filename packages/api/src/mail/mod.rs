@@ -3,6 +3,8 @@ use std::sync::Arc;
 use flow_like::hub::{MailConfig, MailProviderType};
 use flow_like_types::Result;
 
+#[cfg(feature = "acs-email")]
+mod azure_communication_services;
 #[cfg(feature = "sendgrid")]
 mod sendgrid;
 #[cfg(feature = "ses")]
@@ -11,6 +13,8 @@ mod ses;
 mod smtp;
 pub mod templates;
 
+#[cfg(feature = "acs-email")]
+pub use azure_communication_services::AzureCommunicationServicesMailClient;
 #[cfg(feature = "sendgrid")]
 pub use sendgrid::SendgridMailClient;
 #[cfg(feature = "ses")]
@@ -36,7 +40,9 @@ pub trait MailClient: Send + Sync {
 pub type DynMailClient = Arc<dyn MailClient>;
 
 pub async fn create_mail_client(config: &MailConfig) -> Result<DynMailClient> {
-    match config.provider {
+    let provider = runtime_provider_override()?.unwrap_or(config.provider);
+
+    match provider {
         MailProviderType::Ses => {
             #[cfg(feature = "ses")]
             {
@@ -76,5 +82,40 @@ pub async fn create_mail_client(config: &MailConfig) -> Result<DynMailClient> {
                 Err(flow_like_types::anyhow!("Sendgrid feature not enabled"))
             }
         }
+        MailProviderType::AzureCommunicationServices => {
+            #[cfg(feature = "acs-email")]
+            {
+                let client = AzureCommunicationServicesMailClient::new(config)?;
+                Ok(Arc::new(client))
+            }
+            #[cfg(not(feature = "acs-email"))]
+            {
+                Err(flow_like_types::anyhow!(
+                    "Azure Communication Services Email feature not enabled"
+                ))
+            }
+        }
     }
+}
+
+fn runtime_provider_override() -> Result<Option<MailProviderType>> {
+    let Ok(raw_provider) = std::env::var("MAIL_PROVIDER") else {
+        return Ok(None);
+    };
+
+    let provider = match raw_provider.trim().to_ascii_lowercase().as_str() {
+        "ses" => MailProviderType::Ses,
+        "smtp" => MailProviderType::Smtp,
+        "sendgrid" => MailProviderType::Sendgrid,
+        "azure_communication_services" | "acs_email" => {
+            MailProviderType::AzureCommunicationServices
+        }
+        _ => {
+            return Err(flow_like_types::anyhow!(
+                "unsupported MAIL_PROVIDER; expected ses, smtp, sendgrid, or azure_communication_services"
+            ));
+        }
+    };
+
+    Ok(Some(provider))
 }

@@ -35,6 +35,12 @@ pub enum StoreType {
     Meta,
     Content,
     Logs,
+    /// Short-lived request/upload scratch space under `tmp/user/{sub}/apps/{app_id}`.
+    ///
+    /// AWS and GCP express this as an extra prefix on the content bucket inside the
+    /// same credential, so it resolves to the content store there. Azure signs one
+    /// directory per SAS and therefore needs a token of its own.
+    Tmp,
 }
 
 #[async_trait]
@@ -144,6 +150,7 @@ mod tests {
             content_sas_token: Some("?sv=2022-11-02&ss=b&sig=content".to_string()),
             user_content_sas_token: None,
             logs_sas_token: Some("?sv=2022-11-02&ss=b&sig=logs".to_string()),
+            tmp_sas_token: None,
             meta_container: "azure-meta".to_string(),
             content_container: "azure-content".to_string(),
             logs_container: "azure-logs".to_string(),

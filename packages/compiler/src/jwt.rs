@@ -1,14 +1,31 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
-use tokio::sync::OnceCell;
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::sync::{Arc, LazyLock};
+use std::time::{Duration, Instant};
+use tokio::sync::{OnceCell, RwLock};
 
 use crate::error::CompilerError;
 
 pub const BACKEND_PUB_ENV: &str = "BACKEND_PUB";
 pub const API_URL_ENV: &str = "API_BASE_URL";
 
-static PUBLIC_KEY_CACHE: OnceCell<Vec<u8>> = OnceCell::const_new();
+static PINNED_KEY_CACHE: OnceCell<Arc<Vec<u8>>> = OnceCell::const_new();
+static JWKS_KEY_CACHE: LazyLock<RwLock<JwksKeyCache>> = LazyLock::new(RwLock::default);
+const JWKS_MAX_RESPONSE_BYTES: usize = 64 * 1024;
+const JWKS_MAX_KEYS: usize = 8;
+const JWKS_FETCH_FAILURE_BACKOFF: Duration = Duration::from_secs(30);
+const JWKS_FAILED_KID_CAP: usize = 64;
+
+/// Verification keys by kid, so a rotated signing key only needs a JWKS
+/// refresh instead of a process restart.
+#[derive(Default)]
+struct JwksKeyCache {
+    keys: HashMap<String, Arc<Vec<u8>>>,
+    failed_fetches: HashMap<String, Instant>,
+}
 
 #[derive(Debug, Deserialize)]
 struct Jwks {
@@ -21,6 +38,10 @@ struct Jwk {
     crv: String,
     x: String,
     y: String,
+    alg: String,
+    kid: String,
+    #[serde(rename = "use")]
+    key_use: String,
 }
 
 /// Claims embedded in the compiler JWT (signed by API).
@@ -30,6 +51,7 @@ pub struct CompilerClaims {
     pub job_id: String,
     pub package_id: String,
     pub version: String,
+    pub payload_hash: String,
     pub callback_url: String,
     #[serde(rename = "typ")]
     pub token_type: String,
@@ -41,7 +63,7 @@ pub struct CompilerClaims {
     pub jti: String,
 }
 
-async fn fetch_public_key_from_api() -> Result<Vec<u8>, CompilerError> {
+async fn fetch_public_key_from_api(expected_kid: &str) -> Result<Vec<u8>, CompilerError> {
     let api_url = std::env::var(API_URL_ENV).map_err(|_| {
         CompilerError::Config(format!(
             "Neither {BACKEND_PUB_ENV} nor {API_URL_ENV} is set"
@@ -52,48 +74,95 @@ async fn fetch_public_key_from_api() -> Result<Vec<u8>, CompilerError> {
         "{}/execution/.well-known/jwks.json",
         api_url.trim_end_matches('/')
     );
+    let jwks_url = reqwest::Url::parse(&jwks_url)
+        .map_err(|_| CompilerError::Config("API_BASE_URL is invalid".to_string()))?;
+    if !jwks_url.username().is_empty()
+        || jwks_url.password().is_some()
+        || jwks_url.query().is_some()
+        || jwks_url.fragment().is_some()
+        || !matches!(jwks_url.scheme(), "https" | "http")
+        || (jwks_url.scheme() == "http" && !jwks_url.host_str().is_some_and(is_private_api_host))
+    {
+        return Err(CompilerError::Config(
+            "API_BASE_URL must be HTTPS, or private HTTP for local development".to_string(),
+        ));
+    }
 
-    tracing::info!(url = %jwks_url, "Fetching JWKS from API");
+    tracing::info!("Fetching compiler verification key from the API");
 
-    let client = reqwest::Client::new();
-    let response = client
-        .get(&jwks_url)
+    // The edge WAF blocks UA-less requests (CRS `NoUserAgent_HEADER`), and
+    // this fetch goes through the same distribution as the callbacks.
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("flow-like-compiler/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|_| CompilerError::Config("failed to build JWKS client".to_string()))?;
+    let mut response = client
+        .get(jwks_url)
         .send()
         .await
-        .map_err(|e| CompilerError::Jwt(format!("Failed to fetch JWKS: {e}")))?;
+        .map_err(|_| CompilerError::Config("failed to fetch compiler JWKS".to_string()))?;
 
     if !response.status().is_success() {
-        return Err(CompilerError::Jwt(format!(
+        return Err(CompilerError::Config(format!(
             "JWKS endpoint returned status {}",
             response.status()
         )));
     }
 
-    let jwks: Jwks = response
-        .json()
+    if response
+        .content_length()
+        .is_some_and(|length| length > JWKS_MAX_RESPONSE_BYTES as u64)
+    {
+        return Err(CompilerError::Config(
+            "compiler JWKS response is too large".to_string(),
+        ));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|e| CompilerError::Jwt(format!("Failed to parse JWKS: {e}")))?;
+        .map_err(|_| CompilerError::Config("failed to read compiler JWKS".to_string()))?
+    {
+        if body.len().saturating_add(chunk.len()) > JWKS_MAX_RESPONSE_BYTES {
+            return Err(CompilerError::Config(
+                "compiler JWKS response is too large".to_string(),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let jwks: Jwks = serde_json::from_slice(&body)
+        .map_err(|_| CompilerError::Config("failed to parse compiler JWKS".to_string()))?;
+    if jwks.keys.is_empty() || jwks.keys.len() > JWKS_MAX_KEYS {
+        return Err(CompilerError::Config(
+            "compiler JWKS contains an invalid number of keys".to_string(),
+        ));
+    }
+    let mut matches = jwks.keys.iter().filter(|key| key.kid == expected_kid);
+    let jwk = matches
+        .next()
+        .ok_or_else(|| CompilerError::Config("compiler JWT kid is not in JWKS".to_string()))?;
+    if matches.next().is_some() {
+        return Err(CompilerError::Config(
+            "compiler JWKS contains duplicate kid values".to_string(),
+        ));
+    }
 
-    let jwk = jwks
-        .keys
-        .first()
-        .ok_or_else(|| CompilerError::Jwt("JWKS contains no keys".to_string()))?;
-
-    if jwk.kty != "EC" || jwk.crv != "P-256" {
-        return Err(CompilerError::Jwt(format!(
-            "Unsupported key type: {} {}",
-            jwk.kty, jwk.crv
-        )));
+    if jwk.kty != "EC" || jwk.crv != "P-256" || jwk.alg != "ES256" || jwk.key_use != "sig" {
+        return Err(CompilerError::Config(
+            "unsupported compiler JWKS key metadata".to_string(),
+        ));
     }
 
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     let x_bytes = URL_SAFE_NO_PAD
         .decode(&jwk.x)
-        .map_err(|e| CompilerError::Jwt(format!("Failed to decode x: {e}")))?;
+        .map_err(|_| CompilerError::Config("invalid compiler JWKS x coordinate".to_string()))?;
     let y_bytes = URL_SAFE_NO_PAD
         .decode(&jwk.y)
-        .map_err(|e| CompilerError::Jwt(format!("Failed to decode y: {e}")))?;
+        .map_err(|_| CompilerError::Config("invalid compiler JWKS y coordinate".to_string()))?;
 
     let mut point = Vec::with_capacity(1 + x_bytes.len() + y_bytes.len());
     point.push(0x04);
@@ -104,47 +173,179 @@ async fn fetch_public_key_from_api() -> Result<Vec<u8>, CompilerError> {
     use p256::{EncodedPoint, PublicKey};
 
     let encoded_point = EncodedPoint::from_bytes(&point)
-        .map_err(|e| CompilerError::Jwt(format!("Invalid EC point: {e}")))?;
+        .map_err(|_| CompilerError::Config("invalid compiler JWKS EC point".to_string()))?;
 
     let public_key = PublicKey::from_encoded_point(&encoded_point);
     if public_key.is_none().into() {
-        return Err(CompilerError::Jwt("Invalid EC public key".to_string()));
+        return Err(CompilerError::Config(
+            "invalid compiler JWKS public key".to_string(),
+        ));
     }
     let public_key = public_key.unwrap();
 
     use p256::pkcs8::EncodePublicKey;
     let pem = public_key
         .to_public_key_pem(p256::pkcs8::LineEnding::LF)
-        .map_err(|e| CompilerError::Jwt(format!("Failed to encode public key: {e}")))?;
+        .map_err(|_| CompilerError::Config("failed to encode compiler public key".to_string()))?;
 
     Ok(pem.into_bytes())
 }
 
-async fn get_public_key() -> Result<&'static Vec<u8>, CompilerError> {
-    PUBLIC_KEY_CACHE
-        .get_or_try_init(|| async {
-            if let Ok(b64) = std::env::var(BACKEND_PUB_ENV) {
+async fn get_public_key(expected_kid: &str) -> Result<Arc<Vec<u8>>, CompilerError> {
+    // An explicitly pinned key serves every kid; `BACKEND_KID` enforcement
+    // already happened in `verify_jwt_async`.
+    if let Ok(b64) = std::env::var(BACKEND_PUB_ENV) {
+        return PINNED_KEY_CACHE
+            .get_or_try_init(|| async {
                 tracing::info!("Using {BACKEND_PUB_ENV} from environment");
-                return STANDARD.decode(&b64).map_err(|e| {
-                    CompilerError::Jwt(format!("Failed to decode {BACKEND_PUB_ENV}: {e}"))
-                });
+                STANDARD.decode(&b64).map(Arc::new).map_err(|_| {
+                    CompilerError::Config(format!("Failed to decode {BACKEND_PUB_ENV}"))
+                })
+            })
+            .await
+            .cloned();
+    }
+    jwks_public_key(expected_kid).await
+}
+
+async fn jwks_public_key(expected_kid: &str) -> Result<Arc<Vec<u8>>, CompilerError> {
+    {
+        let cache = JWKS_KEY_CACHE.read().await;
+        if let Some(key) = cache.keys.get(expected_kid) {
+            return Ok(key.clone());
+        }
+        // A kid that just failed a refresh stays refused for a backoff window
+        // so bad tokens cannot drive a fetch storm against the API.
+        if let Some(failed_at) = cache.failed_fetches.get(expected_kid) {
+            if failed_at.elapsed() < JWKS_FETCH_FAILURE_BACKOFF {
+                return Err(CompilerError::Jwt(
+                    "compiler JWT kid failed a recent JWKS refresh".to_string(),
+                ));
             }
-            fetch_public_key_from_api().await
-        })
-        .await
+        }
+    }
+
+    match fetch_public_key_from_api(expected_kid).await {
+        Ok(pem) => {
+            let key = Arc::new(pem);
+            let mut cache = JWKS_KEY_CACHE.write().await;
+            cache.failed_fetches.remove(expected_kid);
+            cache.keys.insert(expected_kid.to_string(), key.clone());
+            Ok(key)
+        }
+        Err(error) => {
+            let mut cache = JWKS_KEY_CACHE.write().await;
+            if cache.failed_fetches.len() >= JWKS_FAILED_KID_CAP {
+                cache.failed_fetches.clear();
+            }
+            cache
+                .failed_fetches
+                .insert(expected_kid.to_string(), Instant::now());
+            Err(error)
+        }
+    }
 }
 
 pub async fn verify_jwt_async(token: &str) -> Result<CompilerClaims, CompilerError> {
-    let key_bytes = get_public_key().await?;
+    let header = decode_header(token)
+        .map_err(|_| CompilerError::Jwt("invalid compiler JWT header".to_string()))?;
+    if header.alg != Algorithm::ES256 {
+        return Err(CompilerError::Jwt(
+            "compiler JWT must use ES256".to_string(),
+        ));
+    }
+    let kid = header
+        .kid
+        .as_deref()
+        .filter(|kid| !kid.is_empty() && kid.len() <= 128)
+        .ok_or_else(|| CompilerError::Jwt("compiler JWT must contain a valid kid".to_string()))?;
+    if let Ok(expected_kid) = std::env::var("BACKEND_KID") {
+        let expected_kid = expected_kid.trim();
+        if !expected_kid.is_empty() && kid != expected_kid {
+            return Err(CompilerError::Jwt(
+                "compiler JWT kid does not match the configured backend key".to_string(),
+            ));
+        }
+    }
 
-    let decoding_key = DecodingKey::from_ec_pem(key_bytes)
-        .map_err(|e| CompilerError::Jwt(format!("Invalid public key: {e}")))?;
+    let key_bytes = get_public_key(kid).await?;
+
+    let decoding_key = DecodingKey::from_ec_pem(&key_bytes)
+        .map_err(|_| CompilerError::Config("invalid configured compiler public key".to_string()))?;
 
     let mut validation = Validation::new(Algorithm::ES256);
     validation.validate_exp = true;
+    validation.validate_nbf = true;
+    validation.leeway = 30;
+    validation.set_required_spec_claims(&["exp", "nbf", "iat", "iss", "aud", "sub"]);
     validation.set_audience(&["flow-like-compiler"]);
     validation.set_issuer(&["flow-like"]);
 
     let token_data = decode::<CompilerClaims>(token, &decoding_key, &validation)?;
+    let now = chrono::Utc::now().timestamp();
+    if token_data.claims.iat > now + 60
+        || token_data.claims.exp <= token_data.claims.iat
+        || token_data.claims.exp - token_data.claims.iat > 24 * 60 * 60 + 60
+    {
+        return Err(CompilerError::Jwt(
+            "compiler JWT lifetime is invalid".to_string(),
+        ));
+    }
     Ok(token_data.claims)
+}
+
+fn is_private_api_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") || !host.contains('.') {
+        return true;
+    }
+    host.parse::<IpAddr>().is_ok_and(|address| match address {
+        IpAddr::V4(address) => {
+            address.is_private() || address.is_loopback() || address.is_link_local()
+        }
+        IpAddr::V6(address) => address.is_loopback() || address.is_unique_local(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn cache_key(kid: &str, pem: &[u8]) {
+        JWKS_KEY_CACHE
+            .write()
+            .await
+            .keys
+            .insert(kid.to_string(), Arc::new(pem.to_vec()));
+    }
+
+    #[tokio::test]
+    async fn jwks_cache_serves_each_kid_its_own_key() {
+        cache_key("test-kid-a", b"pem-a").await;
+        cache_key("test-kid-b", b"pem-b").await;
+
+        assert_eq!(
+            *jwks_public_key("test-kid-a").await.unwrap(),
+            b"pem-a".to_vec()
+        );
+        assert_eq!(
+            *jwks_public_key("test-kid-b").await.unwrap(),
+            b"pem-b".to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn recently_failed_kid_is_refused_without_a_refetch() {
+        JWKS_KEY_CACHE
+            .write()
+            .await
+            .failed_fetches
+            .insert("test-kid-failed".to_string(), Instant::now());
+
+        let error = jwks_public_key("test-kid-failed").await.unwrap_err();
+        assert!(matches!(error, CompilerError::Jwt(_)));
+
+        // An unrelated cached kid stays retrievable.
+        cache_key("test-kid-alive", b"pem-alive").await;
+        assert!(jwks_public_key("test-kid-alive").await.is_ok());
+    }
 }

@@ -1,7 +1,12 @@
-import { type JWK, importJWK, jwtVerify } from "jose";
 import { WebrtcProvider } from "y-webrtc";
 import * as Y from "yjs";
-import type { IJwks, IRealtimeAccess } from "./types";
+import {
+	type AuthenticatedSignaling,
+	prepareAuthenticatedSignaling,
+} from "./authenticated-websocket";
+import type { IRealtimeAccess } from "./types";
+
+const FALLBACK_SIGNALING_URL = "wss://signaling.flow-like.com";
 
 export interface RealtimeSession {
 	doc: Y.Doc;
@@ -12,77 +17,51 @@ export interface RealtimeSession {
 		status: "connected" | "disconnected" | "reconnecting",
 	) => void;
 	reconnect: () => Promise<void>;
+	/** Swap the registered signaling credential for a freshly minted one. */
+	refreshAccess: (access: IRealtimeAccess) => void;
 }
 
 // Global registry to prevent duplicate Y.Doc instances for the same room
 const roomRegistry = new Map<
 	string,
-	{ doc: Y.Doc; provider: any; refCount: number }
->();
-
-async function verifyPeerJwt(token: string, jwks: IJwks): Promise<boolean> {
-	try {
-		// Resolve key by kid if present, else try first EC key
-		const [header] = token.split(".");
-		const kid = (() => {
-			try {
-				const json = JSON.parse(
-					atob(header.replace(/-/g, "+").replace(/_/g, "/")),
-				);
-				return json.kid as string | undefined;
-			} catch {
-				return undefined;
-			}
-		})();
-
-		const key: JWK | undefined = jwks.keys.find((k) =>
-			kid ? k.kid === kid : k.kty === "EC",
-		);
-		if (!key) return false;
-
-		const cryptoKey = await importJWK(key as JWK, key.alg || "ES256");
-		await jwtVerify(token, cryptoKey, {
-			algorithms: ["ES256"],
-			// We accept iss/aud validation at the backend; here we only verify signature
-		});
-		return true;
-	} catch {
-		return false;
+	{
+		doc: Y.Doc;
+		provider: any;
+		refCount: number;
+		disposeAuthentication: () => void;
+		rotateAuthentication: (token: string) => void;
 	}
-}
+>();
 
 export async function createRealtimeSession(args: {
 	room: string;
 	access: IRealtimeAccess;
-	jwks?: IJwks;
 	/** The authenticated user's sub (subject) from the auth token */
 	sub?: string;
 	signalingServers?: string[];
 	onStatusChange?: (
 		status: "connected" | "disconnected" | "reconnecting",
 	) => void;
+	/** Invoked when a signaling socket is rejected or closed for a stale
+	 *  credential, so the caller can re-fetch access and call refreshAccess. */
+	onAuthFailure?: () => void;
 }): Promise<RealtimeSession> {
-	const { room, access, jwks, sub, onStatusChange } = args;
+	const { room, access, sub, onStatusChange } = args;
 
 	// Check if a session already exists for this room
 	const existing = roomRegistry.get(room);
 	if (existing) {
-		console.log(`[WebRTC] Reusing existing session for room: ${room}`);
 		existing.refCount++;
 
 		const awareness = existing.provider.awareness;
 		awareness.setLocalStateField("sub", sub);
-		awareness.setLocalStateField("token", access.jwt);
 		awareness.setLocalStateField("selection", { nodes: [] });
 
 		const dispose = () => {
 			existing.refCount--;
-			console.log(
-				`[WebRTC] Decremented refCount for room ${room}: ${existing.refCount}`,
-			);
 			if (existing.refCount <= 0) {
-				console.log(`[WebRTC] Destroying session for room: ${room}`);
 				try {
+					existing.provider.disconnect();
 					existing.provider.destroy();
 				} catch (e) {
 					console.error("Provider destroy error:", e);
@@ -92,16 +71,15 @@ export async function createRealtimeSession(args: {
 				} catch (e) {
 					console.error("Doc destroy error:", e);
 				}
+				existing.disposeAuthentication();
 				roomRegistry.delete(room);
 			}
 		};
 
 		const reconnect = async () => {
-			console.log(`[WebRTC] Reconnect called for existing session: ${room}`);
 			if (onStatusChange) onStatusChange("reconnecting");
 			// Provider should auto-reconnect, just reset awareness state
 			awareness.setLocalStateField("sub", sub);
-			awareness.setLocalStateField("token", access.jwt);
 			if (onStatusChange) onStatusChange("connected");
 		};
 
@@ -111,54 +89,63 @@ export async function createRealtimeSession(args: {
 			awareness,
 			dispose,
 			reconnect,
+			refreshAccess: (nextAccess: IRealtimeAccess) => {
+				existing.rotateAuthentication(nextAccess.jwt);
+			},
 			onStatusChange,
 		};
 	}
 
 	// Create a new session
-	console.log(`[WebRTC] Creating new session for room: ${room}`);
-	const doc = new Y.Doc();
-	const effectiveSignaling = args.signalingServers?.length
+	const configuredSignaling = args.signalingServers?.length
 		? args.signalingServers
-		: ["wss://signaling.flow-like.com"];
-	if (!args.signalingServers?.length) {
-		console.warn("No signaling servers provided, using default");
+		: null;
+	let authenticatedSignaling: AuthenticatedSignaling;
+	if (access?.jwt) {
+		// Authenticated flow: the JWT is a live bearer credential and must only
+		// ever be presented to endpoints the deployment configured — never to the
+		// hardcoded public fallback host.
+		if (!configuredSignaling) {
+			throw new Error(
+				"No signaling servers are configured for this deployment; refusing to send the realtime credential to the public fallback host",
+			);
+		}
+		authenticatedSignaling = await prepareAuthenticatedSignaling(
+			configuredSignaling,
+			room,
+			access.jwt,
+			args.onAuthFailure,
+		);
 	} else {
-		console.log("Using signaling servers:", args.signalingServers);
+		// Legacy unauthenticated path: no credential to protect, fallback allowed.
+		if (!configuredSignaling) {
+			console.warn("No signaling servers provided, using default");
+		}
+		authenticatedSignaling = {
+			signaling: configuredSignaling ?? [FALLBACK_SIGNALING_URL],
+			rotate: () => {},
+			dispose: () => {},
+		};
 	}
-
-	const provider = new WebrtcProvider(room, doc, {
-		password: access.encryption_key,
-		maxConns: 20 + Math.floor(Math.random() * 15),
-		signaling: effectiveSignaling,
-		filterBcConns: true,
-		peerOpts: {},
-	});
+	const doc = new Y.Doc();
+	let provider: any;
+	try {
+		provider = new WebrtcProvider(room, doc, {
+			password: access.encryption_key,
+			maxConns: 20 + Math.floor(Math.random() * 15),
+			signaling: authenticatedSignaling.signaling,
+			filterBcConns: true,
+			peerOpts: {},
+		});
+	} catch (error) {
+		authenticatedSignaling.dispose();
+		doc.destroy();
+		throw error;
+	}
 
 	const awareness = provider.awareness;
 	awareness.setLocalStateField("sub", sub);
-	awareness.setLocalStateField("token", access.jwt);
 	awareness.setLocalStateField("selection", { nodes: [] });
-
-	// Optional: validate peers' JWTs when their state arrives; mark invalid
-	const invalidPeers = new Set<number>();
-	(awareness as any).__invalidPeers = invalidPeers;
-	if (jwks) {
-		awareness.on(
-			"update",
-			async ({ added, updated }: { added: number[]; updated: number[] }) => {
-				const states = awareness.getStates() as Map<number, any>;
-				const toCheck = [...added, ...updated];
-				for (const clientId of toCheck) {
-					const state = states.get(clientId);
-					const token = state?.token as string | undefined;
-					if (!token) continue;
-					const ok = await verifyPeerJwt(token, jwks);
-					if (!ok) invalidPeers.add(clientId);
-				}
-			},
-		);
-	}
 
 	// Monitor connection status
 	let connectedPeers = 0;
@@ -202,16 +189,20 @@ export async function createRealtimeSession(args: {
 	setTimeout(checkConnectionStatus, 1000);
 
 	// Register in the global registry
-	roomRegistry.set(room, { doc, provider, refCount: 1 });
+	roomRegistry.set(room, {
+		doc,
+		provider,
+		refCount: 1,
+		disposeAuthentication: authenticatedSignaling.dispose,
+		rotateAuthentication: authenticatedSignaling.rotate,
+	});
 
 	const reconnect = async () => {
-		console.log(`[WebRTC] Attempting to reconnect for room: ${room}`);
 		if (onStatusChange) onStatusChange("reconnecting");
 
 		try {
 			// Reinitialize awareness state
 			awareness.setLocalStateField("sub", sub);
-			awareness.setLocalStateField("token", access.jwt);
 			awareness.setLocalStateField("selection", { nodes: [] });
 			awareness.setLocalStateField("cursor", undefined);
 
@@ -219,7 +210,6 @@ export async function createRealtimeSession(args: {
 			awareness.setLocalStateField("reconnected", Date.now());
 
 			if (onStatusChange) onStatusChange("connected");
-			console.log(`[WebRTC] Reconnected to room: ${room}`);
 		} catch (e) {
 			console.error(`[WebRTC] Reconnection failed:`, e);
 			if (onStatusChange) onStatusChange("disconnected");
@@ -235,12 +225,9 @@ export async function createRealtimeSession(args: {
 		}
 
 		entry.refCount--;
-		console.log(
-			`[WebRTC] Decremented refCount for room ${room}: ${entry.refCount}`,
-		);
 		if (entry.refCount <= 0) {
-			console.log(`[WebRTC] Destroying session for room: ${room}`);
 			try {
+				provider.disconnect();
 				provider.destroy();
 			} catch (e) {
 				console.error("Provider destroy error:", e);
@@ -250,9 +237,20 @@ export async function createRealtimeSession(args: {
 			} catch (e) {
 				console.error("Doc destroy error:", e);
 			}
+			entry.disposeAuthentication();
 			roomRegistry.delete(room);
 		}
 	};
 
-	return { doc, provider, awareness, dispose, reconnect, onStatusChange };
+	return {
+		doc,
+		provider,
+		awareness,
+		dispose,
+		reconnect,
+		refreshAccess: (nextAccess: IRealtimeAccess) => {
+			authenticatedSignaling.rotate(nextAccess.jwt);
+		},
+		onStatusChange,
+	};
 }

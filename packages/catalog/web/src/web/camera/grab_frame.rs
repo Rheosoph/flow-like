@@ -5,10 +5,10 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::NodeImage;
-use flow_like_types::{Bytes, async_trait, json::json, reqwest};
+use flow_like_types::{Bytes, async_trait, json::json};
 use futures::StreamExt;
 
-use crate::web::api::HttpRequest;
+use crate::web::api::{GuardedHttpClient, HttpRequest};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -75,7 +75,7 @@ impl NodeLogic for GrabFrameNode {
         context.activate_exec_pin("exec_error").await?;
 
         let request: HttpRequest = context.evaluate_pin("request").await?;
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         let response = request.raw_request(&client).await?;
         let mut stream = response.bytes_stream();
@@ -120,6 +120,7 @@ impl NodeLogic for GrabFrameNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flow_like_types::reqwest;
 
     use flow_like_types::{Bytes, tokio};
     use futures::StreamExt;

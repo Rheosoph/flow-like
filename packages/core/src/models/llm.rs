@@ -58,6 +58,47 @@ pub struct ModelUsageContext {
     pub run_id: Option<String>,
 }
 
+/// `custom:vertex` falls back to Google application-default credentials when
+/// the Bit carries neither a service-account key nor an access token — i.e. to
+/// the host process's own identity. Refuse that in a server-side state.
+fn ensure_no_ambient_model_credentials(
+    app_state: &FlowLikeState,
+    provider: &str,
+    model_provider: &flow_like_model_provider::provider::ModelProvider,
+) -> Result<()> {
+    if provider != "custom:vertex" {
+        return Ok(());
+    }
+    let has_explicit = model_provider.params.as_ref().is_some_and(|params| {
+        [
+            "service_account_json",
+            "service_account_key",
+            "access_token",
+        ]
+        .iter()
+        .any(|key| {
+            params
+                .get(*key)
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| !value.trim().is_empty())
+        })
+    });
+    if has_explicit {
+        return Ok(());
+    }
+    #[cfg(feature = "flow")]
+    {
+        app_state
+            .execution_environment
+            .ensure_no_ambient_credentials(provider, "application_default")
+    }
+    #[cfg(not(feature = "flow"))]
+    {
+        let _ = app_state;
+        Ok(())
+    }
+}
+
 fn insert_usage_headers(
     params: &mut HashMap<String, flow_like_types::Value>,
     usage_context: Option<&ModelUsageContext>,
@@ -279,6 +320,7 @@ impl ModelFactory {
         }
 
         if provider.starts_with("custom:") {
+            ensure_no_ambient_model_credentials(&app_state, &provider, &model_provider)?;
             return self
                 .build_custom_model(bit, &provider, &model_provider)
                 .await;

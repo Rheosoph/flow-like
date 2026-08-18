@@ -115,7 +115,7 @@ impl S3Config {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AzureConfig {
     pub account: String,
-    pub access_key: String,
+    pub access_key: Option<String>,
 }
 
 impl AzureConfig {
@@ -124,15 +124,25 @@ impl AzureConfig {
             account: std::env::var("AZURE_STORAGE_ACCOUNT_NAME")
                 .map_err(|_| flow_like_types::anyhow!("AZURE_STORAGE_ACCOUNT_NAME not set"))?,
             access_key: std::env::var("AZURE_STORAGE_ACCOUNT_KEY")
-                .map_err(|_| flow_like_types::anyhow!("AZURE_STORAGE_ACCOUNT_KEY not set"))?,
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
         })
     }
 
     pub fn build_store(&self, container: &str) -> Result<FlowLikeStore> {
-        let store = MicrosoftAzureBuilder::new()
-            .with_account(&self.account)
-            .with_container_name(container)
-            .with_config(AzureConfigKey::AccessKey, &self.access_key)
+        let mut builder = if self.access_key.is_some() {
+            MicrosoftAzureBuilder::new()
+        } else {
+            MicrosoftAzureBuilder::from_env()
+        }
+        .with_account(&self.account)
+        .with_container_name(container);
+
+        if let Some(access_key) = &self.access_key {
+            builder = builder.with_config(AzureConfigKey::AccessKey, access_key);
+        }
+
+        let store = builder
             .build()
             .map_err(|e| flow_like_types::anyhow!("Failed to build Azure store: {}", e))?;
         Ok(FlowLikeStore::Azure(Arc::new(store)))
@@ -151,13 +161,24 @@ impl GcpConfig {
         Ok(GcpConfig {
             project_id: std::env::var("GCP_PROJECT_ID")
                 .map_err(|_| flow_like_types::anyhow!("GCP_PROJECT_ID not set"))?,
-            credentials_json: std::env::var("GOOGLE_APPLICATION_CREDENTIALS_JSON").ok(),
+            // Set-but-empty collapses to `None`, matching
+            // `credentials::gcp_credentials`. Left as `Some("")` it reached
+            // `with_service_account_key("")` below, which object_store rejects as
+            // a malformed key — so an optional Terraform variable rendering to an
+            // empty env var broke every store on a deployment that has no key by
+            // design.
+            credentials_json: std::env::var("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+                .ok()
+                .filter(|key| !key.trim().is_empty()),
         })
     }
 
     pub fn build_store(&self, bucket: &str) -> Result<FlowLikeStore> {
         let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
 
+        // No key means Workload Identity: object_store resolves its own chain
+        // down to the metadata server. A blank key is never passed through — see
+        // `from_env`.
         if let Some(creds) = &self.credentials_json {
             builder = builder.with_service_account_key(creds);
         }

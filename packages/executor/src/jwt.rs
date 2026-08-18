@@ -86,7 +86,12 @@ async fn fetch_public_key_from_api() -> Result<Vec<u8>, ExecutorError> {
 
     tracing::info!(url = %jwks_url, "Fetching execution JWKS from API");
 
-    let client = reqwest::Client::new();
+    // The edge WAF blocks UA-less requests (CRS `NoUserAgent_HEADER`), and
+    // this fetch goes through the same distribution as the callbacks.
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("flow-like-executor/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| ExecutorError::Jwt(format!("Failed to build JWKS client: {}", e)))?;
     let response = client
         .get(&jwks_url)
         .timeout(std::time::Duration::from_secs(10))

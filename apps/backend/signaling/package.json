@@ -6,6 +6,9 @@
 	"scripts": {
 		"start": "bun run server.ts",
 		"dev": "bun --watch server.ts",
+		"typecheck": "bunx tsc --project jsconfig.json --noEmit",
+		"test:auth": "bun test tests/auth.test.ts",
+		"test:config": "bun test tests/redis-config.test.ts",
 		"test:ws": "bun run tests/test-ws.mjs",
 		"test:comprehensive": "bun run tests/test-comprehensive.mjs",
 		"test:redis-fanout": "bun run tests/test-redis-fanout.mjs",
@@ -13,13 +16,16 @@
 	},
 	"author": "",
 	"license": "ISC",
-	"dependencies": {},
+	"dependencies": {
+		"@azure/identity": "4.13.1",
+		"@redis/client": "6.2.1",
+		"@redis/entraid": "6.2.1",
+		"jose": "6.1.0"
+	},
 	"private": true,
 	"devDependencies": {
 		"@types/bun": "latest",
+		"typescript": "^5.9.3",
 		"ws": "^8.18.3"
-	},
-	"peerDependencies": {
-		"typescript": "^5"
 	}
 }

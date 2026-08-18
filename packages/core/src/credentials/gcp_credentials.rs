@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 const GCS_STORAGE_TOKEN_OPTION: &str = "google_storage_token";
+const GCS_SERVICE_ACCOUNT_KEY_OPTION: &str = "google_service_account_key";
 
 /// GCP Shared Credentials that can use either service account key or access token
 ///
@@ -69,6 +70,41 @@ fn default_write_access() -> bool {
     true
 }
 
+impl GcpSharedCredentials {
+    /// Whether this credential set came from `scoped_credentials` rather than
+    /// from server configuration. Every scoped credential carries at least one
+    /// allowed prefix and an expiry; master credentials carry neither.
+    fn is_scoped(&self) -> bool {
+        !self.allowed_prefixes.is_empty()
+            || self.expiration.is_some()
+            || self.content_path_prefix.is_some()
+            || self.user_content_path_prefix.is_some()
+    }
+
+    /// Gate in front of every keyless (ADC) fallback.
+    ///
+    /// Reaching ADC means object_store resolves the workload's own runtime
+    /// service account, which carries no Credential Access Boundary and is
+    /// therefore unrestricted across the entire bucket. That is the correct
+    /// identity for master credentials under Workload Identity, and precisely
+    /// the wrong one for a scoped credential: prefix isolation on GCP is
+    /// enforced *only* by the downscoped token, so falling back here would
+    /// trade tenant isolation for availability without a word in the logs. A
+    /// scoped credential that arrives with no usable token is a bug upstream or
+    /// a forged dispatch payload, and both have to fail closed.
+    fn ensure_keyless_allowed(&self) -> Result<()> {
+        if self.is_scoped() {
+            return Err(anyhow!(
+                "scoped GCP credentials carry no usable access token (prefixes: {:?}, expiration: {:?}) - \
+                 refusing to fall back to the ambient runtime identity, which enforces no prefix restriction",
+                self.allowed_prefixes,
+                self.expiration
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl SharedCredentialsTrait for GcpSharedCredentials {
     #[tracing::instrument(name = "GcpSharedCredentials::to_store", skip(self, meta), fields(meta = meta), level="debug")]
@@ -89,11 +125,14 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
             StoreType::Meta => self.meta_bucket.clone(),
             StoreType::Content => self.content_bucket.clone(),
             StoreType::Logs => self.logs_bucket.clone(),
+            // The downscoped token already carries the `tmp/*` prefixes on the
+            // content bucket, so no separate credential is needed.
+            StoreType::Tmp => self.content_bucket.clone(),
         };
 
         // Prefer access token for scoped credentials, fall back to service account key
         if let Some(ref access_token) = self.access_token
-            && !access_token.is_empty()
+            && !access_token.trim().is_empty()
         {
             let token = access_token.clone();
             let bucket = bucket.clone();
@@ -112,7 +151,7 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
         }
 
         // Fall back to service account key (master credentials)
-        if !self.service_account_key.is_empty() {
+        if !self.service_account_key.trim().is_empty() {
             let service_account_key = self.service_account_key.clone();
             let store = tokio::task::spawn_blocking(move || {
                 GoogleCloudStorageBuilder::new()
@@ -126,9 +165,35 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
             return Ok(FlowLikeStore::Google(Arc::new(store)));
         }
 
-        Err(anyhow!(
-            "No GCP credentials available (neither access token nor service account key)"
-        ))
+        // Keyless. On Cloud Run / GKE Workload Identity neither a scoped token
+        // nor a key JSON exists — the runtime service account is bound to the
+        // workload and there is no key material to carry — so erroring here
+        // failed every executor on its first object access. Building the store
+        // bare hands the problem to object_store's own credential chain:
+        // service-account key -> ADC file -> InstanceCredentialProvider against
+        // the metadata server. Master credentials only: see
+        // `ensure_keyless_allowed`.
+        //
+        // V4 signed URLs on this path resolve to InstanceSigningCredentialProvider,
+        // which signs through iamcredentials.signBlob instead of a local private
+        // key. That requires roles/iam.serviceAccountTokenCreator on the runtime
+        // service account, granted to itself — a Terraform-side grant the runtime
+        // module must make. Without it presigning fails with a 403 that only
+        // surfaces when a client tries to fetch the URL, long after the code path
+        // that produced it has returned successfully.
+        //
+        // `spawn_blocking` because the ADC resolution reads a credentials file
+        // from disk, exactly as the key path parses a key.
+        self.ensure_keyless_allowed()?;
+        let store = tokio::task::spawn_blocking(move || {
+            GoogleCloudStorageBuilder::new()
+                .with_bucket_name(bucket)
+                .build()
+        })
+        .await
+        .map_err(|e| anyhow!("Failed to spawn blocking task: {}", e))??;
+
+        Ok(FlowLikeStore::Google(Arc::new(store)))
     }
 
     #[tracing::instrument(name = "GcpSharedCredentials::to_db", skip(self), level = "debug")]
@@ -147,7 +212,7 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
 
         // Prefer access token for scoped credentials
         if let Some(ref access_token) = self.access_token
-            && !access_token.is_empty()
+            && !access_token.trim().is_empty()
         {
             let connection =
                 make_gcs_builder_with_token(self.content_bucket.clone(), access_token.clone());
@@ -155,7 +220,7 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
         }
 
         // Fall back to service account key
-        if !self.service_account_key.is_empty() {
+        if !self.service_account_key.trim().is_empty() {
             let connection = make_gcs_builder_with_key(
                 self.content_bucket.clone(),
                 self.service_account_key.clone(),
@@ -163,7 +228,12 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
             return Ok(connection(path.clone()));
         }
 
-        Err(anyhow!("No GCP credentials available"))
+        // Keyless: let object_store resolve ADC down to the metadata server.
+        // See `to_store_type` for why this branch exists and what it costs, and
+        // `ensure_keyless_allowed` for why a scoped credential may not take it.
+        self.ensure_keyless_allowed()?;
+        let connection = make_gcs_builder_adc(self.content_bucket.clone());
+        Ok(connection(path.clone()))
     }
 
     async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
@@ -171,14 +241,14 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
         let path = db_path_from_base(&base_path);
 
         if let Some(ref access_token) = self.access_token
-            && !access_token.is_empty()
+            && !access_token.trim().is_empty()
         {
             let connection =
                 make_gcs_builder_with_token(self.content_bucket.clone(), access_token.clone());
             return Ok(connection(path.clone()));
         }
 
-        if !self.service_account_key.is_empty() {
+        if !self.service_account_key.trim().is_empty() {
             let connection = make_gcs_builder_with_key(
                 self.content_bucket.clone(),
                 self.service_account_key.clone(),
@@ -186,7 +256,12 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
             return Ok(connection(path.clone()));
         }
 
-        Err(anyhow!("No GCP credentials available"))
+        // Keyless: see `to_store_type` and `ensure_keyless_allowed`. This is the
+        // per-user database path, so an unrestricted fallback here would hand a
+        // run the whole content bucket instead of one user's prefix.
+        self.ensure_keyless_allowed()?;
+        let connection = make_gcs_builder_adc(self.content_bucket.clone());
+        Ok(connection(path.clone()))
     }
 
     fn to_logs_db_builder(&self) -> Result<LogsDbBuilder> {
@@ -198,7 +273,7 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
 
         // Prefer access token for scoped credentials
         if let Some(ref access_token) = self.access_token
-            && !access_token.is_empty()
+            && !access_token.trim().is_empty()
         {
             let builder =
                 make_gcs_builder_with_token(self.logs_bucket.clone(), access_token.clone());
@@ -206,7 +281,7 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
         }
 
         // Fall back to service account key
-        if !self.service_account_key.is_empty() {
+        if !self.service_account_key.trim().is_empty() {
             let builder = make_gcs_builder_with_key(
                 self.logs_bucket.clone(),
                 self.service_account_key.clone(),
@@ -214,7 +289,31 @@ impl SharedCredentialsTrait for GcpSharedCredentials {
             return Ok(Arc::new(builder));
         }
 
-        Err(anyhow!("No GCP credentials available"))
+        // Keyless: see `to_store_type` and `ensure_keyless_allowed`.
+        self.ensure_keyless_allowed()?;
+        Ok(Arc::new(make_gcs_builder_adc(self.logs_bucket.clone())))
+    }
+}
+
+/// Build a LanceDB connection factory over a GCS bucket.
+///
+/// `credential` is `None` only on the deliberate keyless path. A blank
+/// credential is never normalised to `None` here: object_store rejects a
+/// present-but-blank key, and that rejection is the outcome we want. Dropping
+/// the option instead would resolve ADC and quietly substitute the unrestricted
+/// runtime identity for the credential that was supposed to constrain the
+/// caller.
+fn make_gcs_builder(
+    bucket: String,
+    credential: Option<(&'static str, String)>,
+) -> impl Fn(object_store::path::Path) -> ConnectBuilder + Send + Sync + 'static {
+    move |path| {
+        let url = format!("gs://{}/{}", bucket, path);
+        let builder = lancedb::connect(&url);
+        match &credential {
+            Some((option, value)) => builder.storage_option(option.to_string(), value.clone()),
+            None => builder,
+        }
     }
 }
 
@@ -222,24 +321,29 @@ fn make_gcs_builder_with_key(
     bucket: String,
     service_account_key: String,
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder + Send + Sync + 'static {
-    move |path| {
-        let url = format!("gs://{}/{}", bucket, path);
-        lancedb::connect(&url).storage_option(
-            "google_service_account_key".to_string(),
-            service_account_key.clone(),
-        )
-    }
+    make_gcs_builder(
+        bucket,
+        Some((GCS_SERVICE_ACCOUNT_KEY_OPTION, service_account_key)),
+    )
 }
 
 fn make_gcs_builder_with_token(
     bucket: String,
     access_token: String,
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder + Send + Sync + 'static {
-    move |path| {
-        let url = format!("gs://{}/{}", bucket, path);
-        lancedb::connect(&url)
-            .storage_option(GCS_STORAGE_TOKEN_OPTION.to_string(), access_token.clone())
-    }
+    make_gcs_builder(bucket, Some((GCS_STORAGE_TOKEN_OPTION, access_token)))
+}
+
+/// Application Default Credentials: no explicit credential, so object_store
+/// resolves service-account key -> ADC file -> `InstanceCredentialProvider` on
+/// the metadata server. This is the keyless equivalent of the two builders
+/// above, and the path V4 signing reaches through
+/// `InstanceSigningCredentialProvider` — see `to_store_type` for the IAM grant
+/// that path requires.
+fn make_gcs_builder_adc(
+    bucket: String,
+) -> impl Fn(object_store::path::Path) -> ConnectBuilder + Send + Sync + 'static {
+    make_gcs_builder(bucket, None)
 }
 
 #[cfg(test)]
@@ -279,6 +383,57 @@ mod tests {
             content_path_prefix: Some("apps/test-app".to_string()),
             user_content_path_prefix: None,
         }
+    }
+
+    /// A scoped credential whose token has gone missing. Both credential fields
+    /// are `#[serde(default)]`, so this is the shape a truncated or forged
+    /// dispatch payload deserializes to.
+    fn scoped_credentials_missing_token() -> GcpSharedCredentials {
+        GcpSharedCredentials {
+            access_token: None,
+            ..sample_scoped_credentials()
+        }
+    }
+
+    /// The keyless path must stay closed to scoped credentials. ADC resolves the
+    /// workload's runtime service account, which carries no Credential Access
+    /// Boundary — falling back to it would hand a run the whole bucket instead
+    /// of the prefixes it was scoped to.
+    #[tokio::test]
+    async fn scoped_credentials_without_token_refuse_keyless_fallback() {
+        let creds = scoped_credentials_missing_token();
+
+        assert!(creds.to_db("test-app").await.is_err());
+        assert!(creds.to_db_scoped("user-1", "test-app").await.is_err());
+        assert!(creds.to_logs_db_builder().is_err());
+        assert!(creds.to_store(false).await.is_err());
+    }
+
+    /// A blank token is a broken credential, not a keyless one.
+    #[tokio::test]
+    async fn blank_scoped_token_refuses_keyless_fallback() {
+        let creds = GcpSharedCredentials {
+            access_token: Some("   ".to_string()),
+            ..sample_scoped_credentials()
+        };
+
+        assert!(creds.to_db("test-app").await.is_err());
+        assert!(creds.to_logs_db_builder().is_err());
+    }
+
+    /// Workload Identity: no key, no token, and nothing scoped about it. This is
+    /// the shape the keyless branch exists for and it must keep working.
+    #[tokio::test]
+    async fn keyless_master_credentials_still_reach_adc() {
+        let creds = GcpSharedCredentials {
+            service_account_key: String::new(),
+            access_token: None,
+            ..sample_credentials()
+        };
+
+        assert!(!creds.is_scoped());
+        assert!(creds.to_db("test-app").await.is_ok());
+        assert!(creds.to_logs_db_builder().is_ok());
     }
 
     #[test]

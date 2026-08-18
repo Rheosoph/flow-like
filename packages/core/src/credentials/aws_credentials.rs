@@ -78,6 +78,9 @@ impl AwsSharedCredentials {
             StoreType::Meta => (&self.meta_bucket, self.meta_config.as_ref()),
             StoreType::Content => (&self.content_bucket, self.content_config.as_ref()),
             StoreType::Logs => (&self.logs_bucket, self.logs_config.as_ref()),
+            // The assumed role already carries the `tmp/*` prefixes on the content
+            // bucket, so no separate credential is needed.
+            StoreType::Tmp => (&self.content_bucket, self.content_config.as_ref()),
         }
     }
 }

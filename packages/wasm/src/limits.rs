@@ -281,6 +281,12 @@ pub struct WasmSecurityConfig {
     pub allow_wasi_network: bool,
     /// Specific allowed hosts for HTTP
     pub allowed_hosts: Option<Vec<String>>,
+    /// Where the enclosing flow runs. Stamped per execution from the
+    /// `ExecutionContext`; server-side, every guest network path (host HTTP
+    /// functions, `wasi:http`, `wasi:sockets`) applies the egress policy in
+    /// `flow_like::flow::execution::egress`.
+    #[serde(default)]
+    pub execution_environment: flow_like::flow::execution::ExecutionEnvironment,
 }
 
 impl Default for WasmSecurityConfig {
@@ -291,6 +297,7 @@ impl Default for WasmSecurityConfig {
             allow_wasi: false,
             allow_wasi_network: false,
             allowed_hosts: None,
+            execution_environment: Default::default(),
         }
     }
 }
@@ -308,6 +315,7 @@ impl WasmSecurityConfig {
             allow_wasi: false,
             allow_wasi_network: false,
             allowed_hosts: Some(vec![]),
+            execution_environment: Default::default(),
         }
     }
 
@@ -319,6 +327,7 @@ impl WasmSecurityConfig {
             allow_wasi: true,
             allow_wasi_network: true,
             allowed_hosts: None,
+            execution_environment: Default::default(),
         }
     }
 
@@ -373,6 +382,7 @@ impl WasmSecurityConfig {
             // This flag remains an explicit grant-all override.
             allow_wasi_network: false,
             allowed_hosts: None,
+            execution_environment: Default::default(),
         }
     }
 }

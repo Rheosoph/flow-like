@@ -61,6 +61,10 @@ impl NodeLogic for PathBufToPathNode {
 
         let pathbuf: PathBuf = context.evaluate_pin("pathbuf").await?;
 
+        context
+            .execution_environment()
+            .ensure_host_filesystem_access("Local Path to Path")?;
+
         let path = FlowPath::from_pathbuf(pathbuf, context).await?;
         context.set_pin_value("path", json!(path)).await?;
 

@@ -27,6 +27,24 @@ web:
     tag: "replace-me"
     pullPolicy: IfNotPresent
 
+# Realtime collaboration signaling. The hub config's signaling URL must point
+# at this service (wss://signaling.flow-like.example.com below), not the
+# vendor-hosted default — tokens are signed with this deployment's BACKEND_KEY.
+signaling:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: signaling
+    tag: "replace-me"
+    pullPolicy: IfNotPresent
+  allowedOrigins:
+    - https://app.flow-like.example.com
+    - tauri://localhost
+    - http://tauri.localhost
+    - https://tauri.localhost
+  # replicaCount > 1 requires Redis fan-out so peers on different pods see each other.
+  fanoutMode: redis
+
 executor:
   image:
     repository: executor
@@ -98,11 +116,17 @@ ingress:
         - path: /
           pathType: Prefix
           service: web
+    - host: signaling.flow-like.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: signaling
   tls:
     - secretName: flow-like-tls
       hosts:
         - api.flow-like.example.com
         - app.flow-like.example.com
+        - signaling.flow-like.example.com
 
 networkPolicy:
   enabled: true

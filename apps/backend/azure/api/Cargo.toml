@@ -1,0 +1,30 @@
+[package]
+name = "azure-api"
+version = "0.1.0"
+edition = "2024"
+description = "Flow-Like Azure API Service"
+
+[dependencies]
+flow-like-api = { workspace = true, features = ["azure", "secrets-azure", "cosmos", "storage-queue", "redis", "acs-email"] }
+flow-like-secrets.workspace = true
+flow-like-azure-data.workspace = true
+flow-like-storage.workspace = true
+flow-like-catalog.workspace = true
+mimalloc.workspace = true
+axum.workspace = true
+azure_core = "0.32.0"
+azure_identity = "0.32.0"
+sea-orm.workspace = true
+serde = { workspace = true, features = ["derive"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tower-http.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
+tracing-opentelemetry.workspace = true
+tokio = { workspace = true, features = ["full"] }
+url = "2.5"
+uuid.workspace = true

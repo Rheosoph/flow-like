@@ -36,6 +36,7 @@ impl ProviderSlot {
 
 pub struct SecretStore {
     cache: SecretCache,
+    allow_env_override: bool,
     provider_order: Vec<SecretProviderKind>,
     providers: HashMap<SecretProviderKind, ProviderSlot>,
 }
@@ -68,14 +69,17 @@ impl SecretStore {
                 config.negative_cache_ttl,
                 config.max_cache_entries,
             ),
+            allow_env_override: config.allow_env_override,
             provider_order,
             providers,
         })
     }
 
     pub async fn get_secret(&self, reference: &SecretRef) -> Result<SecretValue> {
-        if let Some(value) = env_override(reference) {
-            return Ok(value);
+        if self.allow_env_override {
+            if let Some(value) = env_override(reference) {
+                return Ok(value);
+            }
         }
 
         if self.providers.is_empty() {
@@ -317,6 +321,21 @@ mod tests {
         let text = must_ok(value.as_text(), "PATH must resolve as text");
 
         assert_eq!(text.expose_secret(), expected);
+    }
+
+    #[tokio::test]
+    async fn env_override_can_be_disabled() {
+        let store = must_ok(
+            SecretStore::new(SecretStoreConfig::default().with_allow_env_override(false)),
+            "must create secret store",
+        );
+
+        let err = match store.get_secret(&SecretRef::new("PATH")).await {
+            Ok(_) => panic!("must not read PATH from the environment"),
+            Err(error) => error,
+        };
+
+        assert_eq!(err, SecretError::NoProvidersConfigured);
     }
 
     #[test]

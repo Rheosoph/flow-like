@@ -39,12 +39,32 @@ Full step-by-step documentation: **[docs.flow-like.com/self-hosting/kubernetes](
 |-----------|------|-------------|
 | API | Deployment | Flow-Like API with HPA |
 | Web | Deployment | Web application (Next.js static) |
+| Signaling | Deployment | Realtime collaboration WebSocket server (optional) |
 | Executor Pool | Deployment | Warm execution workers with HPA |
 | CockroachDB | StatefulSet | Single-node evaluation database; use an external database in production |
 | Redis | Deployment | Job queue and state |
 | Prometheus | Deployment | Metrics collection |
 | Grafana | Deployment | Pre-configured dashboards |
 | Tempo | Deployment | Distributed tracing |
+
+## Realtime Signaling
+
+Realtime board collaboration uses the authenticated signaling server from
+`apps/backend/signaling`. Enable it with `signaling.enabled=true` and expose it
+through the ingress (`service: signaling`), e.g. `wss://signaling.flow-like.example.com`.
+
+- Hub configs served by this deployment must set the hub's `signaling` URL(s) to
+  this service's wss ingress URL instead of the vendor-hosted default — realtime
+  tokens are signed with this deployment's `BACKEND_KEY`, which the vendor host
+  cannot verify.
+- The signaling server verifies tokens with `BACKEND_PUB`/`BACKEND_KID` from the
+  same JWT secret the API and compiler use (`jwt.*` values or `jwt.existingSecret`),
+  so the API's `BACKEND_KEY` signer must match the `BACKEND_PUB` fed to signaling.
+- `signaling.allowedOrigins` must list the exact web app origin plus the desktop
+  origins `tauri://localhost`, `http://tauri.localhost`, and `https://tauri.localhost`.
+- A single replica needs no Redis (`signaling.fanoutMode: local`). With
+  `replicaCount > 1`, set `signaling.fanoutMode: redis` so messages fan out
+  across pods via the chart's Redis.
 
 ## Build Caching
 

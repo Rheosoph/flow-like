@@ -41,10 +41,20 @@ pub struct GcpProvider {
 }
 
 impl GcpProvider {
+    /// Return `true` when this provider resolves credentials from the host
+    /// (ADC lookup, GCE/GKE metadata server) rather than from values carried
+    /// in the struct.
+    pub fn relies_on_env_chain(&self) -> bool {
+        matches!(self.auth_mode.as_str(), GCP_ADC | GCP_WORKLOAD)
+    }
+
     /// Build a BigQuery client for the currently-selected auth mode.
     ///
     /// Feature-gated because `gcp-bigquery-client` is a heavy dependency only
     /// pulled in by consumers that actually talk to BigQuery.
+    ///
+    /// Host-resolved modes are refused when running server-side — see
+    /// [`ExecutionEnvironment::ensure_no_ambient_credentials`](flow_like::flow::execution::ExecutionEnvironment::ensure_no_ambient_credentials).
     #[cfg(feature = "bigquery")]
     pub async fn build_bigquery_client(
         &self,
@@ -52,6 +62,12 @@ impl GcpProvider {
     ) -> flow_like_types::Result<gcp_bigquery_client::Client> {
         use gcp_bigquery_client::Client;
         use gcp_bigquery_client::yup_oauth2::ServiceAccountKey;
+
+        if self.relies_on_env_chain() {
+            context
+                .execution_environment()
+                .ensure_no_ambient_credentials("GcpProvider", &self.auth_mode)?;
+        }
 
         match self.auth_mode.as_str() {
             GCP_ADC => Client::from_application_default_credentials()
@@ -118,6 +134,9 @@ impl GcpProvider {
     /// The caller is expected to set `bucket_name` before/after calling this.
     /// For `service_account_file` mode, the FlowPath is read via `context` and
     /// the raw JSON is passed through as a service-account key.
+    ///
+    /// Host-resolved modes are refused when running server-side — see
+    /// [`ExecutionEnvironment::ensure_no_ambient_credentials`](flow_like::flow::execution::ExecutionEnvironment::ensure_no_ambient_credentials).
     pub async fn apply_to_gcs_builder(
         &self,
         context: &mut ExecutionContext,
@@ -125,6 +144,12 @@ impl GcpProvider {
     ) -> flow_like_types::Result<flow_like_storage::object_store::gcp::GoogleCloudStorageBuilder>
     {
         use flow_like_storage::object_store::gcp::GoogleCloudStorageBuilder;
+
+        if self.relies_on_env_chain() {
+            context
+                .execution_environment()
+                .ensure_no_ambient_credentials("GcpProvider", &self.auth_mode)?;
+        }
 
         match self.auth_mode.as_str() {
             GCP_SA_JSON => {
@@ -291,6 +316,12 @@ impl NodeLogic for GcpProviderNode {
                 auth_mode,
                 GCP_AUTH_MODES
             ));
+        }
+
+        if matches!(auth_mode.as_str(), GCP_ADC | GCP_WORKLOAD) {
+            context
+                .execution_environment()
+                .ensure_no_ambient_credentials("GcpProvider", &auth_mode)?;
         }
 
         let provider = GcpProvider {

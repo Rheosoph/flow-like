@@ -45,6 +45,7 @@ use std::{
 use trace::Trace;
 
 pub mod context;
+pub mod egress;
 pub mod internal_node;
 pub mod internal_pin;
 pub mod log;
@@ -182,6 +183,46 @@ impl ExecutionEnvironment {
 
     pub fn is_local(self) -> bool {
         !matches!(self, Self::Server)
+    }
+
+    /// The environment a server-side entry point should run under: the
+    /// operator override if one is set, otherwise [`Self::Server`].
+    pub fn server_default() -> Self {
+        Self::from_env().unwrap_or(Self::Server)
+    }
+
+    /// Refuses credential modes that resolve the host process's own cloud
+    /// identity (env vars, IMDS / metadata server, workload identity, CLI
+    /// token caches, application-default credentials) when the flow runs in
+    /// the shared server executor. There, those credentials belong to the
+    /// platform, never to the flow author — and the host's role typically
+    /// reaches every tenant's storage.
+    pub fn ensure_no_ambient_credentials(
+        self,
+        provider: &str,
+        mode: &str,
+    ) -> flow_like_types::Result<()> {
+        if self == Self::Server {
+            return Err(flow_like_types::anyhow!(
+                "{provider}: auth mode '{mode}' resolves the host's ambient credentials, which \
+                 is not permitted in server-side execution. Provide explicit credentials \
+                 (static keys, service-account key, SAS token, bearer token) instead."
+            ));
+        }
+        Ok(())
+    }
+
+    /// Refuses flow-supplied host filesystem paths when the flow runs in the
+    /// shared server executor, where the process filesystem (env files,
+    /// mounted tokens, credential caches) belongs to the platform.
+    pub fn ensure_host_filesystem_access(self, what: &str) -> flow_like_types::Result<()> {
+        if self == Self::Server {
+            return Err(flow_like_types::anyhow!(
+                "{what}: access to the host filesystem is not permitted in server-side \
+                 execution. Use a store-backed path instead."
+            ));
+        }
+        Ok(())
     }
 
     pub fn from_env() -> Option<Self> {
@@ -1340,7 +1381,11 @@ impl InternalRun {
                 board_dir: board.board_dir.clone(),
                 sub: sub_value.clone(),
                 stream_state,
-                environment: ExecutionEnvironment::Local,
+                // Inherit the state's environment so a run built on a
+                // server-side state is `Server` even if the entry point never
+                // calls `set_execution_environment` — the gates in nodes and
+                // host functions must not fail open by omission.
+                environment: handler.execution_environment,
                 execution_mode,
                 log_spill_threshold: DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
                 log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
@@ -2403,6 +2448,83 @@ mod tests {
             .expect("flush wait should stop promptly")
             .expect("flush wait task should complete");
         assert!(!ticked);
+    }
+
+    /// The gates in nodes and host functions key off the run's environment,
+    /// whose default is the permissive `Local`. A run built on a server-side
+    /// state must therefore be `Server` even when the entry point never calls
+    /// `set_execution_environment` — otherwise a forgotten call fails open.
+    #[tokio::test]
+    async fn run_inherits_server_environment_from_state_without_explicit_set() {
+        let mut state =
+            FlowLikeState::new(FlowLikeConfig::new(), HTTPClient::new_without_refetch());
+        state.execution_environment = ExecutionEnvironment::Server;
+        let state = Arc::new(state);
+        let board = Board::new_detached(Some("env-inherit".to_string()), Path::default());
+        let payload = RunPayload {
+            id: "unused-entry".to_string(),
+            payload: None,
+            runtime_variables: None,
+            filter_secrets: Some(true),
+        };
+        let intercom = BufferedInterComHandler::new(
+            Arc::new(|_events| Box::pin(async { Ok(()) })),
+            Some(100),
+            Some(400),
+            Some(false),
+        );
+        let run = InternalRun::new(
+            "test-app",
+            Arc::new(board),
+            None,
+            &state,
+            &Profile::default(),
+            &payload,
+            false,
+            intercom.into_callback(),
+            None,
+            None,
+            std::collections::HashMap::new(),
+        )
+        .await
+        .expect("build run");
+
+        assert_eq!(run.meta.environment, ExecutionEnvironment::Server);
+        assert!(
+            run.meta
+                .environment
+                .ensure_no_ambient_credentials("test", "environment")
+                .is_err(),
+            "server runs must refuse ambient credentials"
+        );
+
+        let local_state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let local_board = Board::new_detached(Some("env-local".to_string()), Path::default());
+        let local_run = InternalRun::new(
+            "test-app",
+            Arc::new(local_board),
+            None,
+            &local_state,
+            &Profile::default(),
+            &payload,
+            false,
+            BufferedInterComHandler::new(
+                Arc::new(|_events| Box::pin(async { Ok(()) })),
+                Some(100),
+                Some(400),
+                Some(false),
+            )
+            .into_callback(),
+            None,
+            None,
+            std::collections::HashMap::new(),
+        )
+        .await
+        .expect("build run");
+        assert_eq!(local_run.meta.environment, ExecutionEnvironment::Local);
     }
 
     #[tokio::test]

@@ -14,6 +14,7 @@ use crate::{
 use axum::{
     body::Body,
     extract::{Request, State},
+    http::HeaderMap,
     middleware::Next,
     response::Response,
 };
@@ -27,12 +28,48 @@ use sea_orm::{
 use serde::de::{self, Unexpected};
 use serde::{Deserialize, Deserializer};
 
-use crate::state::{AppState, CachedAuth};
+use crate::state::{AppState, CachedAuth, cached_openid_is_current};
 
 /// Client IP address extracted from the request for audit trail purposes.
 /// Checks X-Forwarded-For, X-Real-Ip, then falls back to the peer address.
 #[derive(Debug, Clone)]
 pub struct ClientIp(pub Option<String>);
+
+/// Header the AWS edge uses to forward the viewer's `Authorization` value.
+///
+/// CloudFront OAC with `signing_behavior = always` overwrites `Authorization`
+/// with its own SigV4 origin signature, so a viewer-request function copies
+/// the original value into this header first. The Terraform precondition in
+/// `modules/aws/workloads/api/main.tf` pins this file to that contract; keep
+/// the literal header name in sync with the CloudFront function there.
+pub const FORWARDED_AUTHORIZATION_HEADER: &str = "x-flow-like-authorization";
+
+/// Prefix of the SigV4 signature CloudFront OAC writes into `Authorization`.
+/// A value with this prefix is CloudFront's origin signature, never a viewer
+/// credential.
+const SIGV4_AUTHORIZATION_PREFIX: &str = "AWS4-HMAC-SHA256";
+
+/// The viewer's `Authorization` value, resilient to CloudFront OAC signing.
+///
+/// Prefers `x-flow-like-authorization` when present and non-empty (the AWS
+/// edge forwards the real viewer header there), otherwise falls back to
+/// `Authorization`, ignoring it when it carries CloudFront's SigV4 signature.
+/// Every reader of viewer credentials must go through this helper so the OAC
+/// fallback cannot drift between call sites.
+pub fn viewer_authorization(headers: &HeaderMap) -> Option<&str> {
+    if let Some(forwarded) = headers.get(FORWARDED_AUTHORIZATION_HEADER)
+        && let Ok(value) = forwarded.to_str()
+        && !value.trim().is_empty()
+    {
+        return Some(value);
+    }
+
+    let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    if value.trim_start().starts_with(SIGV4_AUTHORIZATION_PREFIX) {
+        return None;
+    }
+    Some(value)
+}
 
 fn extract_client_ip(request: &Request) -> Option<String> {
     if let Some(forwarded) = request.headers().get("x-forwarded-for")
@@ -854,8 +891,7 @@ pub async fn jwt_middleware(
     request.extensions_mut().insert(client_ip);
 
     // Try OpenID/JWT or Executor JWT auth
-    if let Some(auth_header) = request.headers().get(AUTHORIZATION)
-        && let Ok(token) = auth_header.to_str()
+    if let Some(token) = viewer_authorization(request.headers())
         && !token.starts_with("pat_")
     {
         let token = if token.starts_with("Bearer ") {
@@ -869,13 +905,19 @@ pub async fn jwt_middleware(
         // Check cache first
         if let Some(cached) = state.auth_cache.get(&cache_key) {
             match cached {
-                CachedAuth::OpenID { sub } => {
-                    let user = AppUser::OpenID(OpenIDUser {
-                        sub,
-                        access_token: token.to_string(),
-                    });
-                    request.extensions_mut().insert::<AppUser>(user);
-                    return Ok(next.run(request).await);
+                CachedAuth::OpenID { sub, exp } => {
+                    if cached_openid_is_current(exp, chrono::Utc::now().timestamp()) {
+                        let user = AppUser::OpenID(OpenIDUser {
+                            sub,
+                            access_token: token.to_string(),
+                        });
+                        request.extensions_mut().insert::<AppUser>(user);
+                        return Ok(next.run(request).await);
+                    }
+                    // Expired cache entry: fall through to fresh validation,
+                    // which honors the configured leeway and re-inserts on
+                    // success.
+                    state.auth_cache.invalidate(&cache_key);
                 }
                 CachedAuth::Executor {
                     sub,
@@ -931,13 +973,14 @@ pub async fn jwt_middleware(
         }
 
         // Cache miss - validate token
-        let claims = state.validate_token(token);
-        if let Ok(claims) = claims {
-            if let Some(sub) = claims.get("sub").and_then(|sub| sub.as_str()) {
+        let validated = state.validate_token(token).await;
+        if let Ok(validated) = validated {
+            if let Some(sub) = validated.claims.get("sub").and_then(|sub| sub.as_str()) {
                 state.auth_cache.insert(
                     cache_key,
                     CachedAuth::OpenID {
                         sub: sub.to_string(),
+                        exp: validated.expires_at,
                     },
                 );
 
@@ -1011,9 +1054,7 @@ pub async fn jwt_middleware(
     }
 
     // Try PAT auth
-    if let Some(auth_header) = request.headers().get(AUTHORIZATION)
-        && let Ok(raw_token) = auth_header.to_str()
-    {
+    if let Some(raw_token) = viewer_authorization(request.headers()) {
         // Strip "Bearer " prefix if present so PATs sent as standard Bearer tokens are recognized
         let token = if raw_token.starts_with("Bearer ") {
             &raw_token[7..]
@@ -1232,6 +1273,55 @@ pub async fn jwt_middleware(
 mod tests {
     use super::*;
     use axum::{http::StatusCode, response::IntoResponse};
+
+    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (name, value) in pairs {
+            headers.insert(
+                axum::http::HeaderName::try_from(*name).unwrap(),
+                value.parse().unwrap(),
+            );
+        }
+        headers
+    }
+
+    #[test]
+    fn viewer_authorization_prefers_the_forwarded_header() {
+        let headers = headers(&[
+            ("authorization", "AWS4-HMAC-SHA256 Credential=cloudfront"),
+            (FORWARDED_AUTHORIZATION_HEADER, "Bearer viewer-token"),
+        ]);
+        assert_eq!(viewer_authorization(&headers), Some("Bearer viewer-token"));
+    }
+
+    #[test]
+    fn viewer_authorization_falls_back_past_an_empty_forwarded_header() {
+        let headers = headers(&[
+            ("authorization", "Bearer viewer-token"),
+            (FORWARDED_AUTHORIZATION_HEADER, "  "),
+        ]);
+        assert_eq!(viewer_authorization(&headers), Some("Bearer viewer-token"));
+    }
+
+    #[test]
+    fn viewer_authorization_uses_authorization_when_nothing_is_forwarded() {
+        let headers = headers(&[("authorization", "Bearer viewer-token")]);
+        assert_eq!(viewer_authorization(&headers), Some("Bearer viewer-token"));
+    }
+
+    #[test]
+    fn viewer_authorization_ignores_cloudfront_sigv4() {
+        let headers = headers(&[(
+            "authorization",
+            "AWS4-HMAC-SHA256 Credential=cloudfront/20260817/eu-central-1/lambda/aws4_request",
+        )]);
+        assert_eq!(viewer_authorization(&headers), None);
+    }
+
+    #[test]
+    fn viewer_authorization_is_none_when_both_headers_are_absent() {
+        assert_eq!(viewer_authorization(&HeaderMap::new()), None);
+    }
 
     #[test]
     fn anonymous_app_permission_denial_is_unauthorized() {

@@ -296,6 +296,12 @@ pub struct ExecutionMetadata {
     pub user_id: String,
     pub stream_state: bool,
     pub log_level: u8,
+    /// Where the enclosing flow runs, exposed to the guest for its own
+    /// decisions. Informational only: enforcement reads
+    /// `ComponentStoreData::environment`, which is stamped from the security
+    /// config, because this struct derives `Default` and that default is the
+    /// permissive `Local`.
+    pub execution_environment: flow_like::flow::execution::ExecutionEnvironment,
 }
 
 /// Stream event from WASM

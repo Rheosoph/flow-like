@@ -1,0 +1,32 @@
+[package]
+name = "flow-like-scheduler-tick"
+version = "0.1.0"
+edition = "2024"
+description = "Run-once cron tick shared by the Azure and GCP scheduler jobs: cron occurrences, claim-then-fire algorithm, sink-trigger API client, and the CAS state store trait"
+
+[lib]
+name = "flow_like_scheduler_tick"
+crate-type = ["lib"]
+
+[features]
+default = []
+azure = ["dep:flow-like-azure-data"]
+gcp = ["dep:flow-like-gcp-data"]
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+cron = "0.15"
+futures.workspace = true
+reqwest.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+tracing.workspace = true
+
+flow-like-azure-data = { workspace = true, optional = true }
+flow-like-gcp-data = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }

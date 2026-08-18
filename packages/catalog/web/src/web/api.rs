@@ -1,4 +1,5 @@
 use flow_like::flow::execution::context::ExecutionContext;
+pub use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like_catalog_core::FlowPath;
 use flow_like_storage::object_store::PutPayload;
 use flow_like_types::{Value, reqwest};
@@ -73,9 +74,13 @@ impl HttpRequest {
         self.body = Some(body);
     }
 
+    /// Every outbound flow request goes through here, and the client type
+    /// forces callers to build it from the run's execution environment — so
+    /// server-side the URL, its DNS resolution and every redirect are checked
+    /// against the egress policy (see `flow_like::flow::execution::egress`).
     async fn to_request(
         &self,
-        client: &reqwest::Client,
+        client: &GuardedHttpClient,
     ) -> flow_like_types::Result<reqwest::RequestBuilder> {
         let method: reqwest::Method = match self.method {
             Method::GET => reqwest::Method::GET,
@@ -85,7 +90,7 @@ impl HttpRequest {
             Method::PATCH => reqwest::Method::PATCH,
         };
 
-        let mut request = client.request(method, &self.url);
+        let mut request = client.request(method, &self.url)?;
 
         if let Some(headers) = &self.headers {
             for (key, value) in headers.iter() {
@@ -110,7 +115,10 @@ impl HttpRequest {
         Ok(request)
     }
 
-    pub async fn trigger(&self, client: &reqwest::Client) -> flow_like_types::Result<HttpResponse> {
+    pub async fn trigger(
+        &self,
+        client: &GuardedHttpClient,
+    ) -> flow_like_types::Result<HttpResponse> {
         let request = self.to_request(client).await?;
         let response = request.send().await?;
         let status_code = response.status().as_u16();
@@ -134,7 +142,7 @@ impl HttpRequest {
 
     pub async fn raw_request(
         &self,
-        client: &reqwest::Client,
+        client: &GuardedHttpClient,
     ) -> flow_like_types::Result<reqwest::Response> {
         let request = self.to_request(client).await?;
         let response = request.send().await?;
@@ -143,7 +151,7 @@ impl HttpRequest {
 
     pub async fn streaming_trigger(
         &self,
-        client: &reqwest::Client,
+        client: &GuardedHttpClient,
         callback: Option<StreamingCallback>,
     ) -> flow_like_types::Result<HttpResponse> {
         let request = self.to_request(client).await?;
@@ -179,7 +187,7 @@ impl HttpRequest {
 
     pub async fn download_to_path(
         &self,
-        client: &reqwest::Client,
+        client: &GuardedHttpClient,
         path: &FlowPath,
         context: &mut ExecutionContext,
     ) -> flow_like_types::Result<()> {

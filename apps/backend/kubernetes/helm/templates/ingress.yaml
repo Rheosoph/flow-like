@@ -37,6 +37,10 @@ spec:
                 name: {{ include "flow-like.fullname" $ }}-web
                 port:
                   number: {{ $.Values.web.service.port }}
+                {{- else if eq .service "signaling" }}
+                name: {{ include "flow-like.fullname" $ }}-signaling
+                port:
+                  number: {{ $.Values.signaling.service.port }}
                 {{- else }}
                 name: {{ include "flow-like.fullname" $ }}-api
                 port:

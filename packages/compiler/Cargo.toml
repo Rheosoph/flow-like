@@ -23,6 +23,7 @@ axum.workspace = true
 jsonwebtoken.workspace = true
 base64 = "0.22"
 p256 = { version = "0.13", features = ["pkcs8", "pem"] }
+percent-encoding = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
