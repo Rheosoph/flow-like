@@ -295,8 +295,15 @@ async fn exec_deps_from_map(
                 sub.end_trace();
                 ctx.push_sub_context(&mut sub);
 
-                if res.is_err() {
-                    ctx.log_message("Failed to trigger mapped dependency", LogLevel::Error);
+                if let Err(err) = res {
+                    ctx.log_message(
+                        &format!(
+                            "Failed to trigger mapped dependency '{}': {}",
+                            n.node_name(),
+                            err.into_message()
+                        ),
+                        LogLevel::Error,
+                    );
                     return false;
                 }
 
@@ -799,26 +806,27 @@ impl InternalNode {
         Ok(out)
     }
 
+    /// Nodes wired to this node's `auto_handle_error` pin.
+    ///
+    /// That pin only exists once the node is opted into error handling, so an absent,
+    /// inactive or mistyped pin means "no handler configured" and yields an empty list.
+    /// `Err` is reserved for a pin that exists but cannot be read.
     pub async fn get_error_handled_nodes(
         &self,
         context: &ExecutionContext,
     ) -> flow_like_types::Result<Vec<Arc<InternalNode>>> {
-        let pin = self.get_pin_by_name("auto_handle_error").await?;
-        let active = evaluate_pin_value(pin.clone(), &context.context_pin_overrides).await?;
-        let active = match active {
-            Value::Bool(b) => b,
-            _ => false,
+        let Ok(pin) = self.get_pin_by_name("auto_handle_error").await else {
+            return Ok(Vec::new());
         };
-        if !active {
-            return Err(flow_like_types::anyhow!("Error Pin not active"));
-        }
 
         // Direct access to immutable fields - no lock needed
-        if pin.pin_type != PinType::Output {
-            return Err(flow_like_types::anyhow!("Pin is not an output pin"));
+        if pin.pin_type != PinType::Output || pin.data_type != VariableType::Execution {
+            return Ok(Vec::new());
         }
-        if pin.data_type != VariableType::Execution {
-            return Err(flow_like_types::anyhow!("Pin is not an execution pin"));
+
+        let active = evaluate_pin_value(pin.clone(), &context.context_pin_overrides).await?;
+        if !matches!(active, Value::Bool(true)) {
+            return Ok(Vec::new());
         }
 
         let conn = pin.connected_to();
@@ -1012,9 +1020,13 @@ impl InternalNode {
                     sub.end_trace();
                     context.push_sub_context(&mut sub);
 
-                    if res.is_err() {
+                    if let Err(err) = res {
                         context.log_message(
-                            &format!("Failed to trigger dependency: {}", node_arc.node_name()),
+                            &format!(
+                                "Failed to trigger dependency '{}': {}",
+                                node_arc.node_name(),
+                                err.into_message()
+                            ),
                             LogLevel::Error,
                         );
                         return false;
@@ -1038,21 +1050,25 @@ impl InternalNode {
             .set_pin_value("auto_handle_error_string", json!(error))
             .await;
 
-        let connected = context
-            .node
-            .get_error_handled_nodes(context)
-            .await
-            .map_err(|err| {
-                let err_string = format!("Failed to get error handling nodes: {}", err);
-                context.log_message(&err_string, LogLevel::Error);
-                InternalNodeError::ExecutionFailed(error.to_string())
-            })?;
+        let connected = match context.node.get_error_handled_nodes(context).await {
+            Ok(connected) => connected,
+            Err(err) => {
+                context.log_message(
+                    &format!("Failed to read the error handling pin: {}", err),
+                    LogLevel::Error,
+                );
+                return Err(InternalNodeError::ExecutionFailed(error.to_string()));
+            }
+        };
 
         if connected.is_empty() {
-            context.log_message(
-                &format!("No error handling nodes found for: {}", context.id),
-                LogLevel::Error,
-            );
+            let node = context.node.clone();
+            log_debug(context, || {
+                format!(
+                    "No error handler wired to {}, propagating the error",
+                    node.node_name()
+                )
+            });
             return Err(InternalNodeError::ExecutionFailed(error.to_string()));
         }
 
@@ -1240,10 +1256,15 @@ impl InternalNode {
                 if !InternalNode::trigger_missing_dependencies(&mut sub, &mut local_guard, false)
                     .await
                 {
-                    let err_string = "Failed to trigger successor dependencies".to_string();
-                    InternalNode::handle_error(&mut sub, &err_string, &mut local_guard).await?;
+                    let err_string = format!(
+                        "Failed to trigger dependencies of successor '{}'",
+                        next.node.node_name()
+                    );
+                    let handled =
+                        InternalNode::handle_error(&mut sub, &err_string, &mut local_guard).await;
                     sub.end_trace();
                     context.push_sub_context(&mut sub);
+                    handled?;
                     return Err(InternalNodeError::ExecutionFailed(err_string));
                 }
 
@@ -1266,9 +1287,12 @@ impl InternalNode {
                     }
                     Err(err) => {
                         let err_string = format!("{:?}", err);
-                        InternalNode::handle_error(&mut sub, &err_string, &mut local_guard).await?;
+                        let handled =
+                            InternalNode::handle_error(&mut sub, &err_string, &mut local_guard)
+                                .await;
                         sub.end_trace();
                         context.push_sub_context(&mut sub);
+                        handled?;
                         return Err(InternalNodeError::ExecutionFailed(err_string));
                     }
                 }
@@ -1377,10 +1401,15 @@ impl InternalNode {
 
                 // Execute *its* mapped deps (fresh executed set semantics like before)
                 if !exec_deps_from_map(&mut sub, &mut local_guard, dependencies).await {
-                    let err_string = "Failed to trigger successor mapped dependencies".to_string();
-                    InternalNode::handle_error(&mut sub, &err_string, &mut local_guard).await?;
+                    let err_string = format!(
+                        "Failed to trigger mapped dependencies of successor '{}'",
+                        next.node.node_name()
+                    );
+                    let handled =
+                        InternalNode::handle_error(&mut sub, &err_string, &mut local_guard).await;
                     sub.end_trace();
                     context.push_sub_context(&mut sub);
+                    handled?;
                     return Err(InternalNodeError::ExecutionFailed(err_string));
                 }
 
@@ -1405,9 +1434,12 @@ impl InternalNode {
                     }
                     Err(err) => {
                         let err_string = format!("{:?}", err);
-                        InternalNode::handle_error(&mut sub, &err_string, &mut local_guard).await?;
+                        let handled =
+                            InternalNode::handle_error(&mut sub, &err_string, &mut local_guard)
+                                .await;
                         sub.end_trace();
                         context.push_sub_context(&mut sub);
+                        handled?;
                         return Err(InternalNodeError::ExecutionFailed(err_string));
                     }
                 }
