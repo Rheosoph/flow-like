@@ -2583,6 +2583,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "azure-executor"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.8",
+ "base64 0.22.1",
+ "flow-like-catalog",
+ "flow-like-executor",
+ "jsonwebtoken 10.3.0",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "mimalloc",
+ "opentelemetry 0.27.1",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk 0.27.1",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry 0.28.0",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "azure-maintenance"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "flow-like-types",
+ "mimalloc",
+ "reqwest 0.12.28",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "azure-queue-worker"
 version = "0.1.0"
 dependencies = [
@@ -2608,6 +2643,20 @@ dependencies = [
  "tracing-subscriber",
  "uuid 1.23.1",
  "webp",
+]
+
+[[package]]
+name = "azure-scheduler"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "flow-like-scheduler-tick",
+ "mimalloc",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid 1.23.1",
 ]
 
 [[package]]
@@ -7899,6 +7948,7 @@ dependencies = [
  "flow-like",
  "flow-like-azure-data",
  "flow-like-catalog-core",
+ "flow-like-gcp-data",
  "flow-like-secrets",
  "flow-like-sinks",
  "flow-like-storage",
@@ -8557,6 +8607,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-gcp-data"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "reqwest 0.12.28",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "urlencoding",
+ "uuid 1.23.1",
+]
+
+[[package]]
 name = "flow-like-model-provider"
 version = "0.1.0"
 dependencies = [
@@ -8591,6 +8659,24 @@ dependencies = [
  "linfa",
  "ndarray 0.16.1",
  "serde",
+]
+
+[[package]]
+name = "flow-like-scheduler-tick"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "cron",
+ "flow-like-azure-data",
+ "flow-like-gcp-data",
+ "futures 0.3.32",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -8735,6 +8821,7 @@ dependencies = [
  "flow-like-types",
  "futures 0.3.32",
  "getrandom 0.4.2",
+ "hyper 1.10.1",
  "once_cell",
  "parking_lot",
  "reqwest 0.12.28",
@@ -9194,6 +9281,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "gcp-api"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.8",
+ "flow-like-api",
+ "flow-like-catalog",
+ "flow-like-gcp-data",
+ "flow-like-secrets",
+ "flow-like-storage",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "mimalloc",
+ "opentelemetry 0.27.1",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk 0.27.1",
+ "sea-orm",
+ "sentry",
+ "sentry-tracing",
+ "serde",
+ "tokio",
+ "tonic 0.12.3",
+ "tower-http 0.6.8",
+ "tracing",
+ "tracing-opentelemetry 0.28.0",
+ "tracing-subscriber",
+ "url",
+ "uuid 1.23.1",
+]
+
+[[package]]
 name = "gcp-bigquery-client"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9223,6 +9340,86 @@ dependencies = [
  "tonic-prost-build",
  "url",
  "yup-oauth2",
+]
+
+[[package]]
+name = "gcp-executor"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.8",
+ "base64 0.22.1",
+ "flow-like-catalog",
+ "flow-like-executor",
+ "flow-like-gcp-data",
+ "jsonwebtoken 10.3.0",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "mimalloc",
+ "opentelemetry 0.27.1",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk 0.27.1",
+ "serde",
+ "tokio",
+ "tonic 0.12.3",
+ "tracing",
+ "tracing-opentelemetry 0.28.0",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "gcp-maintenance"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "flow-like-gcp-data",
+ "flow-like-types",
+ "mimalloc",
+ "reqwest 0.12.28",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "gcp-queue-worker"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.8",
+ "base64 0.22.1",
+ "blake3",
+ "chrono",
+ "flow-like-catalog",
+ "flow-like-compiler",
+ "flow-like-executor",
+ "flow-like-gcp-data",
+ "flow-like-storage",
+ "flow-like-types",
+ "image",
+ "jsonwebtoken 10.3.0",
+ "mimalloc",
+ "reqwest 0.12.28",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid 1.23.1",
+ "webp",
+]
+
+[[package]]
+name = "gcp-scheduler"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "flow-like-gcp-data",
+ "flow-like-scheduler-tick",
+ "mimalloc",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -24592,8 +24789,11 @@ dependencies = [
  "percent-encoding",
  "pin-project",
  "prost 0.13.5",
+ "rustls-native-certs 0.8.3",
+ "rustls-pemfile 2.2.0",
  "socket2 0.5.10",
  "tokio",
+ "tokio-rustls 0.26.4",
  "tokio-stream",
  "tower 0.4.13",
  "tower-layer",

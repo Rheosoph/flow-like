@@ -13,6 +13,8 @@ use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 use crate::flow::event::Event;
+#[cfg(feature = "flow")]
+use crate::flow::execution::ExecutionEnvironment;
 #[cfg(feature = "flow-runtime")]
 use crate::flow::execution::{LogMeta, log::LogMessage};
 
@@ -409,6 +411,12 @@ pub struct FlowLikeState {
     /// packages added to an app (see `a2ui::micro_widget::WidgetProvider`).
     pub package_widget_source:
         Arc<RwLock<Option<Arc<dyn crate::a2ui::micro_widget::PackageWidgetSource>>>>,
+
+    /// Where this state's process runs. Server-side entry points set
+    /// [`ExecutionEnvironment::Server`] so process-level services without a
+    /// run context (the model factory) can refuse ambient host credentials.
+    #[cfg(feature = "flow")]
+    pub execution_environment: ExecutionEnvironment,
 }
 
 impl FlowLikeState {
@@ -417,6 +425,8 @@ impl FlowLikeState {
             config: Arc::new(RwLock::new(config)),
             http_client: Arc::new(client),
             lance_session: Arc::new(LanceSession::default()),
+            #[cfg(feature = "flow")]
+            execution_environment: ExecutionEnvironment::default(),
 
             #[cfg(feature = "bit")]
             download_manager: Arc::new(Mutex::new(DownloadManager::new())),
@@ -455,6 +465,8 @@ impl FlowLikeState {
             config: Arc::new(RwLock::new(config)),
             http_client: Arc::new(client),
             lance_session: Arc::new(LanceSession::default()),
+            #[cfg(feature = "flow")]
+            execution_environment: ExecutionEnvironment::default(),
 
             #[cfg(feature = "bit")]
             download_manager: Arc::new(Mutex::new(DownloadManager::new())),
@@ -513,6 +525,8 @@ impl FlowLikeState {
             config: self.config.clone(),
             http_client: self.http_client.clone(),
             lance_session: Arc::new(LanceSession::default()),
+            #[cfg(feature = "flow")]
+            execution_environment: self.execution_environment,
 
             #[cfg(feature = "bit")]
             download_manager: self.download_manager.clone(),

@@ -13,12 +13,14 @@
 //! | Redis | Low | Native | High-throughput, already deployed in cluster |
 //! | DynamoDB | Low | Native | Serverless, AWS-native |
 //! | Cosmos DB | Low | Native | Serverless, Azure-native |
+//! | Firestore | Low | Native | Serverless, GCP-native |
 //!
 //! ## Recommended Configuration
 //!
 //! | Deployment | Backend | Reason |
 //! |------------|---------|--------|
 //! | AWS Lambda/ECS | `dynamodb` | Native TTL, serverless, no connection pool to babysit |
+//! | GCP Cloud Run | `firestore` | Native TTL, serverless, no connection pool to babysit |
 //! | Kubernetes | `redis` | Native TTL, lowest latency, already in the cluster |
 //! | Docker Compose | `redis` | Simple setup, native TTL |
 //! | Local / small | `postgres` | Nothing else to run |
@@ -27,7 +29,7 @@
 //!
 //! ```bash
 //! # Select backend
-//! CACHE_BACKEND=redis            # postgres (default), redis, dynamodb, cosmos
+//! CACHE_BACKEND=redis            # postgres (default), redis, dynamodb, cosmos, firestore
 //!
 //! # PostgreSQL (default; expiry handled by the cache sweeper)
 //! DATABASE_URL=postgres://...
@@ -44,10 +46,19 @@
 //! COSMOS_CACHE_CONTAINER=cache   # optional; defaults to cache
 //! COSMOS_AUTH_MODE=managed_identity
 //!
+//! # Google Firestore in Native mode (metadata-server tokens only; no key files).
+//! # The collection needs a TTL policy on `expires_at` and an index exemption on `value`.
+//! GCP_PROJECT_ID=<project>
+//! FIRESTORE_DATABASE=(default)          # optional; defaults to (default)
+//! FIRESTORE_CACHE_COLLECTION=cache      # optional; defaults to cache
+//! FIRESTORE_COLLECTION_PREFIX=flowlike- # optional, shared with the execution state store
+//!
 //! # Limits, enforced identically for every backend
 //! CACHE_MAX_KEY_BYTES=512
 //! CACHE_MAX_VALUE_BYTES=1048576  # larger data belongs in app storage, not the cache;
-//!                                # DynamoDB stores values above ~300 KB as chunked items
+//!                                # DynamoDB stores values above ~300 KB as chunked items,
+//!                                # and Firestore refuses an entry that reaches its 1 MiB
+//!                                # document ceiling — lower this on that backend
 //! CACHE_MAX_TTL_SECONDS=2592000
 //! CACHE_DEFAULT_TTL_SECONDS=0    # 0 keeps entries until they are deleted
 //! ```
@@ -68,6 +79,9 @@ mod dynamodb;
 #[cfg(feature = "cosmos")]
 mod cosmos;
 
+#[cfg(feature = "firestore")]
+mod firestore;
+
 pub use postgres::PostgresCacheStore;
 pub use types::*;
 
@@ -79,6 +93,9 @@ pub use dynamodb::DynamoDbCacheStore;
 
 #[cfg(feature = "cosmos")]
 pub use cosmos::CosmosCacheStore;
+
+#[cfg(feature = "firestore")]
+pub use firestore::FirestoreCacheStore;
 
 use std::sync::Arc;
 
@@ -96,6 +113,8 @@ pub enum CacheBackend {
     DynamoDB,
     #[cfg(feature = "cosmos")]
     Cosmos,
+    #[cfg(feature = "firestore")]
+    Firestore,
 }
 
 impl CacheBackend {
@@ -108,6 +127,8 @@ impl CacheBackend {
             "dynamodb" | "dynamo" => Self::DynamoDB,
             #[cfg(feature = "cosmos")]
             "cosmos" | "cosmosdb" => Self::Cosmos,
+            #[cfg(feature = "firestore")]
+            "firestore" | "gcp" => Self::Firestore,
             "" | "postgres" | "postgresql" => Self::Postgres,
             other => {
                 // A typo, or a backend whose Cargo feature is off for this deployment
@@ -173,6 +194,9 @@ pub async fn create_cache_store(
 
         #[cfg(feature = "cosmos")]
         CacheBackend::Cosmos => Ok(Arc::new(CosmosCacheStore::from_env()?)),
+
+        #[cfg(feature = "firestore")]
+        CacheBackend::Firestore => Ok(Arc::new(FirestoreCacheStore::from_env()?)),
     }
 }
 

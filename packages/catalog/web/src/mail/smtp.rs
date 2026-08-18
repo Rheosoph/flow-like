@@ -225,9 +225,16 @@ impl NodeLogic for SmtpConnectNode {
 
         let creds = Credentials::new(username.clone(), password.clone());
 
+        let addrs = flow_like::flow::execution::egress::resolve_socket_addrs(
+            context.execution_environment(),
+            addr.0,
+            addr.1,
+        )
+        .await?;
+
         let session: SmtpSession = match encryption.as_str() {
             "Tls" => {
-                let tcp = TcpStream::connect(addr).await?;
+                let tcp = TcpStream::connect(addrs.as_slice()).await?;
                 let connector = rustls_connector(false);
                 let server_name = rustls_pki_types::ServerName::try_from(host.clone())?;
                 let tls_stream = connector.connect(server_name, tcp).await?;
@@ -247,7 +254,7 @@ impl NodeLogic for SmtpConnectNode {
                 Arc::new(Mutex::new(transport))
             }
             "StartTls" => {
-                let tcp = TcpStream::connect(addr).await?;
+                let tcp = TcpStream::connect(addrs.as_slice()).await?;
                 let stream_plain = BufStream::new(tcp);
 
                 let client = SmtpClient::new(); // expect_greeting = true

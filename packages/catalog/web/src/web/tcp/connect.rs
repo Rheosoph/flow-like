@@ -4,7 +4,7 @@ use ahash::AHashSet;
 use flow_like::flow::execution::context::ExecutionContext;
 #[cfg(feature = "execute")]
 use flow_like::flow::execution::{
-    LogLevel, context::ExecutionContext, internal_node::InternalNode, log::LogMessage,
+    LogLevel, context::ExecutionContext, egress, internal_node::InternalNode, log::LogMessage,
 };
 
 use flow_like::flow::{
@@ -123,7 +123,20 @@ impl NodeLogic for TcpConnectNode {
             .clone();
 
         let addr = format!("{}:{}", config.host, config.port);
-        let stream = match tokio::net::TcpStream::connect(&addr).await {
+        let addrs = match egress::resolve_socket_addrs(
+            context.execution_environment(),
+            &config.host,
+            config.port,
+        )
+        .await
+        {
+            Ok(addrs) => addrs,
+            Err(e) => {
+                context.log_message(&format!("TCP connection refused: {}", e), LogLevel::Error);
+                return Ok(());
+            }
+        };
+        let stream = match tokio::net::TcpStream::connect(addrs.as_slice()).await {
             Ok(s) => s,
             Err(e) => {
                 context.log_message(&format!("TCP connection failed: {}", e), LogLevel::Error);

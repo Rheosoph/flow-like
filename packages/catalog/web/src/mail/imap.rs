@@ -289,12 +289,17 @@ impl NodeLogic for ImapConnectNode {
             }
         }
 
-        let imap_addr: (&str, u16) = (&host, port);
+        let imap_addrs = flow_like::flow::execution::egress::resolve_socket_addrs(
+            context.execution_environment(),
+            &host,
+            port,
+        )
+        .await?;
 
         let client = match encryption.as_str() {
             "Tls" => {
                 // Implicit SSL/TLS from the start
-                let tcp: TcpStream = TcpStream::connect(imap_addr).await?;
+                let tcp: TcpStream = TcpStream::connect(imap_addrs.as_slice()).await?;
                 let connector = rustls_connector(false);
                 let server_name = rustls_pki_types::ServerName::try_from(host.clone())?;
                 let stream = connector.connect(server_name, tcp).await?;
@@ -302,7 +307,7 @@ impl NodeLogic for ImapConnectNode {
             }
             "StartTls" => {
                 // Plain TCP first, then upgrade via STARTTLS
-                let tcp = TcpStream::connect(imap_addr).await?;
+                let tcp = TcpStream::connect(imap_addrs.as_slice()).await?;
                 let mut client = async_imap::Client::new(tcp);
                 let connector = rustls_connector(true);
                 client.run_command_and_check_ok("STARTTLS", None).await?;
@@ -324,7 +329,7 @@ impl NodeLogic for ImapConnectNode {
             }
         };
         context.log_message(
-            &format!("-- connected to {}:{}", imap_addr.0, imap_addr.1),
+            &format!("-- connected to {}:{}", host, port),
             flow_like::flow::execution::LogLevel::Debug,
         );
 

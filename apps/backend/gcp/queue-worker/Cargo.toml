@@ -1,0 +1,34 @@
+[package]
+name = "gcp-queue-worker"
+version = "0.1.0"
+edition = "2024"
+description = "Flow-Like GCP Pub/Sub push worker for execution, compilation, file tracking and media transformation"
+
+[dependencies]
+# The worker is a Pub/Sub *push* target, so its transport is an HTTP server
+# rather than a queue SDK. Nothing here speaks Pub/Sub's data plane: acking is a
+# 2xx and nacking is a 5xx, which is why no google-cloud-pubsub crate appears.
+axum.workspace = true
+base64.workspace = true
+blake3.workspace = true
+chrono.workspace = true
+flow-like-gcp-data.workspace = true
+flow-like-storage.workspace = true
+flow-like-catalog = { workspace = true, features = ["server-execute", "remote-ml", "remote"] }
+flow-like-compiler.workspace = true
+flow-like-executor = { workspace = true, features = ["all-server-execute"] }
+flow-like-types.workspace = true
+image.workspace = true
+# Push deliveries authenticate with a Google-signed RS256 OIDC token, so the
+# `rust_crypto` feature the workspace already pins is what supplies RSA.
+jsonwebtoken.workspace = true
+mimalloc.workspace = true
+reqwest.workspace = true
+sea-orm.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+webp.workspace = true
+tokio = { workspace = true, features = ["full", "signal"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+uuid.workspace = true

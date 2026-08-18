@@ -2302,6 +2302,7 @@ impl NodeLogic for GenerateImageNode {
             LogLevel::Info,
         );
 
+        crate::ensure_vertex_credentials_explicit(context, &provider)?;
         let generated = generate_with_provider(&provider, &request).await?;
         let total = generated.len();
         if total == 0 {

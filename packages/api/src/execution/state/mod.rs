@@ -5,6 +5,7 @@
 //! - **Redis**: Fast, with native TTL support - good for high-throughput
 //! - **DynamoDB**: Serverless, with TTL + FlowLikeStore for large payloads - good for AWS
 //! - **Cosmos DB**: Serverless, native TTL + Blob offload - good for Azure
+//! - **Firestore**: Serverless, native TTL + Cloud Storage offload - good for GCP
 //! - **Object Storage**: S3/R2/GCS - for large payloads and archival
 //!
 //! ## Backend Selection
@@ -14,6 +15,8 @@
 //! | PostgreSQL | Medium | Vertical | Manual | Full-featured, complex queries |
 //! | Redis | Low | Horizontal | Native | High-throughput, real-time |
 //! | DynamoDB | Low | Horizontal | Native | Serverless, AWS-native |
+//! | Cosmos DB | Low | Horizontal | Native | Serverless, Azure-native |
+//! | Firestore | Low | Horizontal | Native | Serverless, GCP-native |
 //! | Object Storage | High | Infinite | Lifecycle | Large payloads, archival |
 //!
 //! ## Recommended Configuration
@@ -21,6 +24,8 @@
 //! | Deployment | Backend | Reason |
 //! |------------|---------|--------|
 //! | AWS Lambda/ECS | `dynamodb` | Native TTL, serverless, auto-scaling, FlowLikeStore for large payloads |
+//! | Azure Container Apps | `cosmos` | Native TTL, serverless, Entra-only auth, Blob offload for large payloads |
+//! | GCP Cloud Run | `firestore` | Native TTL, serverless, metadata-server auth, GCS offload for large payloads |
 //! | Kubernetes | `redis` | Fast, native TTL, already deployed in cluster |
 //! | Docker Compose | `redis` | Simple setup, native TTL |
 //!
@@ -28,7 +33,7 @@
 //!
 //! ```bash
 //! # Select backend
-//! EXECUTION_STATE_BACKEND=dynamodb  # postgres, redis, dynamodb, cosmos, s3
+//! EXECUTION_STATE_BACKEND=dynamodb  # postgres, redis, dynamodb, cosmos, firestore, s3
 //!
 //! # PostgreSQL (default, requires manual TTL cleanup)
 //! DATABASE_URL=postgres://...
@@ -49,6 +54,13 @@
 //! COSMOS_EVENTS_CONTAINER=execution-events
 //! COSMOS_AUTH_MODE=managed_identity
 //!
+//! # Google Cloud Firestore, Native mode (metadata-server tokens only; no key files)
+//! GCP_PROJECT_ID=<project>
+//! FIRESTORE_DATABASE=(default)
+//! FIRESTORE_RUNS_COLLECTION=execution-runs
+//! FIRESTORE_EVENTS_COLLECTION=execution-events
+//! FIRESTORE_COLLECTION_PREFIX=          # optional, empty unless a database is shared
+//!
 //! # Object Storage (for large payloads)
 //! EXECUTION_PAYLOAD_BUCKET=flow-like-execution-payloads
 //! ```
@@ -58,6 +70,10 @@
 //! DynamoDB has a 400KB item limit. Payloads larger than 100KB are automatically
 //! stored via FlowLikeStore under `polling/{run_id}/{event_id}.json` and referenced in DynamoDB.
 //! Uses the cdn_bucket from AppState when available, avoiding duplicate client construction.
+//!
+//! Cosmos DB (2 MB documents) and Firestore (1 MiB documents) offload at the same 100KB
+//! threshold under the same `polling/` prefix, so the boundary between an inline payload and
+//! a stored one does not move when a deployment changes cloud.
 
 mod postgres;
 mod types;
@@ -70,6 +86,9 @@ mod dynamodb;
 
 #[cfg(feature = "cosmos")]
 mod cosmos;
+
+#[cfg(feature = "firestore")]
+mod firestore;
 
 #[cfg(feature = "s3")]
 mod object_storage;
@@ -86,6 +105,9 @@ pub use dynamodb::DynamoDbStateStore;
 #[cfg(feature = "cosmos")]
 pub use cosmos::CosmosStateStore;
 
+#[cfg(feature = "firestore")]
+pub use firestore::FirestoreStateStore;
+
 #[cfg(feature = "s3")]
 pub use object_storage::ObjectStorageStateStore;
 
@@ -94,7 +116,12 @@ use std::sync::Arc;
 #[cfg(feature = "aws")]
 use aws_config::SdkConfig;
 
-#[cfg(any(feature = "dynamodb", feature = "cosmos", feature = "s3"))]
+#[cfg(any(
+    feature = "dynamodb",
+    feature = "cosmos",
+    feature = "firestore",
+    feature = "s3"
+))]
 use flow_like_storage::files::store::FlowLikeStore;
 
 /// Backend type for execution state storage
@@ -108,6 +135,8 @@ pub enum StateBackend {
     DynamoDB,
     #[cfg(feature = "cosmos")]
     Cosmos,
+    #[cfg(feature = "firestore")]
+    Firestore,
     #[cfg(feature = "s3")]
     ObjectStorage,
 }
@@ -125,6 +154,8 @@ impl StateBackend {
             "dynamodb" | "dynamo" => Self::DynamoDB,
             #[cfg(feature = "cosmos")]
             "cosmos" | "cosmosdb" => Self::Cosmos,
+            #[cfg(feature = "firestore")]
+            "firestore" | "gcp" => Self::Firestore,
             #[cfg(feature = "s3")]
             "s3" | "object_storage" | "objectstorage" => Self::ObjectStorage,
             _ => Self::Postgres,
@@ -138,7 +169,7 @@ pub struct StateStoreConfig {
     pub db: Option<Arc<sea_orm::DatabaseConnection>>,
     #[cfg(feature = "aws")]
     pub aws_config: Option<Arc<SdkConfig>>,
-    #[cfg(any(feature = "dynamodb", feature = "cosmos"))]
+    #[cfg(any(feature = "dynamodb", feature = "cosmos", feature = "firestore"))]
     pub content_store: Option<Arc<FlowLikeStore>>,
     #[cfg(feature = "s3")]
     pub meta_store: Option<Arc<FlowLikeStore>>,
@@ -156,7 +187,7 @@ impl StateStoreConfig {
         self
     }
 
-    #[cfg(any(feature = "dynamodb", feature = "cosmos"))]
+    #[cfg(any(feature = "dynamodb", feature = "cosmos", feature = "firestore"))]
     pub fn with_content_store(mut self, store: Arc<FlowLikeStore>) -> Self {
         self.content_store = Some(store);
         self
@@ -208,6 +239,16 @@ pub async fn create_state_store(
 
         #[cfg(feature = "cosmos")]
         StateBackend::Cosmos => Ok(Arc::new(CosmosStateStore::from_env(
+            config.content_store,
+            config.db,
+        )?)),
+
+        // The content store is optional here for the same reason it is on Cosmos: only an
+        // event body over the offload threshold needs it, and a deployment that never
+        // produces one should not fail to start. The database is the source of the
+        // canonical run row an async dispatch already wrote, which Firestore imports once.
+        #[cfg(feature = "firestore")]
+        StateBackend::Firestore => Ok(Arc::new(FirestoreStateStore::from_env(
             config.content_store,
             config.db,
         )?)),

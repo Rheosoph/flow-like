@@ -11,6 +11,10 @@
 //! - **LambdaInvoke**: AWS Lambda SDK async invocation (fire-and-forget)
 //! - **Sqs**: AWS SQS queue with Lambda or ECS consumer
 //! - **AzureQueue**: Azure Queue Storage queue with managed-identity workers
+//! - **PubSub**: Google Cloud Pub/Sub topic with workload-identity workers.
+//!   Selected by `COMPILATION_BACKEND=pubsub` (also accepted: `pub_sub`,
+//!   `gcp_pubsub`) — spelled out because, unlike every other backend, the
+//!   variant's snake_case name is not the value operators actually set.
 //! - **Kafka**: Kafka REST Proxy for high-throughput
 //! - **Redis**: Redis LPUSH/BRPOP queue (Docker Compose / K8s async)
 //! - **KubernetesJob**: Spawn a dedicated K8s Job per compilation
@@ -43,6 +47,8 @@ pub enum CompilationBackend {
     Sqs,
     /// Azure Queue Storage queue for batch compilation
     AzureQueue,
+    /// Google Cloud Pub/Sub topic for batch compilation
+    PubSub,
     /// Apache Kafka via REST Proxy
     Kafka,
     /// Redis LPUSH/BRPOP queue
@@ -94,6 +100,7 @@ impl CompilationBackend {
             "lambda_invoke" | "lambda" | "lambda_sdk" => Self::LambdaInvoke,
             "sqs" | "aws_sqs" => Self::Sqs,
             "azure_queue" | "azure_storage_queue" | "queue_storage" => Self::AzureQueue,
+            "pubsub" | "pub_sub" | "gcp_pubsub" => Self::PubSub,
             "kafka" => Self::Kafka,
             "redis" | "redis_queue" => Self::Redis,
             "kubernetes_job" | "k8s_job" | "k8s" => Self::KubernetesJob,
@@ -108,7 +115,7 @@ impl CompilationBackend {
     pub fn is_queue(&self) -> bool {
         matches!(
             self,
-            Self::Sqs | Self::AzureQueue | Self::Kafka | Self::Redis
+            Self::Sqs | Self::AzureQueue | Self::PubSub | Self::Kafka | Self::Redis
         )
     }
 
@@ -131,6 +138,11 @@ pub struct CompilationDispatchConfig {
     pub queue_account_name: Option<String>,
     /// Azure Queue Storage compilation queue name
     pub queue_name: Option<String>,
+    /// Google Cloud project that owns the Pub/Sub topic (for PubSub backend)
+    pub pubsub_project: Option<String>,
+    /// Pub/Sub compilation topic — either a bare topic ID or the full
+    /// `projects/{project}/topics/{topic}` resource name Terraform emits
+    pub pubsub_topic: Option<String>,
     /// Kafka bootstrap servers / REST proxy URL
     pub kafka_brokers: Option<String>,
     /// Kafka topic name
@@ -162,6 +174,18 @@ impl CompilationDispatchConfig {
             sqs_queue_url: std::env::var("SQS_COMPILATION_QUEUE_URL").ok(),
             queue_account_name: std::env::var("AZURE_QUEUE_STORAGE_ACCOUNT_NAME").ok(),
             queue_name: std::env::var("AZURE_QUEUE_COMPILATION").ok(),
+            // Resolved exactly as `DispatchConfig` resolves it for execution:
+            // `GCP_PUBSUB_PROJECT` first so an install can keep its messaging
+            // plane in a project separate from the workload's own, falling back
+            // to `GCP_PROJECT_ID`, which the standard deployment sets to the
+            // same value. The two dispatchers must agree — resolving them
+            // differently would put execution jobs in one project's topics and
+            // compilation jobs in another's. Whichever wins is checked against
+            // the topic resource name before publishing.
+            pubsub_project: std::env::var("GCP_PUBSUB_PROJECT")
+                .or_else(|_| std::env::var("GCP_PROJECT_ID"))
+                .ok(),
+            pubsub_topic: std::env::var("PUBSUB_COMPILATION_TOPIC").ok(),
             kafka_brokers: std::env::var("KAFKA_BROKERS").ok(),
             kafka_topic: std::env::var("KAFKA_COMPILATION_TOPIC").ok(),
             redis_url: std::env::var("REDIS_URL").ok(),
@@ -196,6 +220,8 @@ pub enum CompilationDispatchError {
     Sqs(String),
     #[error("Azure Queue Storage error: {0}")]
     AzureQueue(String),
+    #[error("Pub/Sub error: {0}")]
+    PubSub(String),
     #[error("Kafka error: {0}")]
     Kafka(String),
     #[error("Redis error: {0}")]
@@ -305,6 +331,7 @@ impl CompilationDispatcher {
             CompilationBackend::LambdaInvoke => self.dispatch_lambda_invoke(job).await,
             CompilationBackend::Sqs => self.dispatch_sqs(job).await,
             CompilationBackend::AzureQueue => self.dispatch_azure_queue(job).await,
+            CompilationBackend::PubSub => self.dispatch_pubsub(job).await,
             CompilationBackend::Kafka => self.dispatch_kafka(job).await,
             CompilationBackend::Redis => self.dispatch_redis(job).await,
             CompilationBackend::KubernetesJob => self.dispatch_k8s_job(job).await,
@@ -582,6 +609,67 @@ impl CompilationDispatcher {
     ) -> Result<CompilationDispatchResponse, CompilationDispatchError> {
         Err(CompilationDispatchError::Configuration(
             "SQS dispatch requires the 'sqs' feature".into(),
+        ))
+    }
+
+    // ── Pub/Sub ───────────────────────────────────────────────────────────
+
+    /// Dispatch via Google Cloud Pub/Sub using only the access token the
+    /// instance metadata server mints for the workload's own service account.
+    ///
+    /// Pub/Sub assigns its own message ID and offers no deduplication, so — as
+    /// on Azure Queue Storage — the job identity travels inside the envelope
+    /// and the worker checks the resolved payload against it.
+    ///
+    /// There is deliberately no claim-check branch here. Queue Storage forces
+    /// one because its 64 KiB ceiling sits inside the range compilation
+    /// payloads occupy; Pub/Sub accepts 10 MiB, roughly 250x the largest job
+    /// this API builds (nine targets x two V4-signed upload URLs). The worker
+    /// still understands the untagged `CompilationJobRef::Remote` form, so
+    /// adding staging later needs no worker change — but producing it today
+    /// would buy a second bucket round trip and a second way to fail for a case
+    /// that cannot occur.
+    #[cfg(feature = "pubsub")]
+    async fn dispatch_pubsub(
+        &self,
+        job: &CompilationJob,
+    ) -> Result<CompilationDispatchResponse, CompilationDispatchError> {
+        let project_id = self.config.pubsub_project.as_deref().ok_or_else(|| {
+            CompilationDispatchError::Configuration(
+                "Neither GCP_PUBSUB_PROJECT nor GCP_PROJECT_ID is configured".into(),
+            )
+        })?;
+        let topic = self.config.pubsub_topic.as_deref().ok_or_else(|| {
+            CompilationDispatchError::Configuration(
+                "PUBSUB_COMPILATION_TOPIC not configured".into(),
+            )
+        })?;
+
+        let message_id = pubsub::publish_json(project_id, topic, &job.job_id, &job.package_id, job)
+            .await
+            .map_err(CompilationDispatchError::PubSub)?;
+
+        tracing::info!(
+            job_id = %job.job_id,
+            topic = %topic,
+            message_id = %message_id,
+            "Dispatched compilation via Pub/Sub"
+        );
+
+        Ok(CompilationDispatchResponse {
+            job_id: job.job_id.clone(),
+            status: "queued".into(),
+            backend: "pubsub".into(),
+        })
+    }
+
+    #[cfg(not(feature = "pubsub"))]
+    async fn dispatch_pubsub(
+        &self,
+        _job: &CompilationJob,
+    ) -> Result<CompilationDispatchResponse, CompilationDispatchError> {
+        Err(CompilationDispatchError::Configuration(
+            "Pub/Sub dispatch requires the 'pubsub' feature".into(),
         ))
     }
 
@@ -912,6 +1000,618 @@ fn compilation_storage_provider(
             Err(CompilationDispatchError::Configuration(format!(
                 "External compilation is enabled (COMPILATION_BACKEND is not `inline`), but the {kind} store cannot issue presigned URLs. Configure S3-compatible storage (AWS S3, Cloudflare R2, MinIO — all use the AWS store), Azure Blob, or Google Cloud Storage, or set COMPILATION_BACKEND=inline to compile in-process."
             )))
+        }
+    }
+}
+
+// ── Pub/Sub publishing ────────────────────────────────────────────────────
+
+/// Passwordless Pub/Sub publishing for the compilation topic.
+///
+/// The Google counterpart to `crate::storage_queue`: the only credential this
+/// path accepts is the OAuth2 token the instance metadata server mints for the
+/// service account bound to the running Cloud Run revision. Service-account key
+/// files, ambient `gcloud` tokens, emulator endpoints and proxies are refused
+/// rather than ignored, so no long-lived secret exists anywhere that could
+/// publish compilation work in this API's name.
+///
+/// Pub/Sub has no Rust data-plane client on the dependency line this crate
+/// already links, so the single `projects.topics.publish` call is issued
+/// directly against the documented REST contract — the same shape the Azure
+/// `Put Message` call takes in `crate::storage_queue`.
+#[cfg(feature = "pubsub")]
+mod pubsub {
+    use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
+    use flow_like_types::dispatch::CompilationJob;
+    use serde::{Deserialize, Serialize};
+    use std::collections::BTreeMap;
+    use std::sync::OnceLock;
+    use std::time::Duration;
+
+    const PUBSUB_API_ROOT: &str = "https://pubsub.googleapis.com/v1";
+    /// Narrow on purpose. Cloud Run hands out a `cloud-platform` token by
+    /// default, which would open Secret Manager, GCS and Cloud SQL to anything
+    /// that got hold of a copy; this token's only consumer is the Pub/Sub
+    /// publish below, so the publish scope alone is all it ever needs.
+    const PUBSUB_SCOPE: &str = "https://www.googleapis.com/auth/pubsub";
+    /// The narrowing request, and the fallback that keeps dispatch alive if the
+    /// platform refuses it.
+    ///
+    /// `?scopes=` alone is silently ignored — the metadata server only honours it
+    /// alongside `enforce_scopes=true` (or an instance that sets the
+    /// `enable-access-token-enforce-scopes` key), which is why asking for the
+    /// Pub/Sub scope without it produced a full `cloud-platform` token and the
+    /// illusion of a restriction. Requesting non-default scopes is in turn
+    /// reported not to work under GKE Workload Identity, so a rejected narrow
+    /// request retries unnarrowed against the same authority instead of costing
+    /// the dispatch. Worst case is the full-scope token this path already used,
+    /// with a warning naming it; best case the token cannot do anything but
+    /// publish.
+    const NARROWED_TOKEN_QUERY: &[(&str, &str)] =
+        &[("scopes", PUBSUB_SCOPE), ("enforce_scopes", "true")];
+    const UNNARROWED_TOKEN_QUERY: &[(&str, &str)] = &[];
+
+    const METADATA_TOKEN_PATH: &str = "/computeMetadata/v1/instance/service-accounts/default/token";
+    const METADATA_HOST: &str = "metadata.google.internal";
+    /// Tried after the hostname because metadata access has to survive a
+    /// revision with broken DNS — the name stops resolving long before the
+    /// link-local address stops answering.
+    const METADATA_IP: &str = "169.254.169.254";
+    const METADATA_FLAVOR_HEADER: &str = "Metadata-Flavor";
+    const METADATA_FLAVOR_VALUE: &str = "Google";
+    /// A cached token is reused only while this much life remains, so a publish
+    /// that starts just under the wire still finishes against a valid token.
+    const TOKEN_REFRESH_MARGIN_SECS: i64 = 5 * 60;
+    /// Ceiling on a metadata-advertised lifetime before it is trusted. Tokens
+    /// live ~1h; clamping keeps an absurd value from parking a stale token in
+    /// the cache for the life of the process.
+    const MAX_TOKEN_LIFETIME_SECS: i64 = 24 * 60 * 60;
+    const MAX_ERROR_BODY_BYTES: usize = 2_048;
+
+    /// Envelope version understood by the queue worker. Pub/Sub mints its own
+    /// `messageId` and the attribute map is unauthenticated routing metadata,
+    /// so the job identity the worker checks the resolved payload against has
+    /// to travel inside the body.
+    const ENVELOPE_VERSION: u8 = 1;
+    /// String form of [`ENVELOPE_VERSION`], because a Pub/Sub attribute map is
+    /// string-to-string. Kept in step by `envelope_version_attribute_matches`.
+    const ENVELOPE_VERSION_ATTRIBUTE: &str = "1";
+    const WORKLOAD_COMPILATION: &str = "compilation";
+
+    /// Pub/Sub caps one message's data plus attributes at 10 MiB. The attribute
+    /// map this module sends is under 300 bytes, so nearly the whole budget is
+    /// available to the body; the 64 KiB reserve is what keeps a later addition
+    /// to that map from turning a dispatch that used to work into an opaque 400
+    /// from the broker.
+    const MAX_MESSAGE_BODY_BYTES: usize = 10 * 1024 * 1024 - 64 * 1024;
+
+    /// Every one of these either substitutes a different credential for the
+    /// workload identity or moves where the credential is fetched from, and
+    /// each is rejected rather than ignored. Ignoring a set
+    /// `PUBSUB_EMULATOR_HOST` would leave an operator believing jobs went to an
+    /// emulator while they were published to the live topic; honouring a
+    /// `GCE_METADATA_HOST` would let anything able to write this process's
+    /// environment redirect the token request and steal the identity the API
+    /// publishes with. `credentials/gcp_credentials.rs` deliberately *does*
+    /// honour the `GCE_METADATA_*` overrides so its tokens agree with the ones
+    /// `object_store` mints in the same process; this path has no such twin to
+    /// stay in step with, so it refuses a redirection it cannot verify.
+    ///
+    /// The proxy variables are here because the publish body carries the
+    /// compiler JWT and a presigned PUT URL for every target — a proxy in that
+    /// path is a complete copy of the job, and therefore write access to the
+    /// artifact bucket.
+    const FORBIDDEN_CREDENTIAL_SETTINGS: &[&str] = &[
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_APPLICATION_CREDENTIALS_JSON",
+        "GOOGLE_CREDENTIALS",
+        "GOOGLE_OAUTH_ACCESS_TOKEN",
+        "CLOUDSDK_AUTH_ACCESS_TOKEN",
+        "GCE_METADATA_HOST",
+        "GCE_METADATA_IP",
+        "GCE_METADATA_ROOT",
+        "PUBSUB_EMULATOR_HOST",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ];
+
+    static PUBSUB_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    static METADATA_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    static CACHED_TOKEN: OnceLock<tokio::sync::Mutex<Option<CachedToken>>> = OnceLock::new();
+
+    /// Deliberately holds no `Debug`: a bearer token that reaches a log line is
+    /// a bearer token in the log retention window.
+    struct CachedToken {
+        value: String,
+        expires_at_unix: i64,
+    }
+
+    /// Body of every message this API publishes to the compilation topic.
+    ///
+    /// `payload` is byte-for-byte the inline job, which is exactly what the
+    /// untagged `CompilationJobRef::Inline` deserializes from — the same shape
+    /// the Azure queue path puts on the wire, so one worker envelope parser
+    /// serves both clouds.
+    #[derive(Serialize)]
+    struct MessageEnvelope<'a> {
+        v: u8,
+        job_id: &'a str,
+        correlation_id: &'a str,
+        workload: &'a str,
+        payload: &'a CompilationJob,
+    }
+
+    /// One message per request. Batching would make a partial failure
+    /// ambiguous — the response lists IDs positionally, and a dispatch that
+    /// cannot say which job was accepted cannot be retried safely.
+    #[derive(Serialize)]
+    struct PublishRequest<'a> {
+        messages: [PubsubMessage<'a>; 1],
+    }
+
+    #[derive(Serialize)]
+    struct PubsubMessage<'a> {
+        data: String,
+        attributes: BTreeMap<&'a str, &'a str>,
+    }
+
+    #[derive(Deserialize)]
+    struct PublishResponse {
+        #[serde(default, rename = "messageIds")]
+        message_ids: Vec<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct MetadataTokenResponse {
+        access_token: String,
+        expires_in: i64,
+        #[serde(default = "bearer")]
+        token_type: String,
+    }
+
+    fn bearer() -> String {
+        "Bearer".to_string()
+    }
+
+    /// Publish one compilation job and return the broker-assigned message ID.
+    pub(super) async fn publish_json(
+        project_id: &str,
+        topic: &str,
+        job_id: &str,
+        correlation_id: &str,
+        job: &CompilationJob,
+    ) -> Result<String, String> {
+        reject_secret_credentials()?;
+        validate_identifier("job ID", job_id)?;
+        validate_identifier("correlation ID", correlation_id)?;
+        let topic = qualified_topic(project_id, topic)?;
+
+        let body = serde_json::to_vec(&MessageEnvelope {
+            v: ENVELOPE_VERSION,
+            job_id,
+            correlation_id,
+            workload: WORKLOAD_COMPILATION,
+            payload: job,
+        })
+        .map_err(|error| format!("failed to serialize Pub/Sub message: {error}"))?;
+        if body.len() > MAX_MESSAGE_BODY_BYTES {
+            return Err(format!(
+                "compilation message is {} bytes, above the {MAX_MESSAGE_BODY_BYTES} byte ceiling Pub/Sub accepts; the job would have to be staged to object storage and sent as a claim-check reference",
+                body.len()
+            ));
+        }
+
+        // The attributes duplicate what the body already states. They exist so a
+        // subscription filter and the worker's dispatch switch can read the
+        // routing keys without the broker or the worker parsing a megabyte of
+        // JSON — never as the authority. The body is what the worker validates.
+        let mut attributes = BTreeMap::new();
+        attributes.insert("v", ENVELOPE_VERSION_ATTRIBUTE);
+        attributes.insert("workload", WORKLOAD_COMPILATION);
+        attributes.insert("job_id", job_id);
+        attributes.insert("correlation_id", correlation_id);
+
+        let request = PublishRequest {
+            // `data` is a proto3 `bytes` field, so the REST contract carries it
+            // base64-encoded. That also removes any question of a body byte the
+            // JSON transport would have to escape or would silently mangle.
+            messages: [PubsubMessage {
+                data: BASE64_STANDARD.encode(&body),
+                attributes,
+            }],
+        };
+
+        let token = access_token().await?;
+        let response = pubsub_http_client()?
+            .post(format!("{PUBSUB_API_ROOT}/{topic}:publish"))
+            .bearer_auth(&token)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|error| format!("failed to publish Pub/Sub message: {error}"))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.bytes().await.unwrap_or_default();
+            let body = String::from_utf8_lossy(&body[..body.len().min(MAX_ERROR_BODY_BYTES)]);
+            return Err(format!(
+                "Pub/Sub rejected the message on {topic} with HTTP {status}: {body}"
+            ));
+        }
+
+        let published: PublishResponse = response
+            .json()
+            .await
+            .map_err(|error| format!("invalid Pub/Sub publish response for {topic}: {error}"))?;
+
+        // A success status with no message ID means nothing was durably stored.
+        // Reporting that as `queued` would leave a package sitting in a
+        // compiling state that no worker will ever move.
+        published.message_ids.into_iter().next().ok_or_else(|| {
+            format!("Pub/Sub accepted the publish to {topic} without returning a message ID")
+        })
+    }
+
+    /// The token is cached because compilation dispatch sits on a user-facing
+    /// upload request: minting per publish would put a metadata round trip in
+    /// front of every package upload, and the metadata server rate-limits — a
+    /// throttled refresh would fail every dispatch in flight at once.
+    async fn access_token() -> Result<String, String> {
+        let cached = CACHED_TOKEN.get_or_init(|| tokio::sync::Mutex::new(None));
+
+        // The fetch happens while the lock is held. Serialising callers costs a
+        // few milliseconds on a cold start and removes the thundering herd that
+        // would otherwise hit the metadata server every time a token ages out.
+        let mut slot = cached.lock().await;
+        if let Some(token) = slot.as_ref()
+            && token.expires_at_unix - unix_timestamp() > TOKEN_REFRESH_MARGIN_SECS
+        {
+            return Ok(token.value.clone());
+        }
+
+        let token = fetch_metadata_token().await?;
+        let value = token.value.clone();
+        *slot = Some(token);
+        Ok(value)
+    }
+
+    async fn fetch_metadata_token() -> Result<CachedToken, String> {
+        let client = metadata_http_client()?;
+        let mut last_error: Option<String> = None;
+
+        for authority in [METADATA_HOST, METADATA_IP] {
+            for query in [NARROWED_TOKEN_QUERY, UNNARROWED_TOKEN_QUERY] {
+                let narrowed = !query.is_empty();
+
+                // `Metadata-Flavor: Google` is the SSRF guard, not a formality:
+                // the metadata server refuses any request that omits it, so a
+                // confused proxy or a redirect-following client cannot be steered
+                // into reading the token on an attacker's behalf. The response
+                // echo is only logged, not required — see the check below for why.
+                let response = client
+                    .get(format!("http://{authority}{METADATA_TOKEN_PATH}"))
+                    .header(METADATA_FLAVOR_HEADER, METADATA_FLAVOR_VALUE)
+                    .query(query)
+                    .send()
+                    .await;
+
+                let response = match response {
+                    Ok(response) => response,
+                    Err(error) => {
+                        last_error = Some(format!(
+                            "GCP metadata token request to {authority} failed: {error}"
+                        ));
+                        // The authority itself did not answer, so the fallback
+                        // query would fail the same way. Move on to the next one.
+                        break;
+                    }
+                };
+
+                let status = response.status();
+                let flavor_echoed = response
+                    .headers()
+                    .get(METADATA_FLAVOR_HEADER)
+                    .and_then(|value| value.to_str().ok())
+                    .is_some_and(|value| value.eq_ignore_ascii_case(METADATA_FLAVOR_VALUE));
+                let body = match response.bytes().await {
+                    Ok(body) => body,
+                    Err(error) => {
+                        last_error = Some(format!(
+                            "GCP metadata response from {authority} was unreadable: {error}"
+                        ));
+                        break;
+                    }
+                };
+
+                if !status.is_success() {
+                    let body = &body[..body.len().min(MAX_ERROR_BODY_BYTES)];
+                    last_error = Some(format!(
+                        "GCP metadata server at {authority} returned HTTP {status}: {}",
+                        String::from_utf8_lossy(body)
+                    ));
+                    if narrowed {
+                        // The documented failure mode for a platform that will
+                        // not downscope. Retry wide rather than lose the publish.
+                        tracing::warn!(
+                            authority,
+                            %status,
+                            "GCP metadata server rejected the scope-narrowed token request; retrying without scope enforcement"
+                        );
+                        continue;
+                    }
+                    break;
+                }
+
+                // Warned about, never enforced. Treating a missing echo as a
+                // hijack was wrong: Google documents this header as a request
+                // requirement only, `google-auth` checks it in its `ping()`
+                // environment probe and on no token fetch, object_store's
+                // `InstanceCredentialProvider` never checks it, and GKE has been
+                // reported serving token responses without it. Failing here
+                // would trade every compilation dispatch for an anti-spoofing
+                // check the platform does not promise to support.
+                if !flavor_echoed {
+                    tracing::warn!(
+                        authority,
+                        "GCP metadata token response omitted {METADATA_FLAVOR_HEADER}: {METADATA_FLAVOR_VALUE}"
+                    );
+                }
+
+                let payload: MetadataTokenResponse =
+                    serde_json::from_slice(&body).map_err(|error| {
+                        format!("invalid GCP metadata token response from {authority}: {error}")
+                    })?;
+                if payload.access_token.trim().is_empty() {
+                    return Err(format!(
+                        "GCP metadata server at {authority} returned an empty access token"
+                    ));
+                }
+                if !payload.token_type.eq_ignore_ascii_case("Bearer") {
+                    return Err(format!(
+                        "GCP metadata server at {authority} returned unsupported token_type '{}'",
+                        payload.token_type
+                    ));
+                }
+
+                // The metadata token response carries no `scope` field, so a
+                // platform that ignores the narrowing rather than rejecting it is
+                // indistinguishable from one that honoured it. This warning marks
+                // the case we can actually detect: the request we sent was the
+                // wide one.
+                if !narrowed {
+                    tracing::warn!(
+                        authority,
+                        "publishing with an unnarrowed GCP metadata token; it carries the runtime service account's full scope"
+                    );
+                }
+
+                return Ok(CachedToken {
+                    expires_at_unix: unix_timestamp()
+                        .saturating_add(payload.expires_in.clamp(0, MAX_TOKEN_LIFETIME_SECS)),
+                    value: payload.access_token,
+                });
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            format!(
+                "no GCP credentials available: the metadata server was unreachable at {METADATA_HOST} and {METADATA_IP}. Bind a runtime service account to the Cloud Run revision, or set COMPILATION_BACKEND to a backend that does not require workload identity."
+            )
+        }))
+    }
+
+    fn pubsub_http_client() -> Result<&'static reqwest::Client, String> {
+        if let Some(client) = PUBSUB_HTTP_CLIENT.get() {
+            return Ok(client);
+        }
+        let client = reqwest::Client::builder()
+            .https_only(true)
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(30))
+            .pool_idle_timeout(Duration::from_secs(90))
+            .user_agent(concat!("flow-like/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|error| format!("failed to construct Pub/Sub client: {error}"))?;
+        let _ = PUBSUB_HTTP_CLIENT.set(client);
+        PUBSUB_HTTP_CLIENT
+            .get()
+            .ok_or_else(|| "failed to initialize Pub/Sub client".to_string())
+    }
+
+    /// Separate from the publish client on purpose. `no_proxy` is load-bearing:
+    /// reqwest honours `HTTP_PROXY` by default, so without it an ambient proxy
+    /// setting — which can also arrive from a system configuration file the
+    /// environment check above cannot see — would route a plaintext credential
+    /// request through a third party. Redirects are refused for the same
+    /// reason. `https_only` is absent by design rather than by oversight: the
+    /// metadata endpoint is plain HTTP on a link-local address only the
+    /// hypervisor can answer for.
+    fn metadata_http_client() -> Result<&'static reqwest::Client, String> {
+        if let Some(client) = METADATA_HTTP_CLIENT.get() {
+            return Ok(client);
+        }
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(10))
+            .pool_idle_timeout(Duration::from_secs(90))
+            .user_agent(concat!("flow-like/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|error| format!("failed to construct GCP metadata client: {error}"))?;
+        let _ = METADATA_HTTP_CLIENT.set(client);
+        METADATA_HTTP_CLIENT
+            .get()
+            .ok_or_else(|| "failed to initialize GCP metadata client".to_string())
+    }
+
+    fn reject_secret_credentials() -> Result<(), String> {
+        for variable in FORBIDDEN_CREDENTIAL_SETTINGS {
+            if std::env::var(variable)
+                .ok()
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                return Err(format!(
+                    "{variable} is forbidden for Pub/Sub dispatch; the API publishes with the metadata server's workload identity only"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve `PUBSUB_COMPILATION_TOPIC` to a fully qualified topic name and
+    /// prove it belongs to the configured project.
+    ///
+    /// Pub/Sub addresses topics by full resource name, and the publish endpoint
+    /// will happily accept one in *any* project this service account can reach.
+    /// A compilation job carries a presigned PUT URL for every target plus the
+    /// JWT that authorises the completion callback, so a topic pointed at a
+    /// foreign project is a wholesale hand-over of write access to the artifact
+    /// bucket. The resolved project is therefore not merely a convenience for
+    /// expanding a bare topic ID — it is the project the configured topic must
+    /// belong to, and a mismatch is refused instead of published.
+    fn qualified_topic(project_id: &str, topic: &str) -> Result<String, String> {
+        validate_project_id(project_id)?;
+
+        let topic_id = match topic.strip_prefix("projects/") {
+            Some(rest) => {
+                let (project, topic_id) = rest.split_once("/topics/").ok_or_else(|| {
+                    "PUBSUB_COMPILATION_TOPIC must be a bare topic ID or a full projects/{project}/topics/{topic} resource name".to_string()
+                })?;
+                if project != project_id {
+                    return Err(format!(
+                        "PUBSUB_COMPILATION_TOPIC names project '{project}' but GCP_PUBSUB_PROJECT/GCP_PROJECT_ID resolves to '{project_id}'; refusing to publish compilation jobs outside the configured project"
+                    ));
+                }
+                topic_id
+            }
+            None => topic,
+        };
+
+        validate_topic_id(topic_id)?;
+        Ok(format!("projects/{project_id}/topics/{topic_id}"))
+    }
+
+    fn validate_project_id(value: &str) -> Result<(), String> {
+        let valid = (6..=30).contains(&value.len())
+            && value.starts_with(|c: char| c.is_ascii_lowercase())
+            && !value.ends_with('-')
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+        if !valid {
+            return Err(
+                "GCP_PUBSUB_PROJECT/GCP_PROJECT_ID must be 6-30 characters of lowercase letters, digits and hyphens, starting with a letter"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Pub/Sub's own topic-ID rules, enforced here rather than left to the
+    /// broker: a value containing `/` or `:` would not be rejected as a bad
+    /// name, it would silently retarget the request at a different resource
+    /// path on the same API.
+    fn validate_topic_id(value: &str) -> Result<(), String> {
+        let valid = (3..=255).contains(&value.len())
+            && value.starts_with(|c: char| c.is_ascii_alphabetic())
+            && value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'+' | b'%')
+            })
+            && !value
+                .get(..4)
+                .is_some_and(|head| head.eq_ignore_ascii_case("goog"));
+        if !valid {
+            return Err(format!(
+                "'{value}' is not a valid Pub/Sub topic ID (3-255 characters, starting with a letter, no reserved 'goog' prefix)"
+            ));
+        }
+        Ok(())
+    }
+
+    /// These identifiers become Pub/Sub attribute values as well as envelope
+    /// fields. A control character there is not merely ugly: it makes the
+    /// message unparseable for the worker that would otherwise dead-letter it,
+    /// so it is rejected at the producer where the job can still fail cleanly.
+    fn validate_identifier(kind: &str, value: &str) -> Result<(), String> {
+        if value.is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
+            return Err(format!("Pub/Sub message {kind} is invalid"));
+        }
+        Ok(())
+    }
+
+    fn unix_timestamp() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs().min(i64::MAX as u64) as i64)
+            .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn envelope_version_attribute_matches() {
+            assert_eq!(ENVELOPE_VERSION.to_string(), ENVELOPE_VERSION_ATTRIBUTE);
+        }
+
+        #[test]
+        fn bare_topic_ids_are_qualified_with_the_configured_project() {
+            assert_eq!(
+                qualified_topic("flow-like-dev", "flow-like-compilation"),
+                Ok("projects/flow-like-dev/topics/flow-like-compilation".to_string())
+            );
+        }
+
+        #[test]
+        fn fully_qualified_topics_survive_unchanged() {
+            assert_eq!(
+                qualified_topic(
+                    "flow-like-dev",
+                    "projects/flow-like-dev/topics/flow-like-compilation"
+                ),
+                Ok("projects/flow-like-dev/topics/flow-like-compilation".to_string())
+            );
+        }
+
+        #[test]
+        fn topics_in_another_project_are_refused() {
+            assert!(
+                qualified_topic("flow-like-dev", "projects/attacker-proj/topics/compilation")
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn topic_ids_cannot_smuggle_a_different_resource_path() {
+            assert!(qualified_topic("flow-like-dev", "compilation:publish").is_err());
+            assert!(qualified_topic("flow-like-dev", "../subscriptions/x").is_err());
+            assert!(qualified_topic("flow-like-dev", "goog-reserved").is_err());
+            assert!(qualified_topic("flow-like-dev", "1compilation").is_err());
+            assert!(qualified_topic("flow-like-dev", "ab").is_err());
+        }
+
+        #[test]
+        fn project_ids_are_restricted_to_the_documented_charset() {
+            assert!(validate_project_id("flow-like-dev").is_ok());
+            assert!(validate_project_id("Flow-Like-Dev").is_err());
+            assert!(validate_project_id("short").is_err());
+            assert!(validate_project_id("flow-like-").is_err());
+            assert!(validate_project_id("flow/like/dev").is_err());
+        }
+
+        #[test]
+        fn identifiers_with_control_characters_never_reach_an_attribute() {
+            assert!(validate_identifier("job ID", "job-1").is_ok());
+            assert!(validate_identifier("job ID", "job\n1").is_err());
+            assert!(validate_identifier("job ID", "").is_err());
+            assert!(validate_identifier("job ID", &"a".repeat(129)).is_err());
         }
     }
 }

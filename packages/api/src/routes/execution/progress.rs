@@ -712,9 +712,7 @@ fn execution_claim_user_id(subject: &str) -> Option<&str> {
 // ============================================================================
 
 fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
-    headers
-        .get("authorization")
-        .and_then(|h| h.to_str().ok())
+    crate::middleware::jwt::viewer_authorization(headers)
         .ok_or_else(|| ApiError::bad_request("Missing Authorization header".to_string()))?
         .strip_prefix("Bearer ")
         .ok_or_else(|| ApiError::bad_request("Invalid Authorization header format".to_string()))

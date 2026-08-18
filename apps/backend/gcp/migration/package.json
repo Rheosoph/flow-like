@@ -1,0 +1,22 @@
+{
+	"name": "gcp-migration",
+	"version": "1.0.0",
+	"description": "Applies the Flow-Like Prisma schema to Cloud SQL for PostgreSQL as the migration identity, authenticated with a short-lived IAM database token.",
+	"main": "migrate.ts",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"start": "bun run migrate.ts",
+		"typecheck": "bunx tsc --project jsconfig.json --noEmit",
+		"test": "bun test tests/"
+	},
+	"dependencies": {
+		"google-auth-library": "11.0.2",
+		"prisma": "7.9.1"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5.9.3"
+	},
+	"trustedDependencies": ["@prisma/engines", "prisma"]
+}

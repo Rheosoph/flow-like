@@ -827,7 +827,10 @@ async fn send_callback(
     config: &CompilerConfig,
 ) -> Result<(), CompilerError> {
     // The bearer credential must never follow a redirect to another endpoint.
+    // The User-Agent is load-bearing: the AWS edge WAF blocks UA-less
+    // requests (CRS `NoUserAgent_HEADER`).
     let client = reqwest::Client::builder()
+        .user_agent(concat!("flow-like-compiler/", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(STORAGE_CONNECT_TIMEOUT)
         .timeout(config.callback_timeout())

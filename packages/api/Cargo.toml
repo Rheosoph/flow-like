@@ -83,6 +83,7 @@ time = { version = "0.3.47", features = ["parsing"], optional = true }
 
 # ----- GCP dependencies ----
 rsa = { version = "0.9", optional = true }
+flow-like-gcp-data = { workspace = true, optional = true }
 # -----
 
 # ----- Cognito dependencies ----
@@ -128,7 +129,12 @@ azure = [
     "dep:time",
     "dep:tokio",
 ]
-gcp = ["rsa", "urlencoding"]
+# GCP provider surface: RS256 assertion signing for the service-account-key path
+# and the metadata-server/STS token exchange behind every scoped credential. Data
+# planes (`firestore`, `pubsub`) stay separate so a deployment that only needs GCS
+# scoped credentials never compiles a state store it does not use — the same split
+# `azure` keeps from `cosmos`/`storage-queue`.
+gcp = ["rsa", "urlencoding", "dep:tokio"]
 r2 = []  # Cloudflare R2 with proprietary temp credentials API
 cognito = ["aws-sdk-cognitoidentityprovider", "aws-config"]
 ses = ["aws-sdk-sesv2", "aws-config"]
@@ -142,10 +148,14 @@ sqs = ["aws-config", "aws-sdk-sqs"]
 # Azure Queue Storage dispatch. The `Put Message` REST call is issued directly
 # with `reqwest`, so only the Entra credential surface is pulled in.
 storage-queue = ["dep:azure_core", "dep:azure_identity"]
+# Pub/Sub dispatch. The `Publish` REST call is issued directly with `reqwest`
+# against a metadata-server token, so no Google SDK is pulled in.
+pubsub = ["dep:tokio"]
 # State store backends
 redis = ["dep:redis", "dep:tokio"]
 dynamodb = ["aws-config", "aws-sdk-dynamodb", "dep:tokio"]  # Uses FlowLikeStore (object_store) for large payloads
 cosmos = ["dep:flow-like-azure-data", "dep:tokio"]
+firestore = ["dep:flow-like-gcp-data", "dep:tokio"]
 s3 = ["aws-config", "aws-sdk-s3"]
 sentry = ["dep:sentry"]
 full=[
@@ -161,7 +171,9 @@ full=[
     "redis",
     "dynamodb",
     "cosmos",
+    "firestore",
     "storage-queue",
+    "pubsub",
     "s3",
     "sentry",
 ]

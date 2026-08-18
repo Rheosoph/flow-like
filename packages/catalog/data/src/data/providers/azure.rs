@@ -54,16 +54,43 @@ pub struct AzureProvider {
 }
 
 impl AzureProvider {
+    /// Return `true` when this provider resolves credentials from the host
+    /// (IMDS managed identity, AKS federated token, cached `az login`) rather
+    /// than from values carried in the struct.
+    ///
+    /// A `connection_string` without an `AccountKey` counts too: the builder is
+    /// left credential-less and object_store falls back to IMDS.
+    pub fn relies_on_env_chain(&self) -> bool {
+        match self.auth_mode.as_str() {
+            AZ_MANAGED_IDENTITY | AZ_WORKLOAD_IDENTITY | AZ_AZURE_CLI => true,
+            AZ_CONNECTION_STRING => self
+                .connection_string
+                .as_deref()
+                .is_none_or(|cs| parse_connection_string(cs).1.is_none()),
+            _ => false,
+        }
+    }
+
     /// Apply this provider's credentials to a `MicrosoftAzureBuilder`.
     ///
     /// The caller supplies the builder with `account` + `container` already set
     /// (those are consumer-level concerns). This helper only wires auth.
+    ///
+    /// Host-resolved modes are refused when running server-side — see
+    /// [`ExecutionEnvironment::ensure_no_ambient_credentials`](flow_like::flow::execution::ExecutionEnvironment::ensure_no_ambient_credentials).
     pub fn apply_to_azure_builder(
         &self,
+        context: &ExecutionContext,
         builder: flow_like_storage::object_store::azure::MicrosoftAzureBuilder,
     ) -> flow_like_types::Result<flow_like_storage::object_store::azure::MicrosoftAzureBuilder>
     {
         use flow_like_storage::object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
+
+        if self.relies_on_env_chain() {
+            context
+                .execution_environment()
+                .ensure_no_ambient_credentials("AzureProvider", &self.auth_mode)?;
+        }
 
         let mut b: MicrosoftAzureBuilder = builder;
         if let Some(acc) = &self.account {
@@ -278,6 +305,15 @@ impl NodeLogic for AzureProviderNode {
                 auth_mode,
                 AZ_AUTH_MODES
             ));
+        }
+
+        if matches!(
+            auth_mode.as_str(),
+            AZ_MANAGED_IDENTITY | AZ_WORKLOAD_IDENTITY | AZ_AZURE_CLI
+        ) {
+            context
+                .execution_environment()
+                .ensure_no_ambient_credentials("AzureProvider", &auth_mode)?;
         }
 
         let account = context

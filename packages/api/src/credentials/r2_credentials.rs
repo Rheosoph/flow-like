@@ -169,8 +169,12 @@ impl R2RuntimeCredentials {
         let db_prefix = format!("{}storage/db/", apps_prefix);
         let user_prefix = format!("users/{}/apps/{}/", sub, app_id);
         let log_prefix = format!("runs/{}/", app_id);
-        let temporary_user_prefix = format!("tmp/user/{}/apps/{}/", sub, app_id);
-        let temporary_global_prefix = format!("tmp/global/apps/{}/", app_id);
+        // Same segments the `/tmp` presign route and the HTTP-sink offload
+        // write; R2 prefixes carry a trailing slash where the others do not.
+        let (temporary_user_prefix, temporary_global_prefix) =
+            crate::credentials::temporary_prefixes(sub, app_id);
+        let temporary_user_prefix = format!("{temporary_user_prefix}/");
+        let temporary_global_prefix = format!("{temporary_global_prefix}/");
         let app_content_path_prefix = format!("apps/{}", app_id);
         let user_content_path_prefix_value = format!("users/{}/apps/{}", sub, app_id);
         let (content_path_prefix, user_content_path_prefix) = scoped_content_path_prefixes(
@@ -293,8 +297,12 @@ impl R2RuntimeCredentials {
 
         let apps_prefix = format!("apps/{}/", app_id);
         let user_prefix = format!("users/{}/apps/{}/", sub, app_id);
-        let temporary_user_prefix = format!("tmp/user/{}/apps/{}/", sub, app_id);
-        let temporary_global_prefix = format!("tmp/global/apps/{}/", app_id);
+        // Same segments the `/tmp` presign route and the HTTP-sink offload
+        // write; R2 prefixes carry a trailing slash where the others do not.
+        let (temporary_user_prefix, temporary_global_prefix) =
+            crate::credentials::temporary_prefixes(sub, app_id);
+        let temporary_user_prefix = format!("{temporary_user_prefix}/");
+        let temporary_global_prefix = format!("{temporary_global_prefix}/");
         let app_content_path_prefix = format!("apps/{}", app_id);
         let user_content_path_prefix = format!("users/{}/apps/{}", sub, app_id);
 

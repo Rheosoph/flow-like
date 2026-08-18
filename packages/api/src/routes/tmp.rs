@@ -167,19 +167,5 @@ fn sanitize_ext(input: Option<&str>) -> Option<String> {
 }
 
 fn sanitize_path_segment(input: &str, fallback: &str) -> String {
-    let mut s = String::with_capacity(input.len().min(80));
-    for ch in input.chars().take(80) {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
-            s.push(ch);
-        } else {
-            s.push('_');
-        }
-    }
-
-    let s = s.trim_matches(|ch| ch == '.' || ch == '_');
-    if s.is_empty() {
-        fallback.to_string()
-    } else {
-        s.to_string()
-    }
+    crate::credentials::storage_path_segment(input, fallback)
 }

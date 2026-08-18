@@ -166,8 +166,12 @@ impl AwsRuntimeCredentials {
         let db_prefix = format!("{}/storage/db", apps_prefix);
         let user_prefix = format!("users/{}/apps/{}", sub, app_id);
         let runs_prefix = format!("runs/{}", app_id);
-        let temporary_user_prefix = format!("tmp/user/{}/apps/{}", sub, app_id);
-        let temporary_global_prefix = format!("tmp/global/apps/{}", app_id);
+        // The writers (`/tmp` presign, HTTP-sink offload) run both segments
+        // through `storage_path_segment`, so the prefixes this credential
+        // authorises have to as well — a raw `sink:abc` here would name a
+        // directory nothing ever writes to.
+        let (temporary_user_prefix, temporary_global_prefix) =
+            crate::credentials::temporary_prefixes(sub, app_id);
         let (content_path_prefix, user_content_path_prefix) =
             scoped_content_path_prefixes(&apps_prefix, &user_prefix, &mode);
 
@@ -203,13 +207,12 @@ impl AwsRuntimeCredentials {
             CredentialsAccess::EditUser => edit_user_policy(self, &user_prefix),
             CredentialsAccess::ReadUser => read_user_policy(self, &user_prefix),
             CredentialsAccess::InvokeNone => {
-                invoke_none_policy(self, &user_prefix, &runs_prefix, &temporary_user_prefix)
+                invoke_none_policy(self, &user_prefix, &temporary_user_prefix)
             }
             CredentialsAccess::InvokeRead => invoke_read_policy(
                 self,
                 &apps_prefix,
                 &user_prefix,
-                &runs_prefix,
                 &temporary_user_prefix,
                 &temporary_global_prefix,
             ),
@@ -217,7 +220,6 @@ impl AwsRuntimeCredentials {
                 self,
                 &apps_prefix,
                 &user_prefix,
-                &runs_prefix,
                 &temporary_user_prefix,
                 &temporary_global_prefix,
             ),
@@ -448,11 +450,14 @@ fn make_s3_builder(
     }
 }
 
+/// Run logs (`runs/{app_id}`) are written only by the server executor
+/// (`ServerExecute`) and read only through the API (`ReadLogs`); the desktop
+/// keeps its own local log store. None of the client-facing invoke policies
+/// therefore names that prefix.
 fn invoke_read_write_policy(
     credentials: &AwsRuntimeCredentials,
     apps_prefix: &str,
     user_prefix: &str,
-    runs_prefix: &str,
     temporary_user_prefix: &str,
     temporary_global_prefix: &str,
 ) -> flow_like_types::Value {
@@ -472,7 +477,6 @@ fn invoke_read_write_policy(
                     "s3:prefix": [
                         format!("{}/*", apps_prefix),
                         format!("{}/*", user_prefix),
-                        format!("{}/*", runs_prefix),
                         format!("{}/*", temporary_user_prefix),
                         format!("{}/*", temporary_global_prefix)
                     ]
@@ -489,7 +493,6 @@ fn invoke_read_write_policy(
             "Resource": [
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, apps_prefix),
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, user_prefix),
-                format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, runs_prefix),
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_user_prefix),
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_global_prefix),
             ],
@@ -560,12 +563,16 @@ fn server_execute_policy(
                 }
             }
           },
+          // Run logs are append-only: the executor creates and appends Lance
+          // tables (fresh data files, `.txn` files, conditional-put manifests)
+          // and never deletes; Lance's auto-cleanup is best-effort and logs on
+          // denial. Without DeleteObject a compromised run cannot erase or
+          // rewrite another run's audit trail.
           {
             "Effect": "Allow",
             "Action": [
                 "s3:GetObject",
-                "s3:PutObject",
-                "s3:DeleteObject"
+                "s3:PutObject"
             ],
             "Resource": [
                 format!("arn:aws:s3:::{}/{}/*", credentials.logs_bucket, runs_prefix),
@@ -604,7 +611,16 @@ fn server_execute_policy(
             ],
             "Resource": [
                 "*"
-            ]
+            ],
+            // On a directory bucket the session token — not per-object IAM —
+            // authorizes every zonal request, and object_store asks for the
+            // maximum privilege. Pin the session to ReadOnly so this mode
+            // cannot write to the meta bucket.
+            "Condition": {
+                "StringEquals": {
+                    "s3express:SessionMode": "ReadOnly"
+                }
+            }
           }
         ],
     })
@@ -614,7 +630,6 @@ fn invoke_read_policy(
     credentials: &AwsRuntimeCredentials,
     apps_prefix: &str,
     user_prefix: &str,
-    runs_prefix: &str,
     temporary_user_prefix: &str,
     temporary_global_prefix: &str,
 ) -> flow_like_types::Value {
@@ -634,7 +649,6 @@ fn invoke_read_policy(
                     "s3:prefix": [
                         format!("{}/*", apps_prefix),
                         format!("{}/*", user_prefix),
-                        format!("{}/*", runs_prefix),
                         format!("{}/*", temporary_user_prefix),
                         format!("{}/*", temporary_global_prefix)
                     ]
@@ -648,7 +662,6 @@ fn invoke_read_policy(
             ],
             "Resource": [
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, apps_prefix),
-                format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, runs_prefix),
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_global_prefix),
             ],
           },
@@ -673,7 +686,6 @@ fn invoke_read_policy(
 fn invoke_none_policy(
     credentials: &AwsRuntimeCredentials,
     user_prefix: &str,
-    runs_prefix: &str,
     temporary_user_prefix: &str,
 ) -> flow_like_types::Value {
     let policy = json!({
@@ -706,16 +718,6 @@ fn invoke_none_policy(
             "Resource": [
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, user_prefix),
                 format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, temporary_user_prefix),
-            ],
-          },
-          {
-            "Effect": "Allow",
-            "Action": [
-                "s3:GetObject",
-                "s3:PutObject",
-            ],
-            "Resource": [
-                format!("arn:aws:s3:::{}/{}/*", credentials.content_bucket, runs_prefix),
             ],
           }
         ],
@@ -913,7 +915,16 @@ fn read_app_policy(
             ],
             "Resource": [
                 "*"
-            ]
+            ],
+            // On a directory bucket the session token — not per-object IAM —
+            // authorizes every zonal request, and object_store asks for the
+            // maximum privilege. Pin the session to ReadOnly so this mode
+            // cannot write to the meta bucket.
+            "Condition": {
+                "StringEquals": {
+                    "s3express:SessionMode": "ReadOnly"
+                }
+            }
           }
         ],
     });
@@ -1144,6 +1155,31 @@ mod tests {
         }
     }
 
+    /// The regression this file carried: the policies interpolated the raw
+    /// `sub` while every writer ran it through `storage_path_segment`, so a
+    /// `sink:…` subject — which is what `trigger_http` uses whenever no PAT
+    /// user resolves — produced a policy for a directory nothing writes to.
+    #[test]
+    fn test_aws_temporary_prefixes_match_what_the_writers_build() {
+        let (temporary_user_prefix, _) =
+            crate::credentials::temporary_prefixes("sink:abc", "app-1");
+        let policy = to_string(&invoke_none_policy(
+            &test_aws_runtime_credentials(),
+            "users/sink:abc/apps/app-1",
+            &temporary_user_prefix,
+        ))
+        .expect("policy should serialize");
+
+        assert!(
+            policy.contains(&format!("content-data/{temporary_user_prefix}/*")),
+            "policy must name the prefix the writers use: {policy}"
+        );
+        assert!(
+            !policy.contains("tmp/user/sink:abc"),
+            "the raw subject must never reach a scratch prefix: {policy}"
+        );
+    }
+
     #[test]
     fn test_aws_invoke_policies_do_not_grant_meta_access() {
         let creds = test_aws_runtime_credentials();
@@ -1156,7 +1192,7 @@ mod tests {
         let policies = [
             (
                 "InvokeNone",
-                invoke_none_policy(&creds, user_prefix, runs_prefix, temporary_user_prefix),
+                invoke_none_policy(&creds, user_prefix, temporary_user_prefix),
             ),
             (
                 "InvokeRead",
@@ -1164,7 +1200,6 @@ mod tests {
                     &creds,
                     apps_prefix,
                     user_prefix,
-                    runs_prefix,
                     temporary_user_prefix,
                     temporary_global_prefix,
                 ),
@@ -1175,7 +1210,6 @@ mod tests {
                     &creds,
                     apps_prefix,
                     user_prefix,
-                    runs_prefix,
                     temporary_user_prefix,
                     temporary_global_prefix,
                 ),
@@ -1192,6 +1226,10 @@ mod tests {
                 !policy.contains("s3express:CreateSession"),
                 "{mode} should not need S3 Express sessions without meta access"
             );
+            assert!(
+                !policy.contains(runs_prefix),
+                "{mode} must not reach the app's run logs; only ServerExecute writes and ReadLogs reads them"
+            );
         }
     }
 
@@ -1201,7 +1239,6 @@ mod tests {
         let policy = invoke_none_policy(
             &creds,
             "users/user-1/apps/app-1",
-            "runs/app-1",
             "tmp/user/user-1/apps/app-1",
         );
         let policy = to_string(&policy).expect("policy should serialize");
@@ -1212,7 +1249,7 @@ mod tests {
         );
         assert!(policy.contains("content-data/users/user-1/apps/app-1/*"));
         assert!(policy.contains("content-data/tmp/user/user-1/apps/app-1/*"));
-        assert!(policy.contains("content-data/runs/app-1/*"));
+        assert!(!policy.contains("content-data/runs/app-1/*"));
     }
 
     #[test]
@@ -1256,6 +1293,16 @@ mod tests {
         assert!(policy.contains("\"s3:GetObject\""));
         assert!(policy.contains("content-data/apps/app-1/*"));
         assert!(policy.contains("logs/runs/app-1/*"));
+        let logs_actions = statements
+            .iter()
+            .find(|statement| statement["Resource"].to_string().contains("logs/runs"))
+            .expect("server execute should include run-log object access")["Action"]
+            .to_string();
+        assert!(logs_actions.contains("PutObject"));
+        assert!(
+            !logs_actions.contains("DeleteObject"),
+            "ServerExecute run logs are append-only"
+        );
         assert!(
             !meta_actions.contains("PutObject"),
             "ServerExecute must not grant meta writes"
@@ -1263,6 +1310,48 @@ mod tests {
         assert!(
             !meta_actions.contains("DeleteObject"),
             "ServerExecute must not grant meta deletes"
+        );
+    }
+
+    /// On a directory (S3 Express) bucket, per-object IAM statements are not
+    /// evaluated — the CreateSession mode is the only thing that separates
+    /// read from write. Read-only modes must therefore pin the session mode.
+    #[test]
+    fn test_aws_read_only_meta_modes_pin_readonly_express_session() {
+        let creds = test_aws_runtime_credentials();
+        let apps_prefix = "apps/app-1";
+
+        let create_session_mode = |policy: flow_like_types::Value| -> Option<String> {
+            policy["Statement"]
+                .as_array()
+                .expect("statements")
+                .iter()
+                .find(|s| s["Action"].to_string().contains("s3express:CreateSession"))
+                .map(|s| s["Condition"]["StringEquals"]["s3express:SessionMode"].to_string())
+        };
+
+        assert_eq!(
+            create_session_mode(read_app_policy(&creds, apps_prefix)).as_deref(),
+            Some("\"ReadOnly\""),
+            "ReadApp must only obtain ReadOnly express sessions"
+        );
+        assert_eq!(
+            create_session_mode(server_execute_policy(
+                &creds,
+                apps_prefix,
+                "users/user-1/apps/app-1",
+                "runs/app-1",
+                "tmp/user/user-1/apps/app-1",
+                "tmp/global/apps/app-1",
+            ))
+            .as_deref(),
+            Some("\"ReadOnly\""),
+            "ServerExecute only reads the meta bucket and must not obtain a ReadWrite session"
+        );
+        assert_eq!(
+            create_session_mode(edit_app_policy(&creds, apps_prefix)).as_deref(),
+            Some("null"),
+            "EditApp legitimately writes the meta bucket"
         );
     }
 

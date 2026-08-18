@@ -21,6 +21,10 @@ pub struct AzureSharedCredentials {
     /// SAS token for logs container
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logs_sas_token: Option<String>,
+    /// SAS token for the caller's temporary scratch directory
+    /// (`tmp/user/{sub}/apps/{app_id}`) on the content container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmp_sas_token: Option<String>,
     pub meta_container: String,
     pub content_container: String,
     pub logs_container: String,
@@ -56,6 +60,10 @@ impl std::fmt::Debug for AzureSharedCredentials {
                 "logs_sas_token",
                 &self.logs_sas_token.as_ref().map(|_| "[REDACTED]"),
             )
+            .field(
+                "tmp_sas_token",
+                &self.tmp_sas_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("meta_container", &self.meta_container)
             .field("content_container", &self.content_container)
             .field("logs_container", &self.logs_container)
@@ -70,6 +78,72 @@ impl std::fmt::Debug for AzureSharedCredentials {
 }
 
 impl AzureSharedCredentials {
+    /// Whether this credential set came from `scoped_credentials` rather than from
+    /// server configuration.
+    ///
+    /// Master credentials carry no SAS and no expiry: they are meant to run as the
+    /// ambient identity. A scoped credential set is the opposite — the tokens it
+    /// carries are the *only* thing enforcing the prefix isolation, so a store it
+    /// cannot authorize must fail rather than quietly borrow the workload identity.
+    fn is_scoped(&self) -> bool {
+        self.expiration.is_some()
+            || self.content_path_prefix.is_some()
+            || self.user_content_path_prefix.is_some()
+            || self.meta_sas_token.is_some()
+            || self.content_sas_token.is_some()
+            || self.user_content_sas_token.is_some()
+            || self.logs_sas_token.is_some()
+            || self.tmp_sas_token.is_some()
+    }
+
+    /// The container and SAS that authorize `store_type`.
+    ///
+    /// `Content` falls back to the user-scoped token because the user-only scopes
+    /// (`ReadUser`, `EditUser`, `InvokeNone`) mint nothing else: without this the
+    /// content store for those modes has no token at all.
+    fn store_credentials(&self, store_type: StoreType) -> (&String, Option<&String>) {
+        match store_type {
+            StoreType::Meta => (&self.meta_container, self.meta_sas_token.as_ref()),
+            StoreType::Content => (
+                &self.content_container,
+                self.content_sas_token
+                    .as_ref()
+                    .or(self.user_content_sas_token.as_ref()),
+            ),
+            StoreType::Logs => (&self.logs_container, self.logs_sas_token.as_ref()),
+            StoreType::Tmp => (
+                &self.content_container,
+                self.tmp_sas_token
+                    .as_ref()
+                    .or(self.content_sas_token.as_ref()),
+            ),
+        }
+    }
+
+    /// The SAS that authorises a LanceDB path, or an error when a scoped
+    /// credential carries none.
+    ///
+    /// `make_azure_builder` drops a blank token, and a `MicrosoftAzureBuilder`
+    /// with no credential configured falls through to
+    /// `ImdsManagedIdentityProvider` — the workload's own managed identity,
+    /// which carries no prefix restriction at all. Under master credentials
+    /// that is the intended identity; under a scoped credential it would trade
+    /// the isolation the token exists to enforce for availability, silently, so
+    /// it fails closed here exactly as `to_store_type` does.
+    fn lance_sas_or_ambient(&self, token: Option<&String>, what: &str) -> Result<String> {
+        match token
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            Some(token) => Ok(token.to_string()),
+            None if self.is_scoped() => Err(anyhow!(
+                "scoped Azure credentials carry no SAS for {what} - refusing to fall back to the \
+                 ambient storage identity, which enforces no prefix restriction"
+            )),
+            None => Ok(String::new()),
+        }
+    }
+
     fn parse_sas_token(sas: &str) -> Vec<(String, String)> {
         let sas = sas.trim_start_matches('?');
         sas.split('&')
@@ -107,11 +181,7 @@ impl SharedCredentialsTrait for AzureSharedCredentials {
     async fn to_store_type(&self, store_type: StoreType) -> Result<FlowLikeStore> {
         use flow_like_types::tokio;
 
-        let (container, sas_token) = match store_type {
-            StoreType::Meta => (&self.meta_container, &self.meta_sas_token),
-            StoreType::Content => (&self.content_container, &self.content_sas_token),
-            StoreType::Logs => (&self.logs_container, &self.logs_sas_token),
-        };
+        let (container, sas_token) = self.store_credentials(store_type);
 
         let account = self.account_name.clone();
         let container = container.clone();
@@ -119,7 +189,19 @@ impl SharedCredentialsTrait for AzureSharedCredentials {
             .account_key
             .clone()
             .filter(|value| !value.trim().is_empty());
-        let sas_token = sas_token.clone().filter(|value| !value.trim().is_empty());
+        let sas_token = sas_token.cloned().filter(|value| !value.trim().is_empty());
+
+        // A scoped credential set that cannot authorize this store must fail here.
+        // Falling through to `from_env` below would build the store from the
+        // workload's own managed identity, which carries no prefix restriction at
+        // all — turning a deliberately withheld scope into full container access.
+        if account_key.is_none() && sas_token.is_none() && self.is_scoped() {
+            return Err(anyhow!(
+                "scoped Azure credentials carry no SAS for the {:?} store - refusing to fall back \
+                 to the ambient storage identity, which enforces no prefix restriction",
+                store_type
+            ));
+        }
 
         let store = tokio::task::spawn_blocking(move || {
             // `from_env` is required for Azure Container Apps/App Service managed
@@ -156,7 +238,8 @@ impl SharedCredentialsTrait for AzureSharedCredentials {
             .content_path_prefix
             .clone()
             .unwrap_or_else(|| format!("apps/{}", app_id));
-        let sas_token = self.content_sas_token.clone().unwrap_or_default();
+        let sas_token =
+            self.lance_sas_or_ambient(self.content_sas_token.as_ref(), "the app database")?;
 
         let path = db_path_from_base(&base_path);
         let connection = make_azure_builder(
@@ -175,11 +258,12 @@ impl SharedCredentialsTrait for AzureSharedCredentials {
     )]
     async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
         let base_path = format!("users/{}/apps/{}", sub, app_id);
-        let sas_token = self
-            .user_content_sas_token
-            .clone()
-            .or_else(|| self.content_sas_token.clone())
-            .unwrap_or_default();
+        let sas_token = self.lance_sas_or_ambient(
+            self.user_content_sas_token
+                .as_ref()
+                .or(self.content_sas_token.as_ref()),
+            "the user database",
+        )?;
 
         let path = db_path_from_base(&base_path);
         let connection = make_azure_builder(
@@ -197,7 +281,8 @@ impl SharedCredentialsTrait for AzureSharedCredentials {
                 "logs_container is empty - cannot create logs database builder"
             ));
         }
-        let sas_token = self.logs_sas_token.clone().unwrap_or_default();
+        let sas_token =
+            self.lance_sas_or_ambient(self.logs_sas_token.as_ref(), "the logs database")?;
         let builder = make_azure_builder(
             self.account_name.clone(),
             self.logs_container.clone(),
@@ -238,6 +323,7 @@ mod tests {
             content_sas_token: Some("?sv=2022-11-02&ss=b&srt=sco&sp=rwdlacyx&se=2025-01-15T20:00:00Z&st=2025-01-15T12:00:00Z&spr=https&sig=content456".to_string()),
             user_content_sas_token: None,
             logs_sas_token: Some("?sv=2022-11-02&ss=b&srt=sco&sp=rl&se=2025-01-15T20:00:00Z&st=2025-01-15T12:00:00Z&spr=https&sig=logs789".to_string()),
+            tmp_sas_token: None,
             meta_container: "meta-container".to_string(),
             content_container: "content-container".to_string(),
             logs_container: "logs-container".to_string(),
@@ -351,5 +437,120 @@ mod tests {
     fn test_parse_sas_token_empty() {
         let pairs = AzureSharedCredentials::parse_sas_token("");
         assert!(pairs.is_empty());
+    }
+
+    /// A `ReadUser` / `EditUser` / `InvokeNone` credential set: the user-scoped SAS
+    /// is the only token minted.
+    fn user_scoped_credentials() -> AzureSharedCredentials {
+        AzureSharedCredentials {
+            meta_sas_token: None,
+            content_sas_token: None,
+            user_content_sas_token: Some("sv=2022-11-02&sr=d&sp=rwdl&sig=user".to_string()),
+            logs_sas_token: None,
+            tmp_sas_token: None,
+            meta_container: "meta".to_string(),
+            content_container: "content".to_string(),
+            logs_container: "logs".to_string(),
+            account_name: "storage".to_string(),
+            account_key: None,
+            expiration: Some(chrono::Utc::now()),
+            content_path_prefix: None,
+            user_content_path_prefix: Some("users/test-user/apps/test-app".to_string()),
+        }
+    }
+
+    fn master_credentials() -> AzureSharedCredentials {
+        AzureSharedCredentials {
+            meta_sas_token: None,
+            content_sas_token: None,
+            user_content_sas_token: None,
+            logs_sas_token: None,
+            tmp_sas_token: None,
+            meta_container: "meta".to_string(),
+            content_container: "content".to_string(),
+            logs_container: "logs".to_string(),
+            account_name: "storage".to_string(),
+            account_key: None,
+            expiration: None,
+            content_path_prefix: None,
+            user_content_path_prefix: None,
+        }
+    }
+
+    #[test]
+    fn test_scoped_and_master_credentials_are_distinguishable() {
+        assert!(user_scoped_credentials().is_scoped());
+        assert!(!master_credentials().is_scoped());
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn test_scoped_credentials_never_fall_back_to_ambient_identity() {
+        let creds = user_scoped_credentials();
+
+        for store_type in [StoreType::Meta, StoreType::Logs] {
+            let error = creds
+                .to_store_type(store_type)
+                .await
+                .expect_err("a scoped credential with no SAS for this store must not build one");
+            assert!(
+                error.to_string().contains("refusing to fall back"),
+                "unexpected error for {store_type:?}: {error}"
+            );
+        }
+    }
+
+    /// The store path was hardened first; the three LanceDB paths kept the old
+    /// `unwrap_or_default()` shape, and `make_azure_builder` drops a blank token
+    /// so `MicrosoftAzureBuilder` resolved the workload's managed identity —
+    /// unrestricted across the whole container.
+    #[flow_like_types::tokio::test]
+    async fn test_scoped_credentials_never_build_a_database_on_the_ambient_identity() {
+        let creds = user_scoped_credentials();
+
+        // No content SAS at all: the app database is out of scope.
+        let error = creds
+            .to_db("test-app")
+            .await
+            .expect_err("a scoped credential with no app SAS must not build an app database");
+        assert!(
+            error.to_string().contains("refusing to fall back"),
+            "{error}"
+        );
+
+        // No logs SAS: every client invoke mode is in this shape now.
+        // `LogsDbBuilder` is a boxed closure, so this cannot use `expect_err`.
+        let Err(error) = creds.to_logs_db_builder() else {
+            panic!("a scoped credential with no logs SAS must not build a logs database");
+        };
+        assert!(
+            error.to_string().contains("refusing to fall back"),
+            "{error}"
+        );
+
+        // The user database is the one scope this credential does carry.
+        creds
+            .to_db_scoped("test-user", "test-app")
+            .await
+            .expect("the user database is signed by the user SAS");
+    }
+
+    /// Master credentials have no SAS by design and must keep resolving the
+    /// workload identity, which is the whole point of that mode.
+    #[flow_like_types::tokio::test]
+    async fn test_master_credentials_still_build_databases_without_a_sas() {
+        let creds = master_credentials();
+        assert!(creds.to_db("test-app").await.is_ok());
+        assert!(creds.to_db_scoped("test-user", "test-app").await.is_ok());
+        assert!(creds.to_logs_db_builder().is_ok());
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn test_content_store_uses_the_user_token_when_it_is_the_only_scope() {
+        // Without this fallback the content store for the user-only modes has no
+        // token at all, which is what made it reach for the ambient identity.
+        user_scoped_credentials()
+            .to_store_type(StoreType::Content)
+            .await
+            .expect("user-scoped content store should be built from the user SAS");
     }
 }

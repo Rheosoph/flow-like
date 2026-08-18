@@ -64,11 +64,21 @@ impl AwsProvider {
     ///
     /// Callers set `bucket` on the returned builder themselves so the helper
     /// stays bucket-agnostic.
+    ///
+    /// Every mode except `access_key` is refused when running server-side —
+    /// see [`ExecutionEnvironment::ensure_no_ambient_credentials`](flow_like::flow::execution::ExecutionEnvironment::ensure_no_ambient_credentials).
     pub fn apply_to_s3_builder(
         &self,
+        context: &ExecutionContext,
         builder: flow_like_storage::object_store::aws::AmazonS3Builder,
-    ) -> flow_like_storage::object_store::aws::AmazonS3Builder {
+    ) -> flow_like_types::Result<flow_like_storage::object_store::aws::AmazonS3Builder> {
         use flow_like_storage::object_store::aws::AmazonS3Builder;
+
+        if self.relies_on_env_chain() {
+            context
+                .execution_environment()
+                .ensure_no_ambient_credentials("AwsProvider", &self.auth_mode)?;
+        }
 
         let mut b: AmazonS3Builder = if self.auth_mode.as_str() == AWS_ACCESS_KEY {
             let mut with_keys = builder;
@@ -97,13 +107,20 @@ impl AwsProvider {
                 .with_endpoint(endpoint)
                 .with_allow_http(endpoint.starts_with("http://"));
         }
-        b
+        Ok(b)
     }
 
     /// Return `true` when this provider can't fully configure object_store
     /// directly and relies on process-level env vars / config files.
+    ///
+    /// `access_key` mode counts too when either key is missing: object_store
+    /// then walks its own chain (web identity, container credentials, IMDS).
     pub fn relies_on_env_chain(&self) -> bool {
-        !matches!(self.auth_mode.as_str(), AWS_ACCESS_KEY)
+        if self.auth_mode.as_str() != AWS_ACCESS_KEY {
+            return true;
+        }
+        let missing = |v: &Option<String>| v.as_deref().is_none_or(|s| s.trim().is_empty());
+        missing(&self.access_key_id) || missing(&self.secret_access_key)
     }
 }
 
@@ -200,6 +217,12 @@ impl NodeLogic for AwsProviderNode {
                 auth_mode,
                 AWS_AUTH_MODES
             ));
+        }
+
+        if auth_mode.as_str() != AWS_ACCESS_KEY {
+            context
+                .execution_environment()
+                .ensure_no_ambient_credentials("AwsProvider", &auth_mode)?;
         }
 
         let region: String = context

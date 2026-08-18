@@ -2336,6 +2336,7 @@ impl NodeLogic for GenerateVideoNode {
             LogLevel::Info,
         );
 
+        crate::ensure_vertex_credentials_explicit(context, &provider)?;
         let videos = generate_video_with_provider(&provider, &request).await?;
         let total = videos.len();
         let mut paths = Vec::with_capacity(total);

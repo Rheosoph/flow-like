@@ -130,6 +130,12 @@ impl NodeLogic for BuildVertexNode {
         let access_token = context.evaluate_pin::<String>("access_token").await?;
         let model_id = context.evaluate_pin::<String>("model_id").await?;
 
+        if service_account_json.trim().is_empty() && access_token.trim().is_empty() {
+            context
+                .execution_environment()
+                .ensure_no_ambient_credentials("custom:vertex", "application_default")?;
+        }
+
         let mut params = HashMap::new();
 
         if !project_id.is_empty() {

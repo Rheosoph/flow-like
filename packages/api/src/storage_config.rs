@@ -161,13 +161,24 @@ impl GcpConfig {
         Ok(GcpConfig {
             project_id: std::env::var("GCP_PROJECT_ID")
                 .map_err(|_| flow_like_types::anyhow!("GCP_PROJECT_ID not set"))?,
-            credentials_json: std::env::var("GOOGLE_APPLICATION_CREDENTIALS_JSON").ok(),
+            // Set-but-empty collapses to `None`, matching
+            // `credentials::gcp_credentials`. Left as `Some("")` it reached
+            // `with_service_account_key("")` below, which object_store rejects as
+            // a malformed key — so an optional Terraform variable rendering to an
+            // empty env var broke every store on a deployment that has no key by
+            // design.
+            credentials_json: std::env::var("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+                .ok()
+                .filter(|key| !key.trim().is_empty()),
         })
     }
 
     pub fn build_store(&self, bucket: &str) -> Result<FlowLikeStore> {
         let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
 
+        // No key means Workload Identity: object_store resolves its own chain
+        // down to the metadata server. A blank key is never passed through — see
+        // `from_env`.
         if let Some(creds) = &self.credentials_json {
             builder = builder.with_service_account_key(creds);
         }

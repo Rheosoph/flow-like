@@ -8,7 +8,7 @@ use flow_like_types::async_trait;
 #[cfg(not(feature = "execute"))]
 use flow_like::flow::execution::context::ExecutionContext;
 #[cfg(feature = "execute")]
-use flow_like::flow::execution::{LogLevel, context::ExecutionContext};
+use flow_like::flow::execution::{LogLevel, context::ExecutionContext, egress};
 
 #[cfg(feature = "execute")]
 use flow_like_types::json::json;
@@ -105,11 +105,18 @@ impl NodeLogic for UdpSendToNode {
         let payload: String = context.evaluate_pin("payload").await?;
 
         let cached = super::get_udp_socket(context, &session.ref_id).await?;
-        let target_addr = format!("{}:{}", target_host, target_port);
+        let target_port = u16::try_from(target_port)
+            .map_err(|_| flow_like_types::anyhow!("Invalid UDP port {target_port}"))?;
+        let target_addrs = egress::resolve_socket_addrs(
+            context.execution_environment(),
+            &target_host,
+            target_port,
+        )
+        .await?;
 
         let bytes_sent = cached
             .socket
-            .send_to(payload.as_bytes(), &target_addr)
+            .send_to(payload.as_bytes(), target_addrs.as_slice())
             .await
             .map_err(|e| {
                 context.log_message(&format!("UDP send_to error: {}", e), LogLevel::Error);

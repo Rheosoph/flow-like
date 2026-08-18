@@ -1,0 +1,28 @@
+[package]
+name = "azure-executor"
+version = "0.1.0"
+edition = "2024"
+description = "Flow-Like Azure synchronous executor server"
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+# Same feature set as the Azure queue worker: server nodes with remote ML only.
+# `all-execute` + `local-ml` (the Kubernetes executor) would link ONNX Runtime
+# and the desktop automation nodes, which the Azure supply-chain posture
+# excludes.
+flow-like-catalog = { workspace = true, features = ["server-execute", "remote-ml", "remote"] }
+flow-like-executor = { workspace = true, features = ["all-server-execute"] }
+# Startup validates BACKEND_PUB with the exact decoder the executor uses per
+# request, so a bad key fails the revision instead of every run.
+jsonwebtoken.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+mimalloc.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
+tokio = { workspace = true, features = ["full", "signal"] }
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

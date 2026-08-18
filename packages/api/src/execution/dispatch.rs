@@ -8,7 +8,11 @@
 //! - **`ASYNC_EXECUTION_BACKEND`**: Used for `/invoke/async` endpoints
 //!
 //! Both support the same backend options, allowing different backends for
-//! realtime streaming vs background batch processing.
+//! realtime streaming vs background batch processing. Accepted values are
+//! `lambda_invoke`, `lambda_stream`, `kubernetes_job`, `sqs`, `azure_queue`,
+//! `pubsub`, `sqs_event_bridge`, `kafka` and `redis`; anything else — including
+//! an unset variable — selects `http`. `from_env_var` lists the aliases each
+//! value accepts.
 //!
 //! ## Supported Backends
 //!
@@ -23,6 +27,7 @@
 //! - **KubernetesJob**: Native K8s Job creation for isolated executions
 //! - **Sqs**: AWS SQS queue for batch processing with Lambda consumer
 //! - **AzureQueue**: Azure Queue Storage queue with managed-identity workers
+//! - **PubSub**: Google Cloud Pub/Sub topic with workload-identity subscribers
 //! - **SqsEventBridge**: SQS → EventBridge Pipe → ECS RunTask (payload staged to storage)
 //! - **Kafka**: Apache Kafka queue for high-throughput batch processing
 //! - **Redis**: Redis queue for Docker Compose / Kubernetes async dispatch
@@ -85,7 +90,7 @@
 //! | Multi-tenant SaaS | Lambda (strongest isolation) |
 //! | Low latency | HTTP → Warm Pool (K8s/Lambda) |
 //! | Untrusted code | KubernetesJob or Lambda |
-//! | Batch processing | SQS, Kafka, or Redis (decoupled, retry built-in) |
+//! | Batch processing | SQS, Pub/Sub, Kafka, or Redis (decoupled, retry built-in) |
 //! | Long-running batch | SqsEventBridge (ECS with no timeout limits) |
 //! | High-throughput batch | Kafka (millions/sec, partitioned) |
 //! | Streaming response | HTTP or LambdaStream |
@@ -133,6 +138,9 @@ pub enum ExecutionBackend {
     Sqs,
     /// Azure Queue Storage queue for batch processing (managed identity only)
     AzureQueue,
+    /// Google Cloud Pub/Sub topic for batch processing (metadata-server
+    /// workload identity only; no service account key is ever accepted)
+    PubSub,
     /// Apache Kafka for high-throughput batch processing
     Kafka,
     /// Redis queue for Docker Compose / Kubernetes async dispatch
@@ -163,6 +171,10 @@ impl ExecutionBackend {
             "kubernetes_job" | "k8s_job" | "isolated" => Self::KubernetesJob,
             "sqs" | "aws_sqs" => Self::Sqs,
             "azure_queue" | "azure_storage_queue" | "queue_storage" => Self::AzureQueue,
+            // `pub_sub` is the snake_case form this enum serializes to, so a
+            // value round-tripped through a stored config resolves back to the
+            // same backend it was written from.
+            "pubsub" | "pub_sub" | "gcp_pubsub" => Self::PubSub,
             "kafka" => Self::Kafka,
             "redis" | "redis_queue" => Self::Redis,
             "sqs_event_bridge" | "sqs_ecs" | "ecs" => Self::SqsEventBridge,
@@ -177,7 +189,12 @@ impl ExecutionBackend {
     pub fn is_queue(&self) -> bool {
         matches!(
             self,
-            Self::Sqs | Self::AzureQueue | Self::SqsEventBridge | Self::Kafka | Self::Redis
+            Self::Sqs
+                | Self::AzureQueue
+                | Self::PubSub
+                | Self::SqsEventBridge
+                | Self::Kafka
+                | Self::Redis
         )
     }
 }
@@ -205,6 +222,11 @@ pub struct DispatchConfig {
     pub queue_account_name: Option<String>,
     /// Azure Queue Storage execution queue name
     pub queue_name: Option<String>,
+    /// Google Cloud project that owns the Pub/Sub topics (for PubSub backend)
+    pub pubsub_project: Option<String>,
+    /// Pub/Sub execution topic, either a bare topic ID or the fully qualified
+    /// `projects/<project>/topics/<topic>` resource name the deployment emits
+    pub pubsub_topic: Option<String>,
     /// SQS queue URL for EventBridge Pipe → ECS dispatch
     pub sqs_event_bridge_queue_url: Option<String>,
     /// Kafka bootstrap servers (comma-separated)
@@ -239,6 +261,16 @@ impl DispatchConfig {
             sqs_queue_url: std::env::var("SQS_EXECUTION_QUEUE_URL").ok(),
             queue_account_name: std::env::var("AZURE_QUEUE_STORAGE_ACCOUNT_NAME").ok(),
             queue_name: std::env::var("AZURE_QUEUE_EXECUTION").ok(),
+            // `GCP_PUBSUB_PROJECT` takes precedence so a deployment can keep its
+            // messaging plane in a project separate from the one the workload
+            // itself runs in; the standard deployment sets both to the same
+            // value. Whichever wins is checked against the topic resource name
+            // before publishing, so a half-migrated pair cannot silently send
+            // jobs into the wrong project's topic.
+            pubsub_project: std::env::var("GCP_PUBSUB_PROJECT")
+                .or_else(|_| std::env::var("GCP_PROJECT_ID"))
+                .ok(),
+            pubsub_topic: std::env::var("PUBSUB_EXECUTION_TOPIC").ok(),
             sqs_event_bridge_queue_url: std::env::var("SQS_EVENT_BRIDGE_EXECUTION_QUEUE_URL").ok(),
             kafka_brokers: std::env::var("KAFKA_BROKERS").ok(),
             kafka_topic: std::env::var("KAFKA_EXECUTION_TOPIC").ok(),
@@ -316,6 +348,8 @@ pub enum DispatchError {
     Sqs(String),
     #[error("Azure Queue Storage error: {0}")]
     AzureQueue(String),
+    #[error("Pub/Sub error: {0}")]
+    PubSub(String),
     #[error("Kafka error: {0}")]
     Kafka(String),
     #[error("Redis error: {0}")]
@@ -471,6 +505,7 @@ impl Dispatcher {
             ExecutionBackend::KubernetesJob => self.dispatch_k8s_job(&job_id, &request).await,
             ExecutionBackend::Sqs => self.dispatch_sqs(&job_id, &request).await,
             ExecutionBackend::AzureQueue => self.dispatch_azure_queue(&job_id, &request).await,
+            ExecutionBackend::PubSub => self.dispatch_pubsub(&job_id, &request).await,
             ExecutionBackend::SqsEventBridge => {
                 self.dispatch_sqs_event_bridge(&job_id, &request).await
             }
@@ -521,8 +556,8 @@ impl Dispatcher {
         let body = build_executor_payload(job_id, request);
 
         let client = reqwest::Client::new();
-        let response = client
-            .post(format!("{}/execute", url))
+        let response = attach_executor_iam_auth(client.post(format!("{}/execute", url)), url)
+            .await?
             .json(&body)
             .send()
             .await
@@ -559,8 +594,8 @@ impl Dispatcher {
         tracing::debug!(job_id = %job_id, "Dispatch payload built");
 
         let client = reqwest::Client::new();
-        let response = client
-            .post(format!("{}/execute/sse", url))
+        let response = attach_executor_iam_auth(client.post(format!("{}/execute/sse", url)), url)
+            .await?
             .json(&body)
             .send()
             .await
@@ -897,6 +932,111 @@ impl Dispatcher {
         ))
     }
 
+    /// Dispatch via Google Cloud Pub/Sub using only the metadata-server identity
+    /// bound to the running revision. Pub/Sub mints its own `messageId` and
+    /// offers no publisher-side deduplication, so the job ID travels inside the
+    /// message envelope, exactly as it does on Queue Storage.
+    ///
+    /// Payloads at or above `CLAIM_CHECK_THRESHOLD_BYTES` are staged to Cloud
+    /// Storage and sent as a compact `DispatchPayloadRef::Remote` reference;
+    /// smaller payloads keep the direct single-hop inline path.
+    #[cfg(feature = "pubsub")]
+    async fn dispatch_pubsub(
+        &self,
+        job_id: &str,
+        request: &DispatchRequest,
+    ) -> Result<DispatchResponse, DispatchError> {
+        use self::pubsub::WORKLOAD_EXECUTION;
+
+        let project_id = self.config.pubsub_project.as_deref().ok_or_else(|| {
+            DispatchError::Configuration(
+                "GCP_PROJECT_ID (or GCP_PUBSUB_PROJECT) not configured".into(),
+            )
+        })?;
+        let topic = self.config.pubsub_topic.as_deref().ok_or_else(|| {
+            DispatchError::Configuration("PUBSUB_EXECUTION_TOPIC not configured".into())
+        })?;
+
+        let body = build_executor_payload(job_id, request);
+        let payload_bytes =
+            serde_json::to_vec(&body).map_err(|e| DispatchError::Serialization(e.to_string()))?;
+
+        if pubsub::requires_claim_check(
+            payload_bytes.len(),
+            job_id,
+            &request.app_id,
+            WORKLOAD_EXECUTION,
+        ) {
+            let staging = self.staging_bucket.as_ref().ok_or_else(|| {
+                DispatchError::Configuration(
+                    "Staging bucket not configured for PubSub backend".into(),
+                )
+            })?;
+
+            let staging_path = StorePath::from(format!("tmp/execution/{}.json", job_id));
+            staging
+                .put(&staging_path, payload_bytes)
+                .await
+                .map_err(|e| DispatchError::PubSub(format!("Failed to stage payload: {}", e)))?;
+
+            // Sized to cover the subscription's retention window — see
+            // `CLAIM_CHECK_URL_TTL` for the seven-day ceiling GCS puts on that
+            // and the retention invariant the deployment has to hold up.
+            let presigned_url = staging
+                .sign("GET", &staging_path, pubsub::CLAIM_CHECK_URL_TTL)
+                .await
+                .map_err(|e| DispatchError::PubSub(format!("Failed to sign staging URL: {}", e)))?;
+
+            let reference = flow_like_types::dispatch::DispatchPayloadRef::Remote {
+                remote_url: presigned_url.to_string(),
+            };
+            pubsub::send_json(
+                project_id,
+                topic,
+                job_id,
+                &request.app_id,
+                WORKLOAD_EXECUTION,
+                &reference,
+            )
+            .await
+            .map_err(DispatchError::PubSub)?;
+
+            tracing::info!(
+                job_id = %job_id,
+                staging_path = %staging_path,
+                "Dispatched execution via Pub/Sub (staged to Cloud Storage)"
+            );
+        } else {
+            pubsub::send_json(
+                project_id,
+                topic,
+                job_id,
+                &request.app_id,
+                WORKLOAD_EXECUTION,
+                &body,
+            )
+            .await
+            .map_err(DispatchError::PubSub)?;
+        }
+
+        Ok(DispatchResponse {
+            job_id: job_id.to_string(),
+            status: "queued".into(),
+            backend: "pubsub".into(),
+        })
+    }
+
+    #[cfg(not(feature = "pubsub"))]
+    async fn dispatch_pubsub(
+        &self,
+        _job_id: &str,
+        _request: &DispatchRequest,
+    ) -> Result<DispatchResponse, DispatchError> {
+        Err(DispatchError::Configuration(
+            "Pub/Sub dispatch requires the 'pubsub' feature".into(),
+        ))
+    }
+
     #[cfg(not(feature = "sqs"))]
     async fn dispatch_sqs(
         &self,
@@ -1145,6 +1285,71 @@ fn build_executor_payload(job_id: &str, request: &DispatchRequest) -> serde_json
     serde_json::to_value(&payload).expect("Failed to serialize DispatchPayload")
 }
 
+/// Environment switch for the credential a synchronous executor request must
+/// carry in front of the application payload. The only recognized value today
+/// is `gcp_id_token`; anything else — including unset — means the executor is
+/// reached without a transport-layer credential of its own.
+const EXECUTOR_AUTH_VAR: &str = "EXECUTOR_AUTH";
+const EXECUTOR_AUTH_GCP_ID_TOKEN: &str = "gcp_id_token";
+
+/// Whether `EXECUTOR_AUTH` demands a Google ID token on every synchronous
+/// executor request. Whitespace and case are tolerated so a value that passed
+/// through Terraform templating or a shell export cannot silently disable the
+/// IAM credential and turn every dispatch into a front-door 403.
+fn executor_auth_requires_gcp_id_token(executor_auth: Option<&str>) -> bool {
+    executor_auth
+        .map(str::trim)
+        .is_some_and(|value| value.eq_ignore_ascii_case(EXECUTOR_AUTH_GCP_ID_TOKEN))
+}
+
+/// Attach the credential Cloud Run's IAM front door demands before a
+/// synchronous executor request is sent.
+///
+/// On GCP the executor service admits only this API's service account as
+/// `roles/run.invoker`, and Cloud Run authenticates the caller from a
+/// Google-signed ID token whose audience is the service URL — a control that
+/// is independent of ingress restrictions and of the backend JWT inside the
+/// payload. That JWT stays untouched: it authenticates the job to the executor
+/// application, this header authenticates the request to Cloud Run's IAM
+/// layer.
+///
+/// A metadata-server failure is an error, never a silent skip: a dispatch
+/// without the header would only travel on to a guaranteed 403 at the
+/// executor's front door, reported as an opaque network failure instead of the
+/// missing credential.
+#[cfg(feature = "pubsub")]
+async fn attach_executor_iam_auth(
+    builder: reqwest::RequestBuilder,
+    executor_url: &str,
+) -> Result<reqwest::RequestBuilder, DispatchError> {
+    if !executor_auth_requires_gcp_id_token(std::env::var(EXECUTOR_AUTH_VAR).ok().as_deref()) {
+        return Ok(builder);
+    }
+
+    let audience = gcp_id_token::audience_from_executor_url(executor_url)
+        .map_err(DispatchError::Configuration)?;
+    let token = gcp_id_token::fetch_id_token(&audience)
+        .await
+        .map_err(DispatchError::Network)?;
+    Ok(builder.bearer_auth(token))
+}
+
+/// Without the GCP dispatch surface compiled in there is no metadata-server
+/// client to mint the token, so a deployment demanding one is refused outright
+/// rather than dispatched into a certain 403.
+#[cfg(not(feature = "pubsub"))]
+async fn attach_executor_iam_auth(
+    builder: reqwest::RequestBuilder,
+    _executor_url: &str,
+) -> Result<reqwest::RequestBuilder, DispatchError> {
+    if executor_auth_requires_gcp_id_token(std::env::var(EXECUTOR_AUTH_VAR).ok().as_deref()) {
+        return Err(DispatchError::Configuration(
+            "EXECUTOR_AUTH=gcp_id_token requires the 'pubsub' feature".into(),
+        ));
+    }
+    Ok(builder)
+}
+
 /// Wrap executor payload in API Gateway v2 HTTP event format.
 /// This is required when invoking Lambda functions that use `lambda_http`
 /// (which expects API Gateway / Function URL event structure) via direct
@@ -1199,6 +1404,1024 @@ fn wrap_as_apigw_v2_event(path: &str, body: serde_json::Value) -> serde_json::Va
     request.is_base64_encoded = true;
 
     serde_json::to_value(&request).expect("Failed to serialize API Gateway event")
+}
+
+/// Passwordless Google Cloud Pub/Sub publishing for queue-backed workloads.
+///
+/// This module intentionally supports only the workload identity the metadata
+/// server hands out. Service account key JSON, `gcloud` cached tokens, emulator
+/// hosts and API endpoint overrides are all refused on the production API path:
+/// the only thing that authenticates a publish is an OAuth2 token minted for
+/// the service account bound to the running revision, and IAM on the topic —
+/// `roles/pubsub.publisher`, granted on the execution topic alone — is what
+/// bounds what that token can do, not the OAuth scope it carries.
+///
+/// Pub/Sub's only Rust client is a generated SDK this crate does not otherwise
+/// link, so the single `projects.topics.publish` call is issued directly
+/// against the documented REST contract, in the same style as the `Put Message`
+/// call in `crate::storage_queue`.
+#[cfg(feature = "pubsub")]
+pub(crate) mod pubsub {
+    use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
+    use serde::{Deserialize, Serialize};
+    use std::sync::OnceLock;
+    use std::time::Duration;
+
+    /// Publish endpoint. Deliberately a constant with no environment override:
+    /// a deployment behind VPC Service Controls reaches Pub/Sub by resolving
+    /// this hostname to the `restricted.googleapis.com` VIP through a private
+    /// DNS zone, so the redirection already happens below this code. An
+    /// override could therefore only ever serve to point a live service-account
+    /// token at a host Google does not operate.
+    const PUBSUB_ENDPOINT: &str = "https://pubsub.googleapis.com";
+
+    /// Hard ceiling on the pre-base64 message body. Pub/Sub caps a publish
+    /// request at 10 MB and the REST transport carries `data` base64-encoded
+    /// inside a JSON document, which expands 3:4, so 7_500_000 bytes is the
+    /// largest body that can still be published over this API. Exceeding it is
+    /// a caller bug: anything at or above [`CLAIM_CHECK_THRESHOLD_BYTES`] must
+    /// already have been staged to Cloud Storage and replaced by a claim-check
+    /// reference.
+    const MAX_MESSAGE_DATA_BYTES: usize = 10_000_000 * 3 / 4;
+    /// Envelopes at or above this size are written to Cloud Storage and
+    /// replaced by a claim-check reference instead of being inlined.
+    ///
+    /// Unlike the Azure threshold this is *not* derived from the wire limit —
+    /// 7.5 MB is two orders of magnitude above any real payload. It is derived
+    /// from retention fan-out: a published message is held by the subscription
+    /// for its whole retention window, copied to the dead-letter topic once the
+    /// delivery attempts are exhausted, and copied a third time by the sink
+    /// that gives the dead-letter topic an evidence window longer than Pub/Sub
+    /// can hold on its own. An inlined body is therefore stored several times
+    /// over, for days, in places with no lifecycle rule of their own. 256 KiB
+    /// sits roughly an order of magnitude above the measured 8-40 KiB execution
+    /// envelope, so every ordinary dispatch keeps the single-hop inline path
+    /// and only genuine outliers pay for the staging round trip.
+    pub(crate) const CLAIM_CHECK_THRESHOLD_BYTES: usize = 256 * 1024;
+    /// Lifetime of the signed URL a claim-check message points at.
+    ///
+    /// Seven days is the **maximum** a GCS V4 signature accepts, not a chosen
+    /// margin, and it is the one place this path is tighter than the queue it
+    /// mirrors: on Queue Storage the signature outlives the message TTL by six
+    /// hours, here it can at best equal the broker's own ceiling. The
+    /// deployment must therefore keep the execution subscription's
+    /// `message_retention_duration` below seven days. If it does not, a message
+    /// first delivered at the very end of its retention window points at an
+    /// expired URL — which fails closed, because the fetch is refused and the
+    /// worker dead-letters the job rather than executing a truncated payload.
+    pub(crate) const CLAIM_CHECK_URL_TTL: Duration = Duration::from_secs(7 * 86_400);
+
+    /// Envelope version understood by the queue worker. Pub/Sub mints its own
+    /// `messageId` and its attributes are an unauthenticated side channel, so
+    /// the job identity the worker checks the resolved payload against has to
+    /// travel inside the body.
+    const ENVELOPE_VERSION: u8 = 1;
+
+    pub(crate) const WORKLOAD_EXECUTION: &str = "execution";
+    pub(crate) const WORKLOAD_COMPILATION: &str = "compilation";
+    /// Fed by Cloud Storage notifications in the deployment; the API never
+    /// publishes into these topics today, but the worker accepts the names and
+    /// a future re-enqueue path must not be rejected here.
+    pub(crate) const WORKLOAD_FILE_TRACKING: &str = "file-tracking";
+    pub(crate) const WORKLOAD_MEDIA_TRANSFORMATION: &str = "media-transformation";
+    const SUPPORTED_WORKLOADS: [&str; 4] = [
+        WORKLOAD_EXECUTION,
+        WORKLOAD_COMPILATION,
+        WORKLOAD_FILE_TRACKING,
+        WORKLOAD_MEDIA_TRANSFORMATION,
+    ];
+
+    /// Metadata-server endpoint that mints an OAuth2 token for the service
+    /// account bound to the running Cloud Run revision, GCE instance or GKE pod.
+    const METADATA_TOKEN_PATH: &str = "/computeMetadata/v1/instance/service-accounts/default/token";
+    const DEFAULT_METADATA_HOST: &str = "metadata.google.internal";
+    const DEFAULT_METADATA_IP: &str = "169.254.169.254";
+    const METADATA_FLAVOR_HEADER: &str = "Metadata-Flavor";
+    const METADATA_FLAVOR_VALUE: &str = "Google";
+    /// Narrow on purpose. Cloud Run hands out a `cloud-platform` token by
+    /// default, which would open Secret Manager, GCS and Cloud SQL to anything
+    /// that got hold of a copy; this token's only consumer is the Pub/Sub
+    /// publish, so the publish scope alone is all it ever needs.
+    const PUBSUB_SCOPE: &str = "https://www.googleapis.com/auth/pubsub";
+    /// The narrowing request, and the fallback that keeps dispatch alive if the
+    /// platform refuses it. `?scopes=` alone is silently ignored — the metadata
+    /// server honours it only alongside `enforce_scopes=true` — and requesting
+    /// non-default scopes is in turn reported not to work under GKE Workload
+    /// Identity, so a rejected narrow request retries unnarrowed against the same
+    /// authority instead of costing the dispatch.
+    const NARROWED_TOKEN_QUERY: &[(&str, &str)] =
+        &[("scopes", PUBSUB_SCOPE), ("enforce_scopes", "true")];
+    const UNNARROWED_TOKEN_QUERY: &[(&str, &str)] = &[];
+    /// A cached token is only reused while this much life remains. A publish
+    /// that starts just before expiry and is rejected mid-flight leaves the
+    /// worst of both states behind: the payload has already been staged to
+    /// Cloud Storage but no message references it, so the object is an orphan
+    /// and the run never starts. Five minutes is far more than a publish needs
+    /// and costs nothing.
+    const METADATA_TOKEN_MIN_LIFETIME_SECONDS: i64 = 5 * 60;
+    /// Ceiling on cache residency. Metadata tokens live ~1h and the metadata
+    /// server refreshes its own copy near the end of that window; re-asking
+    /// every ten minutes keeps this process close to a full-lifetime token
+    /// without turning every dispatch into a metadata round trip.
+    const METADATA_TOKEN_CACHE_TTL_SECONDS: u64 = 10 * 60;
+    pub(super) const METADATA_CONNECT_TIMEOUT_SECONDS: u64 = 3;
+    pub(super) const METADATA_REQUEST_TIMEOUT_SECONDS: u64 = 10;
+
+    const MAX_ERROR_BODY_BYTES: usize = 2_048;
+    /// Settings that would move this publish off the metadata identity or off
+    /// Google's own endpoint.
+    ///
+    /// `PUBSUB_EMULATOR_HOST` cannot redirect this module — the endpoint above
+    /// is a constant — but its presence means something else in the same
+    /// environment is pointed at an emulator. The API would then publish to the
+    /// real topic while a worker read from a local one, and every dispatched
+    /// job would silently disappear. Refusing the dispatch is the only way that
+    /// misconfiguration ever surfaces. The rest are keys and pre-minted tokens:
+    /// accepting them would let an operator quietly downgrade a keyless
+    /// deployment to a long-lived credential without the deployment noticing.
+    const FORBIDDEN_CREDENTIAL_SETTINGS: &[&str] = &[
+        "PUBSUB_EMULATOR_HOST",
+        "CLOUDSDK_API_ENDPOINT_OVERRIDES_PUBSUB",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_APPLICATION_CREDENTIALS_JSON",
+        "GOOGLE_CREDENTIALS",
+        "CLOUDSDK_AUTH_ACCESS_TOKEN",
+        "GOOGLE_OAUTH_ACCESS_TOKEN",
+    ];
+
+    static PUBSUB_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    static METADATA_TOKENS: OnceLock<moka::sync::Cache<String, CachedMetadataToken>> =
+        OnceLock::new();
+
+    #[derive(Clone)]
+    struct CachedMetadataToken {
+        token: String,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    }
+
+    /// Body of every message this API publishes to a work topic.
+    ///
+    /// `payload` is byte-for-byte what the broker body used to be: the untagged
+    /// inline job object or the `{"remote_url": …}` claim-check reference. The
+    /// shape is identical to the Queue Storage envelope on purpose — one worker
+    /// parser serves both clouds.
+    #[derive(Serialize)]
+    struct MessageEnvelope<'a, T: Serialize> {
+        v: u8,
+        job_id: &'a str,
+        correlation_id: &'a str,
+        workload: &'a str,
+        payload: &'a T,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PublishResponse {
+        #[serde(default)]
+        message_ids: Vec<String>,
+    }
+
+    /// Byte cost of wrapping a payload in [`MessageEnvelope`], excluding the
+    /// payload itself. `serde_json` emits the payload verbatim inside the
+    /// envelope, so adding this to the serialized payload length is exact.
+    fn envelope_overhead_bytes(job_id: &str, correlation_id: &str, workload: &str) -> usize {
+        serde_json::to_vec(&MessageEnvelope {
+            v: ENVELOPE_VERSION,
+            job_id,
+            correlation_id,
+            workload,
+            payload: &(),
+        })
+        .map(|bytes| bytes.len().saturating_sub("null".len()))
+        .unwrap_or(0)
+    }
+
+    /// Whether a payload of `payload_bytes` must be staged to Cloud Storage
+    /// instead of being inlined. The threshold applies to the enveloped
+    /// message, not to the bare payload, because the envelope is what the
+    /// broker retains.
+    pub(crate) fn requires_claim_check(
+        payload_bytes: usize,
+        job_id: &str,
+        correlation_id: &str,
+        workload: &str,
+    ) -> bool {
+        payload_bytes.saturating_add(envelope_overhead_bytes(job_id, correlation_id, workload))
+            >= CLAIM_CHECK_THRESHOLD_BYTES
+    }
+
+    pub(crate) async fn send_json<T: Serialize>(
+        project_id: &str,
+        topic: &str,
+        job_id: &str,
+        correlation_id: &str,
+        workload: &str,
+        payload: &T,
+    ) -> Result<(), String> {
+        reject_secret_credentials()?;
+        let topic_resource = resolve_topic_resource(project_id, topic)?;
+        validate_workload(workload)?;
+        validate_identifier("job ID", job_id)?;
+        validate_identifier("correlation ID", correlation_id)?;
+
+        let body = serde_json::to_vec(&MessageEnvelope {
+            v: ENVELOPE_VERSION,
+            job_id,
+            correlation_id,
+            workload,
+            payload,
+        })
+        .map_err(|error| format!("failed to serialize Pub/Sub message: {error}"))?;
+        if body.len() > MAX_MESSAGE_DATA_BYTES {
+            return Err(format!(
+                "Pub/Sub message is {} bytes, above the {MAX_MESSAGE_DATA_BYTES} byte ceiling; bodies of {CLAIM_CHECK_THRESHOLD_BYTES} bytes or more should have been staged to Cloud Storage and sent as a claim-check reference",
+                body.len()
+            ));
+        }
+
+        let request_body = serde_json::json!({
+            "messages": [{
+                // `data` is proto3 `bytes` and the proto3 JSON mapping encodes
+                // bytes as base64. This is the wire format rather than a
+                // defensive choice, and it is why the size budget above is
+                // computed against a 3:4 expansion of the request limit.
+                "data": BASE64_STANDARD.encode(&body),
+                // Attributes mirror the envelope's routing fields so a
+                // subscription filter can route without decoding the body.
+                // Filters are fixed when the subscription is created and can
+                // only read attributes, so a message published without them
+                // could never be matched by a filter added later. The body
+                // stays authoritative: attributes are an unauthenticated side
+                // channel capped at 1 KiB per value and are not part of the
+                // versioned contract the worker validates.
+                "attributes": {
+                    "v": ENVELOPE_VERSION.to_string(),
+                    "job_id": job_id,
+                    "correlation_id": correlation_id,
+                    "workload": workload
+                }
+                // No `orderingKey`. The SQS arm sets a message group per app
+                // because FIFO queues demand one; the work topics are created
+                // with message ordering disabled precisely so executions fan
+                // out across workers. A key on an unordered topic buys nothing
+                // today and would queue every execution of one app behind its
+                // predecessor the moment ordering were switched on.
+            }]
+        });
+
+        let token = fetch_metadata_token().await?;
+
+        let response = pubsub_http_client()?
+            .post(format!("{PUBSUB_ENDPOINT}/v1/{topic_resource}:publish"))
+            .bearer_auth(&token)
+            .json(&request_body)
+            .send()
+            .await
+            .map_err(|error| format!("failed to publish Pub/Sub message: {error}"))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.bytes().await.unwrap_or_default();
+            let body = String::from_utf8_lossy(&body[..body.len().min(MAX_ERROR_BODY_BYTES)]);
+            return Err(format!(
+                "Pub/Sub rejected the publish to {topic_resource} with HTTP {status}: {body}"
+            ));
+        }
+
+        // A success status carrying no message ID means the broker accepted the
+        // request but persisted nothing. Reporting that as queued would hand
+        // the caller a job ID no subscriber will ever see, and the run would
+        // sit in `Running` until it aged out instead of failing at dispatch.
+        let published: PublishResponse = response
+            .json()
+            .await
+            .map_err(|error| format!("invalid Pub/Sub publish response: {error}"))?;
+        if published.message_ids.is_empty() {
+            return Err(format!(
+                "Pub/Sub accepted the publish to {topic_resource} without returning a message ID"
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn pubsub_http_client() -> Result<&'static reqwest::Client, String> {
+        if let Some(client) = PUBSUB_HTTP_CLIENT.get() {
+            return Ok(client);
+        }
+        // `no_proxy` is load-bearing, not tidiness: this request carries a live
+        // token for the workload's service account, and an ambient HTTPS_PROXY
+        // would route it through a third party — one trusted enough to
+        // terminate TLS would read the token outright. GCP deployments reach
+        // the Google APIs over Private Google Access, never an egress proxy, so
+        // no legitimate configuration is closed off here.
+        let client = reqwest::Client::builder()
+            .https_only(true)
+            .no_proxy()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(30))
+            .pool_idle_timeout(Duration::from_secs(90))
+            .user_agent(concat!("flow-like/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|error| format!("failed to construct Pub/Sub client: {error}"))?;
+        let _ = PUBSUB_HTTP_CLIENT.set(client);
+        PUBSUB_HTTP_CLIENT
+            .get()
+            .ok_or_else(|| "failed to initialize Pub/Sub client".to_string())
+    }
+
+    /// Metadata authorities to try, in order: hostname first, link-local IP
+    /// second.
+    ///
+    /// Mirrors object_store's `InstanceCredentialProvider` — including the
+    /// `GCE_METADATA_*` overrides — so the token this module publishes with and
+    /// the token object_store signs staging URLs with come from the same
+    /// server. A deployment that redirected one and not the other would quietly
+    /// run on two different identities, and the claim-check URL would be signed
+    /// by a principal the topic grant knows nothing about. The IP fallback
+    /// exists because metadata access must survive a pod with no working DNS;
+    /// the hostname is unresolvable long before the address is unreachable.
+    pub(super) fn metadata_authorities() -> [String; 2] {
+        let non_empty = |value: String| {
+            let value = value.trim().to_string();
+            (!value.is_empty()).then_some(value)
+        };
+
+        let host = std::env::var("GCE_METADATA_HOST")
+            .or_else(|_| std::env::var("GCE_METADATA_ROOT"))
+            .ok()
+            .and_then(non_empty)
+            .unwrap_or_else(|| DEFAULT_METADATA_HOST.to_string());
+        let ip = std::env::var("GCE_METADATA_IP")
+            .ok()
+            .and_then(non_empty)
+            .unwrap_or_else(|| DEFAULT_METADATA_IP.to_string());
+
+        [host, ip]
+    }
+
+    /// Fetch an OAuth2 access token for the workload's own service account from
+    /// the GCE/Cloud Run metadata server.
+    ///
+    /// The token is requested narrowed to the Pub/Sub scope, falling back to the
+    /// platform default when the metadata server refuses to downscope — see
+    /// `NARROWED_TOKEN_QUERY`. Narrowing is a second line of defence only: the
+    /// restriction that always holds is IAM, where the API's service account
+    /// holds `roles/pubsub.publisher` on the work topics and nothing else, which
+    /// the broker enforces server-side on every publish.
+    ///
+    /// This duplicates the token source in `credentials::gcp_credentials`
+    /// deliberately. `pubsub` is a transport feature and must compile without
+    /// `gcp`, which is the scoped-credential surface; sharing the helper would
+    /// couple a deployment that only publishes jobs to the RS256 assertion
+    /// signing and STS downscoping it never performs. The two caches are
+    /// independent, so a process running both pays at most one extra metadata
+    /// round trip every ten minutes.
+    async fn fetch_metadata_token() -> Result<String, String> {
+        let [host, ip] = metadata_authorities();
+
+        let cache = METADATA_TOKENS.get_or_init(|| {
+            moka::sync::Cache::builder()
+                .max_capacity(4)
+                .time_to_live(Duration::from_secs(METADATA_TOKEN_CACHE_TTL_SECONDS))
+                .build()
+        });
+
+        // The moka TTL is a ceiling, not the truth — the metadata server decides
+        // the real lifetime. Re-checking the advertised expiry keeps a
+        // nearly-dead token out of a publish. A freshly fetched short token is
+        // still used: the metadata server refreshes on its own schedule and
+        // rejecting one here would turn a narrow window into a hard outage.
+        if let Some(cached) = cache.get(&host)
+            && cached.expires_at - chrono::Utc::now()
+                > chrono::Duration::seconds(METADATA_TOKEN_MIN_LIFETIME_SECONDS)
+        {
+            return Ok(cached.token);
+        }
+
+        // `no_proxy` again, for the same reason as the publish client, plus one
+        // more: the metadata server is link-local and unroutable, so there is
+        // never a legitimate proxy for it. HTTPS is likewise absent by design —
+        // the endpoint is plain HTTP on an address only the hypervisor can
+        // answer for, which is why `https_only` is not set here as it is above.
+        //
+        // Redirects are refused because the only correct responder for this
+        // request is the link-local address itself: a 3xx pointing elsewhere is
+        // either a misconfiguration or an attempt to hand this process a token
+        // from a server it does not trust.
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(METADATA_CONNECT_TIMEOUT_SECONDS))
+            .timeout(Duration::from_secs(METADATA_REQUEST_TIMEOUT_SECONDS))
+            .build()
+            .map_err(|error| format!("failed to construct GCP metadata client: {error}"))?;
+
+        #[derive(Deserialize)]
+        struct MetadataTokenResponse {
+            access_token: String,
+            expires_in: i64,
+        }
+
+        let mut last_error: Option<String> = None;
+        for authority in [host.as_str(), ip.as_str()] {
+            for query in [NARROWED_TOKEN_QUERY, UNNARROWED_TOKEN_QUERY] {
+                let narrowed = !query.is_empty();
+
+                // `Metadata-Flavor: Google` is the SSRF guard, not a formality:
+                // the metadata server rejects any request that omits it, so a
+                // confused proxy or a redirect-following client cannot be steered
+                // into reading the token on an attacker's behalf. The response
+                // echo is only logged, not required — see the check below.
+                let response = client
+                    .get(format!("http://{}{}", authority, METADATA_TOKEN_PATH))
+                    .header(METADATA_FLAVOR_HEADER, METADATA_FLAVOR_VALUE)
+                    .query(query)
+                    .send()
+                    .await;
+
+                let response = match response {
+                    Ok(response) => response,
+                    Err(error) => {
+                        last_error = Some(format!(
+                            "GCP metadata token request to {authority} failed: {error}"
+                        ));
+                        // The authority did not answer at all, so the fallback
+                        // query would fail identically. Try the next authority.
+                        break;
+                    }
+                };
+
+                let status = response.status();
+                let flavor_echoed = response
+                    .headers()
+                    .get(METADATA_FLAVOR_HEADER)
+                    .and_then(|value| value.to_str().ok())
+                    .is_some_and(|value| value.eq_ignore_ascii_case(METADATA_FLAVOR_VALUE));
+
+                if !status.is_success() {
+                    let body = response.text().await.unwrap_or_default();
+                    last_error = Some(format!(
+                        "GCP metadata server at {authority} returned HTTP {status}: {body}"
+                    ));
+                    if narrowed {
+                        tracing::warn!(
+                            authority,
+                            %status,
+                            "GCP metadata server rejected the scope-narrowed token request; retrying without scope enforcement"
+                        );
+                        continue;
+                    }
+                    break;
+                }
+
+                // Warned about, never enforced — see the matching note in
+                // `credentials::gcp_credentials`. Google documents this header as
+                // a request requirement only; `google-auth` checks it in `ping()`
+                // and not on token fetches, object_store never checks it, and GKE
+                // has been reported serving token responses without it.
+                if !flavor_echoed {
+                    tracing::warn!(
+                        authority,
+                        "GCP metadata token response omitted {METADATA_FLAVOR_HEADER}: {METADATA_FLAVOR_VALUE}"
+                    );
+                }
+
+                // A malformed body falls through to the next authority rather
+                // than aborting: the hostname answering with junk is exactly the
+                // broken-DNS case the link-local address exists to survive.
+                let token: MetadataTokenResponse = match response.json().await {
+                    Ok(token) => token,
+                    Err(error) => {
+                        last_error = Some(format!(
+                            "invalid GCP metadata token response from {authority}: {error}"
+                        ));
+                        break;
+                    }
+                };
+
+                // The metadata token response carries no `scope` field, so a
+                // platform that ignores the narrowing rather than rejecting it is
+                // indistinguishable from one that honoured it. This warning marks
+                // the case we can actually detect: the request we sent was wide.
+                if !narrowed {
+                    tracing::warn!(
+                        authority,
+                        "publishing with an unnarrowed GCP metadata token; it carries the runtime service account's full scope"
+                    );
+                }
+
+                // Clamped because `chrono::Duration::seconds` panics on an absurd
+                // input and this runs inside a request handler. Clamping low
+                // degrades to "never serve from cache", which is correct rather
+                // than merely safe.
+                let lifetime = chrono::Duration::seconds(token.expires_in.clamp(0, 24 * 60 * 60));
+                cache.insert(
+                    host.clone(),
+                    CachedMetadataToken {
+                        token: token.access_token.clone(),
+                        expires_at: chrono::Utc::now() + lifetime,
+                    },
+                );
+
+                return Ok(token.access_token);
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            format!(
+                "no GCP credentials available for Pub/Sub: the metadata server was unreachable at \
+                 {host} and {ip}. Bind a runtime service account with roles/pubsub.publisher to \
+                 the Cloud Run revision."
+            )
+        }))
+    }
+
+    fn reject_secret_credentials() -> Result<(), String> {
+        for variable in FORBIDDEN_CREDENTIAL_SETTINGS {
+            if std::env::var(variable)
+                .ok()
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                return Err(format!(
+                    "{variable} is forbidden for Pub/Sub; use the runtime service account bound to the workload"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve the configured topic into the `projects/<p>/topics/<t>` resource
+    /// name the publish URL is built from.
+    ///
+    /// The deployment emits the fully qualified form, but a bare topic ID is
+    /// accepted so a hand-assembled environment does not have to repeat the
+    /// project. When the topic is qualified the project is compared rather than
+    /// ignored: a topic name left behind by another project would otherwise
+    /// publish jobs the local workers never subscribe to, and the run would sit
+    /// in `Running` until it aged out instead of failing at dispatch.
+    fn resolve_topic_resource(project_id: &str, topic: &str) -> Result<String, String> {
+        let project_id = project_id.trim();
+        let topic = topic.trim();
+
+        if let Some(rest) = topic.strip_prefix("projects/") {
+            let (topic_project, topic_id) = rest.split_once("/topics/").ok_or_else(|| {
+                format!(
+                    "Pub/Sub topic '{topic}' is not a projects/<project>/topics/<topic> resource name"
+                )
+            })?;
+            validate_project_id(topic_project)?;
+            validate_topic_id(topic_id)?;
+            if !project_id.is_empty() && project_id != topic_project {
+                return Err(format!(
+                    "Pub/Sub topic names project '{topic_project}' but the workload is configured for project '{project_id}'"
+                ));
+            }
+            return Ok(format!("projects/{topic_project}/topics/{topic_id}"));
+        }
+
+        validate_project_id(project_id)?;
+        validate_topic_id(topic)?;
+        Ok(format!("projects/{project_id}/topics/{topic}"))
+    }
+
+    fn validate_project_id(value: &str) -> Result<(), String> {
+        let bytes = value.as_bytes();
+        let valid = (6..=30).contains(&value.len())
+            && bytes.first().is_some_and(u8::is_ascii_lowercase)
+            && bytes
+                .last()
+                .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            && bytes
+                .iter()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-');
+        if !valid {
+            return Err(format!(
+                "GCP project ID '{value}' is invalid; expected 6-30 characters of [a-z0-9-] starting with a letter"
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_topic_id(value: &str) -> Result<(), String> {
+        // Pub/Sub also accepts `%` and `+` in a topic ID, and both change
+        // meaning inside a URL path segment — `%` opens an escape sequence, so
+        // the resource actually published to would differ from the one
+        // configured. The deployment never generates either, so they are
+        // rejected here instead of being percent-encoded on the way out.
+        let valid = (3..=255).contains(&value.len())
+            && value
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphabetic)
+            && value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~')
+            })
+            // `goog` is a reserved prefix Pub/Sub refuses to create, so a topic
+            // carrying it cannot be one this deployment owns.
+            && !value.to_ascii_lowercase().starts_with("goog");
+        if !valid {
+            return Err(format!("Pub/Sub topic ID '{value}' is invalid"));
+        }
+        Ok(())
+    }
+
+    fn validate_workload(value: &str) -> Result<(), String> {
+        if !SUPPORTED_WORKLOADS.contains(&value) {
+            return Err(format!("unsupported Pub/Sub workload '{value}'"));
+        }
+        Ok(())
+    }
+
+    fn validate_identifier(kind: &str, value: &str) -> Result<(), String> {
+        if value.is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
+            return Err(format!("Pub/Sub message {kind} is invalid"));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn bare_topic_ids_resolve_against_the_configured_project() {
+            assert_eq!(
+                resolve_topic_resource("flow-like-dev", "flow-like-execution").unwrap(),
+                "projects/flow-like-dev/topics/flow-like-execution"
+            );
+        }
+
+        #[test]
+        fn qualified_topic_names_are_accepted_unchanged() {
+            assert_eq!(
+                resolve_topic_resource(
+                    "flow-like-dev",
+                    "projects/flow-like-dev/topics/flow-like-execution"
+                )
+                .unwrap(),
+                "projects/flow-like-dev/topics/flow-like-execution"
+            );
+        }
+
+        #[test]
+        fn a_topic_from_another_project_is_refused_before_publishing() {
+            assert!(
+                resolve_topic_resource(
+                    "flow-like-dev",
+                    "projects/flow-like-prod/topics/flow-like-execution"
+                )
+                .is_err()
+            );
+        }
+
+        #[test]
+        fn topic_names_are_restricted_to_deployment_generated_names() {
+            assert!(validate_topic_id("flow-like-execution").is_ok());
+            assert!(validate_topic_id("execution_v2.retry~1").is_ok());
+            // Legal Pub/Sub names that are ambiguous inside a URL path.
+            assert!(validate_topic_id("exec%2Fution").is_err());
+            assert!(validate_topic_id("exec+ution").is_err());
+            // Reserved prefix, path separator, leading digit, too short.
+            assert!(validate_topic_id("goog-execution").is_err());
+            assert!(validate_topic_id("execution/jobs").is_err());
+            assert!(validate_topic_id("1execution").is_err());
+            assert!(validate_topic_id("ex").is_err());
+        }
+
+        #[test]
+        fn project_ids_follow_the_documented_google_shape() {
+            assert!(validate_project_id("flow-like-dev").is_ok());
+            assert!(validate_project_id("Flow-Like-Dev").is_err());
+            assert!(validate_project_id("flowlike-").is_err());
+            assert!(validate_project_id("1flowlike").is_err());
+            assert!(validate_project_id("flow").is_err());
+            assert!(validate_project_id("a".repeat(31).as_str()).is_err());
+        }
+
+        #[test]
+        fn workloads_are_restricted_to_the_deployed_worker_set() {
+            assert!(validate_workload(WORKLOAD_EXECUTION).is_ok());
+            assert!(validate_workload(WORKLOAD_COMPILATION).is_ok());
+            assert!(validate_workload(WORKLOAD_FILE_TRACKING).is_ok());
+            assert!(validate_workload(WORKLOAD_MEDIA_TRANSFORMATION).is_ok());
+            assert!(validate_workload("file-tracker").is_err());
+            assert!(validate_workload("").is_err());
+        }
+
+        #[test]
+        fn envelope_overhead_matches_the_serialized_envelope() {
+            let payload = serde_json::json!({ "remote_url": "https://example.invalid/object" });
+            let payload_bytes = serde_json::to_vec(&payload).expect("payload serializes");
+            let envelope = serde_json::to_vec(&MessageEnvelope {
+                v: ENVELOPE_VERSION,
+                job_id: "job-1",
+                correlation_id: "app-1",
+                workload: WORKLOAD_EXECUTION,
+                payload: &payload,
+            })
+            .expect("envelope serializes");
+
+            assert_eq!(
+                envelope.len(),
+                payload_bytes.len() + envelope_overhead_bytes("job-1", "app-1", WORKLOAD_EXECUTION)
+            );
+        }
+
+        #[test]
+        fn claim_check_triggers_far_below_the_hard_wire_limit() {
+            let overhead = envelope_overhead_bytes("job-1", "app-1", WORKLOAD_EXECUTION);
+            assert!(!requires_claim_check(
+                CLAIM_CHECK_THRESHOLD_BYTES - overhead - 1,
+                "job-1",
+                "app-1",
+                WORKLOAD_EXECUTION
+            ));
+            assert!(requires_claim_check(
+                CLAIM_CHECK_THRESHOLD_BYTES - overhead,
+                "job-1",
+                "app-1",
+                WORKLOAD_EXECUTION
+            ));
+            // Every inlined message still leaves room under the publish limit.
+            assert!(CLAIM_CHECK_THRESHOLD_BYTES < MAX_MESSAGE_DATA_BYTES);
+            assert_eq!(MAX_MESSAGE_DATA_BYTES, 10_000_000 * 3 / 4);
+        }
+
+        #[test]
+        fn claim_check_url_stays_within_the_gcs_signing_ceiling() {
+            // GCS refuses to mint a V4 signature valid for more than seven days,
+            // so a longer TTL would fail at signing time rather than at fetch.
+            assert!(CLAIM_CHECK_URL_TTL.as_secs() <= 7 * 86_400);
+        }
+    }
+}
+
+/// Google ID tokens for the executor's IAM front door on synchronous dispatch.
+///
+/// The executor Cloud Run service admits only the API's service account as
+/// `roles/run.invoker`, so Cloud Run's front-end rejects any request that does
+/// not carry a Google-signed ID token whose `aud` is the service URL. Like the
+/// `pubsub` publisher above, the only identity this module will present is the
+/// one the metadata server hands out for the running revision — there is no
+/// key file path and no endpoint override — which is also why it rides the
+/// same `pubsub` feature: that flag is the metadata-server dispatch surface of
+/// this file, not the Pub/Sub wire protocol.
+#[cfg(feature = "pubsub")]
+pub(crate) mod gcp_id_token {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE};
+    use std::sync::OnceLock;
+    use std::time::Duration;
+
+    use super::pubsub;
+
+    /// Metadata-server endpoint that mints an ID token for the service account
+    /// bound to the running revision, signed by Google for the audience passed
+    /// in the query string. `format=full` is requested so the token carries
+    /// the claims Cloud Run's front-end validates.
+    const METADATA_IDENTITY_PATH: &str =
+        "/computeMetadata/v1/instance/service-accounts/default/identity";
+
+    /// A cached token is only reused while this much life remains, for the
+    /// same reason the Pub/Sub token keeps a margin: a request authenticated
+    /// just before expiry can still be rejected mid-flight, and here that
+    /// surfaces as a spurious 401 on a dispatch that was authorized moments
+    /// earlier.
+    const ID_TOKEN_MIN_LIFETIME_SECONDS: i64 = 5 * 60;
+    /// Ceiling on cache residency. Google ID tokens live one hour; 45 minutes
+    /// keeps a token for most of that life while the min-lifetime check above,
+    /// driven by the `exp` the token actually advertises, remains the real
+    /// expiry authority.
+    const ID_TOKEN_CACHE_TTL_SECONDS: u64 = 45 * 60;
+
+    static ID_TOKENS: OnceLock<moka::sync::Cache<String, CachedIdToken>> = OnceLock::new();
+
+    #[derive(Clone)]
+    struct CachedIdToken {
+        token: String,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    }
+
+    /// Derive the token audience from the configured executor URL.
+    ///
+    /// Cloud Run validates `aud` against the service URL, which is always a
+    /// bare origin, so `EXECUTOR_URL` is used exactly as configured when it
+    /// carries no path — minus a lone trailing slash, which URL parsing would
+    /// report as a path the operator never meant — and is reduced to
+    /// `scheme://host[:port]` when it does (the deployment appends `/execute`
+    /// paths at request time, but a hand-assembled environment may have baked
+    /// one in).
+    pub(crate) fn audience_from_executor_url(executor_url: &str) -> Result<String, String> {
+        let trimmed = executor_url.trim();
+        let parsed = reqwest::Url::parse(trimmed)
+            .map_err(|error| format!("EXECUTOR_URL '{trimmed}' is not a valid URL: {error}"))?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(format!(
+                "EXECUTOR_URL '{trimmed}' must be an http(s) URL to derive an ID-token audience"
+            ));
+        }
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| format!("EXECUTOR_URL '{trimmed}' carries no host"))?;
+
+        if matches!(parsed.path(), "" | "/")
+            && parsed.query().is_none()
+            && parsed.fragment().is_none()
+        {
+            return Ok(trimmed.trim_end_matches('/').to_string());
+        }
+
+        // `Url::port()` is `None` for a scheme-default port, so the origin
+        // only names a port the operator wrote explicitly — exactly what a
+        // non-Cloud-Run executor behind IAM-style auth would have configured
+        // as its audience.
+        let mut audience = format!("{}://{}", parsed.scheme(), host);
+        if let Some(port) = parsed.port() {
+            audience.push_str(&format!(":{port}"));
+        }
+        Ok(audience)
+    }
+
+    /// Fetch a Google-signed ID token for `audience` from the metadata server,
+    /// serving from cache while the token's own `exp` leaves enough life.
+    ///
+    /// An unreachable metadata server is an error the caller must surface, not
+    /// a reason to dispatch without the header: the executor's front door
+    /// would refuse the request anyway, and the 403 it returns names neither
+    /// the missing token nor the reason it could not be minted.
+    pub(crate) async fn fetch_id_token(audience: &str) -> Result<String, String> {
+        let [host, ip] = pubsub::metadata_authorities();
+
+        let cache = ID_TOKENS.get_or_init(|| {
+            moka::sync::Cache::builder()
+                .max_capacity(4)
+                .time_to_live(Duration::from_secs(ID_TOKEN_CACHE_TTL_SECONDS))
+                .build()
+        });
+
+        if let Some(cached) = cache.get(audience)
+            && cached.expires_at - chrono::Utc::now()
+                > chrono::Duration::seconds(ID_TOKEN_MIN_LIFETIME_SECONDS)
+        {
+            return Ok(cached.token);
+        }
+
+        // `no_proxy` and plain HTTP for the same reasons the Pub/Sub token
+        // fetch gives: the metadata server is link-local, unroutable and
+        // answered only by the hypervisor.
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .connect_timeout(Duration::from_secs(
+                pubsub::METADATA_CONNECT_TIMEOUT_SECONDS,
+            ))
+            .timeout(Duration::from_secs(
+                pubsub::METADATA_REQUEST_TIMEOUT_SECONDS,
+            ))
+            .build()
+            .map_err(|error| format!("failed to construct GCP metadata client: {error}"))?;
+
+        let mut last_error: Option<String> = None;
+        for authority in [host.as_str(), ip.as_str()] {
+            let response = client
+                .get(format!("http://{authority}{METADATA_IDENTITY_PATH}"))
+                .query(&[("audience", audience), ("format", "full")])
+                .header("Metadata-Flavor", "Google")
+                .send()
+                .await;
+
+            let response = match response {
+                Ok(response) => response,
+                Err(error) => {
+                    last_error = Some(format!(
+                        "GCP metadata identity request to {authority} failed: {error}"
+                    ));
+                    continue;
+                }
+            };
+
+            let status = response.status();
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                last_error = Some(format!(
+                    "GCP metadata server at {authority} returned HTTP {status}: {body}"
+                ));
+                continue;
+            }
+
+            // The identity endpoint returns the JWT as a bare text body.
+            let token = response
+                .text()
+                .await
+                .map_err(|error| {
+                    format!("invalid GCP metadata identity response from {authority}: {error}")
+                })?
+                .trim()
+                .to_string();
+            if token.is_empty() {
+                last_error = Some(format!(
+                    "GCP metadata server at {authority} returned an empty ID token"
+                ));
+                continue;
+            }
+
+            // An unparseable `exp` degrades to "never serve from cache" — the
+            // token is still presented once, because Cloud Run is the party
+            // that verifies it, and refusing here would turn a decoding quirk
+            // into a dispatch outage.
+            let expires_at = decode_jwt_exp(&token).unwrap_or_else(chrono::Utc::now);
+            cache.insert(
+                audience.to_string(),
+                CachedIdToken {
+                    token: token.clone(),
+                    expires_at,
+                },
+            );
+
+            return Ok(token);
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            format!(
+                "no Google ID token available for the executor: the metadata server was \
+                 unreachable at {host} and {ip}. EXECUTOR_AUTH=gcp_id_token only works where a \
+                 runtime service account with roles/run.invoker on the executor service is bound \
+                 to the workload."
+            )
+        }))
+    }
+
+    /// Expiry claim of the minted token. Only `exp` is read and the signature
+    /// is deliberately not verified — this process is the token's client, not
+    /// its audience; Cloud Run performs the real validation.
+    fn decode_jwt_exp(jwt: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+        let payload = jwt.split('.').nth(1)?;
+        let bytes = BASE64_URL_SAFE.decode(payload).ok()?;
+        let claims: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        chrono::DateTime::from_timestamp(claims.get("exp")?.as_i64()?, 0)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn a_bare_service_url_is_used_exactly() {
+            assert_eq!(
+                audience_from_executor_url("https://executor-abc123-uc.a.run.app").unwrap(),
+                "https://executor-abc123-uc.a.run.app"
+            );
+        }
+
+        #[test]
+        fn a_lone_trailing_slash_is_not_a_path() {
+            assert_eq!(
+                audience_from_executor_url("https://executor-abc123-uc.a.run.app/").unwrap(),
+                "https://executor-abc123-uc.a.run.app"
+            );
+        }
+
+        #[test]
+        fn a_path_is_reduced_to_the_origin() {
+            assert_eq!(
+                audience_from_executor_url("https://executor-abc123-uc.a.run.app/execute").unwrap(),
+                "https://executor-abc123-uc.a.run.app"
+            );
+        }
+
+        #[test]
+        fn a_query_is_reduced_to_the_origin() {
+            assert_eq!(
+                audience_from_executor_url("https://executor-abc123-uc.a.run.app?region=eu")
+                    .unwrap(),
+                "https://executor-abc123-uc.a.run.app"
+            );
+        }
+
+        #[test]
+        fn an_explicit_non_default_port_survives_the_reduction() {
+            assert_eq!(
+                audience_from_executor_url("http://executor.internal:8080/execute").unwrap(),
+                "http://executor.internal:8080"
+            );
+        }
+
+        #[test]
+        fn a_scheme_default_port_is_dropped_by_the_reduction() {
+            assert_eq!(
+                audience_from_executor_url("https://executor-abc123-uc.a.run.app:443/execute")
+                    .unwrap(),
+                "https://executor-abc123-uc.a.run.app"
+            );
+        }
+
+        #[test]
+        fn non_http_and_hostless_urls_are_refused() {
+            assert!(audience_from_executor_url("ftp://executor").is_err());
+            assert!(audience_from_executor_url("unix:///var/run/executor.sock").is_err());
+            assert!(audience_from_executor_url("not a url").is_err());
+            assert!(audience_from_executor_url("").is_err());
+        }
+    }
 }
 
 /// Fetch a profile for a user from the database and convert it
@@ -1346,5 +2569,28 @@ pub async fn hydrate_profile_custom_bit_secrets(
         if let Ok(hydrated) = serde_json::to_value(&hydrated) {
             *bit = hydrated;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The gate is exercised through the pure function rather than the
+    // environment: process-wide env mutation races the rest of the parallel
+    // test binary, and `attach_executor_iam_auth` adds nothing beyond the
+    // `std::env::var` read this function receives verbatim.
+    #[test]
+    fn executor_auth_gate_matches_only_gcp_id_token() {
+        assert!(executor_auth_requires_gcp_id_token(Some("gcp_id_token")));
+        assert!(executor_auth_requires_gcp_id_token(Some("GCP_ID_TOKEN")));
+        assert!(executor_auth_requires_gcp_id_token(Some(
+            "  gcp_id_token\n"
+        )));
+        assert!(!executor_auth_requires_gcp_id_token(Some("")));
+        assert!(!executor_auth_requires_gcp_id_token(Some("none")));
+        assert!(!executor_auth_requires_gcp_id_token(Some("backend_jwt")));
+        assert!(!executor_auth_requires_gcp_id_token(Some("gcp_id_tokens")));
+        assert!(!executor_auth_requires_gcp_id_token(None));
     }
 }

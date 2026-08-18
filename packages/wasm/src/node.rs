@@ -526,9 +526,11 @@ impl NodeLogic for WasmNodeLogic {
             }
         }
 
+        let mut security = self.security.clone();
+        security.execution_environment = context.execution_environment();
         let mut instance = self
             .loaded
-            .instantiate(&self.engine, self.security.clone())
+            .instantiate(&self.engine, security)
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to create WASM instance: {}", e))?;
 
@@ -595,6 +597,7 @@ impl NodeLogic for WasmNodeLogic {
             user_id: sub.clone(),
             stream_state: context.stream_state,
             log_level: context.log_level as u8,
+            execution_environment: context.execution_environment(),
         };
 
         // Populate storage context from ExecutionContext

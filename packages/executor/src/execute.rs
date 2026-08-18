@@ -4,7 +4,7 @@
 
 use crate::config::ExecutorConfig;
 use crate::error::ExecutorError;
-use crate::jwt::{verify_jwt_async, ExecutorClaims};
+use crate::jwt::{ExecutorClaims, verify_jwt_async};
 use crate::types::{EventType, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus};
 use flow_like::credentials::StoreType;
 use flow_like::flow::board::Board;
@@ -289,6 +289,19 @@ enum StartAcknowledgement {
     AlreadyTerminal(ExecutionStatus),
 }
 
+/// Build a callback HTTP client with an explicit User-Agent. The header is
+/// load-bearing: the AWS edge runs the WAF Common Rule Set in block mode and
+/// its `NoUserAgent_HEADER` rule rejects UA-less requests before they reach
+/// the API.
+fn callback_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(concat!("flow-like-executor/", env!("CARGO_PKG_VERSION")))
+        .build()
+        // Only TLS/resolver initialization can fail here, which is exactly
+        // where `reqwest::Client::new()` panics too.
+        .expect("failed to build callback HTTP client")
+}
+
 /// Execute a flow with batched callback reporting
 pub async fn execute(
     request: ExecutionRequest,
@@ -321,7 +334,7 @@ pub async fn execute(
             "{}/api/v1/execution/progress",
             claims.callback_url.trim_end_matches('/')
         );
-        let client = reqwest::Client::new();
+        let client = callback_client();
         loop {
             let start_update = lease_progress_update(&lease, config.strict_lease_duration_ms());
             let acknowledgement = send_progress(
@@ -416,6 +429,15 @@ pub async fn execute(
     flow_config.register_app_meta_store(meta_store.clone());
     flow_config.register_log_store(log_store);
 
+    // Request-file offloads and `/tmp` uploads live under tmp/*, which the
+    // app-scoped content credential does not necessarily cover.
+    match request.credentials.to_store_type(StoreType::Tmp).await {
+        Ok(tmp_store) => flow_config.register_temporary_store(tmp_store),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to create scratch store - tmp/* paths will be unavailable");
+        }
+    }
+
     // Register logs database builder for LanceDB log storage
     match request.credentials.to_logs_db_builder() {
         Ok(logs_db_builder) => {
@@ -431,8 +453,10 @@ pub async fn execute(
     let model_provider_config = ModelProviderConfiguration::default();
 
     let http_client = HTTPClient::new_without_refetch();
-    let state =
+    let execution_environment = ExecutionEnvironment::server_default();
+    let mut state =
         FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
+    state.execution_environment = execution_environment;
 
     let mut registry = PREPARED_REGISTRY.clone();
     let mut failed_wasm_package_ids = BTreeSet::new();
@@ -601,9 +625,7 @@ pub async fn execute(
     .await
     .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
 
-    run.set_execution_environment(
-        ExecutionEnvironment::from_env().unwrap_or(ExecutionEnvironment::Server),
-    );
+    run.set_execution_environment(execution_environment);
     if let Some(mode) = request.execution_mode {
         run.set_execution_mode(mode);
     }
@@ -792,7 +814,7 @@ pub async fn execute(
             &executor_jwt,
             &lease_progress_update(lease, config.strict_lease_duration_ms()),
             &config,
-            &reqwest::Client::new(),
+            &callback_client(),
         )
         .await?;
         if !matches!(
@@ -821,7 +843,7 @@ pub async fn execute(
         "{}/api/v1/execution/progress",
         claims.callback_url.trim_end_matches('/')
     );
-    let http_client = reqwest::Client::new();
+    let http_client = callback_client();
     let progress_result = send_progress(
         &progress_url,
         &executor_jwt,
@@ -902,7 +924,7 @@ async fn run_callback_batcher(
         "{}/api/v1/execution/events",
         claims.callback_url.trim_end_matches('/')
     );
-    let client = reqwest::Client::new();
+    let client = callback_client();
     let mut batch = Vec::new();
     // Multiple producers can reserve an AtomicI32 value and reach the channel
     // in the opposite order. Strict mode assigns the durable sequence at the
@@ -1156,7 +1178,7 @@ pub async fn report_queue_failure(
         "{}/api/v1/execution/progress",
         claims.callback_url.trim_end_matches('/')
     );
-    let client = reqwest::Client::new();
+    let client = callback_client();
     let lease = QueueLeaseContext {
         job_id: job_id.to_string(),
         token: create_id(),
@@ -1206,7 +1228,7 @@ async fn maintain_queue_lease(
         "{}/api/v1/execution/progress",
         callback_url.trim_end_matches('/')
     );
-    let client = reqwest::Client::new();
+    let client = callback_client();
     loop {
         tokio::time::sleep(config.strict_lease_renewal()).await;
         let update = lease_progress_update(lease, config.strict_lease_duration_ms());
@@ -1336,25 +1358,33 @@ mod callback_acknowledgement_tests {
 
     #[test]
     fn terminal_acknowledgement_requires_persisted_terminal_state() {
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(true, "Completed"),
-            &ExecutionStatus::Completed,
-        )
-        .is_ok());
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(true, "Running"),
-            &ExecutionStatus::Completed,
-        )
-        .is_err());
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(true, "Failed"),
-            &ExecutionStatus::Completed,
-        )
-        .is_err());
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(false, "Failed"),
-            &ExecutionStatus::Completed,
-        )
-        .is_ok());
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(true, "Completed"),
+                &ExecutionStatus::Completed,
+            )
+            .is_ok()
+        );
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(true, "Running"),
+                &ExecutionStatus::Completed,
+            )
+            .is_err()
+        );
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(true, "Failed"),
+                &ExecutionStatus::Completed,
+            )
+            .is_err()
+        );
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(false, "Failed"),
+                &ExecutionStatus::Completed,
+            )
+            .is_ok()
+        );
     }
 }
