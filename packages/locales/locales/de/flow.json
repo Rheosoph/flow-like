@@ -899,5 +899,8 @@
 	"xl1280px": "xl · 1280px",
 	"yAxis": "Y-Achse",
 	"yAxisTitle": "Y-Achsentitel",
-	"you": "Du"
+	"you": "Du",
+	"failedToLoadAssets": "",
+	"loading": "",
+	"noMatchingAssetsValHidden": ""
 }

@@ -2698,5 +2698,11 @@
 	"youtubeVideoThumbnail": "YouTube動画サムネイル",
 	"youveOutgrownYourPlan": "現在のプランを超えています",
 	"zoomIn": "ズームイン",
-	"zoomOut": "ズームアウト"
+	"zoomOut": "ズームアウト",
+	"cannotIdentifyRowToUpdate": "",
+	"countHidden_one": "",
+	"countOfTotalCollapsed_one": "",
+	"hidesObjectsWithCountOrFewerConnectionsInThisView_one": "",
+	"now": "",
+	"showingCountOfTotalObjectsAroundName_one": ""
 }

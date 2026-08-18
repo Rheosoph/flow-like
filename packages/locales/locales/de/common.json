@@ -2702,5 +2702,7 @@
 	"youtubeVideoThumbnail": "YouTube-Video-Vorschaubild",
 	"youveOutgrownYourPlan": "Dein aktueller Tarif reicht nicht mehr aus",
 	"zoomIn": "Vergrößern",
-	"zoomOut": "Verkleinern"
+	"zoomOut": "Verkleinern",
+	"cannotIdentifyRowToUpdate": "",
+	"now": ""
 }

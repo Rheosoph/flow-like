@@ -363,5 +363,22 @@
 	"writeAReview": "レビューを書く",
 	"yanked": "取り下げ済み",
 	"youMightAlsoLike": "こちらもおすすめ",
-	"yours": "自分のもの"
+	"yours": "自分のもの",
+	"capabilityA2ui": "",
+	"capabilityCache": "",
+	"capabilityModels": "",
+	"capabilityNetDns": "",
+	"capabilityNetHttp": "",
+	"capabilityNetTcp": "",
+	"capabilityNetUdp": "",
+	"capabilityNetWs": "",
+	"capabilityOauth": "",
+	"capabilityStorageCache": "",
+	"capabilityStorageNode": "",
+	"capabilityStorageUploads": "",
+	"capabilityStorageUser": "",
+	"capabilityStreaming": "",
+	"capabilityVariables": "",
+	"new": "",
+	"noPermissionsRequested": ""
 }

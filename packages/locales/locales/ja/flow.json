@@ -899,5 +899,8 @@
 	"xl1280px": "xl・1280px",
 	"yAxis": "Y軸",
 	"yAxisTitle": "Y軸タイトル",
-	"you": "あなた"
+	"you": "あなた",
+	"failedToLoadAssets": "",
+	"loading": "",
+	"noMatchingAssetsValHidden": ""
 }

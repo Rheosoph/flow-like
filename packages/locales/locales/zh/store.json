@@ -363,5 +363,22 @@
 	"writeAReview": "撰写评价",
 	"yanked": "已撤回",
 	"youMightAlsoLike": "你可能还喜欢",
-	"yours": "我的"
+	"yours": "我的",
+	"capabilityA2ui": "",
+	"capabilityCache": "",
+	"capabilityModels": "",
+	"capabilityNetDns": "",
+	"capabilityNetHttp": "",
+	"capabilityNetTcp": "",
+	"capabilityNetUdp": "",
+	"capabilityNetWs": "",
+	"capabilityOauth": "",
+	"capabilityStorageCache": "",
+	"capabilityStorageNode": "",
+	"capabilityStorageUploads": "",
+	"capabilityStorageUser": "",
+	"capabilityStreaming": "",
+	"capabilityVariables": "",
+	"new": "",
+	"noPermissionsRequested": ""
 }

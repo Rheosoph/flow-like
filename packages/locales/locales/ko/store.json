@@ -363,5 +363,22 @@
 	"writeAReview": "리뷰 작성",
 	"yanked": "철회됨",
 	"youMightAlsoLike": "이런 항목도 마음에 드실 거예요",
-	"yours": "내 항목"
+	"yours": "내 항목",
+	"capabilityA2ui": "",
+	"capabilityCache": "",
+	"capabilityModels": "",
+	"capabilityNetDns": "",
+	"capabilityNetHttp": "",
+	"capabilityNetTcp": "",
+	"capabilityNetUdp": "",
+	"capabilityNetWs": "",
+	"capabilityOauth": "",
+	"capabilityStorageCache": "",
+	"capabilityStorageNode": "",
+	"capabilityStorageUploads": "",
+	"capabilityStorageUser": "",
+	"capabilityStreaming": "",
+	"capabilityVariables": "",
+	"new": "",
+	"noPermissionsRequested": ""
 }

@@ -899,5 +899,8 @@
 	"xl1280px": "xl · 1280px",
 	"yAxis": "Y 轴",
 	"yAxisTitle": "Y 轴标题",
-	"you": "你"
+	"you": "你",
+	"failedToLoadAssets": "",
+	"loading": "",
+	"noMatchingAssetsValHidden": ""
 }

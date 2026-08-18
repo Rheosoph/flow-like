@@ -505,7 +505,6 @@
 	"countFlows_many": "{{count}} flujos",
 	"countFlows_other": "{{count}} flujos",
 	"countHidden_one": "",
-	"countHidden_many": "",
 	"countHidden_other": "",
 	"countInLengthBoard_one": "{{count}}× en {{length}} tablero",
 	"countInLengthBoard_many": "{{count}}× en {{length}} tablero",
@@ -529,7 +528,6 @@
 	"countNodes_many": "{{count}} nodos",
 	"countNodes_other": "{{count}} nodos",
 	"countOfTotalCollapsed_one": "",
-	"countOfTotalCollapsed_many": "",
 	"countOfTotalCollapsed_other": "",
 	"countPackagesFound_one": "{{count}} paquete encontrado",
 	"countPackagesFound_many": "{{count}} paquetes encontrados",
@@ -1078,7 +1076,6 @@
 	"hideAll": "Ocultar todo",
 	"hideLeaves": "",
 	"hidesObjectsWithCountOrFewerConnectionsInThisView_one": "",
-	"hidesObjectsWithCountOrFewerConnectionsInThisView_many": "",
 	"hidesObjectsWithCountOrFewerConnectionsInThisView_other": "",
 	"historyElements": "Elementos del historial",
 	"holdToRecord": "Mantén presionado para grabar",
@@ -2143,7 +2140,6 @@
 	"showhideReorder": "Mostrar/ocultar y reordenar",
 	"showing": "Mostrando",
 	"showingCountOfTotalObjectsAroundName_one": "",
-	"showingCountOfTotalObjectsAroundName_many": "",
 	"showingCountOfTotalObjectsAroundName_other": "",
 	"showingLengthItems": "Mostrando {{length}} elementos",
 	"showingVal": "Mostrando {{val}}",
@@ -2738,5 +2734,7 @@
 	"youtubeVideoThumbnail": "Miniatura del video de YouTube",
 	"youveOutgrownYourPlan": "Has superado tu plan",
 	"zoomIn": "Acercar",
-	"zoomOut": "Alejar"
+	"zoomOut": "Alejar",
+	"cannotIdentifyRowToUpdate": "",
+	"now": ""
 }

@@ -375,5 +375,22 @@
 	"writeAReview": "Escribir una reseña",
 	"yanked": "Retirado",
 	"youMightAlsoLike": "También te podría gustar",
-	"yours": "Tuyo"
+	"yours": "Tuyo",
+	"capabilityA2ui": "",
+	"capabilityCache": "",
+	"capabilityModels": "",
+	"capabilityNetDns": "",
+	"capabilityNetHttp": "",
+	"capabilityNetTcp": "",
+	"capabilityNetUdp": "",
+	"capabilityNetWs": "",
+	"capabilityOauth": "",
+	"capabilityStorageCache": "",
+	"capabilityStorageNode": "",
+	"capabilityStorageUploads": "",
+	"capabilityStorageUser": "",
+	"capabilityStreaming": "",
+	"capabilityVariables": "",
+	"new": "",
+	"noPermissionsRequested": ""
 }
