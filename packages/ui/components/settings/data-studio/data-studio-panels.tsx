@@ -35,8 +35,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useInvalidateInvoke } from "../../../hooks/use-invoke";
-import type { IBoard } from "../../../lib/schema/flow/board";
+import { useInvalidateInvoke, useInvoke } from "../../../hooks/use-invoke";
+import type { IBoardSummary } from "../../../lib/schema/flow/board-summary";
 import { IVersionType } from "../../../lib/schema/flow/version-type";
 import { useBackend } from "../../../state/backend-state";
 import type {
@@ -2122,7 +2122,8 @@ export function OntologyActionsPanel({
 	onSaveActions,
 }: Readonly<
 	StudioPanelBaseProps & {
-		boards: IBoard[];
+		/** Listing only; the selected board's graph is fetched on demand. */
+		boards: IBoardSummary[];
 		appId?: string;
 		onNeedBoards: () => void;
 		onSaveActions: (
@@ -2161,10 +2162,21 @@ export function OntologyActionsPanel({
 	const [repairError, setRepairError] = useState<string | null>(null);
 	const ontology =
 		ontologies.find((item) => item.id === ontologyId) ?? ontologies[0];
-	const board = boards.find((item) => item.id === boardId);
-	const startNodes = board
-		? Object.values(board.nodes).filter((node) => node.start)
-		: [];
+	const boardSummary = boards.find((item) => item.id === boardId);
+	// Only the selected board's graph is needed (its start nodes and their pin schemas), so it is
+	// fetched on demand instead of shipping every board of the app.
+	const selectedBoard = useInvoke(
+		backend.boardState.getBoard,
+		backend.boardState,
+		[appId ?? "", boardId],
+		Boolean(appId) && boardId !== "",
+	);
+	const board = selectedBoard.data;
+	const startNodes = useMemo(
+		() =>
+			board ? Object.values(board.nodes).filter((node) => node.start) : [],
+		[board],
+	);
 	const startNode = startNodes.find((node) => node.id === startNodeId);
 	const inferredParameterSchema = useMemo(() => {
 		const parameterPin = Object.values(startNode?.pins ?? {}).find(
@@ -2311,7 +2323,7 @@ export function OntologyActionsPanel({
 			);
 			// A pinned published version is used verbatim; otherwise the board's
 			// working draft is pinned and published server-side on save.
-			const draft = board?.version;
+			const draft = board?.version ?? boardSummary?.version;
 			const draftVersion =
 				Array.isArray(draft) && draft.length === 3
 					? ([Number(draft[0]), Number(draft[1]), Number(draft[2])] as [
@@ -2361,6 +2373,7 @@ export function OntologyActionsPanel({
 		}
 	}, [
 		board?.version,
+		boardSummary?.version,
 		boardId,
 		selectedVersion,
 		actionEnabled,

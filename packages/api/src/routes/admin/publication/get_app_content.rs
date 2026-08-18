@@ -119,6 +119,12 @@ pub async fn get_app_content(
             comment_count: board.comments.len() as u32,
             scores: computation.scores,
             pages: pages_by_board.remove(&board.id).unwrap_or_default(),
+            node_types: None,
+            entry_nodes: None,
+            updated_at: Some(board.updated_at),
+            scored_node_count: None,
+            flagged_patterns: None,
+            metrics: None,
         });
     }
 

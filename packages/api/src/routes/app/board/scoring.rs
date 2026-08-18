@@ -1,4 +1,7 @@
-use flow_like::flow::board::{Board, ExecutionMode, ExecutionStage};
+use flow_like::flow::board::{
+    Board, ExecutionMode, ExecutionStage,
+    summary::{BoardEntryNode, BoardSummaryMetrics},
+};
 use flow_like::flow::execution::LogLevel;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait,
@@ -38,6 +41,9 @@ pub struct BoardScores {
 #[serde(rename_all = "camelCase")]
 pub struct FlaggedPattern {
     pub node: String,
+    /// Display name of the node type as placed. Empty on rows persisted before it was recorded.
+    #[serde(default)]
+    pub friendly_name: String,
     pub category: String,
     pub score: u8,
     #[serde(default = "default_pattern_count")]
@@ -74,11 +80,28 @@ pub struct BoardSummaryMeta {
     pub variable_count: u32,
     pub layer_count: u32,
     pub comment_count: u32,
+    /// Distinct node type names on the board, sorted. `None` on rows persisted before this
+    /// field existed; the summaries fallback path backfills it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_types: Option<Vec<String>>,
+    /// Nodes flagged as entry points (`start == true`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_nodes: Option<Vec<BoardEntryNode>>,
+    /// The board's `updated_at` when this summary was computed. Lets a client with a local copy
+    /// decide whether to pull the board at all. `None` on rows persisted before this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<std::time::SystemTime>,
+    /// Overview metrics (wasm usage, variable/layer breakdowns, total node count). `None` on
+    /// rows persisted before this field; the summaries fallback path backfills it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<BoardSummaryMetrics>,
 }
 
 /// Build the cached summary metadata for a board. `connection_count` is taken
 /// from [`compute_board_score`] so connections are not counted twice.
 pub fn board_summary_meta(board: &Board, connection_count: u32) -> BoardSummaryMeta {
+    let node_types = board.summary_node_types();
+    let entry_nodes = board.summary_entry_nodes();
     BoardSummaryMeta {
         name: board.name.clone(),
         description: board.description.clone(),
@@ -90,6 +113,10 @@ pub fn board_summary_meta(board: &Board, connection_count: u32) -> BoardSummaryM
         variable_count: board.variables.len() as u32,
         layer_count: board.layers.len() as u32,
         comment_count: board.comments.len() as u32,
+        node_types: Some(node_types),
+        entry_nodes: Some(entry_nodes),
+        updated_at: Some(board.updated_at),
+        metrics: Some(board.summary_metrics()),
     }
 }
 
@@ -106,6 +133,7 @@ pub fn compute_board_score(board: &Board) -> BoardScoreComputation {
     // node-instance multiplier so a board with thousands of identical bad nodes
     // stores a handful of entries instead of one per node.
     let mut flagged: HashMap<(String, &'static str), (u8, u32)> = HashMap::new();
+    let mut friendly_names: HashMap<String, String> = HashMap::new();
 
     for node in board.nodes.values() {
         if node.name == "reroute" {
@@ -151,6 +179,9 @@ pub fn compute_board_score(board: &Board) -> BoardScoreComputation {
                         .or_insert((score, 0));
                     entry.0 = entry.0.min(score);
                     entry.1 += 1;
+                    friendly_names
+                        .entry(node.name.clone())
+                        .or_insert_with(|| node.friendly_name.clone());
                 }
             }
         }
@@ -160,6 +191,7 @@ pub fn compute_board_score(board: &Board) -> BoardScoreComputation {
     let mut flagged_patterns: Vec<FlaggedPattern> = flagged
         .into_iter()
         .map(|((node, category), (score, count))| FlaggedPattern {
+            friendly_name: friendly_names.get(&node).cloned().unwrap_or_default(),
             node,
             category: category.to_string(),
             score,
@@ -197,6 +229,36 @@ pub fn compute_board_score(board: &Board) -> BoardScoreComputation {
         connection_count,
         flagged_patterns,
     }
+}
+
+/// Persist a mutated floating board the way every graph-changing API path must: write the
+/// object, refresh its summary row, and pin the in-memory board to the new ETag.
+///
+/// The summary row is what `/board/summaries` serves without touching storage, so it is only
+/// as fresh as the last writer that refreshed it — every path that changes nodes, variables,
+/// layers or comments has to go through here. The upsert overlaps the object put (both take
+/// `&board`), so an edit pays for the slower of the two rather than their sum. A summary
+/// failure is logged, never surfaced: the board write is the source of truth and the next
+/// summaries request backfills a missing row.
+///
+/// Returns the store's [`PutResult`] once the object write succeeded; the caller decides
+/// whether the board is still needed afterwards, so seeding is the caller's line.
+pub async fn save_board_and_refresh_summary(
+    state: &crate::state::AppState,
+    app_id: &str,
+    board: &Board,
+) -> flow_like_types::Result<flow_like::flow_like_storage::object_store::PutResult> {
+    let (put, summary) = flow_like_types::tokio::join!(
+        board.save(None),
+        persist_board_score(&state.db, app_id, board)
+    );
+    if let Err(err) = summary {
+        tracing::warn!(
+            "failed to refresh board summary for {app_id}/{}: {err:?}",
+            board.id
+        );
+    }
+    put
 }
 
 /// Upsert the persisted [`app_board_score`] row for a single board.

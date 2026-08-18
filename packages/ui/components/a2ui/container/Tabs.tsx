@@ -11,6 +11,10 @@ import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import {
+	useBoundInputValue,
+	valueRevisionOf,
+} from "../hooks/use-bound-input-value";
 import type { BoundValue, TabsComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -27,14 +31,16 @@ export function A2UITabs({
 	onAction,
 	renderChild,
 }: ComponentProps<TabsComponent>) {
-	const { resolve, setByPath } = useData();
+	const { resolve } = useData();
 	const triggerEvent = useComponentEventTrigger(componentId);
-	const activeTab = useResolved<string>(component.value);
+	const [activeTab, setActiveTab] = useBoundInputValue<string>(
+		component.value,
+		component.tabs?.[0]?.id ?? "",
+		{ revision: valueRevisionOf(component) },
+	);
 
 	const handleChange = (newValue: string) => {
-		if (component.value && "path" in component.value) {
-			setByPath(component.value.path, newValue);
-		}
+		setActiveTab(newValue);
 		if (onAction) {
 			onAction({
 				type: "userAction",
@@ -48,11 +54,9 @@ export function A2UITabs({
 		void triggerEvent("change", component, { value: newValue });
 	};
 
-	const defaultValue = activeTab ?? component.tabs?.[0]?.id ?? "";
-
 	return (
 		<ShadTabs
-			value={activeTab ?? defaultValue}
+			value={activeTab}
 			onValueChange={handleChange}
 			className={cn(resolveStyle(style))}
 			style={resolveInlineStyle(style)}

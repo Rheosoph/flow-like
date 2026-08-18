@@ -62,7 +62,7 @@ export default function TemplatesPage() {
 	const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
 	const [selectedWorkflow, setSelectedWorkflow] = useState("");
 	const boards = useInvoke(
-		backend.boardState.getBoards,
+		backend.boardState.getBoardSummaries,
 		backend.boardState,
 		[appId ?? ""],
 		typeof appId === "string",

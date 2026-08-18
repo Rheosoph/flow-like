@@ -124,6 +124,29 @@ pub struct Pin {
 }
 
 impl Pin {
+    /// Whether the pin's literal is a secret (API keys, passwords) that must never leave the
+    /// server in a board response and is write-only from clients.
+    pub fn is_sensitive(&self) -> bool {
+        self.options
+            .as_ref()
+            .and_then(|options| options.sensitive)
+            .unwrap_or(false)
+    }
+
+    /// Write-only semantics for sensitive literals: a client that received a board never saw the
+    /// value, so an incoming `None` means "unchanged", not "clear". Clearing is an explicit empty
+    /// value. Call this on an incoming pin with the pin the board currently holds.
+    pub fn keep_sensitive_value_from(&mut self, existing: Option<&Pin>) {
+        if !self.is_sensitive() || self.default_value.is_some() {
+            return;
+        }
+        if let Some(existing) = existing
+            && existing.is_sensitive()
+        {
+            self.default_value = existing.default_value.clone();
+        }
+    }
+
     pub fn set_default_value(&mut self, default_value: Option<Value>) -> &mut Self {
         self.default_value = default_value.map(|v| flow_like_types::json::to_vec(&v).unwrap());
         self

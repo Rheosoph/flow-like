@@ -221,7 +221,7 @@ export default function EventsPage({
 	);
 
 	const boards = useInvoke(
-		backend.boardState.getBoards,
+		backend.boardState.getBoardSummaries,
 		backend.boardState,
 		[id ?? ""],
 		(id ?? "") !== "",
@@ -768,7 +768,7 @@ function EventConfiguration({
 		uiEventTypeSet.has(formData.event_type) || isPageTargetEvent;
 
 	const boards = useInvoke(
-		backend.boardState.getBoards,
+		backend.boardState.getBoardSummaries,
 		backend.boardState,
 		[appId],
 		!!appId && isEditing && !isPageTargetEvent,

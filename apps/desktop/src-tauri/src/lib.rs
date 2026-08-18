@@ -641,6 +641,7 @@ pub fn run() {
     builder = builder
         .manage(state::TauriSettingsState(settings_state.clone()))
         .manage(state::TauriFlowLikeState(state_ref.clone()))
+        .manage(state::TauriBoardSyncState::default())
         .manage(state::TauriRegistryState(registry_state))
         .manage(state::TauriWasmEngineState(shared_wasm_engine))
         .manage(state::TauriRecordingState::new())
@@ -1072,6 +1073,8 @@ pub fn run() {
             functions::app::get_app_meta,
             functions::app::get_app_board,
             functions::app::get_app_boards,
+            functions::app::get_app_board_summaries,
+            functions::app::get_app_board_variables,
             functions::app::set_app_config,
             functions::app::get_apps,
             functions::app::get_app_size,
@@ -1155,6 +1158,7 @@ pub fn run() {
             functions::flow::board::get_board_versions,
             functions::flow::board::close_board,
             functions::flow::board::get_board,
+            functions::flow::board::sync_board,
             functions::flow::board::get_open_boards,
             functions::flow::board::undo_board,
             functions::flow::board::redo_board,

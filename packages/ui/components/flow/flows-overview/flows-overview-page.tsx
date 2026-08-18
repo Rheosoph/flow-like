@@ -10,7 +10,7 @@ import {
 	type IScoreCategory,
 	SCORE_CATEGORIES,
 } from "../../../lib/board-metrics";
-import type { IBoard } from "../../../lib/schema/flow/board";
+import type { IBoardSummary } from "../../../lib/schema/flow/board-summary";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import type { IApp } from "../../../types";
@@ -159,7 +159,7 @@ function BandSection({
 export interface FlowsOverviewPageProps {
 	appId: string;
 	app?: IApp;
-	boards: UseQueryResult<IBoard[]>;
+	boards: UseQueryResult<IBoardSummary[]>;
 	boardCreation: FlowLibraryBoardCreationState;
 	setBoardCreation: React.Dispatch<
 		React.SetStateAction<FlowLibraryBoardCreationState>

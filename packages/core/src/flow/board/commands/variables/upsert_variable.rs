@@ -100,6 +100,17 @@ impl Command for UpsertVariableCommand {
             return Err(flow_like_types::anyhow!("Variable is not editable"));
         }
 
+        // Board responses strip secret values, so a client that only edited the variable's
+        // metadata sends `default_value: None`. That means "unchanged", not "clear"; clearing a
+        // secret is an explicit empty value.
+        if self.variable.secret
+            && self.variable.default_value.is_none()
+            && let Some(old_variable) = variables.get(&self.variable.id)
+            && old_variable.secret
+        {
+            self.variable.default_value = old_variable.default_value.clone();
+        }
+
         if let Some(old_variable) =
             variables.insert(self.variable.id.clone(), self.variable.clone())
         {
@@ -128,5 +139,49 @@ impl Command for UpsertVariableCommand {
             variables.insert(old_variable.id.clone(), old_variable);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow::board::commands::Command;
+    use crate::flow::pin::ValueType;
+    use crate::flow::variable::{Variable, VariableType};
+    use crate::state::{FlowLikeConfig, FlowLikeState};
+    use crate::utils::http::HTTPClient;
+    use flow_like_storage::Path;
+    use flow_like_types::json::json;
+
+    fn state() -> Arc<FlowLikeState> {
+        Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ))
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn editing_a_secret_variables_metadata_keeps_its_stored_value() {
+        let mut board = Board::new_detached(Some("b".into()), Path::default());
+        let mut variable = Variable::new("token", VariableType::String, ValueType::Normal);
+        variable.secret = true;
+        variable.editable = true;
+        variable.default_value = Some(flow_like_types::json::to_vec(&json!("s3cr3t")).unwrap());
+        board
+            .variables
+            .insert(variable.id.clone(), variable.clone());
+
+        // A web client holds the filtered variable (no value) and only edits its description.
+        let mut incoming = variable.clone();
+        incoming.default_value = None;
+        incoming.description = Some("rotated monthly".into());
+        UpsertVariableCommand::new(incoming)
+            .execute(&mut board, state())
+            .await
+            .expect("upsert");
+
+        let stored = &board.variables[&variable.id];
+        assert_eq!(stored.description.as_deref(), Some("rotated monthly"));
+        assert_eq!(stored.default_value, variable.default_value);
     }
 }

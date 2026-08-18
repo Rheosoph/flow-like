@@ -4,7 +4,7 @@ import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
-	type IBoard,
+	type IBoardVariables,
 	type IVariable,
 	Input,
 	Progress,
@@ -48,7 +48,7 @@ export default function RuntimeVariablesPage() {
 	const id = searchParams.get("id");
 
 	const boards = useInvoke(
-		backend.boardState.getBoards,
+		backend.boardState.getBoardVariables,
 		backend.boardState,
 		[id ?? ""],
 		typeof id === "string",
@@ -73,7 +73,7 @@ export default function RuntimeVariablesPage() {
 					.sort((a, b) => a.name.localeCompare(b.name)),
 			}))
 			.filter(({ variables }) => variables.length > 0)
-			.sort((a, b) => a.board.name.localeCompare(b.board.name));
+			.sort((a, b) => a.board.board_name.localeCompare(b.board.board_name));
 	}, [boards.data]);
 
 	const runtimeVarsMap = useMemo(() => {
@@ -145,7 +145,7 @@ export default function RuntimeVariablesPage() {
 				{id &&
 					runtimeConfiguredBoards.map(({ board, variables }) => (
 						<BoardSection
-							key={board.id}
+							key={board.board_id}
 							appId={id}
 							board={board}
 							variables={variables}
@@ -195,7 +195,7 @@ function BoardSection({
 	runtimeVarsMap,
 }: Readonly<{
 	appId: string;
-	board: IBoard;
+	board: IBoardVariables;
 	variables: IVariable[];
 	runtimeVarsMap: Map<string, IRuntimeVariableValue>;
 }>) {
@@ -228,7 +228,7 @@ function BoardSection({
 						)}
 					</div>
 					<div className="text-left">
-						<h3 className="font-medium">{board.name}</h3>
+						<h3 className="font-medium">{board.board_name}</h3>
 						<p className="text-sm text-muted-foreground">{t('configuredcountOfLengthConfigured', '{{configuredCount}} of {{length}} configured', { configuredCount, length: variables.length })}</p>
 					</div>
 				</div>
@@ -254,7 +254,7 @@ function BoardSection({
 						<VariableRow
 							key={variable.id}
 							appId={appId}
-							boardId={board.id}
+							boardId={board.board_id}
 							variable={variable}
 							savedValue={runtimeVarsMap.get(variable.id)}
 						/>

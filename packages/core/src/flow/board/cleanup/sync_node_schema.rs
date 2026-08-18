@@ -305,6 +305,7 @@ pub async fn sync_board_node_schemas(
             // generation. In particular, never overwrite a newer board with an older registry.
             if can_repair_from_catalog(catalog_version, placed_version) {
                 repair_catalog_pin_schemas(node, &catalog_node, &refs);
+                refresh_catalog_metadata(node, &catalog_node);
             }
             sync_oauth_metadata(node, &catalog_node);
             sync_wasm_permissions(node, &catalog_node);
@@ -319,6 +320,45 @@ pub async fn sync_board_node_schemas(
         for node in layer.nodes.values_mut() {
             sync_node(node, registry);
         }
+    }
+}
+
+/// Refreshes the descriptive, catalog-owned metadata of a placed node from the current catalog
+/// definition at the same schema version.
+///
+/// Until this existed a placed node froze its description, category, icon, docs and scores at
+/// placement time, so a wording fix or a re-tuned quality score in the catalog never reached
+/// existing boards. `on_update` runs after this and re-applies anything it derives dynamically
+/// (call-function names, typed pins), so nothing dynamic is lost.
+///
+/// Deliberately untouched: `friendly_name` (users rename nodes), pin types and schemas (owned by
+/// `on_update` and `repair_catalog_pin_schemas`), and any pin the catalog does not know (dynamic).
+fn refresh_catalog_metadata(placed_node: &mut Node, catalog_node: &Node) {
+    placed_node.description = catalog_node.description.clone();
+    placed_node.category = catalog_node.category.clone();
+    placed_node.icon = catalog_node.icon.clone();
+    placed_node.docs = catalog_node.docs.clone();
+    placed_node.scores = catalog_node.scores.clone();
+    placed_node.long_running = catalog_node.long_running;
+    placed_node.event_callback = catalog_node.event_callback;
+    placed_node.only_offline = catalog_node.only_offline;
+
+    // Pins are matched by name; a name that maps to more than one catalog pin is ambiguous and
+    // left alone, as is any pin the catalog does not define.
+    let mut by_name: HashMap<&str, Vec<&Pin>> = HashMap::new();
+    for pin in catalog_node.pins.values() {
+        by_name.entry(pin.name.as_str()).or_default().push(pin);
+    }
+    for pin in placed_node.pins.values_mut() {
+        let Some([catalog_pin]) = by_name.get(pin.name.as_str()).map(Vec::as_slice) else {
+            continue;
+        };
+        if catalog_pin.pin_type != pin.pin_type {
+            continue;
+        }
+        pin.friendly_name = catalog_pin.friendly_name.clone();
+        pin.description = catalog_pin.description.clone();
+        pin.options = catalog_pin.options.clone();
     }
 }
 
@@ -550,6 +590,58 @@ mod tests {
         assert_eq!(
             placed.get_pin_by_name("data").unwrap().schema.as_deref(),
             Some(current_schema)
+        );
+    }
+
+    #[test]
+    fn same_version_node_refreshes_catalog_text_but_keeps_user_and_dynamic_fields() {
+        let mut placed = Node::new("test", "My renamed node", "old description", "Old/Category");
+        placed.set_version(2);
+        placed.add_icon("/old.svg");
+        placed
+            .add_input_pin(
+                "value",
+                "Value",
+                "old pin description",
+                VariableType::String,
+            )
+            .set_default_value(Some(flow_like_types::json::json!("user literal")));
+        // A pin the catalog does not know — minted by on_update — must be left alone.
+        placed.add_input_pin("dynamic", "Dynamic", "minted", VariableType::Integer);
+        // A pin whose type was retyped dynamically keeps its type.
+        placed
+            .add_output_pin("out", "Out", "old out", VariableType::Struct)
+            .data_type = VariableType::Integer;
+
+        let mut catalog = Node::new("test", "Test", "new description", "New/Category");
+        catalog.set_version(2);
+        catalog.add_icon("/new.svg");
+        catalog.add_input_pin(
+            "value",
+            "Value (v2)",
+            "new pin description",
+            VariableType::String,
+        );
+        catalog.add_output_pin("out", "Out (v2)", "new out", VariableType::Struct);
+
+        refresh_catalog_metadata(&mut placed, &catalog);
+
+        assert_eq!(placed.description, "new description");
+        assert_eq!(placed.category, "New/Category");
+        assert_eq!(placed.icon.as_deref(), Some("/new.svg"));
+        assert_eq!(placed.friendly_name, "My renamed node", "renames survive");
+        let value = placed.get_pin_by_name("value").unwrap();
+        assert_eq!(value.friendly_name, "Value (v2)");
+        assert_eq!(value.description, "new pin description");
+        assert!(value.default_value.is_some(), "user literals survive");
+        let dynamic = placed.get_pin_by_name("dynamic").unwrap();
+        assert_eq!(dynamic.description, "minted");
+        let out = placed.get_pin_by_name("out").unwrap();
+        assert_eq!(out.friendly_name, "Out (v2)");
+        assert_eq!(
+            out.data_type,
+            VariableType::Integer,
+            "dynamic typing survives"
         );
     }
 

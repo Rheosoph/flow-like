@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks";
 import { detectAppType } from "../../../lib/app-type";
+import { boardListing } from "../../../lib/schema/flow/board-summary";
 import { useBackend } from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import { Skeleton } from "../../ui/skeleton";
@@ -135,11 +136,20 @@ export function ProjectDashboard({
 		[appId],
 		enabled,
 	);
-	const boards = useInvoke(
-		backend.boardState.getBoards,
+	const boardSummaries = useInvoke(
+		backend.boardState.getBoardSummaries,
 		backend.boardState,
 		[appId],
 		enabled,
+	);
+	// The dashboard only ever needs names and node counts, so it reads summaries — served from
+	// the database — instead of every board's full graph.
+	const boards = useMemo(
+		() => ({
+			data: boardSummaries.data?.map(boardListing),
+			isLoading: boardSummaries.isLoading,
+		}),
+		[boardSummaries.data, boardSummaries.isLoading],
 	);
 	const events = useInvoke(
 		backend.eventState.getEvents,

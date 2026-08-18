@@ -4,28 +4,34 @@ use crate::{
 };
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use flow_like::flow::board::{ExecutionMode, ExecutionStage};
 use flow_like::flow::execution::LogLevel;
+use futures::{StreamExt, stream};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use utoipa::ToSchema;
 
 use super::super::page::get_pages::PageInfo;
 use super::scoring::{
-    BoardScores, BoardSummaryMeta, board_summary_meta, compute_board_score,
+    BoardScores, BoardSummaryMeta, FlaggedPattern, board_summary_meta, compute_board_score,
     persist_board_score_with,
 };
+use flow_like::flow::board::summary::{BoardEntryNode, BoardSummaryMetrics};
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BoardSummary {
     pub id: String,
     pub name: String,
     pub description: String,
+    #[schema(value_type = String)]
     pub stage: ExecutionStage,
+    #[schema(value_type = String)]
     pub execution_mode: ExecutionMode,
+    #[schema(value_type = i32)]
     pub log_level: LogLevel,
     pub version: (u32, u32, u32),
     pub node_count: u32,
@@ -36,6 +42,50 @@ pub struct BoardSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scores: Option<BoardScores>,
     pub pages: Vec<PageInfo>,
+    /// Only present when requested with `include=node_types`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_types: Option<Vec<String>>,
+    /// Only present when requested with `include=node_types`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Vec<Object>>)]
+    pub entry_nodes: Option<Vec<BoardEntryNode>>,
+    /// The board's last modification time. Absent only for summaries cached before it was
+    /// recorded; those refresh on the next score persist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
+    pub updated_at: Option<std::time::SystemTime>,
+    /// Only present when requested with `include=metrics`: how many scorable nodes carry scores.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scored_node_count: Option<u32>,
+    /// Only present when requested with `include=metrics`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flagged_patterns: Option<Vec<FlaggedPattern>>,
+    /// Only present when requested with `include=metrics`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
+    pub metrics: Option<BoardSummaryMetrics>,
+}
+
+#[derive(Deserialize, ToSchema, Default)]
+pub struct SummariesQuery {
+    /// Comma-separated extras. Supported: `node_types` (distinct node type names + entry nodes),
+    /// `metrics` (scored node count, flagged patterns, wasm/variable/layer breakdowns).
+    pub include: Option<String>,
+}
+
+impl SummariesQuery {
+    fn wants(&self, extra: &str) -> bool {
+        self.include
+            .as_deref()
+            .map(|include| include.split(',').any(|part| part.trim() == extra))
+            .unwrap_or(false)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Includes {
+    node_types: bool,
+    metrics: bool,
 }
 
 /// Reconstruct the persisted score columns into [`BoardScores`].
@@ -54,50 +104,104 @@ fn scores_from_row(row: &app_board_score::Model) -> Option<BoardScores> {
     })
 }
 
-/// Build a [`BoardSummary`] from a cached DB row. Returns `None` when the row
-/// predates the cached `summary` metadata so the caller can fall back to S3.
-fn summary_from_row(row: &app_board_score::Model, pages: Vec<PageInfo>) -> Option<BoardSummary> {
-    let meta: BoardSummaryMeta = serde_json::from_value(row.summary.clone()?).ok()?;
-
-    Some(BoardSummary {
-        id: row.board_id.clone(),
+#[allow(clippy::too_many_arguments)]
+fn summary_from_meta(
+    board_id: &str,
+    meta: BoardSummaryMeta,
+    node_count: u32,
+    scores: Option<BoardScores>,
+    pages: Vec<PageInfo>,
+    includes: Includes,
+    scored_node_count: u32,
+    flagged_patterns: Vec<FlaggedPattern>,
+) -> BoardSummary {
+    let with_node_types = includes.node_types;
+    BoardSummary {
+        id: board_id.to_string(),
         name: meta.name,
         description: meta.description,
         stage: meta.stage,
         execution_mode: meta.execution_mode,
         log_level: meta.log_level,
         version: meta.version,
-        node_count: row.node_count.max(0) as u32,
+        node_count,
         connection_count: meta.connection_count,
         variable_count: meta.variable_count,
         layer_count: meta.layer_count,
         comment_count: meta.comment_count,
-        scores: scores_from_row(row),
+        scores,
         pages,
-    })
+        node_types: with_node_types.then_some(meta.node_types).flatten(),
+        entry_nodes: with_node_types.then_some(meta.entry_nodes).flatten(),
+        updated_at: meta.updated_at,
+        scored_node_count: includes.metrics.then_some(scored_node_count),
+        flagged_patterns: includes.metrics.then_some(flagged_patterns),
+        metrics: includes.metrics.then_some(meta.metrics).flatten(),
+    }
+}
+
+/// Build a [`BoardSummary`] from a cached DB row. Returns `None` when the row
+/// predates the cached `summary` metadata (or, when node types were requested,
+/// predates that field) so the caller can fall back to S3 and backfill.
+fn summary_from_row(
+    row: &app_board_score::Model,
+    pages: Vec<PageInfo>,
+    includes: Includes,
+) -> Option<BoardSummary> {
+    let meta: BoardSummaryMeta = serde_json::from_value(row.summary.clone()?).ok()?;
+    if includes.node_types && (meta.node_types.is_none() || meta.entry_nodes.is_none()) {
+        return None;
+    }
+    if includes.metrics && meta.metrics.is_none() {
+        return None;
+    }
+    let flagged_patterns: Vec<FlaggedPattern> = if includes.metrics {
+        row.flagged_patterns
+            .clone()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    Some(summary_from_meta(
+        &row.board_id,
+        meta,
+        row.node_count.max(0) as u32,
+        scores_from_row(row),
+        pages,
+        includes,
+        row.scored_node_count.max(0) as u32,
+        flagged_patterns,
+    ))
 }
 
 #[utoipa::path(
     get,
     path = "/apps/{app_id}/board/summaries",
     tag = "boards",
-    description = "Get lightweight summaries for all boards including stats, scores, and pages",
+    description = "Get lightweight summaries for all boards including stats, scores, and pages. Add `include=node_types` for distinct node types and entry nodes, `include=metrics` for scored node count, flagged patterns and wasm/variable/layer breakdowns.",
     params(
-        ("app_id" = String, Path, description = "Application ID")
+        ("app_id" = String, Path, description = "Application ID"),
+        ("include" = Option<String>, Query, description = "Comma-separated extras: node_types, metrics")
     ),
     responses(
-        (status = 200, description = "Board summaries with stats and pages", body = Vec<Object>),
+        (status = 200, description = "Board summaries with stats and pages", body = Vec<BoardSummary>),
         (status = 401, description = "Unauthorized")
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/board/summaries", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/board/summaries", skip(state, user, query))]
 pub async fn board_summaries(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
+    Query(query): Query<SummariesQuery>,
 ) -> Result<Json<Vec<BoardSummary>>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
     let sub = permission.sub()?;
+    let includes = Includes {
+        node_types: query.wants("node_types"),
+        metrics: query.wants("metrics"),
+    };
 
     let app = state.master_app(&sub, &app_id, &state).await?;
 
@@ -126,49 +230,67 @@ pub async fn board_summaries(
         .map(|row| (row.board_id.clone(), row))
         .collect();
 
-    let mut summaries = Vec::with_capacity(app.boards.len());
-    for board_id in app.boards.iter() {
+    // Fast path: serve every board that has a complete cached row. Boards without one (never
+    // persisted, or persisted before a field this request needs existed) are collected for the
+    // storage fallback below.
+    let mut summaries: Vec<Option<BoardSummary>> = vec![None; app.boards.len()];
+    let mut missing: Vec<(usize, String, Vec<PageInfo>)> = Vec::new();
+    for (index, board_id) in app.boards.iter().enumerate() {
         let pages = pages_by_board.remove(board_id).unwrap_or_default();
-
-        // Fast path: serve from the DB cache.
         if let Some(row) = cached.remove(board_id)
-            && let Some(summary) = summary_from_row(&row, pages.clone())
+            && let Some(summary) = summary_from_row(&row, pages.clone(), includes)
         {
-            summaries.push(summary);
+            summaries[index] = Some(summary);
             continue;
         }
-
-        // Backwards-compatible fallback: load from S3, compute, and patch the DB.
-        let board = match app.open_board(board_id.clone(), Some(false), None).await {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
-        let board = board.lock().await;
-
-        let computation = compute_board_score(&board);
-        let meta = board_summary_meta(&board, computation.connection_count);
-
-        if let Err(err) = persist_board_score_with(&state.db, &app_id, &board, &computation).await {
-            tracing::warn!("failed to backfill board score for {app_id}/{board_id}: {err:?}");
-        }
-
-        summaries.push(BoardSummary {
-            id: board.id.clone(),
-            name: meta.name,
-            description: meta.description,
-            stage: meta.stage,
-            execution_mode: meta.execution_mode,
-            log_level: meta.log_level,
-            version: meta.version,
-            node_count: computation.node_count,
-            connection_count: computation.connection_count,
-            variable_count: meta.variable_count,
-            layer_count: meta.layer_count,
-            comment_count: meta.comment_count,
-            scores: computation.scores,
-            pages,
-        });
+        missing.push((index, board_id.clone(), pages));
     }
 
-    Ok(Json(summaries))
+    // Backwards-compatible fallback: load from storage, compute, and patch the DB so the next
+    // request is served from the row. Loads go through the ETag-validated board cache and run a
+    // few at a time — an app with many large, never-edited boards must not turn its first
+    // summaries request into a serial walk over all of them.
+    const FALLBACK_CONCURRENCY: usize = 4;
+    let backfilled: Vec<Option<(usize, BoardSummary)>> = stream::iter(missing)
+        .map(|(index, board_id, pages)| {
+            let state = state.clone();
+            let app_id = app_id.clone();
+            async move {
+                let cached = state
+                    .master_board_shared(&app_id, &board_id, &state, None)
+                    .await
+                    .ok()?;
+                let board = &cached.board;
+                let computation = compute_board_score(board);
+                let meta = board_summary_meta(board, computation.connection_count);
+                if let Err(err) =
+                    persist_board_score_with(&state.db, &app_id, board, &computation).await
+                {
+                    tracing::warn!(
+                        "failed to backfill board score for {app_id}/{board_id}: {err:?}"
+                    );
+                }
+                Some((
+                    index,
+                    summary_from_meta(
+                        &board.id,
+                        meta,
+                        computation.node_count,
+                        computation.scores,
+                        pages,
+                        includes,
+                        computation.scored_node_count,
+                        computation.flagged_patterns,
+                    ),
+                ))
+            }
+        })
+        .buffer_unordered(FALLBACK_CONCURRENCY)
+        .collect()
+        .await;
+    for (index, summary) in backfilled.into_iter().flatten() {
+        summaries[index] = Some(summary);
+    }
+
+    Ok(Json(summaries.into_iter().flatten().collect()))
 }

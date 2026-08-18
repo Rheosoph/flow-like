@@ -15,7 +15,6 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like::flow::board::Board;
-use flow_like_types::anyhow;
 
 #[utoipa::path(
     get,
@@ -45,22 +44,7 @@ pub async fn get_board(
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
     let sub = permission.sub()?;
 
-    let version_opt = if let Some(ver_str) = params.version {
-        let parts = ver_str
-            .split('_')
-            .map(str::parse::<u32>)
-            .collect::<Result<Vec<u32>, _>>()?;
-        match parts.as_slice() {
-            [maj, min, pat] => Some((*maj, *min, *pat)),
-            _ => {
-                return Err(ApiError::internal_error(anyhow!(
-                    "version must be in MAJOR_MINOR_PATCH format"
-                )));
-            }
-        }
-    } else {
-        None
-    };
+    let version_opt = super::sync_board::parse_version(params.version.as_deref())?;
 
     let mut board = state
         .master_board(&sub, &app_id, &board_id, &state, version_opt)

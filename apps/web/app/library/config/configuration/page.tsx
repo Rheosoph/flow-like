@@ -11,7 +11,7 @@ import {
 	Collapsible,
 	CollapsibleContent,
 	CollapsibleTrigger,
-	type IBoard,
+	type IBoardVariables,
 	type IVariable,
 	Separator,
 	VariableConfigCard,
@@ -35,8 +35,10 @@ export default function ConfigurationPage() {
 	const searchParams = useSearchParams();
 	const id = searchParams.get("id");
 
+	// Variables only: the configuration surface never needs the graphs, and the endpoint ships
+	// exactly the schema refs the variables reach.
 	const boards = useInvoke(
-		backend.boardState.getBoards,
+		backend.boardState.getBoardVariables,
 		backend.boardState,
 		[id ?? ""],
 		typeof id === "string",
@@ -51,7 +53,7 @@ export default function ConfigurationPage() {
 					.sort((a, b) => a.name.localeCompare(b.name)),
 			}))
 			.filter(({ variables }) => variables.length > 0)
-			.sort((a, b) => a.board.name.localeCompare(b.board.name));
+			.sort((a, b) => a.board.board_name.localeCompare(b.board.board_name));
 	}, [boards.data]);
 
 	if (configurableBoards.length === 0) {
@@ -95,7 +97,7 @@ export default function ConfigurationPage() {
 				{id &&
 					configurableBoards.map(({ board, variables }) => (
 						<BoardConfig
-							key={board.id}
+							key={board.board_id}
 							appId={id}
 							board={board}
 							variables={variables}
@@ -112,7 +114,7 @@ function BoardConfig({
 	variables,
 }: Readonly<{
 	appId: string;
-	board: IBoard;
+	board: IBoardVariables;
 	variables: IVariable[];
 }>) {
 	const { t } = useTranslation("common");
@@ -128,11 +130,11 @@ function BoardConfig({
 				variable: variable,
 			});
 
-			await backend.boardState.executeCommand(appId, board.id, command);
-			await invalidate(backend.boardState.getBoard, [appId, board.id]);
-			await invalidate(backend.boardState.getBoards, [appId]);
+			await backend.boardState.executeCommand(appId, board.board_id, command);
+			await invalidate(backend.boardState.getBoard, [appId, board.board_id]);
+			await invalidate(backend.boardState.getBoardVariables, [appId]);
 		},
-		[appId, board.id, backend, invalidate],
+		[appId, board.board_id, backend, invalidate],
 	);
 
 	return (
@@ -146,7 +148,7 @@ function BoardConfig({
 									<WorkflowIcon className="w-5 h-5 text-primary" />
 								</div>
 								<div>
-									<CardTitle className="text-left">{board.name}</CardTitle>
+									<CardTitle className="text-left">{board.board_name}</CardTitle>
 									<CardDescription className="text-left">
 										{t('countConfigurableParameters', {
 											defaultValue_one: '{{count}} configurable parameter',

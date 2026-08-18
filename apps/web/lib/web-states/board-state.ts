@@ -6,6 +6,9 @@ import {
 	type IApplyFlowScriptResponse,
 	type IBoard,
 	type IBoardState,
+	type IBoardSummary,
+	type IBoardSummaryInclude,
+	type IBoardVariables,
 	ICommentType,
 	IConnectionMode,
 	type IExecutionMode,
@@ -33,6 +36,11 @@ import type {
 	SurfaceComponent,
 } from "@flow-like/flow-like-ui/components/a2ui/types";
 import { apiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
+import {
+	BoardSyncClient,
+	type IBoardSyncRequest,
+	type IBoardSyncResponse,
+} from "@flow-like/flow-like-ui/lib/board-sync";
 import type {
 	ChatImage,
 	CopilotScope,
@@ -137,6 +145,7 @@ function handleProgressEvent(event: IIntercomEvent): void {
 export class WebBoardState implements IBoardState {
 	private readonly copilotAbortControllers = new Map<string, AbortController>();
 	private readonly appIdByBoardId = new Map<string, string>();
+	private readonly boardSync = new BoardSyncClient();
 
 	constructor(private readonly backend: WebBackendRef) {}
 
@@ -153,6 +162,28 @@ export class WebBoardState implements IBoardState {
 		} catch {
 			return [];
 		}
+	}
+
+	async getBoardSummaries(
+		appId: string,
+		include?: IBoardSummaryInclude[],
+	): Promise<IBoardSummary[]> {
+		const query = include?.length ? `?include=${include.join(",")}` : "";
+		const summaries = await apiGet<IBoardSummary[]>(
+			`apps/${appId}/board/summaries${query}`,
+			this.backend.auth,
+		);
+		for (const summary of summaries) {
+			this.appIdByBoardId.set(summary.id, appId);
+		}
+		return summaries;
+	}
+
+	async getBoardVariables(appId: string): Promise<IBoardVariables[]> {
+		return apiGet<IBoardVariables[]>(
+			`apps/${appId}/board/variables`,
+			this.backend.auth,
+		);
 	}
 
 	async respondWidgetQuery(
@@ -174,7 +205,13 @@ export class WebBoardState implements IBoardState {
 
 	async getCatalog(appId: string): Promise<INode[]> {
 		try {
-			return await apiGet<INode[]>(`apps/${appId}/nodes`, this.backend.auth);
+			const nodes = await apiGet<INode[]>(
+				`apps/${appId}/nodes`,
+				this.backend.auth,
+			);
+			// Lets subsequent board syncs ship catalog-owned node fields lean.
+			this.boardSync.setCatalog(appId, nodes);
+			return nodes;
 		} catch {
 			return [];
 		}
@@ -187,9 +224,16 @@ export class WebBoardState implements IBoardState {
 		_forceFresh?: boolean,
 	): Promise<IBoard> {
 		const params = version ? `?version=${version.join("_")}` : "";
-		const board = await apiGet<IBoard>(
-			`apps/${appId}/board/${boardId}${params}`,
-			this.backend.auth,
+		const board = await this.boardSync.sync(
+			appId,
+			boardId,
+			version,
+			(request: IBoardSyncRequest) =>
+				apiPost<IBoardSyncResponse>(
+					`apps/${appId}/board/${boardId}/sync${params}`,
+					request,
+					this.backend.auth,
+				),
 		);
 		this.appIdByBoardId.set(boardId, appId);
 
@@ -690,7 +734,8 @@ export class WebBoardState implements IBoardState {
 	}
 
 	async closeBoard(boardId: string): Promise<void> {
-		// No-op in web mode - we don't track open boards
+		const appId = this.appIdByBoardId.get(boardId);
+		if (appId) this.boardSync.forget(appId, boardId);
 	}
 
 	async executeCommand(

@@ -141,7 +141,7 @@ pub fn canonical_commands_digest(commands: &[GenericCommand]) -> flow_like_types
     Ok(hasher.finalize().to_hex().to_string())
 }
 
-fn canonicalize_json(value: flow_like_types::Value) -> flow_like_types::Value {
+pub(crate) fn canonicalize_json(value: flow_like_types::Value) -> flow_like_types::Value {
     use flow_like_types::Value;
 
     match value {

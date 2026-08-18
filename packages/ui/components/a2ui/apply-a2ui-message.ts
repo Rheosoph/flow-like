@@ -60,6 +60,16 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Inputs hold what the user typed or picked locally, because a literal binding is never
+ * written back. They give that up for a flow's write — which they recognise by this
+ * counter, since the write may well restore the value the component was declared with.
+ */
+function nextValueRevision(data: ComponentData): number {
+	const current = data.valueRevision;
+	return (typeof current === "number" ? current : 0) + 1;
+}
+
+/**
  * Element updates targeting a `microWidgetInstance` are typed props patches
  * (Update Widget Inputs → `props:update` postMessage): the patch merges into
  * `component.props` — never spread onto the component itself — and the
@@ -140,6 +150,7 @@ export function applyElementUpdate(
 				...data,
 				value: bound,
 				defaultValue: bound,
+				valueRevision: nextValueRevision(data),
 			});
 		}
 		case "setStyle":
@@ -207,7 +218,12 @@ export function applyElementUpdate(
 			});
 		case "setChecked": {
 			const checked = updateValue.checked as boolean;
-			return withComponentData(component, { ...data, checked, value: checked });
+			return withComponentData(component, {
+				...data,
+				checked,
+				value: checked,
+				valueRevision: nextValueRevision(data),
+			});
 		}
 		case "setGeoMapViewport":
 			return withComponentData(component, {

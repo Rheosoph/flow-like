@@ -682,6 +682,144 @@ pub async fn get_app_boards(
     Ok(boards)
 }
 
+/// Mirrors the API's `BoardSummary` shape so the frontend merges local and remote summaries as
+/// one type. Scores are computed server-side only; local summaries leave them out.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalBoardSummary {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub stage: ExecutionStage,
+    pub execution_mode: ExecutionMode,
+    pub log_level: LogLevel,
+    pub version: (u32, u32, u32),
+    pub node_count: u32,
+    pub connection_count: u32,
+    pub variable_count: u32,
+    pub layer_count: u32,
+    pub comment_count: u32,
+    pub pages: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_types: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_nodes: Option<Vec<flow_like::flow::board::summary::BoardEntryNode>>,
+    pub updated_at: SystemTime,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scored_node_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<flow_like::flow::board::summary::BoardSummaryMetrics>,
+}
+
+fn local_board_summary(
+    board: &Board,
+    with_node_types: bool,
+    with_metrics: bool,
+) -> LocalBoardSummary {
+    let mut node_count = 0u32;
+    let mut scored_node_count = 0u32;
+    let mut connection_count = 0u32;
+    for node in board.nodes.values() {
+        if node.name == "reroute" {
+            continue;
+        }
+        node_count += 1;
+        if node.scores.is_some() {
+            scored_node_count += 1;
+        }
+        for pin in node.pins.values() {
+            connection_count += pin.connected_to.len() as u32;
+        }
+    }
+    let node_types = with_node_types.then(|| board.summary_node_types());
+    let entry_nodes = with_node_types.then(|| board.summary_entry_nodes());
+    LocalBoardSummary {
+        id: board.id.clone(),
+        name: board.name.clone(),
+        description: board.description.clone(),
+        stage: board.stage.clone(),
+        execution_mode: board.execution_mode.clone(),
+        log_level: board.log_level,
+        version: board.version,
+        node_count,
+        connection_count: connection_count / 2,
+        variable_count: board.variables.len() as u32,
+        layer_count: board.layers.len() as u32,
+        comment_count: board.comments.len() as u32,
+        pages: Vec::new(),
+        node_types,
+        entry_nodes,
+        updated_at: board.updated_at,
+        scored_node_count: with_metrics.then_some(scored_node_count),
+        metrics: with_metrics.then(|| board.summary_metrics()),
+    }
+}
+
+/// Lightweight listing of the app's local boards. Unlike `get_app_boards` this never crosses
+/// the IPC boundary with node graphs, so listing pages stay cheap however large the boards get.
+#[tauri::command(async)]
+pub async fn get_app_board_summaries(
+    app_handle: AppHandle,
+    app_id: String,
+    with_node_types: Option<bool>,
+    with_metrics: Option<bool>,
+) -> Result<Vec<LocalBoardSummary>, TauriFunctionError> {
+    let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
+    let with_node_types = with_node_types.unwrap_or(false);
+    let with_metrics = with_metrics.unwrap_or(false);
+
+    let mut summaries = vec![];
+    if let Ok(app) = App::load(app_id, flow_like_state).await {
+        for board_id in app.boards.iter() {
+            if let Ok(board) = app.open_board(board_id.clone(), Some(false), None).await {
+                summaries.push(local_board_summary(
+                    &*board.lock().await,
+                    with_node_types,
+                    with_metrics,
+                ));
+            }
+        }
+    }
+
+    Ok(summaries)
+}
+
+#[derive(serde::Serialize)]
+pub struct LocalBoardVariables {
+    pub board_id: String,
+    pub board_name: String,
+    pub variables: std::collections::HashMap<String, flow_like::flow::variable::Variable>,
+    pub refs: std::collections::HashMap<String, String>,
+}
+
+/// Every local board's variables without the boards. Secret values are stripped, matching the
+/// remote endpoint, so a caller cannot tell the two sources apart.
+#[tauri::command(async)]
+pub async fn get_app_board_variables(
+    app_handle: AppHandle,
+    app_id: String,
+) -> Result<Vec<LocalBoardVariables>, TauriFunctionError> {
+    let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
+
+    let mut result = vec![];
+    if let Ok(app) = App::load(app_id, flow_like_state).await {
+        for board_id in app.boards.iter() {
+            if let Ok(board) = app.open_board(board_id.clone(), Some(false), None).await {
+                let board = board.lock().await;
+                let (variables, refs) = board.public_variables();
+                result.push(LocalBoardVariables {
+                    board_id: board.id.clone(),
+                    board_name: board.name.clone(),
+                    variables,
+                    refs,
+                });
+            }
+        }
+    }
+
+    Ok(result)
+}
+
 #[tauri::command(async)]
 pub async fn get_app_board(
     app_handle: AppHandle,

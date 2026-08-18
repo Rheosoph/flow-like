@@ -102,6 +102,9 @@ async fn refresh_open_board_definitions(
             .refresh_node_definitions(flow_state.clone())
             .await;
     }
+    // Definitions changed without moving `updated_at`/`hash`; cached sync snapshots would
+    // otherwise keep serving the old node metadata.
+    crate::state::TauriBoardSyncState::invalidate_all(app_handle);
 
     Ok(boards.len())
 }

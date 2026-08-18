@@ -5,7 +5,10 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::wasm_catalog::{app_wasm_nodes, hydrate_board_wasm_metadata},
+    routes::app::{
+        board::scoring::save_board_and_refresh_summary,
+        wasm_catalog::{app_wasm_nodes, hydrate_board_wasm_metadata},
+    },
     state::AppState,
 };
 use axum::{
@@ -97,7 +100,8 @@ pub async fn apply_flowscript(
     .map_err(|error| ApiError::bad_request(error.to_string()))?;
 
     if !result.commands.is_empty() {
-        board.save(None).await?;
+        let put = save_board_and_refresh_summary(&state, &app_id, &board).await?;
+        state.seed_board_cache(&app_id, &board_id, board, &put);
     }
 
     Ok(Json(result))

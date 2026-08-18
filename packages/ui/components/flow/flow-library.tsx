@@ -23,10 +23,10 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { useMemo } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
 import { cn, formatRelativeTime } from "../../lib";
-import { type IBoard, IExecutionMode } from "../../lib/schema/flow/board";
+import { IExecutionMode } from "../../lib/schema/flow/board";
+import type { IBoardSummary } from "../../lib/schema/flow/board-summary";
 import { useBackend } from "../../state/backend-state";
 import type { IApp } from "../../types";
 import { Badge } from "../ui/badge";
@@ -68,7 +68,7 @@ interface FlowLibraryHeaderProps {
 }
 
 interface FlowLibraryBoardsSectionProps {
-	boards: UseQueryResult<IBoard[]>;
+	boards: UseQueryResult<IBoardSummary[]>;
 	app?: IApp;
 	boardCreation: FlowLibraryBoardCreationState;
 	setBoardCreation: React.Dispatch<
@@ -80,7 +80,7 @@ interface FlowLibraryBoardsSectionProps {
 }
 
 interface FlowLibraryBoardCardProps {
-	board: IBoard;
+	board: IBoardSummary;
 	app: IApp;
 	onOpenBoard: (boardId: string) => Promise<void>;
 	onDeleteBoard: (boardId: string) => Promise<void>;
@@ -437,30 +437,9 @@ export function FlowLibraryBoardCard({
 		board.id,
 	]);
 
-	const aggregatedScores = useMemo((): AggregatedScores | null => {
-		const nodes = Object.values(board.nodes);
-		const nodesWithScores = nodes.filter((node) => node.scores);
-		if (nodesWithScores.length === 0) return null;
-
-		return {
-			security: Math.min(
-				...nodesWithScores.map((node) => node.scores?.security ?? 10),
-			),
-			privacy: Math.min(
-				...nodesWithScores.map((node) => node.scores?.privacy ?? 10),
-			),
-			performance: Math.min(
-				...nodesWithScores.map((node) => node.scores?.performance ?? 10),
-			),
-			governance: Math.min(
-				...nodesWithScores.map((node) => node.scores?.governance ?? 10),
-			),
-			reliability: Math.min(
-				...nodesWithScores.map((node) => node.scores?.reliability ?? 10),
-			),
-			cost: Math.min(...nodesWithScores.map((node) => node.scores?.cost ?? 10)),
-		};
-	}, [board.nodes]);
+	// Summaries carry the server-aggregated minimum per category — the same fold the
+	// card used to run over every node of a full board.
+	const aggregatedScores: AggregatedScores | null = board.scores ?? null;
 
 	return (
 		<BubbleActions
@@ -509,9 +488,9 @@ export function FlowLibraryBoardCard({
 								<Badge variant="secondary" className="text-[10px] px-1.5 py-0">
 									{board.stage}
 								</Badge>
-								<ExecutionModeBadge mode={board.execution_mode} />
+								<ExecutionModeBadge mode={board.executionMode} />
 								<span className="text-[10px] text-muted-foreground">
-									{board.log_level}
+									{board.logLevel}
 								</span>
 							</div>
 						</div>
@@ -579,7 +558,7 @@ export function FlowLibraryBoardCard({
 								<TooltipTrigger asChild>
 									<span className="flex items-center gap-1">
 										<SquareMousePointerIcon className="h-3 w-3" />
-										{Object.keys(board.nodes).length}
+										{board.nodeCount}
 									</span>
 								</TooltipTrigger>
 								<TooltipContent>{t('nodes', 'Nodes')}</TooltipContent>
@@ -588,7 +567,7 @@ export function FlowLibraryBoardCard({
 								<TooltipTrigger asChild>
 									<span className="flex items-center gap-1">
 										<VariableIcon className="h-3 w-3" />
-										{Object.keys(board.variables).length}
+										{board.variableCount}
 									</span>
 								</TooltipTrigger>
 								<TooltipContent>{t('variables', 'Variables')}</TooltipContent>
@@ -605,7 +584,7 @@ export function FlowLibraryBoardCard({
 						</div>
 						<span className="flex items-center gap-1">
 							<Calendar className="h-3 w-3" />
-							{formatRelativeTime(board.updated_at)}
+							{formatRelativeTime(board.updatedAt)}
 						</span>
 					</div>
 				</CardContent>

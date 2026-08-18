@@ -18,7 +18,7 @@ import {
 	type ZapIcon,
 } from "lucide-react";
 import Link from "next/link";
-import type { IApp, IBoard } from "../../../lib";
+import type { IApp, IBoardListing } from "../../../lib";
 import { IAppVisibility } from "../../../lib";
 import { formatDuration, formatRelativeTime } from "../../../lib/date";
 import { cn } from "../../../lib/utils";
@@ -111,7 +111,7 @@ export function MissionControl({
 }: Readonly<{
 	appId: string;
 	app: IApp;
-	boards: IBoard[];
+	boards: IBoardListing[];
 	surfaces: ProjectSurface[];
 	runs: ProjectRunHealth;
 	aiAct: AiActStatus;
@@ -228,7 +228,7 @@ export function MissionControl({
 							<div className="space-y-0.5">
 								{boards.slice(0, 5).map((board) => {
 									const health = runs.byBoard.get(board.id);
-									const nodeCount = Object.keys(board.nodes).length;
+									const nodeCount = board.nodeCount;
 									return (
 										<Link
 											key={board.id}
@@ -265,9 +265,9 @@ export function MissionControl({
 														count: nodeCount,
 													})}
 												</span>
-												{board.updated_at && (
+												{board.updatedAt && (
 													<span className="hidden md:inline">
-														{formatRelativeTime(board.updated_at, "narrow")}
+														{formatRelativeTime(board.updatedAt, "narrow")}
 													</span>
 												)}
 												<ArrowRightIcon className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-100" />

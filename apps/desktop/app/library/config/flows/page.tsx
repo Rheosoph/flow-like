@@ -25,9 +25,9 @@ export default function Page() {
 		typeof id === "string",
 	);
 	const boards = useInvoke(
-		backend.boardState.getBoards,
+		backend.boardState.getBoardSummaries,
 		backend.boardState,
-		[id ?? ""],
+		[id ?? "", ["metrics", "node_types"]],
 		typeof id === "string",
 	);
 

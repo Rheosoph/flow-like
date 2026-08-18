@@ -19,6 +19,11 @@ import type {
 } from "../../lib";
 import type { IJwks, IRealtimeAccess } from "../../lib";
 import type {
+	IBoardSummary,
+	IBoardSummaryInclude,
+	IBoardVariables,
+} from "../../lib/schema/flow/board-summary";
+import type {
 	BoardEditJob,
 	BoardEditJobDeliveryClaim,
 	BoardEditJobResolution,
@@ -109,7 +114,23 @@ export interface IBoardServerResetResult {
 }
 
 export interface IBoardState {
+	/**
+	 * Every board of the app **in full**, graph included. Roughly a megabyte of JSON per
+	 * medium board, so only reach for this when the nodes themselves are needed.
+	 * @deprecated Use `getBoardSummaries` for lists, names, counts and pages, or
+	 * `getBoardVariables` for variables.
+	 */
 	getBoards(appId: string): Promise<IBoard[]>;
+	/**
+	 * Board metadata, counts, scores and pages for every board of the app, served from a
+	 * database cache. `include: ["node_types"]` adds distinct node types and entry nodes.
+	 */
+	getBoardSummaries(
+		appId: string,
+		include?: IBoardSummaryInclude[],
+	): Promise<IBoardSummary[]>;
+	/** Every board's variables (secret values stripped) without the boards themselves. */
+	getBoardVariables(appId: string): Promise<IBoardVariables[]>;
 	getCatalog(appId: string): Promise<INode[]>;
 	getBoard(
 		appId: string,

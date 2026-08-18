@@ -8,6 +8,10 @@ import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import {
+	useBoundInputValue,
+	valueRevisionOf,
+} from "../hooks/use-bound-input-value";
 import type { BoundValue, CheckboxComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -25,16 +29,17 @@ export function A2UICheckbox({
 	const { t } = useTranslation("common");
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
-	const checked = useResolved<boolean>(component.checked);
+	const [checked, setChecked] = useBoundInputValue<boolean>(
+		component.checked,
+		false,
+		{ revision: valueRevisionOf(component) },
+	);
 	const label = useResolved<string>(component.label);
 	const disabled = useResolved<boolean>(component.disabled);
-	const { setByPath } = useData();
 
 	const handleChange = (newChecked: boolean | "indeterminate") => {
 		const value = newChecked === true;
-		if (component.checked && "path" in component.checked) {
-			setByPath(component.checked.path, value);
-		}
+		setChecked(value);
 		if (onAction) {
 			onAction({
 				type: "userAction",
@@ -57,7 +62,7 @@ export function A2UICheckbox({
 		>
 			<Checkbox
 				id={id}
-				checked={checked ?? false}
+				checked={checked}
 				disabled={disabled}
 				onCheckedChange={handleChange}
 			/>

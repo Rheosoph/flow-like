@@ -503,7 +503,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		activeView === "queries",
 	);
 	const boards = useInvoke(
-		backend.boardState.getBoards,
+		backend.boardState.getBoardSummaries,
 		backend.boardState,
 		[appId],
 		activeView === "actions" && actionBoardsRequested,

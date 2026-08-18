@@ -11,6 +11,60 @@ use flow_like::flow::{
 };
 use flow_like_wasm::manifest::PackageNodeEntry;
 use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter};
+use std::sync::Arc;
+
+/// An app's WASM node catalog together with a token that changes whenever the catalog does.
+pub struct AppWasmNodes {
+    pub nodes: Vec<Node>,
+    /// Empty for apps without packages, otherwise a digest of every (package, node, version).
+    pub fingerprint: String,
+}
+
+/// [`app_wasm_nodes`] behind a short-lived per-app cache.
+///
+/// The board sync endpoint needs this on every poll; without the cache each poll would pay two
+/// database round trips for a catalog that changes only when packages are installed. Package
+/// mutations call `invalidate_wasm_resolve`, which drops this entry too; the TTL bounds staleness
+/// against writes on other replicas.
+pub async fn app_wasm_nodes_cached(
+    state: &AppState,
+    app_id: &str,
+) -> Result<Arc<AppWasmNodes>, ApiError> {
+    if let Some(cached) = state.app_wasm_nodes_cache.get(app_id) {
+        return Ok(cached);
+    }
+    let nodes = app_wasm_nodes(state, app_id).await?;
+    let fingerprint = if nodes.is_empty() {
+        String::new()
+    } else {
+        let mut hasher = blake3::Hasher::new();
+        let mut identities: Vec<String> = nodes
+            .iter()
+            .map(|node| {
+                format!(
+                    "{}\u{1f}{}\u{1f}{:?}",
+                    node.wasm
+                        .as_ref()
+                        .map(|wasm| wasm.package_id.as_str())
+                        .unwrap_or_default(),
+                    node.name,
+                    node.version
+                )
+            })
+            .collect();
+        identities.sort();
+        for identity in identities {
+            hasher.update(identity.as_bytes());
+            hasher.update(b"\0");
+        }
+        hasher.finalize().to_hex().to_string()
+    };
+    let entry = Arc::new(AppWasmNodes { nodes, fingerprint });
+    state
+        .app_wasm_nodes_cache
+        .insert(app_id.to_string(), entry.clone());
+    Ok(entry)
+}
 
 pub async fn app_wasm_nodes(state: &AppState, app_id: &str) -> Result<Vec<Node>, ApiError> {
     let packages = app_package::Entity::find()

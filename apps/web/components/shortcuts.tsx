@@ -77,7 +77,7 @@ export function Shortcuts() {
 				);
 			}
 
-			const boards = await backend.boardState.getBoards(app.id);
+			const boards = await backend.boardState.getBoardSummaries(app.id);
 			const firstBoard = boards?.[0];
 
 			if (firstBoard) {
@@ -113,7 +113,7 @@ export function Shortcuts() {
 				return appData?.[1] || null;
 			}}
 			getBoardsByAppId={async (backend: any, appId: string) => {
-				return await backend.boardState.getBoards(appId);
+				return await backend.boardState.getBoardSummaries(appId);
 			}}
 			toast={toast}
 			auth={auth}

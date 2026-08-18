@@ -125,7 +125,8 @@ function BindingRow({
 		parseUint8ArrayToJson(event.config) ?? {},
 	);
 	const target = event.node_id
-		? (row.board.nodes?.[event.node_id]?.friendly_name ??
+		? (row.entryPoints.find((node) => node.id === event.node_id)
+				?.friendly_name ??
 			t('aNodeThatNoLongerExists', 'a Node that no longer exists'))
 		: (row.pages.find((page) => page.pageId === event.default_page_id)?.name ??
 			t('aPage', 'a page'));
