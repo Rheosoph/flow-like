@@ -63,3 +63,12 @@ assets/
 *.swp
 *.swo
 .DS_Store
+
+# Managed live-deployment exclusions
+api.config.json
+**/api.config.json
+*.pem
+**/*.pem
+.cargo/config.toml
+**/values-secrets.yml
+**/values-secret*.yml
