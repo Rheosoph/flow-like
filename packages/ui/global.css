@@ -389,16 +389,25 @@
 	padding-inline: max(0px, calc((100% - var(--fl-lesson-measure)) / 2));
 }
 
-.fl-lesson-prose [data-slate-editor] > :has(> figure, > div > figure) {
+/* Only top-level image and video blocks widen; media nested in a quote,
+   column or table stays inside its parent block. */
+.fl-lesson-prose [data-slate-editor] > :is(.slate-img, .slate-video) {
 	margin-inline: min(
 		0px,
 		calc((var(--fl-lesson-measure) - var(--fl-lesson-figure-canvas)) / 2)
 	);
 }
 
-.fl-lesson-prose [data-slate-editor] > p {
+/* Plate renders paragraphs as div.slate-p, never <p>. */
+.fl-lesson-prose [data-slate-editor] > :is(p, .slate-p) {
 	margin-block: 0 1rem;
 	padding-block: 0;
+}
+
+/* Indent-list items are paragraphs wrapping their own ul/ol; the list's
+   margins collapse through and set the item rhythm, so the block adds none. */
+.fl-lesson-prose [data-slate-editor] > .slate-p:has(> :is(ul, ol)) {
+	margin-block: 0;
 }
 
 .fl-lesson-prose [data-slate-editor] > :is(h1, h2, h3) {
@@ -480,10 +489,16 @@
 	text-align: center;
 }
 
-/* Media that never made it into a figure still has to respect the column. */
-.fl-lesson-prose :is(img, video, canvas, iframe) {
+/* Media that never made it into a figure still has to respect the column.
+   Embed iframes keep their own height: the YouTube embed sizes its iframe to
+   the 16:9 box, which `height: auto` would collapse to the attribute height. */
+.fl-lesson-prose :is(img, video, canvas) {
 	max-width: 100%;
 	height: auto;
+}
+
+.fl-lesson-prose iframe {
+	max-width: 100%;
 }
 
 .fl-lesson-prose figure > div {
