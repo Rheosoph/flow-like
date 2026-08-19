@@ -239,8 +239,9 @@ function BackendTile({ stats }: { readonly stats: IAgentBackendStats }) {
 						</span>
 					</div>
 					<div className="mt-1 text-[11px] tabular-nums text-muted-foreground">
-						{stats.errors.toLocaleString()} {t('failed', 'failed ·')}{" "}
-						{stats.stageErrors.toLocaleString()} {t('stageErrors', 'stage errors')}
+						{stats.errors.toLocaleString()} {t("failed", "failed ·")}{" "}
+						{stats.stageErrors.toLocaleString()}{" "}
+						{t("stageErrors", "stage errors")}
 					</div>
 					{stats.topErrorKinds.length > 0 ? (
 						<ul className="mt-3 space-y-1 border-t pt-2">
@@ -311,7 +312,7 @@ export function AgentBackendsCard({
 			<CardHeader className="pb-3">
 				<CardTitle className="flex items-center gap-2 text-base">
 					<Terminal className="h-4 w-4 text-primary" />
-					{t('agentBackends', 'Agent backends')}
+					{t("agentBackends", "Agent backends")}
 				</CardTitle>
 				<CardDescription>
 					{`Local agent CLI health from anonymous aggregate events — start outcomes, durations and classified error kinds only.`}

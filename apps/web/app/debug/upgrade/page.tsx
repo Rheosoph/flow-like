@@ -1,12 +1,12 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Dialog,
 	DialogContent,
 	UpgradeDialogBody,
 } from "@flow-like/flow-like-ui";
 import type { ITierInfo } from "@flow-like/flow-like-ui/state/backend-state/user-state";
+import { useTranslation } from "@flow-like/locales";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useMemo } from "react";
 
@@ -98,17 +98,31 @@ function UpgradeDebugContent() {
 	const triggerMessage = TRIGGER_MESSAGES[reason];
 
 	const headline = useMemo(() => {
-		if (reason === "model-tier") return t('unlockMorePowerfulAiModels', 'Unlock more powerful AI models');
-		if (reason === "generic") return t('unlockTheFullPowerOfFlowlike', 'Unlock the full power of Flow-Like');
-		return t('youveOutgrownYourPlan', 'You\'ve outgrown your plan');
+		if (reason === "model-tier")
+			return t("unlockMorePowerfulAiModels", "Unlock more powerful AI models");
+		if (reason === "generic")
+			return t(
+				"unlockTheFullPowerOfFlowlike",
+				"Unlock the full power of Flow-Like",
+			);
+		return t("youveOutgrownYourPlan", "You've outgrown your plan");
 	}, [reason]);
 
 	const subheadline = useMemo(() => {
 		if (reason === "model-tier")
-			return t('thisModelIsPartOfAHigherPlanUpgradeToUseItInYourFlowsAndChats', 'This model is part of a higher plan. Upgrade to use it in your flows and chats.');
+			return t(
+				"thisModelIsPartOfAHigherPlanUpgradeToUseItInYourFlowsAndChats",
+				"This model is part of a higher plan. Upgrade to use it in your flows and chats.",
+			);
 		if (reason === "generic")
-			return t('moreProjectsPremiumAiModelsAndFasterCloudExecutionsUpgradeInSecondsCancelAnytime', 'More projects, premium AI models and faster cloud executions — upgrade in seconds, cancel anytime.');
-		return t('getRoomForMoreOnlineProjectsYourExistingWorkStaysExactlyWhereItIs', 'Get room for more online projects — your existing work stays exactly where it is.');
+			return t(
+				"moreProjectsPremiumAiModelsAndFasterCloudExecutionsUpgradeInSecondsCancelAnytime",
+				"More projects, premium AI models and faster cloud executions — upgrade in seconds, cancel anytime.",
+			);
+		return t(
+			"getRoomForMoreOnlineProjectsYourExistingWorkStaysExactlyWhereItIs",
+			"Get room for more online projects — your existing work stays exactly where it is.",
+		);
 	}, [reason]);
 
 	return (
@@ -124,12 +138,15 @@ function UpgradeDebugContent() {
 					<UpgradeDialogBody
 						mode={mode}
 						contact={{
-							name: t('enterpriseSales', 'Enterprise Sales'),
+							name: t("enterpriseSales", "Enterprise Sales"),
 							email: "enterprise@flow-like.com",
 							url: "https://flow-like.com",
 							message:
 								mode === "enterprise"
-									? t('yourWorkspaceIsManagedByYourOrganizationReachOutToYourAdministratorToUnlockMoreProjectsModelsOrCapacity', 'Your workspace is managed by your organization. Reach out to your administrator to unlock more projects, models or capacity.')
+									? t(
+											"yourWorkspaceIsManagedByYourOrganizationReachOutToYourAdministratorToUnlockMoreProjectsModelsOrCapacity",
+											"Your workspace is managed by your organization. Reach out to your administrator to unlock more projects, models or capacity.",
+										)
 									: undefined,
 						}}
 						headline={headline}

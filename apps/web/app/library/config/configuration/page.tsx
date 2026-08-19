@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Card,
@@ -20,6 +19,7 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import {
 	ChevronDownIcon,
 	ChevronRightIcon,
@@ -64,10 +64,13 @@ export default function ConfigurationPage() {
 						<SettingsIcon className="w-8 h-8 text-green-600 dark:text-green-400" />
 					</div>
 					<h3 className="text-xl font-semibold mb-2">
-						{t('noConfigurationNeeded', '✅ No Configuration Needed')}
+						{t("noConfigurationNeeded", "✅ No Configuration Needed")}
 					</h3>
 					<p className="text-muted-foreground">
-						{t('yourApplicationDoesnapostHaveAnyConfigurableParametersYouaposreReadyToGo', "Your application doesn't have any configurable parameters. You're ready to go! 🚀")}
+						{t(
+							"yourApplicationDoesnapostHaveAnyConfigurableParametersYouaposreReadyToGo",
+							"Your application doesn't have any configurable parameters. You're ready to go! 🚀",
+						)}
 					</p>
 				</div>
 			</main>
@@ -84,12 +87,36 @@ export default function ConfigurationPage() {
 			<div className="w-full py-4 border-b z-50">
 				<div className="flex items-center justify-between">
 					<div>
-						<h2 className="text-2xl font-bold">{t('configuration', 'Configuration')}</h2>
-						<p className="text-muted-foreground mt-1">{t('configureParametersAcrossBoards', 'Configure {{parameters}} across {{boards}}', { parameters: t('countParameters', { defaultValue_one: '{{count}} parameter', defaultValue_other: '{{count}} parameters', count: totalVariables }), boards: t('countBoards', { defaultValue_one: '{{count}} Board', defaultValue_other: '{{count}} Boards', count: configurableBoards.length }) })}
+						<h2 className="text-2xl font-bold">
+							{t("configuration", "Configuration")}
+						</h2>
+						<p className="text-muted-foreground mt-1">
+							{t(
+								"configureParametersAcrossBoards",
+								"Configure {{parameters}} across {{boards}}",
+								{
+									parameters: t("countParameters", {
+										defaultValue_one: "{{count}} parameter",
+										defaultValue_other: "{{count}} parameters",
+										count: totalVariables,
+									}),
+									boards: t("countBoards", {
+										defaultValue_one: "{{count}} Board",
+										defaultValue_other: "{{count}} Boards",
+										count: configurableBoards.length,
+									}),
+								},
+							)}
 						</p>
 					</div>
 					<Badge variant="secondary" className="gap-1">
-						<SettingsIcon className="w-3 h-3" />{t('countParameters', { defaultValue_one: '{{count}} parameter', defaultValue_other: '{{count}} parameters', count: totalVariables })}</Badge>
+						<SettingsIcon className="w-3 h-3" />
+						{t("countParameters", {
+							defaultValue_one: "{{count}} parameter",
+							defaultValue_other: "{{count}} parameters",
+							count: totalVariables,
+						})}
+					</Badge>
 				</div>
 			</div>
 
@@ -148,11 +175,13 @@ function BoardConfig({
 									<WorkflowIcon className="w-5 h-5 text-primary" />
 								</div>
 								<div>
-									<CardTitle className="text-left">{board.board_name}</CardTitle>
+									<CardTitle className="text-left">
+										{board.board_name}
+									</CardTitle>
 									<CardDescription className="text-left">
-										{t('countConfigurableParameters', {
-											defaultValue_one: '{{count}} configurable parameter',
-											defaultValue_other: '{{count}} configurable parameters',
+										{t("countConfigurableParameters", {
+											defaultValue_one: "{{count}} configurable parameter",
+											defaultValue_other: "{{count}} configurable parameters",
 											count: variables.length,
 										})}
 									</CardDescription>
@@ -160,9 +189,9 @@ function BoardConfig({
 							</div>
 							<div className="flex items-center gap-2">
 								<Badge variant="outline" className="gap-1">
-									{t('countParameters', {
-										defaultValue_one: '{{count}} parameter',
-										defaultValue_other: '{{count}} parameters',
+									{t("countParameters", {
+										defaultValue_one: "{{count}} parameter",
+										defaultValue_other: "{{count}} parameters",
 										count: variables.length,
 									})}
 								</Badge>

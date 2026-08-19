@@ -164,7 +164,10 @@ function PausedHint({ reason }: { reason: PausedReason }) {
 	if (!reason) return null;
 	const label =
 		reason === "error"
-			? t('previewUnavailableShowingStaticCard', 'Preview unavailable — showing static card')
+			? t(
+					"previewUnavailableShowingStaticCard",
+					"Preview unavailable — showing static card",
+				)
 			: "Preview paused";
 	const Icon = reason === "error" ? TriangleAlert : MonitorPause;
 	return (
@@ -337,12 +340,12 @@ export function WidgetCard({
 							{live ? (
 								<>
 									<Square className="h-3 w-3" />
-									{t('stop', 'Stop')}
+									{t("stop", "Stop")}
 								</>
 							) : (
 								<>
 									<Play className="h-3 w-3" />
-									{t('preview', 'Preview')}
+									{t("preview", "Preview")}
 								</>
 							)}
 						</Button>

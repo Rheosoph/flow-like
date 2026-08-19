@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Card,
@@ -20,6 +19,7 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import {
 	ChevronDownIcon,
 	ChevronRightIcon,
@@ -63,16 +63,27 @@ export default function ConfigurationPage() {
 					<div className="w-16 h-16 mx-auto bg-emerald-500/10 rounded-full flex items-center justify-center">
 						<SettingsIcon className="w-8 h-8 text-emerald-500" />
 					</div>
-					<h3 className="text-xl font-semibold">{t('noConfigurationNeeded', 'No Configuration Needed')}</h3>
+					<h3 className="text-xl font-semibold">
+						{t("noConfigurationNeeded", "No Configuration Needed")}
+					</h3>
 					<p className="text-muted-foreground">
-						{t('yourAppDoesnapostHaveAnyConfigurableParametersYet', "Your app doesn't have any configurable parameters yet.")}
+						{t(
+							"yourAppDoesnapostHaveAnyConfigurableParametersYet",
+							"Your app doesn't have any configurable parameters yet.",
+						)}
 					</p>
 					<div className="p-4 rounded-lg bg-muted/50 text-sm text-muted-foreground text-left space-y-2">
 						<p className="font-medium text-foreground">
-							{t('whatAreConfigurableParameters', 'What are configurable parameters?')}
+							{t(
+								"whatAreConfigurableParameters",
+								"What are configurable parameters?",
+							)}
 						</p>
 						<p>
-							{t('whenYouBuildFlowsYouCanMarkVariablesAsQuotexposedquotAndQuoteditablequotTheseShowUpHereSoAppUsersCanCustomizeBehaviorWithoutEditingTheFlowItselfLikeApiKeysThresholdsOrToggleSwitches', "When you build Flows, you can mark variables as \"Exposed\" and \"Editable\". These show up here so app users can customize behavior without editing the flow itself — like API keys, thresholds, or toggle switches.")}
+							{t(
+								"whenYouBuildFlowsYouCanMarkVariablesAsQuotexposedquotAndQuoteditablequotTheseShowUpHereSoAppUsersCanCustomizeBehaviorWithoutEditingTheFlowItselfLikeApiKeysThresholdsOrToggleSwitches",
+								'When you build Flows, you can mark variables as "Exposed" and "Editable". These show up here so app users can customize behavior without editing the flow itself — like API keys, thresholds, or toggle switches.',
+							)}
 						</p>
 					</div>
 				</div>
@@ -90,9 +101,14 @@ export default function ConfigurationPage() {
 			<div className="w-full py-4 border-b">
 				<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
 					<div className="space-y-1">
-						<h2 className="text-2xl font-bold">{t('configuration', 'Configuration')}</h2>
+						<h2 className="text-2xl font-bold">
+							{t("configuration", "Configuration")}
+						</h2>
 						<p className="text-sm text-muted-foreground">
-							{t('adjustExposedParametersAcrossYourFlowsNoCodeChangesNeeded', "Adjust exposed parameters across your flows — no code changes needed.")}
+							{t(
+								"adjustExposedParametersAcrossYourFlowsNoCodeChangesNeeded",
+								"Adjust exposed parameters across your flows — no code changes needed.",
+							)}
 						</p>
 					</div>
 					<Badge
@@ -100,15 +116,15 @@ export default function ConfigurationPage() {
 						className="gap-1 shrink-0 self-start sm:self-auto"
 					>
 						<SettingsIcon className="w-3 h-3" />
-						{t('variablesAcrossFlows', '{{variables}} across {{flows}}', {
-							variables: t('countVariables', {
-								defaultValue_one: '{{count}} variable',
-								defaultValue_other: '{{count}} variables',
+						{t("variablesAcrossFlows", "{{variables}} across {{flows}}", {
+							variables: t("countVariables", {
+								defaultValue_one: "{{count}} variable",
+								defaultValue_other: "{{count}} variables",
 								count: totalVariables,
 							}),
-							flows: t('countFlows', {
-								defaultValue_one: '{{count}} Flow',
-								defaultValue_other: '{{count}} Flows',
+							flows: t("countFlows", {
+								defaultValue_one: "{{count}} Flow",
+								defaultValue_other: "{{count}} Flows",
 								count: configurableBoards.length,
 							}),
 						})}
@@ -171,11 +187,13 @@ function BoardConfig({
 									<WorkflowIcon className="w-5 h-5 text-primary" />
 								</div>
 								<div>
-									<CardTitle className="text-left">{board.board_name}</CardTitle>
+									<CardTitle className="text-left">
+										{board.board_name}
+									</CardTitle>
 									<CardDescription className="text-left">
-										{t('countConfigurableParameters', {
-											defaultValue_one: '{{count}} configurable parameter',
-											defaultValue_other: '{{count}} configurable parameters',
+										{t("countConfigurableParameters", {
+											defaultValue_one: "{{count}} configurable parameter",
+											defaultValue_other: "{{count}} configurable parameters",
 											count: variables.length,
 										})}
 									</CardDescription>
@@ -183,9 +201,9 @@ function BoardConfig({
 							</div>
 							<div className="flex items-center gap-2">
 								<Badge variant="outline" className="gap-1">
-									{t('countParameters', {
-										defaultValue_one: '{{count}} parameter',
-										defaultValue_other: '{{count}} parameters',
+									{t("countParameters", {
+										defaultValue_one: "{{count}} parameter",
+										defaultValue_other: "{{count}} parameters",
 										count: variables.length,
 									})}
 								</Badge>

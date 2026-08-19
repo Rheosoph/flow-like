@@ -153,8 +153,15 @@ export function ForkPermissionWarning({
 		} catch (err) {
 			toast.error(
 				err instanceof Error
-					? t('couldntUpdateTheDefaultRoleMessage', 'Couldn\'t update the default role: {{message}}', { message: err.message })
-					: t('couldntUpdateTheDefaultRole', 'Couldn\'t update the default role.'),
+					? t(
+							"couldntUpdateTheDefaultRoleMessage",
+							"Couldn't update the default role: {{message}}",
+							{ message: err.message },
+						)
+					: t(
+							"couldntUpdateTheDefaultRole",
+							"Couldn't update the default role.",
+						),
 			);
 		} finally {
 			setFixing(false);
@@ -166,11 +173,23 @@ export function ForkPermissionWarning({
 	return (
 		<Alert variant="destructive" className="mt-4">
 			<AlertTriangleIcon className="w-4 h-4" />
-			<AlertTitle>{t('forkingWontWorkForMembersYet', 'Forking won\'t work for members yet')}</AlertTitle>
+			<AlertTitle>
+				{t(
+					"forkingWontWorkForMembersYet",
+					"Forking won't work for members yet",
+				)}
+			</AlertTitle>
 			<AlertDescription>
 				<p>
-					{t('forkingIsEnabledButTheDefaultRole', 'Forking is enabled, but the default role')}{" "}
-					<span className="font-medium">{defaultRole.name}</span> {t('isMissingReadPermissionsAForkNeedsUntilTheseAreGrantedTheForkButtonStaysHiddenForMembers', "is missing read permissions a fork needs. Until these are granted, the Fork button stays hidden for members.")}
+					{t(
+						"forkingIsEnabledButTheDefaultRole",
+						"Forking is enabled, but the default role",
+					)}{" "}
+					<span className="font-medium">{defaultRole.name}</span>{" "}
+					{t(
+						"isMissingReadPermissionsAForkNeedsUntilTheseAreGrantedTheForkButtonStaysHiddenForMembers",
+						"is missing read permissions a fork needs. Until these are granted, the Fork button stays hidden for members.",
+					)}
 				</p>
 				<ul className="list-disc pl-5">
 					{missing.map(({ label, reason }) => (
@@ -199,11 +218,16 @@ export function ForkPermissionWarning({
 						) : (
 							<WrenchIcon className="w-3.5 h-3.5" />
 						)}
-						{fixing ? t('applying', 'Applying…') : t('grantRequiredPermissions', 'Grant required permissions')}
+						{fixing
+							? t("applying", "Applying…")
+							: t("grantRequiredPermissions", "Grant required permissions")}
 					</Button>
 				) : (
 					<p className="text-xs">
-						{t('askTheAppOwnerToGrantThesePermissionsToTheDefaultRole', 'Ask the app owner to grant these permissions to the default role.')}
+						{t(
+							"askTheAppOwnerToGrantThesePermissionsToTheDefaultRole",
+							"Ask the app owner to grant these permissions to the default role.",
+						)}
 					</p>
 				)}
 			</AlertDescription>

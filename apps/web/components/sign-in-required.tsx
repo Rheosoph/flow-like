@@ -1,7 +1,7 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import { Button } from "@flow-like/flow-like-ui/components/ui/button";
+import { useTranslation } from "@flow-like/locales";
 import {
 	ArrowRight,
 	Cloud,
@@ -58,21 +58,21 @@ export function SignInRequired() {
 						<div className="absolute inset-0 bg-primary/30 blur-xl rounded-full" />
 						<Image
 							src="/app-logo-light.webp"
-							alt={t('flowlike2', 'Flow-Like')}
+							alt={t("flowlike2", "Flow-Like")}
 							width={56}
 							height={56}
 							className="dark:hidden relative w-10 h-10 sm:w-14 sm:h-14"
 						/>
 						<Image
 							src="/app-logo.webp"
-							alt={t('flowlike2', 'Flow-Like')}
+							alt={t("flowlike2", "Flow-Like")}
 							width={56}
 							height={56}
 							className="hidden dark:block relative w-10 h-10 sm:w-14 sm:h-14"
 						/>
 					</div>
 					<span className="text-2xl sm:text-3xl font-bold tracking-tight bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text">
-						{t('flowlike2', 'Flow-Like')}
+						{t("flowlike2", "Flow-Like")}
 					</span>
 				</div>
 
@@ -85,10 +85,13 @@ export function SignInRequired() {
 								{/* Header */}
 								<div className="text-center space-y-3">
 									<h1 className="text-3xl sm:text-4xl font-bold tracking-tight bg-gradient-to-br from-foreground via-foreground to-muted-foreground bg-clip-text">
-										{t('welcomeBack', 'Welcome back')}
+										{t("welcomeBack", "Welcome back")}
 									</h1>
 									<p className="text-muted-foreground text-sm sm:text-base">
-										{t('signInToAccessYourAiWorkflows', 'Sign in to access your AI workflows')}
+										{t(
+											"signInToAccessYourAiWorkflows",
+											"Sign in to access your AI workflows",
+										)}
 									</p>
 								</div>
 
@@ -107,21 +110,21 @@ export function SignInRequired() {
 											</span>
 										) : (
 											<>
-												{t('signInToContinue', 'Sign In to Continue')}
+												{t("signInToContinue", "Sign In to Continue")}
 												<ArrowRight className="ml-2 h-5 w-5" />
 											</>
 										)}
 									</Button>
 
 									<p className="text-center text-xs sm:text-sm text-muted-foreground">
-										{t('newHere', 'New here?')}{" "}
+										{t("newHere", "New here?")}{" "}
 										<button
 											type="button"
 											onClick={handleSignIn}
 											disabled={isRedirecting}
 											className="text-primary font-semibold hover:underline underline-offset-2"
 										>
-											{t('createAFreeAccount', 'Create a free account')}
+											{t("createAFreeAccount", "Create a free account")}
 										</button>
 									</p>
 								</div>
@@ -133,7 +136,10 @@ export function SignInRequired() {
 									</div>
 									<div className="relative flex justify-center text-xs uppercase">
 										<span className="bg-card px-4 text-muted-foreground font-medium tracking-wider">
-											{t('orGetTheFullExperience', 'or get the full experience')}
+											{t(
+												"orGetTheFullExperience",
+												"or get the full experience",
+											)}
 										</span>
 									</div>
 								</div>
@@ -143,10 +149,12 @@ export function SignInRequired() {
 									<div className="flex flex-col items-center text-center gap-1">
 										<div className="flex items-center gap-2">
 											<Sparkles className="h-4 w-4 text-primary" />
-											<span className="font-semibold">{t('flowlikeStudio', 'Flow-Like Studio')}</span>
+											<span className="font-semibold">
+												{t("flowlikeStudio", "Flow-Like Studio")}
+											</span>
 										</div>
 										<span className="text-xs text-muted-foreground">
-											{t('offlineAiCloudSync', 'Offline AI & Cloud Sync')}
+											{t("offlineAiCloudSync", "Offline AI & Cloud Sync")}
 										</span>
 									</div>
 									<div className="flex gap-2">
@@ -168,7 +176,7 @@ export function SignInRequired() {
 												>
 													<path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z" />
 												</svg>
-												{t('appStore', 'App Store')}
+												{t("appStore", "App Store")}
 											</Link>
 										</Button>
 										<Button
@@ -189,7 +197,7 @@ export function SignInRequired() {
 												>
 													<path d="M3.609 1.814L13.792 12 3.61 22.186a.996.996 0 01-.61-.92V2.734a1 1 0 01.609-.92zm10.89 10.893l2.302 2.302-10.937 6.333 8.635-8.635zm3.199-3.198l2.807 1.626a1 1 0 010 1.73l-2.808 1.626L15.206 12l2.492-2.491zM5.864 2.658L16.8 8.99l-2.302 2.302-8.634-8.634z" />
 												</svg>
-												{t('googlePlay', 'Google Play')}
+												{t("googlePlay", "Google Play")}
 											</Link>
 										</Button>
 									</div>
@@ -210,23 +218,26 @@ export function SignInRequired() {
 													<Sparkles className="h-4 w-4 text-white" />
 												</div>
 												<span className="font-bold text-xl">
-													{t('flowlikeStudio', 'Flow-Like Studio')}
+													{t("flowlikeStudio", "Flow-Like Studio")}
 												</span>
 											</div>
 											<p className="text-sm text-muted-foreground">
-												{t('desktopMobileAppWithSuperpowers', 'Desktop & mobile app with superpowers')}
+												{t(
+													"desktopMobileAppWithSuperpowers",
+													"Desktop & mobile app with superpowers",
+												)}
 											</p>
 										</div>
 										<span className="text-xs font-semibold text-primary bg-primary/15 px-3 py-1.5 rounded-full border border-primary/25 shadow-sm">
-											{t('recommended', 'Recommended')}
+											{t("recommended", "Recommended")}
 										</span>
 									</div>
 
 									<div className="grid grid-cols-3 gap-2.5">
 										{[
-											{ icon: Cloud, label: t('cloudSync', 'Cloud Sync') },
-											{ icon: WifiOff, label: t('offline', 'Offline') },
-											{ icon: Laptop, label: t('localAi', 'Local AI') },
+											{ icon: Cloud, label: t("cloudSync", "Cloud Sync") },
+											{ icon: WifiOff, label: t("offline", "Offline") },
+											{ icon: Laptop, label: t("localAi", "Local AI") },
 										].map((item) => (
 											<div
 												key={item.label}
@@ -252,7 +263,7 @@ export function SignInRequired() {
 											rel="noopener noreferrer"
 										>
 											<Download className="mr-2 h-4 w-4" />
-											{t('downloadForFree', 'Download for Free')}
+											{t("downloadForFree", "Download for Free")}
 											<ExternalLink className="ml-2 h-3.5 w-3.5 opacity-70" />
 										</Link>
 									</Button>
@@ -276,7 +287,7 @@ export function SignInRequired() {
 												>
 													<path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z" />
 												</svg>
-												{t('appStore', 'App Store')}
+												{t("appStore", "App Store")}
 											</Link>
 										</Button>
 										<Button
@@ -297,7 +308,7 @@ export function SignInRequired() {
 												>
 													<path d="M3.609 1.814L13.792 12 3.61 22.186a.996.996 0 01-.61-.92V2.734a1 1 0 01.609-.92zm10.89 10.893l2.302 2.302-10.937 6.333 8.635-8.635zm3.199-3.198l2.807 1.626a1 1 0 010 1.73l-2.808 1.626L15.206 12l2.492-2.491zM5.864 2.658L16.8 8.99l-2.302 2.302-8.634-8.634z" />
 												</svg>
-												{t('googlePlay', 'Google Play')}
+												{t("googlePlay", "Google Play")}
 											</Link>
 										</Button>
 									</div>
@@ -309,11 +320,19 @@ export function SignInRequired() {
 					{/* Footer features - Updated stats */}
 					<div className="hidden sm:flex flex-wrap justify-center gap-6 mt-10 text-muted-foreground">
 						{[
-							{ icon: Zap, label: t('nocodeAi', 'No-Code AI'), color: "text-yellow-500" },
-							{ icon: Workflow, label: t('500Nodes', '500+ Nodes'), color: "text-primary" },
+							{
+								icon: Zap,
+								label: t("nocodeAi", "No-Code AI"),
+								color: "text-yellow-500",
+							},
+							{
+								icon: Workflow,
+								label: t("500Nodes", "500+ Nodes"),
+								color: "text-primary",
+							},
 							{
 								icon: Puzzle,
-								label: t('100Integrations', '100+ Integrations'),
+								label: t("100Integrations", "100+ Integrations"),
 								color: "text-violet-500",
 							},
 						].map((item) => (

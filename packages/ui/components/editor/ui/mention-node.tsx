@@ -101,7 +101,9 @@ export function MentionInputElement(
 				</span>
 
 				<InlineComboboxContent className="my-1.5">
-					<InlineComboboxEmpty>{t('noResults2', 'No results')}</InlineComboboxEmpty>
+					<InlineComboboxEmpty>
+						{t("noResults2", "No results")}
+					</InlineComboboxEmpty>
 
 					<InlineComboboxGroup>
 						{items.map((item) => (

@@ -18,7 +18,6 @@ import {
 	useIsWideScreen,
 	useLessonWorkspaceLayout,
 } from "@flow-like/flow-like-ui";
-import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import type {
 	BoardSnapshot,
 	Challenge,
@@ -26,6 +25,7 @@ import type {
 	LessonAction,
 	LessonAppRef,
 } from "@flow-like/flow-like-ui";
+import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import { BOARD_BRIDGE_NATIVE_EVENT } from "@flow-like/flow-like-ui/lib/learn/board-bridge";
 import {
 	type UserLessonProgress,

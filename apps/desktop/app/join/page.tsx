@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	LoadingScreen,
@@ -11,6 +10,7 @@ import {
 	attemptJoinWithRetry,
 	joinFailureMessage,
 } from "@flow-like/flow-like-ui/lib/join-invite";
+import { useTranslation } from "@flow-like/locales";
 import { LogIn } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -86,9 +86,14 @@ export default function JoinPage() {
 		return (
 			<main className="flex h-full w-full flex-1 items-center justify-center p-6">
 				<div className="w-full max-w-md space-y-4 rounded-xl border bg-card p-8 text-center shadow-floating">
-					<h2 className="text-xl font-semibold">{t('youaposveBeenInvited', "You've been invited")}</h2>
+					<h2 className="text-xl font-semibold">
+						{t("youaposveBeenInvited", "You've been invited")}
+					</h2>
 					<p className="text-sm text-muted-foreground">
-						{t('signInToAcceptThisInviteYouaposllBeBroughtRightBackHereAfterwards', "Sign in to accept this invite. You'll be brought right back here afterwards.")}
+						{t(
+							"signInToAcceptThisInviteYouaposllBeBroughtRightBackHereAfterwards",
+							"Sign in to accept this invite. You'll be brought right back here afterwards.",
+						)}
 					</p>
 					<Button
 						className="w-full"
@@ -96,7 +101,9 @@ export default function JoinPage() {
 						disabled={isRedirecting}
 					>
 						<LogIn className="mr-2 h-4 w-4" />
-						{isRedirecting ? t('openingSignin', 'Opening sign-in...') : t('signInToContinue', 'Sign In to Continue')}
+						{isRedirecting
+							? t("openingSignin", "Opening sign-in...")
+							: t("signInToContinue", "Sign In to Continue")}
 					</Button>
 				</div>
 			</main>
@@ -106,7 +113,11 @@ export default function JoinPage() {
 	return (
 		<LoadingScreen
 			progress={Math.min(30 + attempt * 10, 95)}
-			message={attempt > 0 ? t('settingUpYourAccount', 'Setting up your account...') : undefined}
+			message={
+				attempt > 0
+					? t("settingUpYourAccount", "Setting up your account...")
+					: undefined
+			}
 		/>
 	);
 }

@@ -5,10 +5,7 @@ import * as assert from "assert";
 import * as vscode from "vscode";
 import { validateDecoratorArgument } from "../diagnostics";
 import { analyzeFlowDocument } from "../flowDocument";
-import {
-	FlowDecoratorCompletionProvider,
-	getDecorator,
-} from "../providers";
+import { FlowDecoratorCompletionProvider, getDecorator } from "../providers";
 
 suite("Extension Test Suite", () => {
 	vscode.window.showInformationMessage("Start all tests.");
@@ -46,7 +43,10 @@ suite("Extension Test Suite", () => {
 	});
 
 	test("cache decorator lint accepts bare and object forms", () => {
-		assert.strictEqual(validateDecoratorArgument("cache", undefined), undefined);
+		assert.strictEqual(
+			validateDecoratorArgument("cache", undefined),
+			undefined,
+		);
 		assert.strictEqual(validateDecoratorArgument("cache", "({})"), undefined);
 		assert.strictEqual(
 			validateDecoratorArgument(

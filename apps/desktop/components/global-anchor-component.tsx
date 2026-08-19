@@ -1,12 +1,12 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { openUrl as shellOpen } from "@tauri-apps/plugin-opener";
@@ -448,7 +448,9 @@ const GlobalAnchorHandler = () => {
 									}}
 									style={{ cursor: "pointer" }}
 								>
-									{IOS ? t('openInBrowser', 'Open in browser') : `Open in new window`}
+									{IOS
+										? t("openInBrowser", "Open in browser")
+										: `Open in new window`}
 								</button>
 							</DropdownMenuItem>
 
@@ -463,7 +465,7 @@ const GlobalAnchorHandler = () => {
 									}}
 									style={{ cursor: "pointer" }}
 								>
-									{t('copyLink', 'Copy Link')}
+									{t("copyLink", "Copy Link")}
 								</button>
 							</DropdownMenuItem>
 						</DropdownMenuContent>

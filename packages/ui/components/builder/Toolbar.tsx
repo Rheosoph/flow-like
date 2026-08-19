@@ -116,7 +116,7 @@ export function Toolbar({
 					/>
 					<ToolbarButton
 						icon={Trash2}
-						label={t('delete', 'Delete')}
+						label={t("delete", "Delete")}
 						shortcut="⌫"
 						onClick={() => deleteComponents(selection.componentIds)}
 						disabled={!hasSelection}
@@ -128,7 +128,7 @@ export function Toolbar({
 				{/* Dev Mode */}
 				<ToolbarButton
 					icon={Code}
-					label={t('devModeJsonEditor', 'Dev Mode (JSON Editor)')}
+					label={t("devModeJsonEditor", "Dev Mode (JSON Editor)")}
 					onClick={() => setDevMode(!devMode)}
 					active={devMode}
 				/>
@@ -138,7 +138,7 @@ export function Toolbar({
 				{/* Save */}
 				<ToolbarButton
 					icon={Save}
-					label={t('save', 'Save')}
+					label={t("save", "Save")}
 					shortcut="⌘S"
 					onClick={onSave}
 				/>

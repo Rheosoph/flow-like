@@ -641,7 +641,11 @@ export class TauriBackend implements IBackendState {
 				} else {
 					reject(
 						new Error(
-							i18next.t('uploadFailedWithStatusStatusStatustext', 'Upload failed with status {{status}}: {{statusText}}', { status: xhr.status, statusText: xhr.statusText }),
+							i18next.t(
+								"uploadFailedWithStatusStatusStatustext",
+								"Upload failed with status {{status}}: {{statusText}}",
+								{ status: xhr.status, statusText: xhr.statusText },
+							),
 						),
 					);
 				}
@@ -1112,7 +1116,10 @@ export function ProfileSyncer({
 								console.log(
 									"[ProfileSync] Found",
 									serverProfiles.length,
-									t('profilesOnServerCreatingLocally', 'profiles on server, creating locally...'),
+									t(
+										"profilesOnServerCreatingLocally",
+										"profiles on server, creating locally...",
+									),
 								);
 								let firstProfileId: string | null = null;
 
@@ -1271,7 +1278,7 @@ export function ProfileSyncer({
 				console.log(
 					"[ProfileSync] Sending",
 					profilesToSync.length,
-					t('profilesToSync', 'profiles to sync:'),
+					t("profilesToSync", "profiles to sync:"),
 					JSON.stringify(profilesToSync, null, 2),
 				);
 

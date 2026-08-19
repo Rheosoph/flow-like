@@ -47,7 +47,10 @@ export function TocElement(props: PlateElementProps) {
 					))
 				) : (
 					<div className="text-sm text-gray-500">
-						{t('createAHeadingToDisplayTheTableOfContents', 'Create a heading to display the table of contents.')}
+						{t(
+							"createAHeadingToDisplayTheTableOfContents",
+							"Create a heading to display the table of contents.",
+						)}
 					</div>
 				)}
 			</div>

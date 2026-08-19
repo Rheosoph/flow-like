@@ -192,9 +192,12 @@ export function CommentNode(props: NodeProps<CommentNode>) {
 					>
 						<DialogContent className="max-w-(--breakpoint-xl) min-w-[95dvw] w-full min-h-[90vh] max-h-[90vh] overflow-hidden flex flex-col">
 							<DialogHeader>
-								<DialogTitle>{t('editComment', 'Edit Comment')}</DialogTitle>
+								<DialogTitle>{t("editComment", "Edit Comment")}</DialogTitle>
 								<DialogDescription>
-									{t('editTheTextContentOfTheComment', 'Edit the text content of the comment.')}
+									{t(
+										"editTheTextContentOfTheComment",
+										"Edit the text content of the comment.",
+									)}
 								</DialogDescription>
 							</DialogHeader>
 							<div className="flex flex-col grow max-h-full overflow-auto relative">

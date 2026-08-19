@@ -149,7 +149,9 @@ export function A2UIFeedback({
 	const disabled = useResolved<boolean>(component.disabled) ?? false;
 	const showComment =
 		useResolved<boolean>(component.showComment) ?? mode === "extended";
-	const title = useResolved<string>(component.title) ?? t('wasThisHelpful', 'Was this helpful?');
+	const title =
+		useResolved<string>(component.title) ??
+		t("wasThisHelpful", "Was this helpful?");
 	const description = useResolved<string>(component.description);
 	const positiveLabel =
 		useResolved<string>(component.positiveLabel) ??
@@ -174,12 +176,17 @@ export function A2UIFeedback({
 		showComment,
 	);
 	const commentTitle =
-		useResolved<string>(component.commentTitle) ?? t('addFeedback', 'Add feedback');
+		useResolved<string>(component.commentTitle) ??
+		t("addFeedback", "Add feedback");
 	const commentDescription =
 		useResolved<string>(component.commentDescription) ??
-		t('shareALittleMoreContextBeforeSubmitting', 'Share a little more context before submitting.');
+		t(
+			"shareALittleMoreContextBeforeSubmitting",
+			"Share a little more context before submitting.",
+		);
 	const commentSubmitLabel =
-		useResolved<string>(component.commentSubmitLabel) ?? t('submitFeedback', 'Submit feedback');
+		useResolved<string>(component.commentSubmitLabel) ??
+		t("submitFeedback", "Submit feedback");
 	const commentCancelLabel =
 		useResolved<string>(component.commentCancelLabel) ?? "Cancel";
 	const feedbackId = useResolved<string>(component.feedbackId) || componentId;
@@ -201,7 +208,8 @@ export function A2UIFeedback({
 	const includePageHash =
 		useResolved<boolean>(component.includePageHash) ?? false;
 	const successMessage =
-		useResolved<string>(component.successMessage) ?? t('thanksForTheFeedback', 'Thanks for the feedback.');
+		useResolved<string>(component.successMessage) ??
+		t("thanksForTheFeedback", "Thanks for the feedback.");
 	const feedbackStoragePageId = useMemo(
 		() => getPageContextStorageId(pathname, search),
 		[pathname, search],

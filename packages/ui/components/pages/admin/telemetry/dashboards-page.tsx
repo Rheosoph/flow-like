@@ -129,7 +129,10 @@ function DashboardTile({
 						<CardDescription className="truncate text-[11px]">
 							{savedQuery
 								? describeTelemetryQuery(savedQuery.definition)
-								: t('theSavedQueryBehindThisTileNoLongerExists', 'The saved query behind this tile no longer exists.')}
+								: t(
+										"theSavedQueryBehindThisTileNoLongerExists",
+										"The saved query behind this tile no longer exists.",
+									)}
 						</CardDescription>
 					</div>
 					<div className="flex shrink-0 items-center gap-0.5">
@@ -139,7 +142,7 @@ function DashboardTile({
 							className="h-7 w-7"
 							disabled={index === 0}
 							onClick={() => onMove(index, -1)}
-							aria-label={t('moveTileUp', 'Move tile up')}
+							aria-label={t("moveTileUp", "Move tile up")}
 						>
 							<ArrowUp className="h-3.5 w-3.5" />
 						</Button>
@@ -149,7 +152,7 @@ function DashboardTile({
 							className="h-7 w-7"
 							disabled={index >= total - 1}
 							onClick={() => onMove(index, 1)}
-							aria-label={t('moveTileDown', 'Move tile down')}
+							aria-label={t("moveTileDown", "Move tile down")}
 						>
 							<ArrowDown className="h-3.5 w-3.5" />
 						</Button>
@@ -163,7 +166,7 @@ function DashboardTile({
 									view: tile.view === "chart" ? "table" : "chart",
 								})
 							}
-							aria-label={t('toggleTileView', 'Toggle tile view')}
+							aria-label={t("toggleTileView", "Toggle tile view")}
 						>
 							{tile.view === "chart" ? (
 								<Table2 className="h-3.5 w-3.5" />
@@ -180,7 +183,7 @@ function DashboardTile({
 								result.data &&
 								downloadTelemetryQueryCsv(tile.title, result.data)
 							}
-							aria-label={t('downloadTileCsv', 'Download tile CSV')}
+							aria-label={t("downloadTileCsv", "Download tile CSV")}
 						>
 							<Download className="h-3.5 w-3.5" />
 						</Button>
@@ -189,7 +192,7 @@ function DashboardTile({
 							size="icon"
 							className="h-7 w-7"
 							onClick={() => onRemove(index)}
-							aria-label={t('removeTile', 'Remove tile')}
+							aria-label={t("removeTile", "Remove tile")}
 						>
 							<Trash2 className="h-3.5 w-3.5" />
 						</Button>
@@ -304,7 +307,7 @@ export function AdminTelemetryDashboardsPage() {
 			toast.error(
 				error instanceof Error
 					? error.message
-					: t('failedToCreateTheDashboard', 'Failed to create the dashboard'),
+					: t("failedToCreateTheDashboard", "Failed to create the dashboard"),
 			);
 		},
 	});
@@ -345,7 +348,9 @@ export function AdminTelemetryDashboardsPage() {
 				queryClient.setQueryData(DASHBOARDS_KEY, context.previous);
 			}
 			toast.error(
-				error instanceof Error ? error.message : t('failedToSaveTheLayout', 'Failed to save the layout'),
+				error instanceof Error
+					? error.message
+					: t("failedToSaveTheLayout", "Failed to save the layout"),
 			);
 		},
 		onSettled: async () => {
@@ -370,7 +375,7 @@ export function AdminTelemetryDashboardsPage() {
 			toast.error(
 				error instanceof Error
 					? error.message
-					: t('failedToDeleteTheDashboard', 'Failed to delete the dashboard'),
+					: t("failedToDeleteTheDashboard", "Failed to delete the dashboard"),
 			);
 		},
 	});
@@ -455,10 +460,14 @@ export function AdminTelemetryDashboardsPage() {
 					<CardHeader>
 						<CardTitle className="flex items-center justify-center gap-2 text-base">
 							<Lock className="h-4 w-4" />
-							{t('insufficientPermissions', 'Insufficient permissions')}
+							{t("insufficientPermissions", "Insufficient permissions")}
 						</CardTitle>
-						<CardDescription><Trans i18nKey="youNeedTheBadminbPermissionToManageTelemetryDashboards">You need the <b>Admin</b> permission to manage telemetry
-							dashboards.</Trans></CardDescription>
+						<CardDescription>
+							<Trans i18nKey="youNeedTheBadminbPermissionToManageTelemetryDashboards">
+								You need the <b>Admin</b> permission to manage telemetry
+								dashboards.
+							</Trans>
+						</CardDescription>
 					</CardHeader>
 				</Card>
 			</main>
@@ -473,28 +482,31 @@ export function AdminTelemetryDashboardsPage() {
 						<div>
 							<h1 className="flex items-center gap-2 text-3xl font-bold">
 								<LayoutDashboard className="h-7 w-7 text-primary" />
-								{t('telemetryDashboards', 'Telemetry dashboards')}
+								{t("telemetryDashboards", "Telemetry dashboards")}
 							</h1>
 							<p className="text-muted-foreground">
-								{t('pinSavedQueriesAsTilesAndArrangeThemIntoASharedBoard', 'Pin saved queries as tiles and arrange them into a shared board.')}
+								{t(
+									"pinSavedQueriesAsTilesAndArrangeThemIntoASharedBoard",
+									"Pin saved queries as tiles and arrange them into a shared board.",
+								)}
 							</p>
 						</div>
 						<div className="flex flex-wrap items-center gap-2">
 							<Button asChild variant="ghost" size="sm">
 								<Link href="/admin/telemetry">
 									<ArrowLeft className="mr-1 h-3.5 w-3.5" />
-									{t('telemetry', 'Telemetry')}
+									{t("telemetry", "Telemetry")}
 								</Link>
 							</Button>
 							<Button asChild variant="ghost" size="sm">
 								<Link href="/admin/telemetry/query">
 									<SlidersHorizontal className="mr-1 h-3.5 w-3.5" />
-									{t('queryBuilder', 'Query builder')}
+									{t("queryBuilder", "Query builder")}
 								</Link>
 							</Button>
 							<Button variant="outline" size="sm" onClick={refresh}>
 								<RefreshCw className="mr-1 h-3.5 w-3.5" />
-								{t('refresh', 'Refresh')}
+								{t("refresh", "Refresh")}
 							</Button>
 						</div>
 					</div>
@@ -503,14 +515,16 @@ export function AdminTelemetryDashboardsPage() {
 						<Card className="h-fit">
 							<CardHeader className="pb-3">
 								<div className="flex items-center justify-between gap-2">
-									<CardTitle className="text-base">{t('dashboards', 'Dashboards')}</CardTitle>
+									<CardTitle className="text-base">
+										{t("dashboards", "Dashboards")}
+									</CardTitle>
 									<Button
 										variant="outline"
 										size="sm"
 										onClick={() => setCreateOpen(true)}
 									>
 										<Plus className="mr-1 h-3.5 w-3.5" />
-										{t('new', 'New')}
+										{t("new", "New")}
 									</Button>
 								</div>
 							</CardHeader>
@@ -570,7 +584,11 @@ export function AdminTelemetryDashboardsPage() {
 												}
 												title={
 													tiles.length >= TELEMETRY_DASHBOARD_MAX_TILES
-														? t('aDashboardCarriesAtMostTelemetry_dashboard_max_tilesTiles', 'A dashboard carries at most {{TELEMETRY_DASHBOARD_MAX_TILES}} tiles.', { TELEMETRY_DASHBOARD_MAX_TILES })
+														? t(
+																"aDashboardCarriesAtMostTelemetry_dashboard_max_tilesTiles",
+																"A dashboard carries at most {{TELEMETRY_DASHBOARD_MAX_TILES}} tiles.",
+																{ TELEMETRY_DASHBOARD_MAX_TILES },
+															)
 														: undefined
 												}
 												onClick={() => {
@@ -582,7 +600,7 @@ export function AdminTelemetryDashboardsPage() {
 												}}
 											>
 												<Plus className="mr-1 h-3.5 w-3.5" />
-												{t('addTile', 'Add tile')}
+												{t("addTile", "Add tile")}
 											</Button>
 											<Button
 												variant="ghost"
@@ -590,16 +608,20 @@ export function AdminTelemetryDashboardsPage() {
 												onClick={() => deleteDashboard.mutate(active.id)}
 											>
 												<Trash2 className="mr-1 h-3.5 w-3.5" />
-												{t('delete', 'Delete')}
+												{t("delete", "Delete")}
 											</Button>
 										</div>
 									</div>
 
 									{tiles.length === 0 ? (
 										<EmptyState
-											message={
-												t('noTilesYetAddASavedQueryToThisDashboard', { defaultValue_zero: 'Save a query in the query builder first, then pin it here.', defaultValue_other: 'No tiles yet — add a saved query to this dashboard.', count: savedQueries.length })
-											}
+											message={t("noTilesYetAddASavedQueryToThisDashboard", {
+												defaultValue_zero:
+													"Save a query in the query builder first, then pin it here.",
+												defaultValue_other:
+													"No tiles yet — add a saved query to this dashboard.",
+												count: savedQueries.length,
+											})}
 											className="py-12 text-sm"
 										/>
 									) : (
@@ -636,9 +658,12 @@ export function AdminTelemetryDashboardsPage() {
 			<Dialog open={createOpen} onOpenChange={setCreateOpen}>
 				<DialogContent>
 					<DialogHeader>
-						<DialogTitle>{t('newDashboard', 'New dashboard')}</DialogTitle>
+						<DialogTitle>{t("newDashboard", "New dashboard")}</DialogTitle>
 						<DialogDescription>
-							{t('dashboardsGroupSavedTelemetryQueriesIntoOneView', 'Dashboards group saved telemetry queries into one view.')}
+							{t(
+								"dashboardsGroupSavedTelemetryQueriesIntoOneView",
+								"Dashboards group saved telemetry queries into one view.",
+							)}
 						</DialogDescription>
 					</DialogHeader>
 					<div className="space-y-1.5">
@@ -647,12 +672,12 @@ export function AdminTelemetryDashboardsPage() {
 							id="telemetry-dashboard-name"
 							value={createName}
 							onChange={(e) => setCreateName(e.target.value)}
-							placeholder={t('releaseHealth', 'Release health')}
+							placeholder={t("releaseHealth", "Release health")}
 						/>
 					</div>
 					<DialogFooter>
 						<Button variant="ghost" onClick={() => setCreateOpen(false)}>
-							{t('cancel', 'Cancel')}
+							{t("cancel", "Cancel")}
 						</Button>
 						<Button
 							disabled={
@@ -660,7 +685,7 @@ export function AdminTelemetryDashboardsPage() {
 							}
 							onClick={() => createDashboard.mutate(createName.trim())}
 						>
-							{t('create', 'Create')}
+							{t("create", "Create")}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -669,17 +694,18 @@ export function AdminTelemetryDashboardsPage() {
 			<Dialog open={tileOpen} onOpenChange={setTileOpen}>
 				<DialogContent>
 					<DialogHeader>
-						<DialogTitle>{t('addTile', 'Add tile')}</DialogTitle>
+						<DialogTitle>{t("addTile", "Add tile")}</DialogTitle>
 						<DialogDescription>
-							{t('pinASavedQueryTo', 'Pin a saved query to')} {active?.name ?? "this dashboard"}.
+							{t("pinASavedQueryTo", "Pin a saved query to")}{" "}
+							{active?.name ?? "this dashboard"}.
 						</DialogDescription>
 					</DialogHeader>
 					<div className="space-y-3">
 						<div className="space-y-1.5">
-							<Label>{t('savedQuery', 'Saved query')}</Label>
+							<Label>{t("savedQuery", "Saved query")}</Label>
 							<Select value={tileQueryId} onValueChange={setTileQueryId}>
 								<SelectTrigger className="w-full">
-									<SelectValue placeholder={t('savedQuery', 'Saved query')} />
+									<SelectValue placeholder={t("savedQuery", "Saved query")} />
 								</SelectTrigger>
 								<SelectContent>
 									{savedQueries.map((query) => (
@@ -691,7 +717,9 @@ export function AdminTelemetryDashboardsPage() {
 							</Select>
 						</div>
 						<div className="space-y-1.5">
-							<Label htmlFor="telemetry-tile-title">{t('title', 'Title')}</Label>
+							<Label htmlFor="telemetry-tile-title">
+								{t("title", "Title")}
+							</Label>
 							<Input
 								id="telemetry-tile-title"
 								value={tileTitle}
@@ -705,7 +733,7 @@ export function AdminTelemetryDashboardsPage() {
 						</div>
 						<div className="grid gap-3 sm:grid-cols-2">
 							<div className="space-y-1.5">
-								<Label>{t('width', 'Width')}</Label>
+								<Label>{t("width", "Width")}</Label>
 								<Select
 									value={tileWidth}
 									onValueChange={(v) =>
@@ -716,13 +744,17 @@ export function AdminTelemetryDashboardsPage() {
 										<SelectValue />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value="half">{t('halfWidth', 'Half width')}</SelectItem>
-										<SelectItem value="full">{t('fullWidth', 'Full width')}</SelectItem>
+										<SelectItem value="half">
+											{t("halfWidth", "Half width")}
+										</SelectItem>
+										<SelectItem value="full">
+											{t("fullWidth", "Full width")}
+										</SelectItem>
 									</SelectContent>
 								</Select>
 							</div>
 							<div className="space-y-1.5">
-								<Label>{t('view', 'View')}</Label>
+								<Label>{t("view", "View")}</Label>
 								<Select
 									value={tileView}
 									onValueChange={(v) => setTileView(v as ITelemetryQueryView)}
@@ -731,8 +763,8 @@ export function AdminTelemetryDashboardsPage() {
 										<SelectValue />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value="chart">{t('chart', 'Chart')}</SelectItem>
-										<SelectItem value="table">{t('table', 'Table')}</SelectItem>
+										<SelectItem value="chart">{t("chart", "Chart")}</SelectItem>
+										<SelectItem value="table">{t("table", "Table")}</SelectItem>
 									</SelectContent>
 								</Select>
 							</div>
@@ -740,10 +772,10 @@ export function AdminTelemetryDashboardsPage() {
 					</div>
 					<DialogFooter>
 						<Button variant="ghost" onClick={() => setTileOpen(false)}>
-							{t('cancel', 'Cancel')}
+							{t("cancel", "Cancel")}
 						</Button>
 						<Button disabled={!tileQueryId} onClick={addTile}>
-							{t('addTile', 'Add tile')}
+							{t("addTile", "Add tile")}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

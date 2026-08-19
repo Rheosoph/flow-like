@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	Card,
@@ -12,6 +11,7 @@ import {
 	IAppVisibility,
 } from "@flow-like/flow-like-ui";
 import { ForkAppCard } from "@flow-like/flow-like-ui/components/settings/forking/fork-app-card";
+import { useTranslation } from "@flow-like/locales";
 import { GitForkIcon, Loader2Icon } from "lucide-react";
 import { useApplyForkBundle } from "../../../lib/use-apply-fork-bundle";
 import { useOfflineToOnlineFork } from "../../../lib/use-offline-to-online-fork";
@@ -40,10 +40,13 @@ export function ForkAppButton({
 					<div className="space-y-1">
 						<CardTitle className="flex items-center gap-2">
 							<GitForkIcon className="w-4 h-4" />
-							{t('createAnOnlineCopy', 'Create an online copy')}
+							{t("createAnOnlineCopy", "Create an online copy")}
 						</CardTitle>
 						<CardDescription>
-							{t('uploadAFreshSecretstrippedCopyOfThisLocalAppToYourAccountTheLocalAppRemainsUnchanged', "Upload a fresh, secret-stripped copy of this local app to your account. The local app remains unchanged.")}
+							{t(
+								"uploadAFreshSecretstrippedCopyOfThisLocalAppToYourAccountTheLocalAppRemainsUnchanged",
+								"Upload a fresh, secret-stripped copy of this local app to your account. The local app remains unchanged.",
+							)}
 						</CardDescription>
 					</div>
 				</CardHeader>
@@ -58,7 +61,7 @@ export function ForkAppButton({
 						) : (
 							<GitForkIcon className="w-4 h-4" />
 						)}
-						{t('createOnlineCopy', 'Create online copy')}
+						{t("createOnlineCopy", "Create online copy")}
 					</Button>
 				</CardContent>
 			</Card>

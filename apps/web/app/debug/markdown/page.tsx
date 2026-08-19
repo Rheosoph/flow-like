@@ -1,7 +1,7 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import { TextEditor } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { useState } from "react";
 
 const EXAMPLE_FULL_MARKDOWN = `# Markdown Debug Preview
@@ -494,22 +494,29 @@ export default function DebugMarkdownPage() {
 	return (
 		<div className="container mx-auto py-8 space-y-8 px-2 md:px-4">
 			<div>
-				<h1 className="text-3xl font-bold mb-2">{t('markdownDebugPreview', 'Markdown Debug Preview')}</h1>
+				<h1 className="text-3xl font-bold mb-2">
+					{t("markdownDebugPreview", "Markdown Debug Preview")}
+				</h1>
 				<p className="text-muted-foreground">
-					{t('debugPageForTestingMarkdownRenderingIncludingChartsCalloutsSpoilersEmbedsAndMaps', "Debug page for testing markdown rendering including charts, callouts, spoilers, embeds, and maps.")}
+					{t(
+						"debugPageForTestingMarkdownRenderingIncludingChartsCalloutsSpoilersEmbedsAndMaps",
+						"Debug page for testing markdown rendering including charts, callouts, spoilers, embeds, and maps.",
+					)}
 				</p>
 			</div>
 
 			{/* Live Editor */}
 			<section className="space-y-4" data-doc-screenshot="live-editor">
-				<h2 className="text-xl font-semibold">{t('liveEditor', 'Live Editor')}</h2>
+				<h2 className="text-xl font-semibold">
+					{t("liveEditor", "Live Editor")}
+				</h2>
 				<div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 					<div>
 						<label
 							htmlFor="markdown-debug-source"
 							className="block text-sm font-medium mb-2"
 						>
-							{t('rawMarkdown', 'Raw Markdown')}
+							{t("rawMarkdown", "Raw Markdown")}
 						</label>
 						<textarea
 							id="markdown-debug-source"
@@ -520,7 +527,7 @@ export default function DebugMarkdownPage() {
 					</div>
 					<div data-doc-screenshot="rendered-output">
 						<div className="block text-sm font-medium mb-2">
-							{t('renderedOutput', 'Rendered Output')}
+							{t("renderedOutput", "Rendered Output")}
 						</div>
 						<div className="h-[600px] p-4 bg-background border rounded-md overflow-auto">
 							<TextEditor
@@ -538,49 +545,49 @@ export default function DebugMarkdownPage() {
 						className="text-xs px-3 py-1.5 rounded-md border bg-muted/50 hover:bg-muted"
 						onClick={() => setCustomMarkdown(EXAMPLE_ALL_ELEMENTS)}
 					>
-						{t('loadAllElements', 'Load All Elements')}
+						{t("loadAllElements", "Load All Elements")}
 					</button>
 					<button
 						type="button"
 						className="text-xs px-3 py-1.5 rounded-md border bg-muted/50 hover:bg-muted"
 						onClick={() => setCustomMarkdown(EXAMPLE_FULL_MARKDOWN)}
 					>
-						{t('loadBasicMarkdown', 'Load Basic Markdown')}
+						{t("loadBasicMarkdown", "Load Basic Markdown")}
 					</button>
 				</div>
 			</section>
 
 			{/* Callout Examples */}
 			<ExampleSection
-				title={t('calloutAdmonitionExamples', 'Callout / Admonition Examples')}
+				title={t("calloutAdmonitionExamples", "Callout / Admonition Examples")}
 				examples={CALLOUT_EXAMPLES}
 				onLoad={setCustomMarkdown}
 			/>
 
 			{/* Spoiler Examples */}
 			<ExampleSection
-				title={t('spoilerExamples', 'Spoiler Examples')}
+				title={t("spoilerExamples", "Spoiler Examples")}
 				examples={SPOILER_EXAMPLES}
 				onLoad={setCustomMarkdown}
 			/>
 
 			{/* Embed Examples */}
 			<ExampleSection
-				title={t('embedExamples', 'Embed Examples')}
+				title={t("embedExamples", "Embed Examples")}
 				examples={EMBED_EXAMPLES}
 				onLoad={setCustomMarkdown}
 			/>
 
 			{/* Map Examples */}
 			<ExampleSection
-				title={t('mapExamples', 'Map Examples')}
+				title={t("mapExamples", "Map Examples")}
 				examples={MAP_EXAMPLES}
 				onLoad={setCustomMarkdown}
 			/>
 
 			{/* Chart Examples */}
 			<ExampleSection
-				title={t('chartExamples', 'Chart Examples')}
+				title={t("chartExamples", "Chart Examples")}
 				examples={CHART_EXAMPLES}
 				onLoad={setCustomMarkdown}
 			/>
@@ -618,14 +625,14 @@ function ExampleSection({
 										void navigator.clipboard.writeText(example.content);
 									}}
 								>
-									{t('copy', 'Copy')}
+									{t("copy", "Copy")}
 								</button>
 								<button
 									type="button"
 									className="text-xs text-muted-foreground hover:text-foreground"
 									onClick={() => onLoad(example.content)}
 								>
-									{t('load', 'Load')}
+									{t("load", "Load")}
 								</button>
 							</div>
 						</div>

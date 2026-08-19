@@ -5,12 +5,7 @@ import { XIcon } from "lucide-react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type { ReactNode } from "react";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
-import {
-	Dialog,
-	DialogContent,
-	DialogTitle,
-	Input,
-} from "../../components/ui";
+import { Dialog, DialogContent, DialogTitle, Input } from "../../components/ui";
 import { cn } from "../../lib/utils";
 
 /** Gap the window keeps to every viewport edge while being dragged. */

@@ -382,7 +382,11 @@
 											"label": "Client-side validation is sufficient once the form is the only linked entry"
 										}
 									],
-									"correct": ["revalidate-flow", "align-pins", "node-before-event"]
+									"correct": [
+										"revalidate-flow",
+										"align-pins",
+										"node-before-event"
+									]
 								}
 							}
 						],

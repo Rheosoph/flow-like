@@ -62,7 +62,9 @@ export const FlowChat = memo(function FlowChat({
 		<div className="flex flex-col w-80 h-96 rounded-xl border border-border/60 bg-background/95 backdrop-blur-lg shadow-2xl overflow-hidden">
 			{/* Header */}
 			<div className="flex items-center justify-between px-3 py-2 border-b border-border/40">
-				<span className="text-sm font-medium">{t('boardChat', 'Board Chat')}</span>
+				<span className="text-sm font-medium">
+					{t("boardChat", "Board Chat")}
+				</span>
 				<button
 					type="button"
 					onClick={onClose}
@@ -76,7 +78,7 @@ export const FlowChat = memo(function FlowChat({
 			<div className="flex-1 overflow-y-auto px-3 py-2 space-y-2 min-h-0">
 				{messages.length === 0 && (
 					<div className="flex items-center justify-center h-full text-xs text-muted-foreground">
-						{t('noMessagesYetSayHi', 'No messages yet. Say hi!')}
+						{t("noMessagesYetSayHi", "No messages yet. Say hi!")}
 					</div>
 				)}
 				{messages.map((msg, i) => {
@@ -149,7 +151,7 @@ export const FlowChat = memo(function FlowChat({
 						value={input}
 						onChange={(e) => setInput(e.target.value)}
 						onKeyDown={handleKeyDown}
-						placeholder={t('typeAMessage', 'Type a message...')}
+						placeholder={t("typeAMessage", "Type a message...")}
 						className="flex-1 bg-muted/50 rounded-lg px-3 py-1.5 text-sm outline-none placeholder:text-muted-foreground/60 focus:ring-1 focus:ring-primary/30"
 						maxLength={500}
 					/>

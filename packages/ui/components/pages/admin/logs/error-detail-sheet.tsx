@@ -79,7 +79,7 @@ export function ErrorDetailSheet({
 								{detail.data.status_code}
 							</Badge>
 						) : null}
-						{t('errorReport', 'Error report')}
+						{t("errorReport", "Error report")}
 					</SheetTitle>
 					<SheetDescription className="font-mono text-xs">
 						{errorId}
@@ -115,7 +115,7 @@ export function ErrorDetailSheet({
 												onClick={() =>
 													onApplyFilter?.({ key: "path", value: record.path })
 												}
-												title={t('filterByThisPath', 'Filter by this path')}
+												title={t("filterByThisPath", "Filter by this path")}
 											>
 												<Filter className="h-3.5 w-3.5" />
 											</Button>
@@ -141,7 +141,7 @@ export function ErrorDetailSheet({
 												<UserPill userId={record.user_id} />
 											) : (
 												<Badge variant="outline" className="text-xs">
-													{t('anonymous', 'Anonymous')}
+													{t("anonymous", "Anonymous")}
 												</Badge>
 											)}
 										</div>
@@ -149,7 +149,7 @@ export function ErrorDetailSheet({
 
 									<div className="space-y-1">
 										<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-											{t('summary', 'Summary')}
+											{t("summary", "Summary")}
 										</div>
 										<p className="rounded-lg border bg-background/50 p-3 text-sm leading-relaxed whitespace-pre-wrap">
 											{record.summary}
@@ -160,7 +160,7 @@ export function ErrorDetailSheet({
 										<div className="space-y-1">
 											<div className="flex items-center justify-between">
 												<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-													{t('details', 'Details')}
+													{t("details", "Details")}
 												</div>
 												<Button
 													variant="ghost"
@@ -173,7 +173,7 @@ export function ErrorDetailSheet({
 													}}
 												>
 													<Copy className="mr-1 h-3 w-3" />
-													{t('copy', 'Copy')}
+													{t("copy", "Copy")}
 												</Button>
 											</div>
 											<pre className="max-h-96 overflow-auto rounded-lg border bg-muted/40 p-3 font-mono text-[11px] leading-relaxed">
@@ -186,7 +186,7 @@ export function ErrorDetailSheet({
 
 									<div className="space-y-2">
 										<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-											{t('referenceId', 'Reference id')}
+											{t("referenceId", "Reference id")}
 										</div>
 										<div className="flex items-center gap-2">
 											<code className="flex-1 truncate rounded bg-muted px-2 py-1 font-mono text-xs">
@@ -206,7 +206,10 @@ export function ErrorDetailSheet({
 											</Button>
 										</div>
 										<p className="text-xs text-muted-foreground">
-											{t('usersCanShareThisIdPasteItInTheSearchBarToJumpBackToThisError', "Users can share this id; paste it in the search bar to jump back to this error.")}
+											{t(
+												"usersCanShareThisIdPasteItInTheSearchBarToJumpBackToThisError",
+												"Users can share this id; paste it in the search bar to jump back to this error.",
+											)}
 										</p>
 									</div>
 								</>

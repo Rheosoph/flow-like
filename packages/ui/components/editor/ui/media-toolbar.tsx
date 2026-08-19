@@ -81,7 +81,7 @@ export function MediaToolbar({
 
 							<FloatingMediaPrimitive.UrlInput
 								className={inputVariants()}
-								placeholder={t('pasteTheEmbedLink', 'Paste the embed link...')}
+								placeholder={t("pasteTheEmbedLink", "Paste the embed link...")}
 								options={{ plugin }}
 							/>
 						</div>
@@ -91,11 +91,11 @@ export function MediaToolbar({
 						<FloatingMediaPrimitive.EditButton
 							className={buttonVariants({ size: "sm", variant: "ghost" })}
 						>
-							{t('editLink', 'Edit link')}
+							{t("editLink", "Edit link")}
 						</FloatingMediaPrimitive.EditButton>
 
 						<CaptionButton size="sm" variant="ghost">
-							{t('caption', 'Caption')}
+							{t("caption", "Caption")}
 						</CaptionButton>
 
 						<Separator orientation="vertical" className="mx-1 h-6" />

@@ -103,7 +103,8 @@ export function A2UIFilePreview({
 	const fit = useResolved<string>(component.fit) ?? "contain";
 	const loading = useResolved<"lazy" | "eager">(component.loading);
 	const fallbackText =
-		useResolved<string>(component.fallbackText) ?? t('cannotPreviewThisFile', 'Cannot preview this file');
+		useResolved<string>(component.fallbackText) ??
+		t("cannotPreviewThisFile", "Cannot preview this file");
 
 	const [content, setContent] = useState<string>("");
 	const [loadingText, setLoadingText] = useState(false);

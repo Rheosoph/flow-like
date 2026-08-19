@@ -25,7 +25,8 @@ import {
 
 function durationLabel(duration?: number) {
 	if (duration === undefined) return "running";
-	if (duration < 1_000) return i18next.t('valMs', '{{val}} ms', { val: Math.round(duration) });
+	if (duration < 1_000)
+		return i18next.t("valMs", "{{val}} ms", { val: Math.round(duration) });
 	return `${(duration / 1_000).toFixed(duration < 10_000 ? 1 : 0)} s`;
 }
 

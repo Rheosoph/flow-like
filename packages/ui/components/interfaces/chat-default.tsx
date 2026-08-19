@@ -851,7 +851,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 						}}
 					>
 						<HistoryIcon className="w-3 h-3" />
-						{t('chatHistory', 'Chat History')}
+						{t("chatHistory", "Chat History")}
 					</div>
 				</HoverCardContent>
 			</HoverCard>,
@@ -874,7 +874,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				>
 					<div className="flex items-center gap-2 text-sm font-medium">
 						<SquarePenIcon className="w-3 h-3" />
-						{t('newChat', 'New Chat')}
+						{t("newChat", "New Chat")}
 					</div>
 				</HoverCardContent>
 			</HoverCard>,
@@ -957,7 +957,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 							size="sm"
 							className="rounded-full px-4 gap-2 font-medium"
 						>
-							{t('navigate', 'Navigate')}
+							{t("navigate", "Navigate")}
 							<ChevronDownIcon className="h-3.5 w-3.5 opacity-60" />
 						</Button>
 					</DropdownMenuTrigger>
@@ -1733,7 +1733,10 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			// (errors are run logs, not exceptions), so surface it explicitly.
 			if ((result?.log_level ?? 0) >= 3) {
 				toast.error(
-					t('widgetActionFailedCheckTheFlowsRunsPanelForTheFailingNode', 'Widget action failed — check the flow\'s Runs panel for the failing node.'),
+					t(
+						"widgetActionFailedCheckTheFlowsRunsPanelForTheFailingNode",
+						"Widget action failed — check the flow's Runs panel for the failing node.",
+					),
 				);
 			}
 
@@ -1777,7 +1780,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					<div className="flex h-full flex-col items-center justify-center gap-3">
 						<Loader2Icon className="h-6 w-6 animate-spin text-muted-foreground" />
 						<p className="text-sm text-muted-foreground">
-							{t('loadingConversation', 'Loading conversation...')}
+							{t("loadingConversation", "Loading conversation...")}
 						</p>
 					</div>
 				) : showWelcome ? (
@@ -1816,18 +1819,23 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			>
 				<AlertDialogContent>
 					<AlertDialogHeader>
-						<AlertDialogTitle>{t('sendPrefilledMessage', 'Send prefilled message?')}</AlertDialogTitle>
+						<AlertDialogTitle>
+							{t("sendPrefilledMessage", "Send prefilled message?")}
+						</AlertDialogTitle>
 						<AlertDialogDescription>
-							{t('thisChatWasOpenedWithAPrefilledMessagePleaseReviewItBeforeSending', "This chat was opened with a prefilled message. Please review it before sending:")}
+							{t(
+								"thisChatWasOpenedWithAPrefilledMessagePleaseReviewItBeforeSending",
+								"This chat was opened with a prefilled message. Please review it before sending:",
+							)}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<div className="rounded-md bg-muted p-3 text-sm max-h-48 overflow-y-auto wrap-break-word whitespace-pre-wrap">
 						{prefilledMessage}
 					</div>
 					<AlertDialogFooter>
-						<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
+						<AlertDialogCancel>{t("cancel", "Cancel")}</AlertDialogCancel>
 						<AlertDialogAction onClick={handlePrefilledConfirm}>
-							{t('send', 'Send')}
+							{t("send", "Send")}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>

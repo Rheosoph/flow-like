@@ -1,5 +1,4 @@
 "use client";
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	type IBoard,
 	type IEvent,
@@ -19,6 +18,7 @@ import type {
 	IHub,
 	ISupportedSinks,
 } from "@flow-like/flow-like-ui/lib/schema/hub/hub";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { useEffect, useMemo } from "react";
 
 /** Map event types to their corresponding sink type for hub lookup */
@@ -64,19 +64,28 @@ function computeSinkAvailability(
 		if (supportsRemote && supportsLocal) {
 			return {
 				availability: "both",
-				description: i18next.t('canRunLocallyOrOnRemoteServer', 'Can run locally or on remote server'),
+				description: i18next.t(
+					"canRunLocallyOrOnRemoteServer",
+					"Can run locally or on remote server",
+				),
 			};
 		}
 		if (supportsRemote) {
 			return {
 				availability: "remote",
-				description: i18next.t('runsOnRemoteServerOnly', 'Runs on remote server only'),
+				description: i18next.t(
+					"runsOnRemoteServerOnly",
+					"Runs on remote server only",
+				),
 			};
 		}
 		if (supportsLocal) {
 			return {
 				availability: "local",
-				description: i18next.t('runsLocallyOnlyDesktopApp', 'Runs locally only (desktop app)'),
+				description: i18next.t(
+					"runsLocallyOnlyDesktopApp",
+					"Runs locally only (desktop app)",
+				),
 			};
 		}
 		return null;
@@ -88,7 +97,10 @@ function computeSinkAvailability(
 	if (supportsLocal) {
 		return {
 			availability: "local",
-			description: i18next.t('runsLocallyOnlyDesktopApp', 'Runs locally only (desktop app)'),
+			description: i18next.t(
+				"runsLocallyOnlyDesktopApp",
+				"Runs locally only (desktop app)",
+			),
 		};
 	}
 
@@ -192,7 +204,9 @@ export function EventTypeConfiguration({
 					size={compact ? "sm" : "default"}
 					className={compact ? "w-32 text-xs" : "w-full"}
 				>
-					<SelectValue placeholder={t('selectEventType', 'Select event type')} />
+					<SelectValue
+						placeholder={t("selectEventType", "Select event type")}
+					/>
 				</SelectTrigger>
 				<SelectContent>
 					{availableEventTypes?.map((type) => (
@@ -285,14 +299,19 @@ export function EventTranslation({
 	);
 
 	if (!node) {
-		return <p className="text-red-500">{t('nodeNotFound', 'Node not found.')}</p>;
+		return (
+			<p className="text-red-500">{t("nodeNotFound", "Node not found.")}</p>
+		);
 	}
 
 	if (!foundEventConfig || !ConfigInterface) {
 		return (
 			<div className="w-full space-y-4">
 				<p className="text-sm text-muted-foreground">
-					{t('noSpecificConfigurationAvailableForThisEventType', 'No specific configuration available for this event type.')}
+					{t(
+						"noSpecificConfigurationAvailableForThisEventType",
+						"No specific configuration available for this event type.",
+					)}
 				</p>
 			</div>
 		);

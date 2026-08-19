@@ -210,11 +210,22 @@ export function RemoteProjectSelect({
 					<SelectGroup>
 						<SelectLabel>{pin.friendly_name}</SelectLabel>
 						{loading && apps.length === 0 && (
-							<SelectLabel>{t('loadingProjects', 'Loading projects...')}</SelectLabel>
+							<SelectLabel>
+								{t("loadingProjects", "Loading projects...")}
+							</SelectLabel>
 						)}
-						{error && <SelectLabel>{t('couldNotLoadAccessibleApps', 'Could not load accessible apps')}</SelectLabel>}
+						{error && (
+							<SelectLabel>
+								{t(
+									"couldNotLoadAccessibleApps",
+									"Could not load accessible apps",
+								)}
+							</SelectLabel>
+						)}
 						{!loading && !error && apps.length === 0 && (
-							<SelectLabel>{t('noAccessibleAppsFound', 'No accessible apps found')}</SelectLabel>
+							<SelectLabel>
+								{t("noAccessibleAppsFound", "No accessible apps found")}
+							</SelectLabel>
 						)}
 						{apps.map((app) => (
 							<SelectItem key={app.app_id} value={app.app_id}>

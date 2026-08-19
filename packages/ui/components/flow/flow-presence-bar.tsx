@@ -170,19 +170,27 @@ export const FlowPresenceBar = memo(function FlowPresenceBar({
 									<div className="flex flex-col gap-0.5">
 										<span className="font-medium">{fullName}</span>
 										<span className="text-muted-foreground">
-											{t('layer', 'Layer:')} {layerLabel(peer.layerPath, layerNames)}
+											{t("layer", "Layer:")}{" "}
+											{layerLabel(peer.layerPath, layerNames)}
 										</span>
 										{peer.selection?.nodes?.length > 0 && (
 											<span className="text-muted-foreground">
-												<MousePointerClick className="h-3 w-3 inline mr-0.5" />{t('countNodesSelected', { defaultValue_one: '{{count}} node selected', defaultValue_other: '{{count}} nodes selected', count: peer.selection.nodes.length })}
+												<MousePointerClick className="h-3 w-3 inline mr-0.5" />
+												{t("countNodesSelected", {
+													defaultValue_one: "{{count}} node selected",
+													defaultValue_other: "{{count}} nodes selected",
+													count: peer.selection.nodes.length,
+												})}
 											</span>
 										)}
 										{isFollowing ? (
 											<span className="text-primary font-medium">
-												{t('followingClickToStop', 'Following — click to stop')}
+												{t("followingClickToStop", "Following — click to stop")}
 											</span>
 										) : (
-											<span className="text-foreground">{t('clickToFollow', 'Click to follow')}</span>
+											<span className="text-foreground">
+												{t("clickToFollow", "Click to follow")}
+											</span>
 										)}
 									</div>
 								</TooltipContent>
@@ -219,10 +227,14 @@ export const FlowPresenceBar = memo(function FlowPresenceBar({
 							</TooltipTrigger>
 							<TooltipContent side="bottom" className="text-xs">
 								{expanded
-								? t('collapse', 'Collapse')
+									? t("collapse", "Collapse")
 									: peersInDifferentLayer.length > 0
-									? t('countUsersInOtherLayers', { defaultValue_one: '{{count}} user in other layers', defaultValue_other: '{{count}} users in other layers', count: peersInDifferentLayer.length })
-									: t('showCollaborators', 'Show collaborators')}
+										? t("countUsersInOtherLayers", {
+												defaultValue_one: "{{count}} user in other layers",
+												defaultValue_other: "{{count}} users in other layers",
+												count: peersInDifferentLayer.length,
+											})
+										: t("showCollaborators", "Show collaborators")}
 							</TooltipContent>
 						</Tooltip>
 					</>
@@ -246,7 +258,7 @@ export const FlowPresenceBar = memo(function FlowPresenceBar({
 									</button>
 								</TooltipTrigger>
 								<TooltipContent side="bottom" className="text-xs">
-									{t('chat', 'Chat')}
+									{t("chat", "Chat")}
 								</TooltipContent>
 							</Tooltip>
 						</>
@@ -314,7 +326,7 @@ const CollaboratorsPanel = memo(function CollaboratorsPanel({
 			<div className="px-3 py-2 border-b border-border/30">
 				<h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
 					<Users className="h-3.5 w-3.5" />
-					{t('collaborators', 'Collaborators')}
+					{t("collaborators", "Collaborators")}
 					<Badge
 						variant="secondary"
 						className="ml-auto text-[10px] px-1.5 py-0"
@@ -339,7 +351,7 @@ const CollaboratorsPanel = memo(function CollaboratorsPanel({
 										variant="outline"
 										className="text-[9px] px-1 py-0 ml-auto"
 									>
-										{t('you', 'You')}
+										{t("you", "You")}
 									</Badge>
 								)}
 								{!isCurrentLayer && (
@@ -349,7 +361,7 @@ const CollaboratorsPanel = memo(function CollaboratorsPanel({
 										className="ml-auto text-[10px] text-primary hover:text-primary/80 font-medium flex items-center gap-0.5 cursor-pointer transition-colors"
 									>
 										<Navigation className="h-2.5 w-2.5" />
-										{t('go', 'Go')}
+										{t("go", "Go")}
 									</button>
 								)}
 							</div>
@@ -417,7 +429,11 @@ const CollaboratorRow = memo(function CollaboratorRow({
 				<div className="text-xs font-medium truncate">{name}</div>
 				{selectedCount > 0 && (
 					<div className="text-[10px] text-muted-foreground flex items-center gap-0.5">
-						<MousePointerClick className="h-2.5 w-2.5" />{t('selectedcountSelected', '{{selectedCount}} selected', { selectedCount })}</div>
+						<MousePointerClick className="h-2.5 w-2.5" />
+						{t("selectedcountSelected", "{{selectedCount}} selected", {
+							selectedCount,
+						})}
+					</div>
 				)}
 			</div>
 			<div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -433,7 +449,7 @@ const CollaboratorRow = memo(function CollaboratorRow({
 							</button>
 						</TooltipTrigger>
 						<TooltipContent side="left" className="text-xs">
-							{t('jumpToUser', 'Jump to user')}
+							{t("jumpToUser", "Jump to user")}
 						</TooltipContent>
 					</Tooltip>
 					<Tooltip>
@@ -449,7 +465,9 @@ const CollaboratorRow = memo(function CollaboratorRow({
 							</button>
 						</TooltipTrigger>
 						<TooltipContent side="left" className="text-xs">
-							{isFollowing ? t('stopFollowing', 'Stop following') : t('follow', 'Follow')}
+							{isFollowing
+								? t("stopFollowing", "Stop following")
+								: t("follow", "Follow")}
 						</TooltipContent>
 					</Tooltip>
 				</TooltipProvider>

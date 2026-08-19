@@ -56,15 +56,21 @@ export function RowInspectorSheet({
 		<Sheet open={row !== null} onOpenChange={onOpenChange}>
 			<SheetContent className="w-full gap-0 p-0 sm:max-w-md">
 				<SheetHeader className="border-b">
-					<SheetTitle>{t('rowDetails', 'Row details')}</SheetTitle>
-					<SheetDescription>{t('countColumns', { defaultValue_one: '{{count}} column', defaultValue_other: '{{count}} columns', count: columns.length })}</SheetDescription>
+					<SheetTitle>{t("rowDetails", "Row details")}</SheetTitle>
+					<SheetDescription>
+						{t("countColumns", {
+							defaultValue_one: "{{count}} column",
+							defaultValue_other: "{{count}} columns",
+							count: columns.length,
+						})}
+					</SheetDescription>
 					<Button
 						variant="outline"
 						size="sm"
 						className="mt-1 w-fit gap-1.5"
 						onClick={copyRow}
 					>
-						<Braces className="h-3.5 w-3.5" /> {t('copyAsJson', 'Copy as JSON')}
+						<Braces className="h-3.5 w-3.5" /> {t("copyAsJson", "Copy as JSON")}
 					</Button>
 				</SheetHeader>
 				<ScrollArea className="h-[calc(100%-8rem)]">
@@ -106,7 +112,9 @@ export function RowInspectorSheet({
 												variant="ghost"
 												size="icon"
 												className="h-7 w-7 shrink-0 self-start text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
-												aria-label={t('copyName', 'Copy {{name}}', { name: column.name })}
+												aria-label={t("copyName", "Copy {{name}}", {
+													name: column.name,
+												})}
 												onClick={() => {
 													void navigator.clipboard.writeText(
 														cellToString(value),

@@ -237,10 +237,10 @@ export function Inspector({ className }: InspectorProps) {
 				className={cn("flex flex-col h-full bg-background border-l", className)}
 			>
 				<div className="p-4 border-b">
-					<h3 className="font-medium text-sm">{t('inspector', 'Inspector')}</h3>
+					<h3 className="font-medium text-sm">{t("inspector", "Inspector")}</h3>
 				</div>
 				<div className="flex-1 flex items-center justify-center p-4 text-sm text-muted-foreground">
-					{t('selectAComponentToEdit', 'Select a component to edit')}
+					{t("selectAComponentToEdit", "Select a component to edit")}
 				</div>
 			</div>
 		);
@@ -252,12 +252,21 @@ export function Inspector({ className }: InspectorProps) {
 				className={cn("flex flex-col h-full bg-background border-l", className)}
 			>
 				<div className="p-4 border-b">
-					<h3 className="font-medium text-sm">{t('inspector', 'Inspector')}</h3>
-					<p className="text-xs text-muted-foreground mt-1">{t('countComponentsSelected', { defaultValue_one: '{{count}} component selected', defaultValue_other: '{{count}} components selected', count: selectedComponents.length })}</p>
+					<h3 className="font-medium text-sm">{t("inspector", "Inspector")}</h3>
+					<p className="text-xs text-muted-foreground mt-1">
+						{t("countComponentsSelected", {
+							defaultValue_one: "{{count}} component selected",
+							defaultValue_other: "{{count}} components selected",
+							count: selectedComponents.length,
+						})}
+					</p>
 				</div>
 				<div className="p-4">
 					<p className="text-sm text-muted-foreground">
-						{t('multiselectionEditingComingSoon', 'Multi-selection editing coming soon')}
+						{t(
+							"multiselectionEditingComingSoon",
+							"Multi-selection editing coming soon",
+						)}
 					</p>
 				</div>
 			</div>
@@ -276,7 +285,7 @@ export function Inspector({ className }: InspectorProps) {
 					{singleSelected ? getComponentType(singleSelected) : ""}
 				</h3>
 				<p className="text-xs text-muted-foreground truncate mt-0.5">
-					{t('id', 'ID:')} {singleSelected?.id}
+					{t("id", "ID:")} {singleSelected?.id}
 				</p>
 			</div>
 
@@ -289,25 +298,25 @@ export function Inspector({ className }: InspectorProps) {
 						value="properties"
 						className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3 text-xs"
 					>
-						{t('props', 'Props')}
+						{t("props", "Props")}
 					</TabsTrigger>
 					<TabsTrigger
 						value="style"
 						className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3 text-xs"
 					>
-						{t('style', 'Style')}
+						{t("style", "Style")}
 					</TabsTrigger>
 					<TabsTrigger
 						value="canvas"
 						className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3 text-xs"
 					>
-						{t('canvas', 'Canvas')}
+						{t("canvas", "Canvas")}
 					</TabsTrigger>
 					<TabsTrigger
 						value="actions"
 						className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3 text-xs"
 					>
-						{t('actions', 'Actions')}
+						{t("actions", "Actions")}
 					</TabsTrigger>
 				</TabsList>
 
@@ -485,7 +494,7 @@ function PropertyEditor({ component, onUpdate }: PropertyEditorProps) {
 		<div className="min-w-0 max-w-full space-y-4">
 			{/* Common ID field */}
 			<div className={INSPECTOR_FIELD_CLASS}>
-				<Label className="text-xs">{t('componentId', 'Component ID')}</Label>
+				<Label className="text-xs">{t("componentId", "Component ID")}</Label>
 				<Input
 					value={component.id}
 					onChange={(e) => onUpdate({ id: e.target.value })}
@@ -569,7 +578,9 @@ function JsonContractField({
 			}
 		} catch (error) {
 			setErrors([
-				t('invalidJsonVal', 'Invalid JSON: {{val}}', { val: error instanceof Error ? error.message : String(error) }),
+				t("invalidJsonVal", "Invalid JSON: {{val}}", {
+					val: error instanceof Error ? error.message : String(error),
+				}),
 			]);
 		}
 	}, [input, text, value, onCommit]);
@@ -819,7 +830,7 @@ function ContractInputField({
 						htmlFor={`${id}-included`}
 						className="text-[10px] font-normal text-muted-foreground"
 					>
-						{t('includeValue', 'Include value')}
+						{t("includeValue", "Include value")}
 					</Label>
 				</div>
 			)}
@@ -830,7 +841,7 @@ function ContractInputField({
 					size="sm"
 					onClick={() => onChange(controlValue)}
 				>
-					{t('setValue', 'Set value')}
+					{t("setValue", "Set value")}
 				</Button>
 			) : (
 				renderControl()
@@ -897,11 +908,17 @@ function MicroWidgetEditor({ component, onUpdate }: MicroWidgetEditorProps) {
 						{micro.packageVersion ? `@${micro.packageVersion}` : ""}
 					</span>
 				</div>
-				<p className="text-[10px] text-muted-foreground">{t('widgetWidgetidRenderedInASandboxItsInternalsAreNotEditableInTheBuilder', "Widget “{{widgetId}}” — rendered in a sandbox; its internals are not editable in the builder.", { widgetId: micro.widgetId })}</p>
+				<p className="text-[10px] text-muted-foreground">
+					{t(
+						"widgetWidgetidRenderedInASandboxItsInternalsAreNotEditableInTheBuilder",
+						"Widget “{{widgetId}}” — rendered in a sandbox; its internals are not editable in the builder.",
+						{ widgetId: micro.widgetId },
+					)}
+				</p>
 			</div>
 
 			<div className={INSPECTOR_FIELD_CLASS}>
-				<Label className="text-xs">{t('componentId', 'Component ID')}</Label>
+				<Label className="text-xs">{t("componentId", "Component ID")}</Label>
 				<Input
 					value={component.id}
 					onChange={(e) => onUpdate({ id: e.target.value })}
@@ -910,10 +927,10 @@ function MicroWidgetEditor({ component, onUpdate }: MicroWidgetEditorProps) {
 			</div>
 
 			<div className="space-y-3">
-				<Label className="text-xs font-semibold">{t('inputs', 'Inputs')}</Label>
+				<Label className="text-xs font-semibold">{t("inputs", "Inputs")}</Label>
 				{inputs.length === 0 ? (
 					<p className="text-xs text-muted-foreground">
-						{t('thisWidgetDeclaresNoInputs', 'This widget declares no inputs.')}
+						{t("thisWidgetDeclaresNoInputs", "This widget declares no inputs.")}
 					</p>
 				) : (
 					inputs.map(([name, input]) => (
@@ -931,7 +948,9 @@ function MicroWidgetEditor({ component, onUpdate }: MicroWidgetEditorProps) {
 
 			{queries.length > 0 && (
 				<div className="space-y-2">
-					<Label className="text-xs font-semibold">{t('queries', 'Queries')}</Label>
+					<Label className="text-xs font-semibold">
+						{t("queries", "Queries")}
+					</Label>
 					<p className="text-[10px] text-muted-foreground">
 						{`Callable from flows by connecting Get Element to Query Widget.`}
 					</p>
@@ -1367,7 +1386,9 @@ function Model3DEditor({
 	return (
 		<div className="space-y-3">
 			<div className="space-y-1.5">
-				<Label className="text-xs text-muted-foreground">{t('componentId', 'Component ID')}</Label>
+				<Label className="text-xs text-muted-foreground">
+					{t("componentId", "Component ID")}
+				</Label>
 				<Input
 					value={component.id}
 					onChange={(e) => onUpdate({ id: e.target.value })}
@@ -1401,7 +1422,9 @@ function Model3DEditor({
 					)}
 					<div className="space-y-1.5">
 						<div className="flex items-center justify-between">
-							<Label className="text-xs text-muted-foreground">{t('scale', 'Scale')}</Label>
+							<Label className="text-xs text-muted-foreground">
+								{t("scale", "Scale")}
+							</Label>
 							<Select
 								value={scaleMode}
 								onValueChange={(mode) => {
@@ -1424,7 +1447,7 @@ function Model3DEditor({
 								</SelectTrigger>
 								<SelectContent>
 									<SelectItem value="uniform" className="text-xs">
-										{t('uniform', 'Uniform')}
+										{t("uniform", "Uniform")}
 									</SelectItem>
 									<SelectItem value="xyz" className="text-xs">
 										XYZ
@@ -1470,7 +1493,7 @@ function Model3DEditor({
 						{renderSelect(
 							"cameraAngle",
 							"front",
-							t('anglePreset', 'Angle Preset'),
+							t("anglePreset", "Angle Preset"),
 							MODEL3D_ENUMS.cameraAngle,
 						)}
 						{renderNumberField(
@@ -1490,11 +1513,11 @@ function Model3DEditor({
 						10,
 						120,
 						1,
-						t('fieldOfView', 'Field of View'),
+						t("fieldOfView", "Field of View"),
 					)}
 					<div className="flex items-center justify-between py-1.5 border-y">
 						<span className="text-xs text-muted-foreground">
-							{t('captureCurrentView', 'Capture current view')}
+							{t("captureCurrentView", "Capture current view")}
 						</span>
 						<Button
 							size="sm"
@@ -1511,7 +1534,7 @@ function Model3DEditor({
 								});
 							}}
 						>
-							{t('useView', 'Use View')}
+							{t("useView", "Use View")}
 						</Button>
 					</div>
 					{renderVectorField(
@@ -1605,7 +1628,7 @@ function Model3DEditor({
 					</div>
 					<BoundValueEditor
 						name="lightColor"
-						label={t('lightColor', 'Light Color')}
+						label={t("lightColor", "Light Color")}
 						value={getBoundValue("lightColor") ?? { literalString: "#ffffff" }}
 						onChange={(v) => updateProp("lightColor", v)}
 						componentType="model3d"
@@ -1644,7 +1667,7 @@ function Model3DEditor({
 							return (
 								<BoundValueEditor
 									name="hdriUrl"
-									label={t('hdriUrl', 'HDRI URL')}
+									label={t("hdriUrl", "HDRI URL")}
 									value={getBoundValue("hdriUrl") ?? { literalString: "" }}
 									onChange={(v) => updateProp("hdriUrl", v)}
 									componentType="model3d"
@@ -1680,7 +1703,7 @@ function Model3DEditor({
 					{renderToggle("showGround", false, "Show Ground")}
 					<BoundValueEditor
 						name="groundColor"
-						label={t('groundColor', 'Ground Color')}
+						label={t("groundColor", "Ground Color")}
 						value={getBoundValue("groundColor") ?? { literalString: "#1a1a2e" }}
 						onChange={(v) => updateProp("groundColor", v)}
 						componentType="model3d"
@@ -1721,7 +1744,7 @@ function Model3DEditor({
 					/>
 					<BoundValueEditor
 						name="backgroundColor"
-						label={t('background', 'Background')}
+						label={t("background", "Background")}
 						value={
 							getBoundValue("backgroundColor") ?? {
 								literalString: "transparent",
@@ -1780,7 +1803,7 @@ function ChartEditor({
 
 	const addSeries = useCallback(() => {
 		const newSeries: ChartSeries = {
-			name: t('seriesVal', 'Series {{val}}', { val: series.length + 1 }),
+			name: t("seriesVal", "Series {{val}}", { val: series.length + 1 }),
 			type: "line",
 			dataSource: { csv: "Jan,10\nFeb,15\nMar,12\nApr,18" },
 			color: CHART_COLORS[series.length % CHART_COLORS.length],
@@ -1826,7 +1849,7 @@ function ChartEditor({
 		<div className="space-y-4">
 			{/* Component ID */}
 			<div className="space-y-2">
-				<Label className="text-xs">{t('componentId', 'Component ID')}</Label>
+				<Label className="text-xs">{t("componentId", "Component ID")}</Label>
 				<Input
 					value={component.id}
 					onChange={(e) => onUpdate({ id: e.target.value })}
@@ -1844,14 +1867,20 @@ function ChartEditor({
 			{/* Data Series */}
 			<Collapsible defaultOpen>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('dataSeriesLength', 'Data Series ({{length}})', { length: series.length })}</span>
+					<span>
+						{t("dataSeriesLength", "Data Series ({{length}})", {
+							length: series.length,
+						})}
+					</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="space-y-3 pt-2">
 					{series.map((s, idx) => (
 						<div key={idx} className="space-y-2 rounded border p-2">
 							<div className="flex items-center justify-between">
-								<span className="text-xs font-medium">{t('series', 'Series')} {idx + 1}</span>
+								<span className="text-xs font-medium">
+									{t("series", "Series")} {idx + 1}
+								</span>
 								<Button
 									variant="ghost"
 									size="icon"
@@ -1864,7 +1893,7 @@ function ChartEditor({
 							<Input
 								value={s.name}
 								onChange={(e) => updateSeries(idx, { name: e.target.value })}
-								placeholder={t('seriesName', 'Series name')}
+								placeholder={t("seriesName", "Series name")}
 								className="h-7 text-xs"
 							/>
 							<div className="grid grid-cols-2 gap-2">
@@ -1889,7 +1918,7 @@ function ChartEditor({
 									</Select>
 								</div>
 								<div>
-									<Label className="text-xs">{t('color', 'Color')}</Label>
+									<Label className="text-xs">{t("color", "Color")}</Label>
 									<Input
 										type="color"
 										value={s.color || "#6366f1"}
@@ -1901,7 +1930,9 @@ function ChartEditor({
 								</div>
 							</div>
 							<div className="space-y-1">
-								<Label className="text-xs">{t('dataCsvLabelvalue', 'Data (CSV: label,value)')}</Label>
+								<Label className="text-xs">
+									{t("dataCsvLabelvalue", "Data (CSV: label,value)")}
+								</Label>
 								<Textarea
 									value={
 										s.dataSource && "csv" in s.dataSource
@@ -1919,7 +1950,7 @@ function ChartEditor({
 								s.type === "scatter" ||
 								s.type === "area") && (
 								<div>
-									<Label className="text-xs">{t('mode', 'Mode')}</Label>
+									<Label className="text-xs">{t("mode", "Mode")}</Label>
 									<Select
 										value={s.mode || "lines+markers"}
 										onValueChange={(v) =>
@@ -1930,10 +1961,14 @@ function ChartEditor({
 											<SelectValue />
 										</SelectTrigger>
 										<SelectContent>
-											<SelectItem value="lines">{t('lines', 'Lines')}</SelectItem>
-											<SelectItem value="markers">{t('markers', 'Markers')}</SelectItem>
+											<SelectItem value="lines">
+												{t("lines", "Lines")}
+											</SelectItem>
+											<SelectItem value="markers">
+												{t("markers", "Markers")}
+											</SelectItem>
 											<SelectItem value="lines+markers">
-												{t('linesMarkers', 'Lines + Markers')}
+												{t("linesMarkers", "Lines + Markers")}
 											</SelectItem>
 										</SelectContent>
 									</Select>
@@ -1948,7 +1983,7 @@ function ChartEditor({
 						onClick={addSeries}
 					>
 						<Plus className="h-3 w-3 mr-1" />
-						{t('addSeries', 'Add Series')}
+						{t("addSeries", "Add Series")}
 					</Button>
 				</CollapsibleContent>
 			</Collapsible>
@@ -1956,16 +1991,16 @@ function ChartEditor({
 			{/* X Axis */}
 			<Collapsible>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('xAxis', 'X Axis')}</span>
+					<span>{t("xAxis", "X Axis")}</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="space-y-2 pt-2">
 					<div className="space-y-1">
-						<Label className="text-xs">{t('title', 'Title')}</Label>
+						<Label className="text-xs">{t("title", "Title")}</Label>
 						<Input
 							value={xAxis.title || ""}
 							onChange={(e) => updateXAxis({ title: e.target.value })}
-							placeholder={t('xAxisTitle', 'X Axis Title')}
+							placeholder={t("xAxisTitle", "X Axis Title")}
 							className="h-7 text-xs"
 						/>
 					</div>
@@ -1981,15 +2016,17 @@ function ChartEditor({
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="category">{t('category', 'Category')}</SelectItem>
-								<SelectItem value="linear">{t('linear', 'Linear')}</SelectItem>
-								<SelectItem value="log">{t('log', 'Log')}</SelectItem>
-								<SelectItem value="date">{t('date', 'Date')}</SelectItem>
+								<SelectItem value="category">
+									{t("category", "Category")}
+								</SelectItem>
+								<SelectItem value="linear">{t("linear", "Linear")}</SelectItem>
+								<SelectItem value="log">{t("log", "Log")}</SelectItem>
+								<SelectItem value="date">{t("date", "Date")}</SelectItem>
 							</SelectContent>
 						</Select>
 					</div>
 					<div className="flex items-center justify-between">
-						<Label className="text-xs">{t('showGrid', 'Show Grid')}</Label>
+						<Label className="text-xs">{t("showGrid", "Show Grid")}</Label>
 						<Switch
 							checked={xAxis.showGrid ?? true}
 							onCheckedChange={(v) => updateXAxis({ showGrid: v })}
@@ -2001,16 +2038,16 @@ function ChartEditor({
 			{/* Y Axis */}
 			<Collapsible>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('yAxis', 'Y Axis')}</span>
+					<span>{t("yAxis", "Y Axis")}</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="space-y-2 pt-2">
 					<div className="space-y-1">
-						<Label className="text-xs">{t('title', 'Title')}</Label>
+						<Label className="text-xs">{t("title", "Title")}</Label>
 						<Input
 							value={yAxis.title || ""}
 							onChange={(e) => updateYAxis({ title: e.target.value })}
-							placeholder={t('yAxisTitle', 'Y Axis Title')}
+							placeholder={t("yAxisTitle", "Y Axis Title")}
 							className="h-7 text-xs"
 						/>
 					</div>
@@ -2026,14 +2063,14 @@ function ChartEditor({
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="linear">{t('linear', 'Linear')}</SelectItem>
-								<SelectItem value="log">{t('log', 'Log')}</SelectItem>
+								<SelectItem value="linear">{t("linear", "Linear")}</SelectItem>
+								<SelectItem value="log">{t("log", "Log")}</SelectItem>
 							</SelectContent>
 						</Select>
 					</div>
 					<div className="grid grid-cols-2 gap-2">
 						<div className="space-y-1">
-							<Label className="text-xs">{t('min', 'Min')}</Label>
+							<Label className="text-xs">{t("min", "Min")}</Label>
 							<Input
 								type="number"
 								value={xAxis.min ?? ""}
@@ -2042,12 +2079,12 @@ function ChartEditor({
 										min: e.target.value ? Number(e.target.value) : undefined,
 									})
 								}
-								placeholder={t('auto', 'Auto')}
+								placeholder={t("auto", "Auto")}
 								className="h-7 text-xs"
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('max', 'Max')}</Label>
+							<Label className="text-xs">{t("max", "Max")}</Label>
 							<Input
 								type="number"
 								value={yAxis.max ?? ""}
@@ -2056,13 +2093,13 @@ function ChartEditor({
 										max: e.target.value ? Number(e.target.value) : undefined,
 									})
 								}
-								placeholder={t('auto', 'Auto')}
+								placeholder={t("auto", "Auto")}
 								className="h-7 text-xs"
 							/>
 						</div>
 					</div>
 					<div className="flex items-center justify-between">
-						<Label className="text-xs">{t('showGrid', 'Show Grid')}</Label>
+						<Label className="text-xs">{t("showGrid", "Show Grid")}</Label>
 						<Switch
 							checked={yAxis.showGrid ?? true}
 							onCheckedChange={(v) => updateYAxis({ showGrid: v })}
@@ -2074,7 +2111,7 @@ function ChartEditor({
 			{/* Display Options */}
 			<Collapsible>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('display', 'Display')}</span>
+					<span>{t("display", "Display")}</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="space-y-2 pt-2">
@@ -2089,7 +2126,7 @@ function ChartEditor({
 						onChange={(v) => updateProp("height", v)}
 					/>
 					<div className="flex items-center justify-between">
-						<Label className="text-xs">{t('showLegend', 'Show Legend')}</Label>
+						<Label className="text-xs">{t("showLegend", "Show Legend")}</Label>
 						<Switch
 							checked={
 								props.showLegend &&
@@ -2103,7 +2140,9 @@ function ChartEditor({
 						/>
 					</div>
 					<div className="space-y-1">
-						<Label className="text-xs">{t('legendPosition', 'Legend Position')}</Label>
+						<Label className="text-xs">
+							{t("legendPosition", "Legend Position")}
+						</Label>
 						<Select
 							value={
 								props.legendPosition &&
@@ -2120,10 +2159,10 @@ function ChartEditor({
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="top">{t('top', 'Top')}</SelectItem>
-								<SelectItem value="bottom">{t('bottom', 'Bottom')}</SelectItem>
-								<SelectItem value="left">{t('left', 'Left')}</SelectItem>
-								<SelectItem value="right">{t('right', 'Right')}</SelectItem>
+								<SelectItem value="top">{t("top", "Top")}</SelectItem>
+								<SelectItem value="bottom">{t("bottom", "Bottom")}</SelectItem>
+								<SelectItem value="left">{t("left", "Left")}</SelectItem>
+								<SelectItem value="right">{t("right", "Right")}</SelectItem>
 							</SelectContent>
 						</Select>
 					</div>
@@ -2334,7 +2373,7 @@ function NivoChartEditor({
 		<div className="space-y-4">
 			{/* Component ID */}
 			<div className="space-y-2">
-				<Label className="text-xs">{t('componentId', 'Component ID')}</Label>
+				<Label className="text-xs">{t("componentId", "Component ID")}</Label>
 				<Input
 					value={component.id}
 					onChange={(e) => onUpdate({ id: e.target.value })}
@@ -2344,7 +2383,7 @@ function NivoChartEditor({
 
 			{/* Chart Type */}
 			<div className="space-y-2">
-				<Label className="text-xs">{t('chartType', 'Chart Type')}</Label>
+				<Label className="text-xs">{t("chartType", "Chart Type")}</Label>
 				<Select value={chartType} onValueChange={handleChartTypeChange}>
 					<SelectTrigger className="h-8 text-sm">
 						<SelectValue />
@@ -2362,7 +2401,7 @@ function NivoChartEditor({
 			{/* Data Input */}
 			<Collapsible defaultOpen>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('data', 'Data')}</span>
+					<span>{t("data", "Data")}</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="space-y-3 pt-2">
@@ -2403,7 +2442,7 @@ function NivoChartEditor({
 										updateProp("data", { literalJson: e.target.value });
 									}
 								}}
-								placeholder={t('enterJsonData', 'Enter JSON data...')}
+								placeholder={t("enterJsonData", "Enter JSON data...")}
 								className="h-40 text-xs font-mono resize-none"
 							/>
 							<Button
@@ -2419,7 +2458,7 @@ function NivoChartEditor({
 									}
 								}}
 							>
-								{t('resetToDefaultData', 'Reset to Default Data')}
+								{t("resetToDefaultData", "Reset to Default Data")}
 							</Button>
 						</div>
 					) : (
@@ -2445,7 +2484,7 @@ function NivoChartEditor({
 								className="w-full h-7 text-xs"
 								onClick={applyCsvData}
 							>
-								{t('applyCsvData', 'Apply CSV Data')}
+								{t("applyCsvData", "Apply CSV Data")}
 							</Button>
 						</div>
 					)}
@@ -2456,12 +2495,14 @@ function NivoChartEditor({
 			{needsKeysAndIndex && (
 				<Collapsible>
 					<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-						<span>{t('dataKeys', 'Data Keys')}</span>
+						<span>{t("dataKeys", "Data Keys")}</span>
 						<ChevronDown className="h-4 w-4" />
 					</CollapsibleTrigger>
 					<CollapsibleContent className="space-y-2 pt-2">
 						<div className="space-y-1">
-							<Label className="text-xs">{t('indexByCategoryField', 'Index By (Category Field)')}</Label>
+							<Label className="text-xs">
+								{t("indexByCategoryField", "Index By (Category Field)")}
+							</Label>
 							<Input
 								value={
 									props.indexBy &&
@@ -2472,13 +2513,16 @@ function NivoChartEditor({
 								onChange={(e) =>
 									updateProp("indexBy", { literalString: e.target.value })
 								}
-								placeholder={t('egCountryCategory', 'e.g. country, category')}
+								placeholder={t("egCountryCategory", "e.g. country, category")}
 								className="h-7 text-xs"
 							/>
 						</div>
 						<div className="space-y-1">
 							<Label className="text-xs">
-								{t('keysDataSeriesCommaSeparated', 'Keys (Data Series - comma separated)')}
+								{t(
+									"keysDataSeriesCommaSeparated",
+									"Keys (Data Series - comma separated)",
+								)}
 							</Label>
 							<Input
 								value={(() => {
@@ -2500,7 +2544,10 @@ function NivoChartEditor({
 										.filter(Boolean);
 									updateProp("keys", { literalJson: JSON.stringify(keys) });
 								}}
-								placeholder={t('egSalesRevenueProfit', 'e.g. sales, revenue, profit')}
+								placeholder={t(
+									"egSalesRevenueProfit",
+									"e.g. sales, revenue, profit",
+								)}
 								className="h-7 text-xs"
 							/>
 						</div>
@@ -2511,12 +2558,14 @@ function NivoChartEditor({
 			{/* Styling */}
 			<Collapsible>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('styling', 'Styling')}</span>
+					<span>{t("styling", "Styling")}</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="space-y-2 pt-2">
 					<div className="space-y-1">
-						<Label className="text-xs">{t('colorScheme', 'Color Scheme')}</Label>
+						<Label className="text-xs">
+							{t("colorScheme", "Color Scheme")}
+						</Label>
 						<Select
 							value={
 								props.colors && "literalString" in (props.colors as BoundValue)
@@ -2538,7 +2587,7 @@ function NivoChartEditor({
 						</Select>
 					</div>
 					<div className="flex items-center justify-between">
-						<Label className="text-xs">{t('animate', 'Animate')}</Label>
+						<Label className="text-xs">{t("animate", "Animate")}</Label>
 						<Switch
 							checked={
 								props.animate && "literalBool" in (props.animate as BoundValue)
@@ -2549,7 +2598,7 @@ function NivoChartEditor({
 						/>
 					</div>
 					<div className="flex items-center justify-between">
-						<Label className="text-xs">{t('showLegend', 'Show Legend')}</Label>
+						<Label className="text-xs">{t("showLegend", "Show Legend")}</Label>
 						<Switch
 							checked={
 								props.showLegend &&
@@ -2563,7 +2612,9 @@ function NivoChartEditor({
 						/>
 					</div>
 					<div className="space-y-1">
-						<Label className="text-xs">{t('legendPosition', 'Legend Position')}</Label>
+						<Label className="text-xs">
+							{t("legendPosition", "Legend Position")}
+						</Label>
 						<Select
 							value={
 								props.legendPosition &&
@@ -2580,10 +2631,10 @@ function NivoChartEditor({
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="top">{t('top', 'Top')}</SelectItem>
-								<SelectItem value="bottom">{t('bottom', 'Bottom')}</SelectItem>
-								<SelectItem value="left">{t('left', 'Left')}</SelectItem>
-								<SelectItem value="right">{t('right', 'Right')}</SelectItem>
+								<SelectItem value="top">{t("top", "Top")}</SelectItem>
+								<SelectItem value="bottom">{t("bottom", "Bottom")}</SelectItem>
+								<SelectItem value="left">{t("left", "Left")}</SelectItem>
+								<SelectItem value="right">{t("right", "Right")}</SelectItem>
 							</SelectContent>
 						</Select>
 					</div>
@@ -2594,12 +2645,12 @@ function NivoChartEditor({
 			{chartType === "bar" && (
 				<Collapsible>
 					<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-						<span>{t('barOptions', 'Bar Options')}</span>
+						<span>{t("barOptions", "Bar Options")}</span>
 						<ChevronDown className="h-4 w-4" />
 					</CollapsibleTrigger>
 					<CollapsibleContent className="space-y-2 pt-2">
 						<div className="space-y-1">
-							<Label className="text-xs">{t('layout', 'Layout')}</Label>
+							<Label className="text-xs">{t("layout", "Layout")}</Label>
 							<Select
 								value={(() => {
 									const s = props.barStyle as { layout?: string } | undefined;
@@ -2616,13 +2667,17 @@ function NivoChartEditor({
 									<SelectValue />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="vertical">{t('vertical', 'Vertical')}</SelectItem>
-									<SelectItem value="horizontal">{t('horizontal', 'Horizontal')}</SelectItem>
+									<SelectItem value="vertical">
+										{t("vertical", "Vertical")}
+									</SelectItem>
+									<SelectItem value="horizontal">
+										{t("horizontal", "Horizontal")}
+									</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('groupMode', 'Group Mode')}</Label>
+							<Label className="text-xs">{t("groupMode", "Group Mode")}</Label>
 							<Select
 								value={(() => {
 									const s = props.barStyle as
@@ -2641,13 +2696,19 @@ function NivoChartEditor({
 									<SelectValue />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="grouped">{t('grouped', 'Grouped')}</SelectItem>
-									<SelectItem value="stacked">{t('stacked', 'Stacked')}</SelectItem>
+									<SelectItem value="grouped">
+										{t("grouped", "Grouped")}
+									</SelectItem>
+									<SelectItem value="stacked">
+										{t("stacked", "Stacked")}
+									</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('borderRadius', 'Border Radius')}</Label>
+							<Label className="text-xs">
+								{t("borderRadius", "Border Radius")}
+							</Label>
 							<Input
 								type="number"
 								value={(() => {
@@ -2672,13 +2733,16 @@ function NivoChartEditor({
 			{chartType === "pie" && (
 				<Collapsible>
 					<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-						<span>{t('pieOptions', 'Pie Options')}</span>
+						<span>{t("pieOptions", "Pie Options")}</span>
 						<ChevronDown className="h-4 w-4" />
 					</CollapsibleTrigger>
 					<CollapsibleContent className="space-y-2 pt-2">
 						<div className="space-y-1">
 							<Label className="text-xs">
-								{t('innerRadius0PieGt0Donut', "Inner Radius (0 = pie, >0 = donut)")}
+								{t(
+									"innerRadius0PieGt0Donut",
+									"Inner Radius (0 = pie, >0 = donut)",
+								)}
 							</Label>
 							<Input
 								type="number"
@@ -2701,7 +2765,7 @@ function NivoChartEditor({
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('padAngle', 'Pad Angle')}</Label>
+							<Label className="text-xs">{t("padAngle", "Pad Angle")}</Label>
 							<Input
 								type="number"
 								step="0.5"
@@ -2720,7 +2784,9 @@ function NivoChartEditor({
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('cornerRadius', 'Corner Radius')}</Label>
+							<Label className="text-xs">
+								{t("cornerRadius", "Corner Radius")}
+							</Label>
 							<Input
 								type="number"
 								min="0"
@@ -2746,12 +2812,12 @@ function NivoChartEditor({
 			{chartType === "line" && (
 				<Collapsible>
 					<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-						<span>{t('lineOptions', 'Line Options')}</span>
+						<span>{t("lineOptions", "Line Options")}</span>
 						<ChevronDown className="h-4 w-4" />
 					</CollapsibleTrigger>
 					<CollapsibleContent className="space-y-2 pt-2">
 						<div className="space-y-1">
-							<Label className="text-xs">{t('curve', 'Curve')}</Label>
+							<Label className="text-xs">{t("curve", "Curve")}</Label>
 							<Select
 								value={(() => {
 									const s = props.lineStyle as { curve?: string } | undefined;
@@ -2768,19 +2834,33 @@ function NivoChartEditor({
 									<SelectValue />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="linear">{t('linear', 'Linear')}</SelectItem>
-									<SelectItem value="monotoneX">{t('smooth', 'Smooth')}</SelectItem>
-									<SelectItem value="natural">{t('natural', 'Natural')}</SelectItem>
-									<SelectItem value="step">{t('step', 'Step')}</SelectItem>
-									<SelectItem value="stepBefore">{t('stepBefore', 'Step Before')}</SelectItem>
-									<SelectItem value="stepAfter">{t('stepAfter', 'Step After')}</SelectItem>
-									<SelectItem value="basis">{t('basis', 'Basis')}</SelectItem>
-									<SelectItem value="cardinal">{t('cardinal', 'Cardinal')}</SelectItem>
+									<SelectItem value="linear">
+										{t("linear", "Linear")}
+									</SelectItem>
+									<SelectItem value="monotoneX">
+										{t("smooth", "Smooth")}
+									</SelectItem>
+									<SelectItem value="natural">
+										{t("natural", "Natural")}
+									</SelectItem>
+									<SelectItem value="step">{t("step", "Step")}</SelectItem>
+									<SelectItem value="stepBefore">
+										{t("stepBefore", "Step Before")}
+									</SelectItem>
+									<SelectItem value="stepAfter">
+										{t("stepAfter", "Step After")}
+									</SelectItem>
+									<SelectItem value="basis">{t("basis", "Basis")}</SelectItem>
+									<SelectItem value="cardinal">
+										{t("cardinal", "Cardinal")}
+									</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>
 						<div className="flex items-center justify-between">
-							<Label className="text-xs">{t('enableArea', 'Enable Area')}</Label>
+							<Label className="text-xs">
+								{t("enableArea", "Enable Area")}
+							</Label>
 							<Switch
 								checked={(() => {
 									const s = props.lineStyle as
@@ -2797,7 +2877,9 @@ function NivoChartEditor({
 							/>
 						</div>
 						<div className="flex items-center justify-between">
-							<Label className="text-xs">{t('showPoints', 'Show Points')}</Label>
+							<Label className="text-xs">
+								{t("showPoints", "Show Points")}
+							</Label>
 							<Switch
 								checked={(() => {
 									const s = props.lineStyle as
@@ -2814,7 +2896,7 @@ function NivoChartEditor({
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('lineWidth', 'Line Width')}</Label>
+							<Label className="text-xs">{t("lineWidth", "Line Width")}</Label>
 							<Input
 								type="number"
 								min="1"
@@ -2841,7 +2923,7 @@ function NivoChartEditor({
 			{/* Display Options */}
 			<Collapsible>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('display', 'Display')}</span>
+					<span>{t("display", "Display")}</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="space-y-2 pt-2">
@@ -2956,7 +3038,9 @@ function TableEditor({
 			setCsvInput("");
 		} catch (err) {
 			setCsvError(
-				t('failedToParseCsvVal', 'Failed to parse CSV: {{val}}', { val: err instanceof Error ? err.message : "Unknown error" }),
+				t("failedToParseCsvVal", "Failed to parse CSV: {{val}}", {
+					val: err instanceof Error ? err.message : "Unknown error",
+				}),
 			);
 		}
 	}, [csvInput, updateProp]);
@@ -2965,7 +3049,11 @@ function TableEditor({
 	const addColumn = useCallback(() => {
 		const newColumn: TableColumn = {
 			id: `col-${Date.now()}`,
-			header: { literalString: t('columnVal', 'Column {{val}}', { val: columns.length + 1 }) },
+			header: {
+				literalString: t("columnVal", "Column {{val}}", {
+					val: columns.length + 1,
+				}),
+			},
 			accessor: { literalString: `column_${columns.length + 1}` },
 			sortable: { literalBool: true },
 		};
@@ -3061,7 +3149,7 @@ function TableEditor({
 		<div className="space-y-4">
 			{/* Component ID */}
 			<div className="space-y-2">
-				<Label className="text-xs">{t('componentId', 'Component ID')}</Label>
+				<Label className="text-xs">{t("componentId", "Component ID")}</Label>
 				<Input
 					value={component.id}
 					onChange={(e) => onUpdate({ id: e.target.value })}
@@ -3089,7 +3177,7 @@ function TableEditor({
 						onClick={handleCsvImport}
 						disabled={!csvInput.trim()}
 					>
-						{t('importCsv', 'Import CSV')}
+						{t("importCsv", "Import CSV")}
 					</Button>
 				</CollapsibleContent>
 			</Collapsible>
@@ -3097,7 +3185,11 @@ function TableEditor({
 			{/* Columns */}
 			<Collapsible defaultOpen>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('columnsLength', 'Columns ({{length}})', { length: columns.length })}</span>
+					<span>
+						{t("columnsLength", "Columns ({{length}})", {
+							length: columns.length,
+						})}
+					</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="space-y-2 pt-2">
@@ -3117,7 +3209,7 @@ function TableEditor({
 								</Button>
 							</div>
 							<div className="space-y-1">
-								<Label className="text-xs">{t('header', 'Header')}</Label>
+								<Label className="text-xs">{t("header", "Header")}</Label>
 								<Input
 									value={getHeader(col)}
 									onChange={(e) =>
@@ -3129,7 +3221,9 @@ function TableEditor({
 								/>
 							</div>
 							<div className="space-y-1">
-								<Label className="text-xs">{t('accessorDataKey', 'Accessor (data key)')}</Label>
+								<Label className="text-xs">
+									{t("accessorDataKey", "Accessor (data key)")}
+								</Label>
 								<Input
 									value={getAccessor(col)}
 									onChange={(e) =>
@@ -3141,7 +3235,7 @@ function TableEditor({
 								/>
 							</div>
 							<div className="flex items-center justify-between">
-								<Label className="text-xs">{t('sortable', 'Sortable')}</Label>
+								<Label className="text-xs">{t("sortable", "Sortable")}</Label>
 								<Switch
 									checked={
 										col.sortable &&
@@ -3166,7 +3260,7 @@ function TableEditor({
 						onClick={addColumn}
 					>
 						<Plus className="h-3 w-3 mr-1" />
-						{t('addColumn', 'Add Column')}
+						{t("addColumn", "Add Column")}
 					</Button>
 				</CollapsibleContent>
 			</Collapsible>
@@ -3174,7 +3268,13 @@ function TableEditor({
 			{/* Data Rows */}
 			<Collapsible defaultOpen={data.length <= 5}>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('dataCountRows', { defaultValue_one: 'Data ({{count}} row)', defaultValue_other: 'Data ({{count}} rows)', count: data.length })}</span>
+					<span>
+						{t("dataCountRows", {
+							defaultValue_one: "Data ({{count}} row)",
+							defaultValue_other: "Data ({{count}} rows)",
+							count: data.length,
+						})}
+					</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="space-y-2 pt-2">
@@ -3192,7 +3292,7 @@ function TableEditor({
 								<div key={rowIdx} className="rounded border p-2 space-y-1">
 									<div className="flex items-center justify-between mb-1">
 										<span className="text-xs font-medium">
-											{t('row', 'Row')} {rowIdx + 1}
+											{t("row", "Row")} {rowIdx + 1}
 										</span>
 										<Button
 											variant="ghost"
@@ -3232,7 +3332,7 @@ function TableEditor({
 						disabled={columns.length === 0}
 					>
 						<Plus className="h-3 w-3 mr-1" />
-						{t('addRow', 'Add Row')}
+						{t("addRow", "Add Row")}
 					</Button>
 				</CollapsibleContent>
 			</Collapsible>
@@ -3240,7 +3340,7 @@ function TableEditor({
 			{/* Table Options */}
 			<Collapsible>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('options', 'Options')}</span>
+					<span>{t("options", "Options")}</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="space-y-2 pt-2">
@@ -3250,7 +3350,7 @@ function TableEditor({
 						onChange={(v) => updateProp("caption", v)}
 					/>
 					<div className="flex items-center justify-between">
-						<Label className="text-xs">{t('striped', 'Striped')}</Label>
+						<Label className="text-xs">{t("striped", "Striped")}</Label>
 						<Switch
 							checked={
 								props.striped && "literalBool" in (props.striped as BoundValue)
@@ -3261,7 +3361,7 @@ function TableEditor({
 						/>
 					</div>
 					<div className="flex items-center justify-between">
-						<Label className="text-xs">{t('bordered', 'Bordered')}</Label>
+						<Label className="text-xs">{t("bordered", "Bordered")}</Label>
 						<Switch
 							checked={
 								props.bordered &&
@@ -3275,7 +3375,7 @@ function TableEditor({
 						/>
 					</div>
 					<div className="flex items-center justify-between">
-						<Label className="text-xs">{t('hoverable', 'Hoverable')}</Label>
+						<Label className="text-xs">{t("hoverable", "Hoverable")}</Label>
 						<Switch
 							checked={
 								props.hoverable &&
@@ -3289,7 +3389,7 @@ function TableEditor({
 						/>
 					</div>
 					<div className="flex items-center justify-between">
-						<Label className="text-xs">{t('compact', 'Compact')}</Label>
+						<Label className="text-xs">{t("compact", "Compact")}</Label>
 						<Switch
 							checked={
 								props.compact && "literalBool" in (props.compact as BoundValue)
@@ -3300,7 +3400,9 @@ function TableEditor({
 						/>
 					</div>
 					<div className="flex items-center justify-between">
-						<Label className="text-xs">{t('stickyHeader', 'Sticky Header')}</Label>
+						<Label className="text-xs">
+							{t("stickyHeader", "Sticky Header")}
+						</Label>
 						<Switch
 							checked={
 								props.stickyHeader &&
@@ -3314,7 +3416,7 @@ function TableEditor({
 						/>
 					</div>
 					<div className="flex items-center justify-between">
-						<Label className="text-xs">{t('sortable', 'Sortable')}</Label>
+						<Label className="text-xs">{t("sortable", "Sortable")}</Label>
 						<Switch
 							checked={
 								props.sortable &&
@@ -3328,7 +3430,7 @@ function TableEditor({
 						/>
 					</div>
 					<div className="flex items-center justify-between">
-						<Label className="text-xs">{t('searchable', 'Searchable')}</Label>
+						<Label className="text-xs">{t("searchable", "Searchable")}</Label>
 						<Switch
 							checked={
 								props.searchable &&
@@ -3342,7 +3444,7 @@ function TableEditor({
 						/>
 					</div>
 					<div className="flex items-center justify-between">
-						<Label className="text-xs">{t('paginated', 'Paginated')}</Label>
+						<Label className="text-xs">{t("paginated", "Paginated")}</Label>
 						<Switch
 							checked={
 								props.paginated &&
@@ -3361,7 +3463,7 @@ function TableEditor({
 							(props.paginated as { literalBool: boolean }).literalBool,
 					) && (
 						<div className="space-y-1">
-							<Label className="text-xs">{t('pageSize', 'Page Size')}</Label>
+							<Label className="text-xs">{t("pageSize", "Page Size")}</Label>
 							<Input
 								type="number"
 								min={1}
@@ -3418,13 +3520,15 @@ function OntologyIdField({
 
 	return (
 		<div className={INSPECTOR_FIELD_CLASS}>
-			<Label className="text-xs">{t('ontology', 'Ontology')}</Label>
+			<Label className="text-xs">{t("ontology", "Ontology")}</Label>
 			<Select
 				value={value || undefined}
 				onValueChange={(next) => onChange({ literalString: next })}
 			>
 				<SelectTrigger className="h-8 text-sm">
-					<SelectValue placeholder={t('selectAnOntology', 'Select an ontology...')} />
+					<SelectValue
+						placeholder={t("selectAnOntology", "Select an ontology...")}
+					/>
 				</SelectTrigger>
 				<SelectContent>
 					{(ontologies.data ?? []).map((ontology) => (
@@ -3436,7 +3540,10 @@ function OntologyIdField({
 			</Select>
 			{ontologies.data?.length === 0 && (
 				<p className="text-[11px] text-muted-foreground">
-					{t('thisProjectHasNoOntologiesYetCreateOneInDataStudio', 'This project has no ontologies yet — create one in Data Studio.')}
+					{t(
+						"thisProjectHasNoOntologiesYetCreateOneInDataStudio",
+						"This project has no ontologies yet — create one in Data Studio.",
+					)}
 				</p>
 			)}
 		</div>
@@ -3591,7 +3698,7 @@ function OptionsEditor({
 			...options,
 			{
 				value: `option${options.length + 1}`,
-				label: t('optionVal', 'Option {{val}}', { val: options.length + 1 }),
+				label: t("optionVal", "Option {{val}}", { val: options.length + 1 }),
 			},
 		]);
 	}, [options, onChange]);
@@ -3626,8 +3733,8 @@ function OptionsEditor({
 						<SelectValue />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="literal">{t('literal', 'Literal')}</SelectItem>
-						<SelectItem value="binding">{t('binding', 'Binding')}</SelectItem>
+						<SelectItem value="literal">{t("literal", "Literal")}</SelectItem>
+						<SelectItem value="binding">{t("binding", "Binding")}</SelectItem>
 					</SelectContent>
 				</Select>
 			</div>
@@ -3663,7 +3770,7 @@ function OptionsEditor({
 					onClick={addOption}
 				>
 					<Plus className="h-3 w-3 mr-1" />
-					{t('addOption', 'Add Option')}
+					{t("addOption", "Add Option")}
 				</Button>
 			</div>
 		</div>
@@ -3869,8 +3976,8 @@ function BoundValueEditor({
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="literal">{t('literal', 'Literal')}</SelectItem>
-							<SelectItem value="binding">{t('binding', 'Binding')}</SelectItem>
+							<SelectItem value="literal">{t("literal", "Literal")}</SelectItem>
+							<SelectItem value="binding">{t("binding", "Binding")}</SelectItem>
 						</SelectContent>
 					</Select>
 				</div>
@@ -3898,8 +4005,8 @@ function BoundValueEditor({
 						<SelectValue />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="literal">{t('literal', 'Literal')}</SelectItem>
-						<SelectItem value="binding">{t('binding', 'Binding')}</SelectItem>
+						<SelectItem value="literal">{t("literal", "Literal")}</SelectItem>
+						<SelectItem value="binding">{t("binding", "Binding")}</SelectItem>
 					</SelectContent>
 				</Select>
 			</div>
@@ -3912,8 +4019,8 @@ function BoundValueEditor({
 						<SelectValue />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="true">{t('true', 'True')}</SelectItem>
-						<SelectItem value="false">{t('false', 'False')}</SelectItem>
+						<SelectItem value="true">{t("true", "True")}</SelectItem>
+						<SelectItem value="false">{t("false", "False")}</SelectItem>
 					</SelectContent>
 				</Select>
 			) : mode === "literal" && originalType === "json" ? (
@@ -4001,7 +4108,7 @@ function BoundValueEditor({
 						}
 						onChange={(e) => handleLiteralChange(e.target.value)}
 						className="h-8 w-10 shrink-0 cursor-pointer p-1"
-						aria-label={t('nameColor', '{{name}} color', { name })}
+						aria-label={t("nameColor", "{{name}} color", { name })}
 					/>
 					<Input
 						type="text"
@@ -4026,7 +4133,11 @@ function BoundValueEditor({
 										: e.target.value,
 								)
 					}
-					placeholder={mode === "binding" ? "/path/to/data" : t('enterValue', 'Enter value...')}
+					placeholder={
+						mode === "binding"
+							? "/path/to/data"
+							: t("enterValue", "Enter value...")
+					}
 					className="h-8 text-sm"
 				/>
 			)}
@@ -4118,7 +4229,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 			{/* Spacing - Margin & Padding */}
 			<Collapsible defaultOpen>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('spacing', 'Spacing')}</span>
+					<span>{t("spacing", "Spacing")}</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="pt-2 space-y-3">
@@ -4148,7 +4259,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 									))}
 								</div>
 								<p className="text-[10px] text-muted-foreground">
-									{t('topRightBottomLeft', 'Top, Right, Bottom, Left')}
+									{t("topRightBottomLeft", "Top, Right, Bottom, Left")}
 								</p>
 							</div>
 						);
@@ -4159,13 +4270,13 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 			{/* Sizing */}
 			<Collapsible defaultOpen>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('size', 'Size')}</span>
+					<span>{t("size", "Size")}</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="pt-2 space-y-3">
 					<div className="grid grid-cols-2 gap-2">
 						<div className="space-y-1">
-							<Label className="text-xs">{t('width', 'Width')}</Label>
+							<Label className="text-xs">{t("width", "Width")}</Label>
 							<Input
 								value={getStyleValue(style.width)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4176,7 +4287,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('height', 'Height')}</Label>
+							<Label className="text-xs">{t("height", "Height")}</Label>
 							<Input
 								value={getStyleValue(style.height)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4187,7 +4298,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('minWidth', 'Min Width')}</Label>
+							<Label className="text-xs">{t("minWidth", "Min Width")}</Label>
 							<Input
 								value={getStyleValue(style.minWidth)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4198,7 +4309,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('minHeight', 'Min Height')}</Label>
+							<Label className="text-xs">{t("minHeight", "Min Height")}</Label>
 							<Input
 								value={getStyleValue(style.minHeight)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4209,7 +4320,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('maxWidth', 'Max Width')}</Label>
+							<Label className="text-xs">{t("maxWidth", "Max Width")}</Label>
 							<Input
 								value={getStyleValue(style.maxWidth)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4220,7 +4331,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('maxHeight', 'Max Height')}</Label>
+							<Label className="text-xs">{t("maxHeight", "Max Height")}</Label>
 							<Input
 								value={getStyleValue(style.maxHeight)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4236,27 +4347,29 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 
 			{/* Tailwind Classes */}
 			<div className="space-y-2">
-				<Label className="text-xs">{t('tailwindClasses', 'Tailwind Classes')}</Label>
+				<Label className="text-xs">
+					{t("tailwindClasses", "Tailwind Classes")}
+				</Label>
 				<Textarea
 					value={style.className || ""}
 					onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
 						updateStyle("className", e.target.value)
 					}
-					placeholder={t('enterTailwindClasses', 'Enter Tailwind classes')}
+					placeholder={t("enterTailwindClasses", "Enter Tailwind classes")}
 					autoComplete="off"
 					autoCorrect="off"
 					autoCapitalize="off"
 					className="text-sm min-h-[60px]"
 				/>
 				<p className="text-xs text-muted-foreground">
-					{t('additionalUtilityClasses', 'Additional utility classes')}
+					{t("additionalUtilityClasses", "Additional utility classes")}
 				</p>
 			</div>
 
 			{/* Position */}
 			<Collapsible>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('position', 'Position')}</span>
+					<span>{t("position", "Position")}</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="pt-2 space-y-3">
@@ -4275,20 +4388,26 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							}
 						>
 							<SelectTrigger className="h-8 text-sm">
-								<SelectValue placeholder={t('selectPosition', 'Select position')} />
+								<SelectValue
+									placeholder={t("selectPosition", "Select position")}
+								/>
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="relative">{t('relative', 'Relative')}</SelectItem>
-								<SelectItem value="absolute">{t('absolute', 'Absolute')}</SelectItem>
-								<SelectItem value="fixed">{t('fixed', 'Fixed')}</SelectItem>
-								<SelectItem value="sticky">{t('sticky', 'Sticky')}</SelectItem>
+								<SelectItem value="relative">
+									{t("relative", "Relative")}
+								</SelectItem>
+								<SelectItem value="absolute">
+									{t("absolute", "Absolute")}
+								</SelectItem>
+								<SelectItem value="fixed">{t("fixed", "Fixed")}</SelectItem>
+								<SelectItem value="sticky">{t("sticky", "Sticky")}</SelectItem>
 							</SelectContent>
 						</Select>
 					</div>
 					{style.position && getPositionType(style.position) !== "relative" && (
 						<div className="grid grid-cols-2 gap-2">
 							<div className="space-y-1">
-								<Label className="text-xs">{t('top', 'Top')}</Label>
+								<Label className="text-xs">{t("top", "Top")}</Label>
 								<Input
 									value={style.position?.top || ""}
 									onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4303,7 +4422,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 								/>
 							</div>
 							<div className="space-y-1">
-								<Label className="text-xs">{t('right', 'Right')}</Label>
+								<Label className="text-xs">{t("right", "Right")}</Label>
 								<Input
 									value={style.position?.right || ""}
 									onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4318,7 +4437,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 								/>
 							</div>
 							<div className="space-y-1">
-								<Label className="text-xs">{t('bottom', 'Bottom')}</Label>
+								<Label className="text-xs">{t("bottom", "Bottom")}</Label>
 								<Input
 									value={style.position?.bottom || ""}
 									onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4333,7 +4452,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 								/>
 							</div>
 							<div className="space-y-1">
-								<Label className="text-xs">{t('left', 'Left')}</Label>
+								<Label className="text-xs">{t("left", "Left")}</Label>
 								<Input
 									value={style.position?.left || ""}
 									onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4355,7 +4474,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 			{/* Background */}
 			<Collapsible>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('background', 'Background')}</span>
+					<span>{t("background", "Background")}</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="pt-2 space-y-3">
@@ -4399,18 +4518,22 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="none">{t('none', 'None')}</SelectItem>
-								<SelectItem value="color">{t('color', 'Color')}</SelectItem>
-								<SelectItem value="gradient">{t('gradient', 'Gradient')}</SelectItem>
-								<SelectItem value="image">{t('image', 'Image')}</SelectItem>
-								<SelectItem value="blur">{t('backdropBlur', 'Backdrop blur')}</SelectItem>
+								<SelectItem value="none">{t("none", "None")}</SelectItem>
+								<SelectItem value="color">{t("color", "Color")}</SelectItem>
+								<SelectItem value="gradient">
+									{t("gradient", "Gradient")}
+								</SelectItem>
+								<SelectItem value="image">{t("image", "Image")}</SelectItem>
+								<SelectItem value="blur">
+									{t("backdropBlur", "Backdrop blur")}
+								</SelectItem>
 							</SelectContent>
 						</Select>
 					</div>
 
 					{backgroundMode === "color" && (
 						<div className="space-y-1">
-							<Label className="text-xs">{t('color', 'Color')}</Label>
+							<Label className="text-xs">{t("color", "Color")}</Label>
 							<Input
 								value={
 									style.background && "color" in style.background
@@ -4420,7 +4543,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 								onChange={(e) =>
 									updateStyle("background", { color: e.target.value })
 								}
-								placeholder={t('ffffffOrTransparent', '#ffffff or transparent')}
+								placeholder={t("ffffffOrTransparent", "#ffffff or transparent")}
 								className="h-8 text-sm"
 							/>
 						</div>
@@ -4430,7 +4553,9 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						<div className="space-y-3">
 							<div className="grid grid-cols-2 gap-2">
 								<div className="space-y-1">
-									<Label className="text-xs">{t('gradientType', 'Gradient type')}</Label>
+									<Label className="text-xs">
+										{t("gradientType", "Gradient type")}
+									</Label>
 									<Select
 										value={gradientType}
 										onValueChange={(value) =>
@@ -4448,14 +4573,22 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 											<SelectValue />
 										</SelectTrigger>
 										<SelectContent>
-											<SelectItem value="linear">{t('linear', 'Linear')}</SelectItem>
-											<SelectItem value="radial">{t('radial', 'Radial')}</SelectItem>
-											<SelectItem value="conic">{t('conic', 'Conic')}</SelectItem>
+											<SelectItem value="linear">
+												{t("linear", "Linear")}
+											</SelectItem>
+											<SelectItem value="radial">
+												{t("radial", "Radial")}
+											</SelectItem>
+											<SelectItem value="conic">
+												{t("conic", "Conic")}
+											</SelectItem>
 										</SelectContent>
 									</Select>
 								</div>
 								<div className="space-y-1">
-									<Label className="text-xs">{t('direction', 'Direction')}</Label>
+									<Label className="text-xs">
+										{t("direction", "Direction")}
+									</Label>
 									<Input
 										value={
 											gradient?.direction ??
@@ -4473,7 +4606,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 												},
 											})
 										}
-										placeholder={t('toRightOr45deg', 'to right or 45deg')}
+										placeholder={t("toRightOr45deg", "to right or 45deg")}
 										className="h-8 text-sm"
 									/>
 								</div>
@@ -4566,7 +4699,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 								}
 							>
 								<Plus className="mr-1 h-3.5 w-3.5" />
-								{t('addStop', 'Add stop')}
+								{t("addStop", "Add stop")}
 							</Button>
 						</div>
 					)}
@@ -4574,7 +4707,9 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 					{backgroundMode === "image" && backgroundImage && (
 						<div className="space-y-3">
 							<div className="space-y-1">
-								<Label className="text-xs">{t('urlSource', 'URL source')}</Label>
+								<Label className="text-xs">
+									{t("urlSource", "URL source")}
+								</Label>
 								<Select
 									value={"path" in backgroundImage.url ? "path" : "literal"}
 									onValueChange={(value) =>
@@ -4593,8 +4728,12 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 										<SelectValue />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value="literal">{t('literalUrl', 'Literal URL')}</SelectItem>
-										<SelectItem value="path">{t('dataPath', 'Data path')}</SelectItem>
+										<SelectItem value="literal">
+											{t("literalUrl", "Literal URL")}
+										</SelectItem>
+										<SelectItem value="path">
+											{t("dataPath", "Data path")}
+										</SelectItem>
 									</SelectContent>
 								</Select>
 							</div>
@@ -4631,7 +4770,9 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							</div>
 							{"path" in backgroundImage.url && (
 								<div className="space-y-1">
-									<Label className="text-xs">{t('fallbackUrl', 'Fallback URL')}</Label>
+									<Label className="text-xs">
+										{t("fallbackUrl", "Fallback URL")}
+									</Label>
 									<Input
 										value={
 											typeof backgroundImage.url.defaultValue === "string"
@@ -4677,7 +4818,9 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 
 					{backgroundMode === "blur" && (
 						<div className="space-y-1">
-							<Label className="text-xs">{t('backdropBlur2', 'Backdrop Blur')}</Label>
+							<Label className="text-xs">
+								{t("backdropBlur2", "Backdrop Blur")}
+							</Label>
 							<Input
 								value={
 									style.background && "blur" in style.background
@@ -4693,7 +4836,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						</div>
 					)}
 					<div className="space-y-1">
-						<Label className="text-xs">{t('opacity', 'Opacity')}</Label>
+						<Label className="text-xs">{t("opacity", "Opacity")}</Label>
 						<Input
 							type="number"
 							step="0.1"
@@ -4718,13 +4861,13 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 			{/* Border */}
 			<Collapsible>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('border', 'Border')}</span>
+					<span>{t("border", "Border")}</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="pt-2 space-y-3">
 					<div className="grid grid-cols-2 gap-2">
 						<div className="space-y-1">
-							<Label className="text-xs">{t('width', 'Width')}</Label>
+							<Label className="text-xs">{t("width", "Width")}</Label>
 							<Input
 								value={style.border?.width || ""}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4738,7 +4881,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('radius', 'Radius')}</Label>
+							<Label className="text-xs">{t("radius", "Radius")}</Label>
 							<Input
 								value={style.border?.radius || ""}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4753,7 +4896,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						</div>
 					</div>
 					<div className="space-y-1">
-						<Label className="text-xs">{t('color', 'Color')}</Label>
+						<Label className="text-xs">{t("color", "Color")}</Label>
 						<div className="flex gap-2">
 							<Input
 								type="color"
@@ -4785,7 +4928,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 			{/* Shadow */}
 			<Collapsible>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('shadow', 'Shadow')}</span>
+					<span>{t("shadow", "Shadow")}</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="pt-2 space-y-3">
@@ -4816,7 +4959,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						))}
 					</div>
 					<div className="flex items-center justify-between">
-						<Label className="text-xs">{t('inset', 'Inset')}</Label>
+						<Label className="text-xs">{t("inset", "Inset")}</Label>
 						<Switch
 							checked={style.shadow?.inset ?? false}
 							onCheckedChange={(checked) =>
@@ -4828,7 +4971,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						/>
 					</div>
 					<div className="space-y-1">
-						<Label className="text-xs">{t('textShadow', 'Text Shadow')}</Label>
+						<Label className="text-xs">{t("textShadow", "Text Shadow")}</Label>
 						<Input
 							value={style.shadow?.textShadow || ""}
 							onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4847,13 +4990,13 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 			{/* Transform */}
 			<Collapsible>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('transform', 'Transform')}</span>
+					<span>{t("transform", "Transform")}</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="pt-2 space-y-3">
 					<div className="grid grid-cols-2 gap-2">
 						<div className="space-y-1">
-							<Label className="text-xs">{t('translate', 'Translate')}</Label>
+							<Label className="text-xs">{t("translate", "Translate")}</Label>
 							<Input
 								value={style.transform?.translate || ""}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4867,7 +5010,9 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('rotateDeg', 'Rotate (deg)')}</Label>
+							<Label className="text-xs">
+								{t("rotateDeg", "Rotate (deg)")}
+							</Label>
 							<Input
 								type="number"
 								value={style.transform?.rotate ?? ""}
@@ -4882,7 +5027,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('scale', 'Scale')}</Label>
+							<Label className="text-xs">{t("scale", "Scale")}</Label>
 							<Input
 								value={style.transform?.scale || ""}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4896,7 +5041,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('skew', 'Skew')}</Label>
+							<Label className="text-xs">{t("skew", "Skew")}</Label>
 							<Input
 								value={style.transform?.skew || ""}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4910,7 +5055,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('origin', 'Origin')}</Label>
+							<Label className="text-xs">{t("origin", "Origin")}</Label>
 							<Input
 								value={style.transform?.transformOrigin || ""}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -4930,12 +5075,12 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 			{/* Responsive overrides */}
 			<Collapsible>
 				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
-					<span>{t('responsive', 'Responsive')}</span>
+					<span>{t("responsive", "Responsive")}</span>
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="pt-2 space-y-3">
 					<div className="space-y-1">
-						<Label className="text-xs">{t('breakpoint', 'Breakpoint')}</Label>
+						<Label className="text-xs">{t("breakpoint", "Breakpoint")}</Label>
 						<Select
 							value={responsiveBreakpoint}
 							onValueChange={(value) =>
@@ -4946,16 +5091,24 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="sm">{t('sm640px', 'sm · 640px')}</SelectItem>
-								<SelectItem value="md">{t('md768px', 'md · 768px')}</SelectItem>
-								<SelectItem value="lg">{t('lg1024px', 'lg · 1024px')}</SelectItem>
-								<SelectItem value="xl">{t('xl1280px', 'xl · 1280px')}</SelectItem>
-								<SelectItem value="xxl">{t('2xl1536px', '2xl · 1536px')}</SelectItem>
+								<SelectItem value="sm">{t("sm640px", "sm · 640px")}</SelectItem>
+								<SelectItem value="md">{t("md768px", "md · 768px")}</SelectItem>
+								<SelectItem value="lg">
+									{t("lg1024px", "lg · 1024px")}
+								</SelectItem>
+								<SelectItem value="xl">
+									{t("xl1280px", "xl · 1280px")}
+								</SelectItem>
+								<SelectItem value="xxl">
+									{t("2xl1536px", "2xl · 1536px")}
+								</SelectItem>
 							</SelectContent>
 						</Select>
 					</div>
 					<div className="space-y-1">
-						<Label className="text-xs">{t('tailwindClasses2', 'Tailwind classes')}</Label>
+						<Label className="text-xs">
+							{t("tailwindClasses2", "Tailwind classes")}
+						</Label>
 						<Input
 							value={breakpointStyle.className ?? ""}
 							onChange={(e) =>
@@ -5028,7 +5181,9 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							</div>
 						))}
 						<div className="space-y-1">
-							<Label className="text-xs">{t('gridColumns', 'Grid columns')}</Label>
+							<Label className="text-xs">
+								{t("gridColumns", "Grid columns")}
+							</Label>
 							<Input
 								type="number"
 								min="1"
@@ -5043,7 +5198,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							/>
 						</div>
 						<div className="space-y-1">
-							<Label className="text-xs">{t('order', 'Order')}</Label>
+							<Label className="text-xs">{t("order", "Order")}</Label>
 							<Input
 								type="number"
 								value={breakpointStyle.order ?? ""}
@@ -5058,7 +5213,9 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						</div>
 					</div>
 					<div className="flex items-center justify-between">
-						<Label className="text-xs">{t('hiddenAtThisBreakpoint', 'Hidden at this breakpoint')}</Label>
+						<Label className="text-xs">
+							{t("hiddenAtThisBreakpoint", "Hidden at this breakpoint")}
+						</Label>
 						<Switch
 							checked={breakpointStyle.hidden ?? false}
 							onCheckedChange={(checked) =>
@@ -5071,19 +5228,19 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 
 			{/* Overflow */}
 			<div className="space-y-2">
-				<Label className="text-xs">{t('overflow', 'Overflow')}</Label>
+				<Label className="text-xs">{t("overflow", "Overflow")}</Label>
 				<Select
 					value={style.overflow || "visible"}
 					onValueChange={(v) => updateStyle("overflow", v as Overflow)}
 				>
 					<SelectTrigger className="h-8 text-sm">
-						<SelectValue placeholder={t('selectOverflow', 'Select overflow')} />
+						<SelectValue placeholder={t("selectOverflow", "Select overflow")} />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="visible">{t('visible', 'Visible')}</SelectItem>
-						<SelectItem value="hidden">{t('hidden', 'Hidden')}</SelectItem>
-						<SelectItem value="scroll">{t('scroll', 'Scroll')}</SelectItem>
-						<SelectItem value="auto">{t('auto', 'Auto')}</SelectItem>
+						<SelectItem value="visible">{t("visible", "Visible")}</SelectItem>
+						<SelectItem value="hidden">{t("hidden", "Hidden")}</SelectItem>
+						<SelectItem value="scroll">{t("scroll", "Scroll")}</SelectItem>
+						<SelectItem value="auto">{t("auto", "Auto")}</SelectItem>
 					</SelectContent>
 				</Select>
 			</div>
@@ -5099,12 +5256,17 @@ function CanvasSettingsEditor() {
 	return (
 		<div className="space-y-4">
 			<p className="text-xs text-muted-foreground mb-4">
-				{t('theseSettingsApplyToTheEntireCanvasBackgroundNotIndividualComponents', "These settings apply to the entire canvas background, not individual components.")}
+				{t(
+					"theseSettingsApplyToTheEntireCanvasBackgroundNotIndividualComponents",
+					"These settings apply to the entire canvas background, not individual components.",
+				)}
 			</p>
 
 			{/* Canvas Background Color */}
 			<div className="space-y-2">
-				<Label className="text-xs">{t('canvasBackground', 'Canvas Background')}</Label>
+				<Label className="text-xs">
+					{t("canvasBackground", "Canvas Background")}
+				</Label>
 				<div className="flex gap-2">
 					<Input
 						type="color"
@@ -5127,7 +5289,9 @@ function CanvasSettingsEditor() {
 
 			{/* Canvas Background Image */}
 			<div className="space-y-2">
-				<Label className="text-xs">{t('backgroundImageUrl', 'Background Image URL')}</Label>
+				<Label className="text-xs">
+					{t("backgroundImageUrl", "Background Image URL")}
+				</Label>
 				<Input
 					value={canvasSettings.backgroundImage || ""}
 					onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -5140,29 +5304,40 @@ function CanvasSettingsEditor() {
 
 			{/* Canvas Padding */}
 			<div className="space-y-2">
-				<Label className="text-xs">{t('canvasPadding', 'Canvas Padding')}</Label>
+				<Label className="text-xs">
+					{t("canvasPadding", "Canvas Padding")}
+				</Label>
 				<Select
 					value={canvasSettings.padding || "16px"}
 					onValueChange={(v) => setCanvasSettings({ padding: v })}
 				>
 					<SelectTrigger className="h-8 text-sm">
-						<SelectValue placeholder={t('selectPadding', 'Select padding')} />
+						<SelectValue placeholder={t("selectPadding", "Select padding")} />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="0">{t('none', 'None')}</SelectItem>
-						<SelectItem value="8px">{t('small8px', 'Small (8px)')}</SelectItem>
-						<SelectItem value="16px">{t('medium16px', 'Medium (16px)')}</SelectItem>
-						<SelectItem value="24px">{t('large24px', 'Large (24px)')}</SelectItem>
-						<SelectItem value="32px">{t('extraLarge32px', 'Extra Large (32px)')}</SelectItem>
+						<SelectItem value="0">{t("none", "None")}</SelectItem>
+						<SelectItem value="8px">{t("small8px", "Small (8px)")}</SelectItem>
+						<SelectItem value="16px">
+							{t("medium16px", "Medium (16px)")}
+						</SelectItem>
+						<SelectItem value="24px">
+							{t("large24px", "Large (24px)")}
+						</SelectItem>
+						<SelectItem value="32px">
+							{t("extraLarge32px", "Extra Large (32px)")}
+						</SelectItem>
 					</SelectContent>
 				</Select>
 			</div>
 
 			{/* Custom CSS */}
 			<div className="space-y-2">
-				<Label className="text-xs">{t('customCss', 'Custom CSS')}</Label>
+				<Label className="text-xs">{t("customCss", "Custom CSS")}</Label>
 				<p className="text-xs text-muted-foreground">
-					{t('cssIsAutomaticallyScopedToTheCanvasUseClassSelectorsLikeMyclass', "CSS is automatically scoped to the canvas. Use class selectors like .my-class")}
+					{t(
+						"cssIsAutomaticallyScopedToTheCanvasUseClassSelectorsLikeMyclass",
+						"CSS is automatically scoped to the canvas. Use class selectors like .my-class",
+					)}
 				</p>
 				<MonacoCodeEditor
 					value={canvasSettings.customCss || ""}
@@ -5229,7 +5404,7 @@ function actionTypeLabel(name: string): string {
 	return (
 		{
 			widget_event: "Widget event",
-			navigate_page: i18next.t('navigateToPage', 'Navigate to page'),
+			navigate_page: i18next.t("navigateToPage", "Navigate to page"),
 			external_link: "External link",
 			workflow_event: "Trigger workflow",
 		}[name] ?? name
@@ -5249,7 +5424,11 @@ function HandlerStatus({
 	const label = exact
 		? actions.length === 0
 			? "Disabled"
-			: t('countActions', { defaultValue_one: '{{count}} action', defaultValue_other: '{{count}} actions', count: actions.length })
+			: t("countActions", {
+					defaultValue_one: "{{count}} action",
+					defaultValue_other: "{{count}} actions",
+					count: actions.length,
+				})
 		: (fallbackLabel ?? "Uses default");
 
 	return (
@@ -5301,7 +5480,10 @@ function OrderedActionsEditor({
 		<div className="space-y-3">
 			{actions.length === 0 && (
 				<div className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-					{t('thisEventIsExplicitlyDisabledAddAnActionToEnableIt', 'This event is explicitly disabled. Add an action to enable it.')}
+					{t(
+						"thisEventIsExplicitlyDisabledAddAnActionToEnableIt",
+						"This event is explicitly disabled. Add an action to enable it.",
+					)}
 				</div>
 			)}
 			{actions.map((action, index) => (
@@ -5320,7 +5502,9 @@ function OrderedActionsEditor({
 							className="h-6 w-6"
 							disabled={index === 0}
 							onClick={() => moveAction(index, -1)}
-							aria-label={t('moveActionValUp', 'Move action {{val}} up', { val: index + 1 })}
+							aria-label={t("moveActionValUp", "Move action {{val}} up", {
+								val: index + 1,
+							})}
 						>
 							<ChevronUp className="h-3.5 w-3.5" />
 						</Button>
@@ -5331,7 +5515,9 @@ function OrderedActionsEditor({
 							className="h-6 w-6"
 							disabled={index === actions.length - 1}
 							onClick={() => moveAction(index, 1)}
-							aria-label={t('moveActionValDown', 'Move action {{val}} down', { val: index + 1 })}
+							aria-label={t("moveActionValDown", "Move action {{val}} down", {
+								val: index + 1,
+							})}
 						>
 							<ChevronDown className="h-3.5 w-3.5" />
 						</Button>
@@ -5341,7 +5527,9 @@ function OrderedActionsEditor({
 							size="icon"
 							className="h-6 w-6 text-destructive hover:text-destructive"
 							onClick={() => updateAction(index, null)}
-							aria-label={t('removeActionVal', 'Remove action {{val}}', { val: index + 1 })}
+							aria-label={t("removeActionVal", "Remove action {{val}}", {
+								val: index + 1,
+							})}
 						>
 							<Trash2 className="h-3.5 w-3.5" />
 						</Button>
@@ -5360,7 +5548,7 @@ function OrderedActionsEditor({
 				onClick={addAction}
 			>
 				<Plus className="mr-1 h-3.5 w-3.5" />
-				{t('addAction', 'Add action')}
+				{t("addAction", "Add action")}
 			</Button>
 		</div>
 	);
@@ -5389,12 +5577,15 @@ function ActionValueEditor({
 		<div className="space-y-3">
 			<div className="space-y-2">
 				<Label className="text-xs font-medium">
-					{isWidgetMode ? "Widget Event" : t('actionType', 'Action Type')}
+					{isWidgetMode ? "Widget Event" : t("actionType", "Action Type")}
 				</Label>
 				{isWidgetMode ? (
 					widgetActions.length === 0 ? (
 						<p className="text-xs text-muted-foreground">
-							{t('noEventsDefinedAddEventsInWidgetSettingsEventsTab', 'No events defined. Add events in Widget Settings → Events tab.')}
+							{t(
+								"noEventsDefinedAddEventsInWidgetSettingsEventsTab",
+								"No events defined. Add events in Widget Settings → Events tab.",
+							)}
 						</p>
 					) : (
 						<Select
@@ -5415,10 +5606,10 @@ function ActionValueEditor({
 							}}
 						>
 							<SelectTrigger className="h-8 text-sm">
-								<SelectValue placeholder={t('noEvent', 'No event')} />
+								<SelectValue placeholder={t("noEvent", "No event")} />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="none">{t('noEvent', 'No event')}</SelectItem>
+								<SelectItem value="none">{t("noEvent", "No event")}</SelectItem>
 								{widgetActions.map((widgetAction) => (
 									<SelectItem key={widgetAction.id} value={widgetAction.id}>
 										{widgetAction.label}
@@ -5439,16 +5630,26 @@ function ActionValueEditor({
 						}}
 					>
 						<SelectTrigger className="h-8 text-sm">
-							<SelectValue placeholder={t('noAction', 'No action')} />
+							<SelectValue placeholder={t("noAction", "No action")} />
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="none">{t('noAction', 'No action')}</SelectItem>
+							<SelectItem value="none">{t("noAction", "No action")}</SelectItem>
 							{currentType && !knownActionTypes.includes(currentType) && (
-								<SelectItem value={currentType}>{t('customCurrenttype', 'Custom: {{currentType}}', { currentType })}</SelectItem>
+								<SelectItem value={currentType}>
+									{t("customCurrenttype", "Custom: {{currentType}}", {
+										currentType,
+									})}
+								</SelectItem>
 							)}
-							<SelectItem value="navigate_page">{t('navigateToPage2', 'Navigate to Page')}</SelectItem>
-							<SelectItem value="external_link">{t('externalLink', 'External Link')}</SelectItem>
-							<SelectItem value="workflow_event">{t('triggerWorkflow', 'Trigger Workflow')}</SelectItem>
+							<SelectItem value="navigate_page">
+								{t("navigateToPage2", "Navigate to Page")}
+							</SelectItem>
+							<SelectItem value="external_link">
+								{t("externalLink", "External Link")}
+							</SelectItem>
+							<SelectItem value="workflow_event">
+								{t("triggerWorkflow", "Trigger Workflow")}
+							</SelectItem>
 						</SelectContent>
 					</Select>
 				)}
@@ -5469,14 +5670,19 @@ function ActionValueEditor({
 						</p>
 					)}
 					<p className="text-xs text-muted-foreground">
-						{t('thisEventWillBeAvailableForBindingWhenTheWidgetIsInstantiated', "This event will be available for binding when the widget is instantiated.")}
+						{t(
+							"thisEventWillBeAvailableForBindingWhenTheWidgetIsInstantiated",
+							"This event will be available for binding when the widget is instantiated.",
+						)}
 					</p>
 				</div>
 			)}
 
 			{currentType === "navigate_page" && (
 				<div className="space-y-2 border-l-2 border-muted pl-2">
-					<Label className="text-xs text-muted-foreground">{t('route', 'Route')}</Label>
+					<Label className="text-xs text-muted-foreground">
+						{t("route", "Route")}
+					</Label>
 					<Input
 						className="h-8 text-sm"
 						placeholder="/about"
@@ -5489,10 +5695,13 @@ function ActionValueEditor({
 						}
 					/>
 					<p className="text-xs text-muted-foreground">
-						{t('relativePathToNavigateToEgContactProducts123', 'Relative path to navigate to (e.g., /contact, /products/123)')}
+						{t(
+							"relativePathToNavigateToEgContactProducts123",
+							"Relative path to navigate to (e.g., /contact, /products/123)",
+						)}
 					</p>
 					<Label className="mt-2 text-xs text-muted-foreground">
-						{t('queryParamsJson', 'Query Params (JSON)')}
+						{t("queryParamsJson", "Query Params (JSON)")}
 					</Label>
 					<Input
 						className="h-8 text-sm font-mono"
@@ -5506,7 +5715,10 @@ function ActionValueEditor({
 						}
 					/>
 					<p className="text-xs text-muted-foreground">
-						{t('optionalJsonObjectOfQueryParameters', 'Optional JSON object of query parameters')}
+						{t(
+							"optionalJsonObjectOfQueryParameters",
+							"Optional JSON object of query parameters",
+						)}
 					</p>
 				</div>
 			)}
@@ -5532,7 +5744,7 @@ function ActionValueEditor({
 			{currentType === "workflow_event" && (
 				<div className="space-y-2 border-l-2 border-muted pl-2">
 					<Label className="text-xs text-muted-foreground">
-						{t('workflowEvent', 'Workflow Event')}
+						{t("workflowEvent", "Workflow Event")}
 					</Label>
 					<Select
 						value={(context.nodeId as string) ?? ""}
@@ -5549,7 +5761,7 @@ function ActionValueEditor({
 						}
 					>
 						<SelectTrigger className="h-8 text-sm">
-							<SelectValue placeholder={t('selectEvent', 'Select event')} />
+							<SelectValue placeholder={t("selectEvent", "Select event")} />
 						</SelectTrigger>
 						<SelectContent>
 							{actionContext?.workflowEvents?.length ? (
@@ -5563,7 +5775,10 @@ function ActionValueEditor({
 								))
 							) : (
 								<div className="p-2 text-center text-sm text-muted-foreground">
-									{t('noWorkflowEventsAvailable', 'No workflow events available')}
+									{t(
+										"noWorkflowEventsAvailable",
+										"No workflow events available",
+									)}
 								</div>
 							)}
 						</SelectContent>
@@ -5614,7 +5829,7 @@ function NamedEventHandlerEditor({
 					</div>
 					{hasExistingWorkflowBinding && (
 						<div className="mt-0.5 text-[10px] text-amber-600 dark:text-amber-400">
-							{t('existingWorkflowBinding', 'Existing workflow binding')}
+							{t("existingWorkflowBinding", "Existing workflow binding")}
 						</div>
 					)}
 				</div>
@@ -5630,7 +5845,10 @@ function NamedEventHandlerEditor({
 				</p>
 				{hasExistingWorkflowBinding && (
 					<div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[10px] text-muted-foreground">
-						{t('thisLegacyWidgetWorkflowBindingIsPreservedAddingAnExactHandlerMayOverrideItAtRuntime', "This legacy widget workflow binding is preserved. Adding an exact handler may override it at runtime.")}
+						{t(
+							"thisLegacyWidgetWorkflowBindingIsPreservedAddingAnExactHandlerMayOverrideItAtRuntime",
+							"This legacy widget workflow binding is preserved. Adding an exact handler may override it at runtime.",
+						)}
 					</div>
 				)}
 				{exact ? (
@@ -5643,13 +5861,17 @@ function NamedEventHandlerEditor({
 							className="h-7 w-full text-xs"
 							onClick={onDelete}
 						>
-							{t('useDefault', 'Use default')}
+							{t("useDefault", "Use default")}
 						</Button>
 					</>
 				) : (
 					<div className="space-y-2">
 						<p className="text-[10px] text-muted-foreground">
-							{t('noExactHandlerIsStoredThisEventCurrentlyUsesFallbackLabel', 'No exact handler is stored. Current fallback: {{fallbackLabel}}.', { fallbackLabel })}
+							{t(
+								"noExactHandlerIsStoredThisEventCurrentlyUsesFallbackLabel",
+								"No exact handler is stored. Current fallback: {{fallbackLabel}}.",
+								{ fallbackLabel },
+							)}
 						</p>
 						<div className="grid grid-cols-2 gap-2">
 							<Button
@@ -5659,7 +5881,7 @@ function NamedEventHandlerEditor({
 								className="h-7 text-xs"
 								onClick={customizeActions}
 							>
-								{t('customize', 'Customize')}
+								{t("customize", "Customize")}
 							</Button>
 							<Button
 								type="button"
@@ -5668,7 +5890,7 @@ function NamedEventHandlerEditor({
 								className="h-7 text-xs"
 								onClick={() => onSet([])}
 							>
-								{t('disable', 'Disable')}
+								{t("disable", "Disable")}
 							</Button>
 						</div>
 					</div>
@@ -5699,9 +5921,14 @@ function LegacyDefaultEditor({
 			<CollapsibleTrigger className="flex w-full items-start gap-2 px-2.5 py-2 text-left hover:bg-muted/40">
 				<ChevronDown className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
 				<div className="min-w-0 flex-1">
-					<div className="text-xs font-medium">{t('defaultLegacyFallback', 'Default / legacy fallback')}</div>
+					<div className="text-xs font-medium">
+						{t("defaultLegacyFallback", "Default / legacy fallback")}
+					</div>
 					<div className="font-mono text-[10px] text-muted-foreground">
-						{t('actions0OnlyTheFirstLegacyActionRuns', 'actions[0] · only the first legacy action runs')}
+						{t(
+							"actions0OnlyTheFirstLegacyActionRuns",
+							"actions[0] · only the first legacy action runs",
+						)}
 					</div>
 				</div>
 				<span className="shrink-0 rounded border bg-muted/40 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
@@ -5710,10 +5937,29 @@ function LegacyDefaultEditor({
 			</CollapsibleTrigger>
 			<CollapsibleContent className="space-y-3 border-t px-2.5 py-3">
 				<p className="text-xs text-muted-foreground">
-					{t('thisPreservesTheOriginalSingleactionBehaviorExactNamedAndWildcardHandlersTakePrecedence', "This preserves the original single-action behavior. Exact named and wildcard handlers take precedence.")}
+					{t(
+						"thisPreservesTheOriginalSingleactionBehaviorExactNamedAndWildcardHandlersTakePrecedence",
+						"This preserves the original single-action behavior. Exact named and wildcard handlers take precedence.",
+					)}
 				</p>
 				{dormantCount > 0 && (
-					<p className="rounded-md bg-muted/40 px-2.5 py-2 text-[10px] text-muted-foreground">{t('dormantcountInactiveLegacy', '{{dormantCount}} inactive legacy', { dormantCount })}{" "}{t('entriesPreservedWhileThisActionIsEditedRemovingTheDefaultClearsThemToo', { defaultValue_one: "entry preserved while this action is edited. Removing the default clears them too.", defaultValue_other: "entries preserved while this action is edited. Removing the default clears them too.", count: dormantCount })}</p>
+					<p className="rounded-md bg-muted/40 px-2.5 py-2 text-[10px] text-muted-foreground">
+						{t(
+							"dormantcountInactiveLegacy",
+							"{{dormantCount}} inactive legacy",
+							{ dormantCount },
+						)}{" "}
+						{t(
+							"entriesPreservedWhileThisActionIsEditedRemovingTheDefaultClearsThemToo",
+							{
+								defaultValue_one:
+									"entry preserved while this action is edited. Removing the default clears them too.",
+								defaultValue_other:
+									"entries preserved while this action is edited. Removing the default clears them too.",
+								count: dormantCount,
+							},
+						)}
+					</p>
 				)}
 				{legacyAction ? (
 					<>
@@ -5725,7 +5971,7 @@ function LegacyDefaultEditor({
 							className="h-7 w-full text-xs text-destructive hover:text-destructive"
 							onClick={() => onChange(null)}
 						>
-							{t('removeLegacyDefault', 'Remove legacy default')}
+							{t("removeLegacyDefault", "Remove legacy default")}
 						</Button>
 					</>
 				) : (
@@ -5736,7 +5982,7 @@ function LegacyDefaultEditor({
 						className="h-7 w-full text-xs"
 						onClick={() => onChange(createInitialAction(widgetActions))}
 					>
-						{t('configureLegacyDefault', 'Configure legacy default')}
+						{t("configureLegacyDefault", "Configure legacy default")}
 					</Button>
 				)}
 			</CollapsibleContent>
@@ -5772,8 +6018,10 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 				(eventName): ComponentEventDefinition => ({
 					id: eventName,
 					label: eventName,
-					description:
-						t('thisHandlerIsConfiguredButIsNotDeclaredByTheCurrentComponentContract', 'This handler is configured but is not declared by the current component contract.'),
+					description: t(
+						"thisHandlerIsConfiguredButIsNotDeclaredByTheCurrentComponentContract",
+						"This handler is configured but is not declared by the current component contract.",
+					),
 					legacyFallback: true,
 					wildcardFallback: true,
 				}),
@@ -5782,9 +6030,11 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 		if (definitions.length > 0 || savedEventIds.has(WILDCARD_EVENT)) {
 			definitions.push({
 				id: WILDCARD_EVENT,
-				label: t('wildcardDefault', 'Wildcard default'),
-				description:
-					t('runsForNamedEventsThatDoNotHaveAnExactHandlerExceptEventsAddedAfterTheComponentShippedThoseNeedTheirOwnHandlerSupportsAnOrderedActionList', 'Runs for named events that do not have an exact handler, except events added after the component shipped — those need their own handler. Supports an ordered action list.'),
+				label: t("wildcardDefault", "Wildcard default"),
+				description: t(
+					"runsForNamedEventsThatDoNotHaveAnExactHandlerExceptEventsAddedAfterTheComponentShippedThoseNeedTheirOwnHandlerSupportsAnOrderedActionList",
+					"Runs for named events that do not have an exact handler, except events added after the component shipped — those need their own handler. Supports an ordered action list.",
+				),
 				legacyFallback: true,
 				wildcardFallback: true,
 			});
@@ -5825,7 +6075,10 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 	if (definitions.length === 0 && !hasAnyConfiguration) {
 		return (
 			<div className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
-				{t('thisComponentDoesNotExposeConfigurableEvents', 'This component does not expose configurable events.')}
+				{t(
+					"thisComponentDoesNotExposeConfigurableEvents",
+					"This component does not expose configurable events.",
+				)}
 			</div>
 		);
 	}
@@ -5835,9 +6088,14 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 			{definitions.length > 0 && (
 				<div className="space-y-2">
 					<div>
-						<Label className="text-xs font-semibold">{t('events', 'Events')}</Label>
+						<Label className="text-xs font-semibold">
+							{t("events", "Events")}
+						</Label>
 						<p className="mt-1 text-[10px] text-muted-foreground">
-							{t('eachEventCanRunAnOrderedListOfActionsAnExactEmptyListDisablesOnlyThatEvent', "Each event can run an ordered list of actions. An exact empty list disables only that event.")}
+							{t(
+								"eachEventCanRunAnOrderedListOfActionsAnExactEmptyListDisablesOnlyThatEvent",
+								"Each event can run an ordered list of actions. An exact empty list disables only that event.",
+							)}
 						</p>
 					</div>
 					{definitions.map((definition) => {
@@ -5855,12 +6113,19 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 									? [legacyAction]
 									: [];
 						const fallbackLabel = wildcardExact
-							? t('usesDefault', { defaultValue_zero: 'Disabled by default', defaultValue_other: 'Uses default', count: wildcardActions.length })
+							? t("usesDefault", {
+									defaultValue_zero: "Disabled by default",
+									defaultValue_other: "Uses default",
+									count: wildcardActions.length,
+								})
 							: hasExistingWorkflowBinding
-								? t('usesExistingWorkflowBinding', 'Uses existing workflow binding')
+								? t(
+										"usesExistingWorkflowBinding",
+										"Uses existing workflow binding",
+									)
 								: definition.legacyFallback && legacyAction
-									? t('usesLegacyFallback', 'Uses legacy fallback')
-									: t('unconfigured', 'Unconfigured');
+									? t("usesLegacyFallback", "Uses legacy fallback")
+									: t("unconfigured", "Unconfigured");
 
 						return (
 							<NamedEventHandlerEditor

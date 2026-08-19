@@ -176,7 +176,10 @@ export function RemoteEventSelect({
 				metaValue = JSON.stringify(detail);
 			} catch {
 				toast.warning(
-					t('couldNotLoadRemoteEventDetailsDynamicPinsMayBeUnavailable', 'Could not load remote event details. Dynamic pins may be unavailable.'),
+					t(
+						"couldNotLoadRemoteEventDetailsDynamicPinsMayBeUnavailable",
+						"Could not load remote event details. Dynamic pins may be unavailable.",
+					),
 				);
 			}
 
@@ -250,7 +253,7 @@ export function RemoteEventSelect({
 					className="w-fit! max-w-full! p-0 border-0 text-xs bg-card! text-start max-h-fit h-4 gap-0.5 flex-row items-center overflow-hidden"
 				>
 					<small className="text-start text-[10px] m-0! truncate">
-						{!targetAppId && t('selectAProjectFirst', 'Select a project first')}
+						{!targetAppId && t("selectAProjectFirst", "Select a project first")}
 						{targetAppId &&
 							(selectedEventLabel || selectedEventId || "Select event")}
 					</small>
@@ -260,11 +263,19 @@ export function RemoteEventSelect({
 					<SelectGroup>
 						<SelectLabel>{pin.friendly_name}</SelectLabel>
 						{loading && events.length === 0 && (
-							<SelectLabel>{t('loadingEvents', 'Loading events...')}</SelectLabel>
+							<SelectLabel>
+								{t("loadingEvents", "Loading events...")}
+							</SelectLabel>
 						)}
-						{error && <SelectLabel>{t('couldNotLoadRemoteEvents', 'Could not load remote events')}</SelectLabel>}
+						{error && (
+							<SelectLabel>
+								{t("couldNotLoadRemoteEvents", "Could not load remote events")}
+							</SelectLabel>
+						)}
 						{!loading && !error && events.length === 0 && !selectedEventId && (
-							<SelectLabel>{t('noSharedEventsFound', 'No shared events found')}</SelectLabel>
+							<SelectLabel>
+								{t("noSharedEventsFound", "No shared events found")}
+							</SelectLabel>
 						)}
 						{events.map((event) => (
 							<SelectItem key={event.id} value={event.id}>
@@ -281,13 +292,16 @@ export function RemoteEventSelect({
 								{selectedEventMissing && (
 									<span className="text-muted-foreground">
 										{" "}
-										{t('notFoundInProject', '(not found in project)')}
+										{t("notFoundInProject", "(not found in project)")}
 									</span>
 								)}
 								{selectedEventUnsupported && (
 									<span className="text-muted-foreground">
 										{" "}
-										{t('notAvailableForThisNode', '(not available for this node)')}
+										{t(
+											"notAvailableForThisNode",
+											"(not available for this node)",
+										)}
 									</span>
 								)}
 							</SelectItem>

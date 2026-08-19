@@ -95,14 +95,19 @@ export function StepEdges({
 		<div className="space-y-4">
 			<div className="flex items-center justify-between">
 				<div>
-					<h3 className="text-sm font-medium mb-1">{t('edgeMappings', 'Edge Mappings')}</h3>
+					<h3 className="text-sm font-medium mb-1">
+						{t("edgeMappings", "Edge Mappings")}
+					</h3>
 					<p className="text-xs text-muted-foreground">
-						{t('eachMappingTurnsATableIntoAGraphEdgeLabelConnectingTwoNodeLabels', "Each mapping turns a table into a graph edge label connecting two node labels.")}
+						{t(
+							"eachMappingTurnsATableIntoAGraphEdgeLabelConnectingTwoNodeLabels",
+							"Each mapping turns a table into a graph edge label connecting two node labels.",
+						)}
 					</p>
 				</div>
 				<Button size="sm" variant="outline" onClick={addEdge}>
 					<Plus className="h-3.5 w-3.5 mr-1" />
-					{t('addEdge', 'Add Edge')}
+					{t("addEdge", "Add Edge")}
 				</Button>
 			</div>
 
@@ -115,7 +120,8 @@ export function StepEdges({
 							<Card key={i} className="p-4 space-y-3">
 								<div className="flex items-center justify-between">
 									<span className="text-xs font-medium text-muted-foreground">
-										{t('edge2', 'Edge #')}{i + 1}
+										{t("edge2", "Edge #")}
+										{i + 1}
 									</span>
 									<Button
 										variant="ghost"
@@ -129,7 +135,7 @@ export function StepEdges({
 
 								<div className="grid grid-cols-2 gap-3">
 									<div className="space-y-1.5">
-										<Label className="text-xs">{t('label', 'Label')}</Label>
+										<Label className="text-xs">{t("label", "Label")}</Label>
 										<Input
 											value={edge.label}
 											onChange={(e) => updateEdge(i, { label: e.target.value })}
@@ -138,7 +144,7 @@ export function StepEdges({
 										/>
 									</div>
 									<div className="space-y-1.5">
-										<Label className="text-xs">{t('table', 'Table')}</Label>
+										<Label className="text-xs">{t("table", "Table")}</Label>
 										<Select
 											value={edge.table}
 											onValueChange={(v) =>
@@ -151,7 +157,9 @@ export function StepEdges({
 											}
 										>
 											<SelectTrigger className="h-8 text-xs">
-												<SelectValue placeholder={t('selectTable', 'Select table')} />
+												<SelectValue
+													placeholder={t("selectTable", "Select table")}
+												/>
 											</SelectTrigger>
 											<SelectContent>
 												{tables.map((t) => (
@@ -163,25 +171,31 @@ export function StepEdges({
 										</Select>
 									</div>
 									<div className="space-y-1.5">
-										<Label className="text-xs">{t('sourceColumn', 'Source Column')}</Label>
+										<Label className="text-xs">
+											{t("sourceColumn", "Source Column")}
+										</Label>
 										<ColumnPicker
 											columns={colNames}
 											value={edge.src_column}
 											onChange={(v) => updateEdge(i, { src_column: v })}
-											placeholder={t('sourceFk', 'Source FK')}
+											placeholder={t("sourceFk", "Source FK")}
 										/>
 									</div>
 									<div className="space-y-1.5">
-										<Label className="text-xs">{t('targetColumn', 'Target Column')}</Label>
+										<Label className="text-xs">
+											{t("targetColumn", "Target Column")}
+										</Label>
 										<ColumnPicker
 											columns={colNames}
 											value={edge.dst_column}
 											onChange={(v) => updateEdge(i, { dst_column: v })}
-											placeholder={t('targetFk', 'Target FK')}
+											placeholder={t("targetFk", "Target FK")}
 										/>
 									</div>
 									<div className="space-y-1.5">
-										<Label className="text-xs">{t('sourceLabel', 'Source Label')}</Label>
+										<Label className="text-xs">
+											{t("sourceLabel", "Source Label")}
+										</Label>
 										<Select
 											value={edge.src_label}
 											onValueChange={(v) =>
@@ -192,7 +206,12 @@ export function StepEdges({
 											}
 										>
 											<SelectTrigger className="h-8 text-xs">
-												<SelectValue placeholder={t('sourceNodeLabel', 'Source node label')} />
+												<SelectValue
+													placeholder={t(
+														"sourceNodeLabel",
+														"Source node label",
+													)}
+												/>
 											</SelectTrigger>
 											<SelectContent>
 												{nodeLabels.map((l) => (
@@ -204,7 +223,9 @@ export function StepEdges({
 										</Select>
 									</div>
 									<div className="space-y-1.5">
-										<Label className="text-xs">{t('targetLabel', 'Target Label')}</Label>
+										<Label className="text-xs">
+											{t("targetLabel", "Target Label")}
+										</Label>
 										<Select
 											value={edge.dst_label}
 											onValueChange={(v) =>
@@ -215,7 +236,12 @@ export function StepEdges({
 											}
 										>
 											<SelectTrigger className="h-8 text-xs">
-												<SelectValue placeholder={t('targetNodeLabel', 'Target node label')} />
+												<SelectValue
+													placeholder={t(
+														"targetNodeLabel",
+														"Target node label",
+													)}
+												/>
 											</SelectTrigger>
 											<SelectContent>
 												{nodeLabels.map((l) => (
@@ -229,7 +255,9 @@ export function StepEdges({
 									{edge.src_label &&
 										getNodeColumns(edge.src_label).length > 0 && (
 											<div className="space-y-1.5">
-												<Label className="text-xs">{t('sourceJoinColumn', 'Source Join Column')}</Label>
+												<Label className="text-xs">
+													{t("sourceJoinColumn", "Source Join Column")}
+												</Label>
 												<ColumnPicker
 													columns={getNodeColumns(edge.src_label)}
 													value={edge.src_node_column ?? ""}
@@ -238,7 +266,7 @@ export function StepEdges({
 													}
 													placeholder={
 														nodes.find((n) => n.label === edge.src_label)
-															?.id_column || t('nodeIdColumn', 'Node ID column')
+															?.id_column || t("nodeIdColumn", "Node ID column")
 													}
 												/>
 											</div>
@@ -246,7 +274,9 @@ export function StepEdges({
 									{edge.dst_label &&
 										getNodeColumns(edge.dst_label).length > 0 && (
 											<div className="space-y-1.5">
-												<Label className="text-xs">{t('targetJoinColumn', 'Target Join Column')}</Label>
+												<Label className="text-xs">
+													{t("targetJoinColumn", "Target Join Column")}
+												</Label>
 												<ColumnPicker
 													columns={getNodeColumns(edge.dst_label)}
 													value={edge.dst_node_column ?? ""}
@@ -255,7 +285,7 @@ export function StepEdges({
 													}
 													placeholder={
 														nodes.find((n) => n.label === edge.dst_label)
-															?.id_column || t('nodeIdColumn', 'Node ID column')
+															?.id_column || t("nodeIdColumn", "Node ID column")
 													}
 												/>
 											</div>
@@ -264,9 +294,14 @@ export function StepEdges({
 
 								{cols.length > 0 && (
 									<div className="space-y-1.5">
-										<Label className="text-xs">{t('propertyColumns', 'Property Columns')}</Label>
+										<Label className="text-xs">
+											{t("propertyColumns", "Property Columns")}
+										</Label>
 										<p className="text-[10px] text-muted-foreground">
-											{t('leaveEmptyToIncludeAllNonvectorColumns', 'Leave empty to include all non-vector columns.')}
+											{t(
+												"leaveEmptyToIncludeAllNonvectorColumns",
+												"Leave empty to include all non-vector columns.",
+											)}
 										</p>
 										<div className="flex flex-wrap gap-1.5">
 											{cols.map((col) => (
@@ -300,7 +335,10 @@ export function StepEdges({
 					})}
 					{edges.length === 0 && (
 						<p className="text-sm text-muted-foreground text-center py-8">
-							{t('noEdgeMappingsYetClickQuotaddEdgequotToConnectNodeLabels', "No edge mappings yet. Click \"Add Edge\" to connect node labels.")}
+							{t(
+								"noEdgeMappingsYetClickQuotaddEdgequotToConnectNodeLabels",
+								'No edge mappings yet. Click "Add Edge" to connect node labels.',
+							)}
 						</p>
 					)}
 				</div>

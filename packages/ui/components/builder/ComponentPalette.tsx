@@ -1,7 +1,7 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import { useDraggable } from "@dnd-kit/core";
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import {
 	AlignCenter,
@@ -858,7 +858,7 @@ export function ComponentPalette({
 				<div className="relative">
 					<Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
 					<Input
-						placeholder={t('searchComponents', 'Search components...')}
+						placeholder={t("searchComponents", "Search components...")}
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						className="pl-8"
@@ -872,7 +872,7 @@ export function ComponentPalette({
 					{recentlyUsed.length > 0 && !searchQuery && (
 						<Collapsible defaultOpen>
 							<CollapsibleTrigger className="flex w-full items-center justify-between p-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded">
-								<span>{t('recent', 'Recent')}</span>
+								<span>{t("recent", "Recent")}</span>
 								<ChevronRight className="h-4 w-4 transition-transform duration-200 data-[state=open]:rotate-90" />
 							</CollapsibleTrigger>
 							<CollapsibleContent className="pt-1 space-y-0.5">
@@ -937,7 +937,7 @@ export function ComponentPalette({
 							<CollapsibleTrigger className="flex w-full items-center justify-between p-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded">
 								<div className="flex items-center gap-2">
 									<Layers className="h-4 w-4" />
-									<span>{t('widgets', 'Widgets')}</span>
+									<span>{t("widgets", "Widgets")}</span>
 								</div>
 								<ChevronRight
 									className={cn(
@@ -950,12 +950,14 @@ export function ComponentPalette({
 								{widgetsLoading ? (
 									<div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
 										<Loader2 className="h-4 w-4 animate-spin" />
-										<span>{t('loadingWidgets', 'Loading widgets...')}</span>
+										<span>{t("loadingWidgets", "Loading widgets...")}</span>
 									</div>
 								) : filteredWidgets.length === 0 &&
 									groupedPackageWidgets.length === 0 ? (
 									<div className="px-3 py-2 text-sm text-muted-foreground">
-										{searchQuery ? t('noWidgetsMatch', 'No widgets match') : t('noWidgetsAvailable', 'No widgets available')}
+										{searchQuery
+											? t("noWidgetsMatch", "No widgets match")
+											: t("noWidgetsAvailable", "No widgets available")}
 									</div>
 								) : (
 									groupedWidgets.map((group) => {
@@ -1167,7 +1169,9 @@ function PackageWidgetItem({ packageWidget }: PackageWidgetItemProps) {
 			<span className="truncate">{widget.name}</span>
 			<Package
 				className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground/70"
-				aria-label={t('fromPackagePackageid', 'From package {{packageId}}', { packageId })}
+				aria-label={t("fromPackagePackageid", "From package {{packageId}}", {
+					packageId,
+				})}
 			/>
 		</div>
 	);

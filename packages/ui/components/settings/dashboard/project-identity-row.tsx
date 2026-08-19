@@ -41,7 +41,7 @@ export function ProjectIdentityRow({
 					type="button"
 					className="shrink-0 rounded-lg border-0 bg-transparent p-0"
 					onClick={() => onOpenPanel("identity")}
-					aria-label={t('editIdentityAndMedia', 'Edit identity and media')}
+					aria-label={t("editIdentityAndMedia", "Edit identity and media")}
 					disabled={!canEdit}
 				>
 					<AppTypeMark
@@ -59,7 +59,10 @@ export function ProjectIdentityRow({
 						</h1>
 						<VisibilityBadge visibility={app.visibility} />
 						{app.version && (
-							<Badge variant="outline" className="text-xs">{`v${app.version}`}</Badge>
+							<Badge
+								variant="outline"
+								className="text-xs"
+							>{`v${app.version}`}</Badge>
 						)}
 						{statusSlot}
 					</div>
@@ -86,7 +89,7 @@ export function ProjectIdentityRow({
 							className="flex-1 sm:flex-none"
 						>
 							<PencilIcon className="mr-1.5 h-3 w-3" />
-							{t('identity', 'Identity')}
+							{t("identity", "Identity")}
 						</Button>
 						<Button
 							variant="outline"
@@ -95,7 +98,7 @@ export function ProjectIdentityRow({
 							className="flex-1 sm:flex-none"
 						>
 							<SettingsIcon className="mr-1.5 h-3 w-3" />
-							{t('settings', 'Settings')}
+							{t("settings", "Settings")}
 						</Button>
 					</>
 				)}

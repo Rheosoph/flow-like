@@ -44,7 +44,10 @@ export function TocElementStatic(props: SlateElementProps) {
 					))
 				) : (
 					<div className="text-sm text-gray-500">
-						{t('createAHeadingToDisplayTheTableOfContents', 'Create a heading to display the table of contents.')}
+						{t(
+							"createAHeadingToDisplayTheTableOfContents",
+							"Create a heading to display the table of contents.",
+						)}
 					</div>
 				)}
 			</div>

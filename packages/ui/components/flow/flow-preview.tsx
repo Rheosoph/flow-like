@@ -212,7 +212,9 @@ export function FlowPreview({
 	if (!nodes || nodes.length === 0) {
 		return (
 			<div className="w-full h-full min-h-56 rounded-md flow-preview not-content flex items-center justify-center bg-muted/20">
-				<p className="text-sm text-muted-foreground">{t('noNodesToPreview', 'No nodes to preview')}</p>
+				<p className="text-sm text-muted-foreground">
+					{t("noNodesToPreview", "No nodes to preview")}
+				</p>
 			</div>
 		);
 	}

@@ -500,28 +500,28 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		}[] = [
 			{
 				id: "rail-chat",
-				label: t('chatReasoning', 'Chat & reasoning'),
+				label: t("chatReasoning", "Chat & reasoning"),
 				icon: MessageSquare,
 				color: "var(--m-chat)",
 				match: (b) => LLM_LIKE_TYPES.has(b.type),
 			},
 			{
 				id: "rail-stt",
-				label: t('speechtotext', 'Speech-to-text'),
+				label: t("speechtotext", "Speech-to-text"),
 				icon: Mic,
 				color: "var(--m-audio)",
 				match: (b) => b.type === IBitTypes.Stt,
 			},
 			{
 				id: "rail-tts",
-				label: t('texttospeech', 'Text-to-speech'),
+				label: t("texttospeech", "Text-to-speech"),
 				icon: AudioLines,
 				color: "var(--m-speech)",
 				match: (b) => b.type === IBitTypes.Tts,
 			},
 			{
 				id: "rail-embed",
-				label: t('embeddings', 'Embeddings'),
+				label: t("embeddings", "Embeddings"),
 				icon: FileSearchIcon,
 				color: "var(--m-embed)",
 				match: (b) =>
@@ -541,7 +541,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		if (rest.length > 0) {
 			built.push({
 				id: "rail-other",
-				label: t('otherModels', 'Other models'),
+				label: t("otherModels", "Other models"),
 				icon: Sparkles,
 				color: "var(--m-video)",
 				match: () => true,
@@ -695,7 +695,9 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 			toast.success("Custom model deleted");
 		} catch (error) {
 			toast.error(
-				t('failedToDeleteModelVal', 'Failed to delete model: {{val}}', { val: error instanceof Error ? error.message : String(error) }),
+				t("failedToDeleteModelVal", "Failed to delete model: {{val}}", {
+					val: error instanceof Error ? error.message : String(error),
+				}),
 			);
 		}
 	}, [deleteCustomTarget, backend.bitState, invalidate]);
@@ -722,7 +724,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		<div className="space-y-5">
 			<div className="space-y-2">
 				<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-					{t('status', 'Status')}
+					{t("status", "Status")}
 				</p>
 				<div className="space-y-1.5">
 					<FilterCheckbox
@@ -730,7 +732,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 						onCheckedChange={(c) => setShowInProfileOnly(!!c)}
 						icon={Sparkles}
 						iconColor="text-primary"
-						label={t('inProfile', 'In Profile')}
+						label={t("inProfile", "In Profile")}
 					/>
 					{!webMode && (
 						<FilterCheckbox
@@ -738,7 +740,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 							onCheckedChange={(c) => setShowDownloadedOnly(!!c)}
 							icon={PackageCheck}
 							iconColor="text-emerald-500"
-							label={t('downloaded', 'Downloaded')}
+							label={t("downloaded", "Downloaded")}
 						/>
 					)}
 				</div>
@@ -747,14 +749,16 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 			{providers.length > 0 && (
 				<div className="space-y-2">
 					<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-						{t('provider', 'Provider')}
+						{t("provider", "Provider")}
 					</p>
 					<Select value={providerFilter} onValueChange={setProviderFilter}>
 						<SelectTrigger className="h-8 text-xs">
-							<SelectValue placeholder={t('allProviders', 'All providers')} />
+							<SelectValue placeholder={t("allProviders", "All providers")} />
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="all">{t('allProviders', 'All providers')}</SelectItem>
+							<SelectItem value="all">
+								{t("allProviders", "All providers")}
+							</SelectItem>
 							{providers.map((provider) => (
 								<SelectItem key={provider} value={provider}>
 									{provider}
@@ -769,7 +773,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				<div className="flex items-center justify-between">
 					<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60 flex items-center gap-2">
 						<Cpu className="h-3 w-3" />
-						{t('context', 'Context')}
+						{t("context", "Context")}
 					</p>
 					<span className="text-[10px] text-muted-foreground/40">
 						{formatContextLength(contextLengthFilter[0])} –{" "}
@@ -788,7 +792,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 			<div className="space-y-3">
 				<p className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60 flex items-center gap-2">
 					<Brain className="h-3 w-3" />
-					{t('capabilities', 'Capabilities')}
+					{t("capabilities", "Capabilities")}
 				</p>
 				<div className="space-y-4">
 					{Object.entries(capabilityIcons)
@@ -831,7 +835,13 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 					type="button"
 					onClick={resetFilters}
 					className="text-xs text-muted-foreground/40 hover:text-foreground transition-colors"
-				>{t('clearActivefiltercountFilter', 'Clear {{activeFilterCount}} filter', { activeFilterCount })}{activeFilterCount !== 1 ? "s" : ""}
+				>
+					{t(
+						"clearActivefiltercountFilter",
+						"Clear {{activeFilterCount}} filter",
+						{ activeFilterCount },
+					)}
+					{activeFilterCount !== 1 ? "s" : ""}
 				</button>
 			)}
 		</div>
@@ -853,9 +863,16 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 						</span>
 						<span className="flex min-w-0 flex-col leading-tight">
 							<span className="text-[15px] font-semibold tracking-tight">
-								{t('models', 'Models')}
+								{t("models", "Models")}
 							</span>
-							<span className="text-[11.5px] text-muted-foreground">{t('lengthAvailableMiddot', '{{length}} available ·', { length: hostableBits.length })}{" "}{t('lengthInYourProfile', '{{length}} in your profile', { length: profileGlyphModels.length })}</span>
+							<span className="text-[11.5px] text-muted-foreground">
+								{t("lengthAvailableMiddot", "{{length}} available ·", {
+									length: hostableBits.length,
+								})}{" "}
+								{t("lengthInYourProfile", "{{length}} in your profile", {
+									length: profileGlyphModels.length,
+								})}
+							</span>
 						</span>
 					</div>
 
@@ -871,8 +888,10 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 						className="h-8 shrink-0 gap-1.5 px-3 text-xs"
 					>
 						<Plus className="h-3.5 w-3.5" />
-						<span className="hidden sm:inline">{t('addCustomModel', 'Add custom model')}</span>
-						<span className="sm:hidden">{t('add', 'Add')}</span>
+						<span className="hidden sm:inline">
+							{t("addCustomModel", "Add custom model")}
+						</span>
+						<span className="sm:hidden">{t("add", "Add")}</span>
 					</Button>
 				</div>
 
@@ -882,7 +901,10 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 					<div className="relative min-w-0 flex-1">
 						<Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/60 pointer-events-none" />
 						<Input
-							placeholder={t('searchModelsProvidersCapabilities', 'Search models, providers, capabilities…')}
+							placeholder={t(
+								"searchModelsProvidersCapabilities",
+								"Search models, providers, capabilities…",
+							)}
 							value={searchTerm}
 							onChange={(e) => setSearchTerm(e.target.value)}
 							className="h-9 pl-10 text-sm bg-muted/40 border-border/60 focus:bg-background"
@@ -890,7 +912,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 						{searchTerm && (
 							<button
 								type="button"
-								aria-label={t('clearSearch', 'Clear search')}
+								aria-label={t("clearSearch", "Clear search")}
 								onClick={() => setSearchTerm("")}
 								className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-foreground transition-colors"
 							>
@@ -908,13 +930,17 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="updated">{t('recent', 'Recent')}</SelectItem>
+								<SelectItem value="updated">{t("recent", "Recent")}</SelectItem>
 								<SelectItem value="name">Name</SelectItem>
-								<SelectItem value="context">{t('context', 'Context')}</SelectItem>
-								<SelectItem value="speed">{t('speed', 'Speed')}</SelectItem>
-								<SelectItem value="cost">{t('cost', 'Cost')}</SelectItem>
-								<SelectItem value="reasoning">{t('reasoning', 'Reasoning')}</SelectItem>
-								<SelectItem value="coding">{t('coding', 'Coding')}</SelectItem>
+								<SelectItem value="context">
+									{t("context", "Context")}
+								</SelectItem>
+								<SelectItem value="speed">{t("speed", "Speed")}</SelectItem>
+								<SelectItem value="cost">{t("cost", "Cost")}</SelectItem>
+								<SelectItem value="reasoning">
+									{t("reasoning", "Reasoning")}
+								</SelectItem>
+								<SelectItem value="coding">{t("coding", "Coding")}</SelectItem>
 							</SelectContent>
 						</Select>
 
@@ -940,7 +966,9 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 								</Button>
 							</TooltipTrigger>
 							<TooltipContent>
-								{viewMode === "grid" ? t('switchToList', 'Switch to list') : t('switchToGrid', 'Switch to grid')}
+								{viewMode === "grid"
+									? t("switchToList", "Switch to list")
+									: t("switchToGrid", "Switch to grid")}
 							</TooltipContent>
 						</Tooltip>
 
@@ -980,12 +1008,12 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				{/* Jump links earn their row only once the page is long enough to scroll */}
 				{populatedRails.length > 2 && (
 					<nav
-						aria-label={t('jumpToACapability', 'Jump to a capability')}
+						aria-label={t("jumpToACapability", "Jump to a capability")}
 						className={`mx-auto flex w-full max-w-[1240px] gap-1.5 overflow-x-auto pb-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
 					>
 						<RailChip
 							icon={Sparkles}
-							label={t('yourProfile', 'Your profile')}
+							label={t("yourProfile", "Your profile")}
 							count={profileModels.length}
 							owned={profileModels.length}
 							active={activeRail === "rail-profile"}
@@ -1012,7 +1040,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				{/* Modality filters, labelled so the two rows of chips can't be confused */}
 				<div className="flex flex-wrap items-center gap-x-3 gap-y-2">
 					<div className="flex items-center gap-1.5">
-						<FilterGroupLabel>{t('accepts', 'Accepts')}</FilterGroupLabel>
+						<FilterGroupLabel>{t("accepts", "Accepts")}</FilterGroupLabel>
 						<ModalityChip
 							active={inputModalities.has("text")}
 							onClick={() => toggleInputModality("text")}
@@ -1029,14 +1057,14 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 							active={inputModalities.has("speech")}
 							onClick={() => toggleInputModality("speech")}
 							icon={Mic}
-							label={t('audio', 'Audio')}
+							label={t("audio", "Audio")}
 						/>
 					</div>
 
 					<span className="hidden h-4 w-px bg-border sm:block" />
 
 					<div className="flex items-center gap-1.5">
-						<FilterGroupLabel>{t('produces', 'Produces')}</FilterGroupLabel>
+						<FilterGroupLabel>{t("produces", "Produces")}</FilterGroupLabel>
 						<ModalityChip
 							active={outputModalities.has("text")}
 							onClick={() => toggleOutputModality("text")}
@@ -1057,7 +1085,11 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 						/>
 					</div>
 
-					<span className="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground">{t('lengthModel', '{{length}} model', { length: filteredModels.length })}{filteredModels.length !== 1 ? "s" : ""}
+					<span className="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground">
+						{t("lengthModel", "{{length}} model", {
+							length: filteredModels.length,
+						})}
+						{filteredModels.length !== 1 ? "s" : ""}
 					</span>
 				</div>
 
@@ -1071,8 +1103,14 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 			<Sheet open={mobileFiltersOpen} onOpenChange={setMobileFiltersOpen}>
 				<SheetContent side="left" className="w-72 p-0">
 					<SheetHeader className="p-4 border-b border-border/10">
-						<SheetTitle className="text-sm font-medium">{t('filters', 'Filters')}</SheetTitle>
-						<SheetDescription className="text-xs text-muted-foreground/50">{t('totalModelsAvailable', '{{total}} models available', { total: modalityCounts.total })}</SheetDescription>
+						<SheetTitle className="text-sm font-medium">
+							{t("filters", "Filters")}
+						</SheetTitle>
+						<SheetDescription className="text-xs text-muted-foreground/50">
+							{t("totalModelsAvailable", "{{total}} models available", {
+								total: modalityCounts.total,
+							})}
+						</SheetDescription>
 					</SheetHeader>
 					<div className="p-4 overflow-y-auto">{filterContent}</div>
 				</SheetContent>
@@ -1089,11 +1127,21 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 						<Search className="mb-3 h-6 w-6 text-muted-foreground/50" />
 						<p className="text-sm font-medium">
 							{searchTerm
-								? t('nothingMatchesSearchterm', 'Nothing matches “{{searchTerm}}”', { searchTerm })
-								: t('noModelsMatchTheseFilters', 'No models match these filters')}
+								? t(
+										"nothingMatchesSearchterm",
+										"Nothing matches “{{searchTerm}}”",
+										{ searchTerm },
+									)
+								: t(
+										"noModelsMatchTheseFilters",
+										"No models match these filters",
+									)}
 						</p>
 						<p className="mt-1 text-xs text-muted-foreground">
-							{t('widenTheModalityOrCapabilityFiltersToSeeMore', 'Widen the modality or capability filters to see more.')}
+							{t(
+								"widenTheModalityOrCapabilityFiltersToSeeMore",
+								"Widen the modality or capability filters to see more.",
+							)}
 						</p>
 						{(searchTerm || activeFilterCount > 0) && (
 							<Button
@@ -1105,7 +1153,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 									resetFilters();
 								}}
 							>
-								{t('clearSearchAndFilters', 'Clear search and filters')}
+								{t("clearSearchAndFilters", "Clear search and filters")}
 							</Button>
 						)}
 					</div>
@@ -1134,8 +1182,13 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 						))}
 
 						<footer className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border/60 pt-4 text-xs text-muted-foreground">
-							<span className="font-mono tabular-nums">{t('lengthOfLength2', '{{length}} of {{length2}}', { length: filteredModels.length, length2: hostableBits.length })}</span>
-							<span>{t('modelsShown', 'models shown')}</span>
+							<span className="font-mono tabular-nums">
+								{t("lengthOfLength2", "{{length}} of {{length2}}", {
+									length: filteredModels.length,
+									length2: hostableBits.length,
+								})}
+							</span>
+							<span>{t("modelsShown", "models shown")}</span>
 						</footer>
 					</>
 				)}
@@ -1161,15 +1214,21 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 			>
 				<AlertDialogContent>
 					<AlertDialogHeader>
-						<AlertDialogTitle>{t('deleteCustomModel', 'Delete custom model?')}</AlertDialogTitle>
+						<AlertDialogTitle>
+							{t("deleteCustomModel", "Delete custom model?")}
+						</AlertDialogTitle>
 						<AlertDialogDescription>
-							{t('valAndItsStoredCredentialsWillBeRemovedFlowsUsingItWillNoLongerResolveThisModel', '"{{val}}" and its stored credentials will be removed. Flows using it will no longer resolve this model.', { val: deleteCustomTarget?.meta?.en?.name ?? "This model" })}
+							{t(
+								"valAndItsStoredCredentialsWillBeRemovedFlowsUsingItWillNoLongerResolveThisModel",
+								'"{{val}}" and its stored credentials will be removed. Flows using it will no longer resolve this model.',
+								{ val: deleteCustomTarget?.meta?.en?.name ?? "This model" },
+							)}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
-						<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
+						<AlertDialogCancel>{t("cancel", "Cancel")}</AlertDialogCancel>
 						<AlertDialogAction onClick={confirmDeleteCustomModel}>
-							{t('delete', 'Delete')}
+							{t("delete", "Delete")}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>
@@ -1219,7 +1278,8 @@ function ModelSection({
 				</span>
 				{owned > 0 && (
 					<span className="ml-auto text-[11px] text-muted-foreground">
-						<span className="font-mono tabular-nums">{owned}</span> {t('inYourProfile', "in your profile")}
+						<span className="font-mono tabular-nums">{owned}</span>{" "}
+						{t("inYourProfile", "in your profile")}
 					</span>
 				)}
 			</div>
@@ -1271,17 +1331,23 @@ function ProfileSummary({
 					id={`${id}-heading`}
 					className="m-0 text-[12px] font-semibold uppercase tracking-[0.12em] text-muted-foreground"
 				>
-					{t('inYourProfile2', 'In your profile')}
+					{t("inYourProfile2", "In your profile")}
 				</h2>
 				<span className="ml-auto text-[11px] text-muted-foreground">
-					{t('availableToEveryFlowInThisWorkspace', 'Available to every flow in this workspace')}
+					{t(
+						"availableToEveryFlowInThisWorkspace",
+						"Available to every flow in this workspace",
+					)}
 				</span>
 			</div>
 
 			{models.length === 0 ? (
 				<div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
 					<span>
-						{t('noModelsYetAddOneBelowOrConnectYourOwnProvider', 'No models yet — add one below, or connect your own provider.')}
+						{t(
+							"noModelsYetAddOneBelowOrConnectYourOwnProvider",
+							"No models yet — add one below, or connect your own provider.",
+						)}
 					</span>
 					<Button
 						variant="outline"
@@ -1290,7 +1356,7 @@ function ProfileSummary({
 						className="h-7 gap-1.5 bg-background text-xs"
 					>
 						<Plus className="h-3.5 w-3.5" />
-						{t('addCustomModel', 'Add custom model')}
+						{t("addCustomModel", "Add custom model")}
 					</Button>
 				</div>
 			) : (
@@ -1335,8 +1401,12 @@ function ProfileToggle({
 			aria-pressed={active}
 			aria-label={
 				active
-					? t('showTheWholeCatalog', 'Show the whole catalog')
-					: t('showOnlyTheLengthModelsInYourProfile', 'Show only the {{length}} models in your profile', { length: models.length })
+					? t("showTheWholeCatalog", "Show the whole catalog")
+					: t(
+							"showOnlyTheLengthModelsInYourProfile",
+							"Show only the {{length}} models in your profile",
+							{ length: models.length },
+						)
 			}
 			className={`flex h-8 shrink-0 items-center gap-2 rounded-md border px-2.5 text-xs font-medium transition-colors ${
 				active
@@ -1360,7 +1430,7 @@ function ProfileToggle({
 					)}
 				</span>
 			)}
-			<span className="whitespace-nowrap">{t('inProfile2', 'In profile')}</span>
+			<span className="whitespace-nowrap">{t("inProfile2", "In profile")}</span>
 		</button>
 	);
 }
@@ -1397,7 +1467,9 @@ function RailChip({
 			<span>{label}</span>
 			{owned > 0 && (
 				<span
-					title={t('ownedInYourProfile', '{{owned}} in your profile', { owned })}
+					title={t("ownedInYourProfile", "{{owned}} in your profile", {
+						owned,
+					})}
 					className="h-1.5 w-1.5 rounded-full bg-primary"
 				/>
 			)}

@@ -684,7 +684,10 @@ function PhaseReadout({ title }: Readonly<{ title: string }>) {
 				<span
 					className="fxl-ticks"
 					role="img"
-					aria-label={t('stepValOfLength', 'Step {{val}} of {{length}}', { val: index + 1, length: PHASES.length })}
+					aria-label={t("stepValOfLength", "Step {{val}} of {{length}}", {
+						val: index + 1,
+						length: PHASES.length,
+					})}
 				>
 					{PHASES.map((phase, position) => (
 						<i

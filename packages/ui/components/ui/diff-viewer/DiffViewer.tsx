@@ -437,7 +437,10 @@ export function DiffViewer({
 				style={{ gridColumn: "1 / -1" }}
 				className="flex items-center justify-center gap-2 border-y border-border/40 bg-muted/40 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
 			>
-				<UnfoldVertical className="h-3 w-3" />{t('lengthUnchanged', '{{length}} unchanged', { length: item.hiddenRows.length })}{" "}
+				<UnfoldVertical className="h-3 w-3" />
+				{t("lengthUnchanged", "{{length}} unchanged", {
+					length: item.hiddenRows.length,
+				})}{" "}
 				{item.hiddenRows.length === 1 ? "line" : "lines"}
 			</button>
 		);
@@ -618,9 +621,21 @@ export function DiffViewer({
 								<div className="flex items-center rounded-md border bg-background p-0.5">
 									{(
 										[
-											{ id: "split", icon: Columns2, label: t('split', 'Split') },
-											{ id: "unified", icon: Rows3, label: t('unified', 'Unified') },
-											{ id: "inline", icon: Pilcrow, label: t('inline', 'Inline') },
+											{
+												id: "split",
+												icon: Columns2,
+												label: t("split", "Split"),
+											},
+											{
+												id: "unified",
+												icon: Rows3,
+												label: t("unified", "Unified"),
+											},
+											{
+												id: "inline",
+												icon: Pilcrow,
+												label: t("inline", "Inline"),
+											},
 										] as const
 									).map((option) => (
 										<button
@@ -644,7 +659,7 @@ export function DiffViewer({
 									variant="ghost"
 									size="icon"
 									className={cn("h-7 w-7", wordWrap && "text-primary")}
-									title={t('toggleWordWrap', 'Toggle word wrap')}
+									title={t("toggleWordWrap", "Toggle word wrap")}
 									onClick={() => setWordWrap((value) => !value)}
 								>
 									<WrapText className="h-3.5 w-3.5" />
@@ -653,7 +668,7 @@ export function DiffViewer({
 									variant="ghost"
 									size="icon"
 									className={cn("h-7 w-7", collapse && "text-primary")}
-									title={t('collapseUnchanged', 'Collapse unchanged')}
+									title={t("collapseUnchanged", "Collapse unchanged")}
 									onClick={() => setCollapse((value) => !value)}
 								>
 									{collapse ? (
@@ -670,7 +685,9 @@ export function DiffViewer({
 								size="icon"
 								className={cn("h-7 w-7", renderedMarkdown && "text-primary")}
 								title={
-									renderedMarkdown ? t('showMarkdownSource', 'Show markdown source') : "Render markdown"
+									renderedMarkdown
+										? t("showMarkdownSource", "Show markdown source")
+										: "Render markdown"
 								}
 								onClick={() =>
 									setMdMode((value) =>

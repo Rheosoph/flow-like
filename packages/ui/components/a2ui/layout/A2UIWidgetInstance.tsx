@@ -348,12 +348,18 @@ export function A2UIWidgetInstance({
 					data-widget-instance={instanceId}
 					data-widget-id={widgetId}
 				>
-					{t('loadingWidget', 'Loading widget…')}
+					{t("loadingWidget", "Loading widget…")}
 				</div>
 			);
 		}
 		return (
-			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">{t('widgetInstanceQuotinstanceidquotCouldNotBeResolved', "Widget instance \"{{instanceId}}\" could not be resolved", { instanceId })}{fetched.error ? `: ${fetched.error.message}` : ""}
+			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">
+				{t(
+					"widgetInstanceQuotinstanceidquotCouldNotBeResolved",
+					'Widget instance "{{instanceId}}" could not be resolved',
+					{ instanceId },
+				)}
+				{fetched.error ? `: ${fetched.error.message}` : ""}
 			</div>
 		);
 	}
@@ -361,7 +367,10 @@ export function A2UIWidgetInstance({
 	if (!widgetDef.rootComponentId) {
 		return (
 			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">
-				{t('widgetDefinitionMissingRootcomponentid', 'Widget definition missing rootComponentId')}
+				{t(
+					"widgetDefinitionMissingRootcomponentid",
+					"Widget definition missing rootComponentId",
+				)}
 			</div>
 		);
 	}

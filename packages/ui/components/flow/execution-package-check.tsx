@@ -84,9 +84,14 @@ export function ExecutionPackageCheck({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="max-w-lg">
 				<DialogHeader>
-					<DialogTitle>{t('packageAccessCheck', 'Package Access Check')}</DialogTitle>
+					<DialogTitle>
+						{t("packageAccessCheck", "Package Access Check")}
+					</DialogTitle>
 					<DialogDescription>
-						{t('thisWorkflowUsesPackagesWithDifferentAccessLevels', 'This workflow uses packages with different access levels.')}
+						{t(
+							"thisWorkflowUsesPackagesWithDifferentAccessLevels",
+							"This workflow uses packages with different access levels.",
+						)}
 					</DialogDescription>
 				</DialogHeader>
 				<ScrollArea className="max-h-72">
@@ -128,7 +133,7 @@ export function ExecutionPackageCheck({
 							}
 							disabled={loading}
 						>
-							{t('installRecheck', 'Install & Re-check')}
+							{t("installRecheck", "Install & Re-check")}
 						</Button>
 					)}
 					{hasRemote && !hasUnavailable && (
@@ -137,7 +142,7 @@ export function ExecutionPackageCheck({
 						</Button>
 					)}
 					<Button variant="ghost" onClick={onCancel}>
-						{t('cancel', 'Cancel')}
+						{t("cancel", "Cancel")}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

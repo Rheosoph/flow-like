@@ -191,7 +191,7 @@ export function WidgetList({ appId }: Readonly<{ appId: string }>) {
 	return (
 		<main className="flex flex-col grow min-h-0 max-h-full p-6 pt-0 overflow-auto md:overflow-visible">
 			<div className="sticky top-0 z-20 flex flex-wrap items-center gap-3 border-b bg-background py-3">
-				<h1 className="text-base font-semibold">{t('widgets', 'Widgets')}</h1>
+				<h1 className="text-base font-semibold">{t("widgets", "Widgets")}</h1>
 				<Badge
 					variant="secondary"
 					className="font-mono text-[11px] tabular-nums"
@@ -202,11 +202,14 @@ export function WidgetList({ appId }: Readonly<{ appId: string }>) {
 				<div className="relative min-w-[200px] flex-1 max-w-sm">
 					<Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
 					<Input
-						placeholder={t('searchNameDescriptionTags', 'Search name, description, tags…')}
+						placeholder={t(
+							"searchNameDescriptionTags",
+							"Search name, description, tags…",
+						)}
 						value={searchTerm}
 						onChange={(e) => setSearchTerm(e.target.value)}
 						className="h-8 pl-8 text-xs"
-						aria-label={t('searchWidgets', 'Search widgets')}
+						aria-label={t("searchWidgets", "Search widgets")}
 					/>
 				</div>
 
@@ -215,13 +218,17 @@ export function WidgetList({ appId }: Readonly<{ appId: string }>) {
 				<Select value={sort} onValueChange={(v) => setSort(v as SortKey)}>
 					<SelectTrigger
 						className="h-8 w-[168px] text-xs"
-						aria-label={t('sortWidgets', 'Sort widgets')}
+						aria-label={t("sortWidgets", "Sort widgets")}
 					>
 						<SelectValue />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="updated">{t('recentlyUpdated', 'Recently updated')}</SelectItem>
-						<SelectItem value="created">{t('recentlyCreated', 'Recently created')}</SelectItem>
+						<SelectItem value="updated">
+							{t("recentlyUpdated", "Recently updated")}
+						</SelectItem>
+						<SelectItem value="created">
+							{t("recentlyCreated", "Recently created")}
+						</SelectItem>
 						<SelectItem value="name">Name</SelectItem>
 					</SelectContent>
 				</Select>
@@ -230,7 +237,7 @@ export function WidgetList({ appId }: Readonly<{ appId: string }>) {
 					<DensityButton
 						active={density === "comfortable"}
 						onClick={() => setDensity("comfortable")}
-						label={t('comfortableTiles', 'Comfortable tiles')}
+						label={t("comfortableTiles", "Comfortable tiles")}
 					>
 						<Grid2X2 className="h-3.5 w-3.5" />
 					</DensityButton>
@@ -238,7 +245,7 @@ export function WidgetList({ appId }: Readonly<{ appId: string }>) {
 					<DensityButton
 						active={density === "large"}
 						onClick={() => setDensity("large")}
-						label={t('largeTiles', 'Large tiles')}
+						label={t("largeTiles", "Large tiles")}
 					>
 						<Rows3 className="h-3.5 w-3.5" />
 					</DensityButton>
@@ -250,7 +257,7 @@ export function WidgetList({ appId }: Readonly<{ appId: string }>) {
 					onClick={() => setIsCreateDialogOpen(true)}
 				>
 					<Plus className="mr-1.5 h-3.5 w-3.5" />
-					{t('newWidget', 'New widget')}
+					{t("newWidget", "New widget")}
 				</Button>
 			</div>
 
@@ -260,7 +267,7 @@ export function WidgetList({ appId }: Readonly<{ appId: string }>) {
 						active={activeTag === null}
 						onClick={() => setActiveTag(null)}
 					>
-						{t('all', 'All')}
+						{t("all", "All")}
 					</TagChip>
 					{tags.map(([tag, count]) => (
 						<TagChip
@@ -310,7 +317,7 @@ export function WidgetList({ appId }: Readonly<{ appId: string }>) {
 						className="flex min-h-[160px] flex-col items-center justify-center gap-2 rounded-lg border border-dashed text-sm text-muted-foreground transition-colors hover:border-primary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 					>
 						<Plus className="h-5 w-5" />
-						{t('newWidget', 'New widget')}
+						{t("newWidget", "New widget")}
 					</button>
 				</div>
 			)}
@@ -421,7 +428,7 @@ function WidgetTile({
 			<button
 				type="button"
 				onClick={() => onOpen(widgetId)}
-				aria-label={t('openName', 'Open {{name}}', { name })}
+				aria-label={t("openName", "Open {{name}}", { name })}
 				className="absolute inset-0 z-10 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 			/>
 
@@ -444,7 +451,7 @@ function WidgetTile({
 						onClick={openBuilder}
 					>
 						<Settings className="mr-1 h-3 w-3" />
-						{t('builder', 'Builder')}
+						{t("builder", "Builder")}
 					</Button>
 					<DropdownMenu>
 						<DropdownMenuTrigger asChild>
@@ -452,18 +459,20 @@ function WidgetTile({
 								variant="outline"
 								size="icon"
 								className="h-6 w-6 bg-card"
-								aria-label={t('actionsForName', 'Actions for {{name}}', { name })}
+								aria-label={t("actionsForName", "Actions for {{name}}", {
+									name,
+								})}
 							>
 								<MoreVertical className="h-3 w-3" />
 							</Button>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="end">
 							<DropdownMenuItem onClick={() => onOpen(widgetId)}>
-								{t('openDetails', 'Open details')}
+								{t("openDetails", "Open details")}
 							</DropdownMenuItem>
 							<DropdownMenuItem onClick={openBuilder}>
 								<Settings className="mr-2 h-4 w-4" />
-								{t('openInBuilder', 'Open in builder')}
+								{t("openInBuilder", "Open in builder")}
 							</DropdownMenuItem>
 							<DropdownMenuSeparator />
 							<DropdownMenuItem
@@ -471,7 +480,7 @@ function WidgetTile({
 								onClick={() => onDelete(widgetId)}
 							>
 								<Trash2 className="mr-2 h-4 w-4" />
-								{t('delete', 'Delete')}
+								{t("delete", "Delete")}
 							</DropdownMenuItem>
 						</DropdownMenuContent>
 					</DropdownMenu>
@@ -492,12 +501,18 @@ function WidgetTile({
 					{version ? (
 						<span className="text-foreground/75">v{version.join(".")}</span>
 					) : (
-						<span className="text-tertiary">{t('draft', 'Draft')}</span>
+						<span className="text-tertiary">{t("draft", "Draft")}</span>
 					)}
 					<span className="opacity-40">·</span>
-					<span>{t('propcountProps', '{{propCount}} props', { propCount })}</span>
+					<span>
+						{t("propcountProps", "{{propCount}} props", { propCount })}
+					</span>
 					<span className="opacity-40">·</span>
-					<span>{t('elementcountElements', '{{elementCount}} elements', { elementCount })}</span>
+					<span>
+						{t("elementcountElements", "{{elementCount}} elements", {
+							elementCount,
+						})}
+					</span>
 					{updatedAt && (
 						<>
 							<span className="opacity-40">·</span>
@@ -574,7 +589,9 @@ function WidgetThumbnail({
 			) : (
 				<>
 					<LayoutGridIcon className="h-7 w-7 opacity-30" />
-					<span className="text-[11px] opacity-70">{t('emptyWidget', 'Empty widget')}</span>
+					<span className="text-[11px] opacity-70">
+						{t("emptyWidget", "Empty widget")}
+					</span>
 				</>
 			)}
 		</div>
@@ -592,17 +609,25 @@ function EmptyState({
 				<LayoutGridIcon className="h-8 w-8 text-primary" />
 			</div>
 			<h3 className="text-lg font-medium">
-				{searching ? t('noWidgetsFound', 'No widgets found') : t('noWidgetsYet', 'No widgets yet')}
+				{searching
+					? t("noWidgetsFound", "No widgets found")
+					: t("noWidgetsYet", "No widgets yet")}
 			</h3>
 			<p className="text-sm text-muted-foreground">
 				{searching
-					? t('tryADifferentSearchTermOrClearTheTagFilter', 'Try a different search term or clear the tag filter.')
-					: t('widgetsAreTheVisualBuildingBlocksOfYourAppFormsDashboardsChatInterfacesAndMoreCreateOneToStartDesigning', 'Widgets are the visual building blocks of your app — forms, dashboards, chat interfaces, and more. Create one to start designing.')}
+					? t(
+							"tryADifferentSearchTermOrClearTheTagFilter",
+							"Try a different search term or clear the tag filter.",
+						)
+					: t(
+							"widgetsAreTheVisualBuildingBlocksOfYourAppFormsDashboardsChatInterfacesAndMoreCreateOneToStartDesigning",
+							"Widgets are the visual building blocks of your app — forms, dashboards, chat interfaces, and more. Create one to start designing.",
+						)}
 			</p>
 			{!searching && (
 				<Button onClick={onCreate}>
 					<Plus className="mr-2 h-4 w-4" />
-					{t('createYourFirstWidget', 'Create your first widget')}
+					{t("createYourFirstWidget", "Create your first widget")}
 				</Button>
 			)}
 		</div>
@@ -631,21 +656,24 @@ function CreateWidgetDialog({
 						<LayoutGridIcon className="h-6 w-6 text-primary" />
 					</div>
 					<DialogTitle className="text-center text-xl">
-						{t('createNewWidget', 'Create New Widget')}
+						{t("createNewWidget", "Create New Widget")}
 					</DialogTitle>
 					<DialogDescription className="text-center">
-						{t('designAReusableUiComponentForYourApplication', 'Design a reusable UI component for your application')}
+						{t(
+							"designAReusableUiComponentForYourApplication",
+							"Design a reusable UI component for your application",
+						)}
 					</DialogDescription>
 				</DialogHeader>
 
 				<div className="space-y-6 py-4">
 					<div className="space-y-2">
 						<Label htmlFor="widget-name" className="text-sm font-medium">
-							{t('widgetName', 'Widget Name')}
+							{t("widgetName", "Widget Name")}
 						</Label>
 						<Input
 							id="widget-name"
-							placeholder={t('enterWidgetName', 'Enter widget name')}
+							placeholder={t("enterWidgetName", "Enter widget name")}
 							value={value.name}
 							onChange={(e) => onChange({ ...value, name: e.target.value })}
 						/>
@@ -653,11 +681,14 @@ function CreateWidgetDialog({
 
 					<div className="space-y-2">
 						<Label htmlFor="widget-description" className="text-sm font-medium">
-							{t('description', 'Description')}
+							{t("description", "Description")}
 						</Label>
 						<Textarea
 							id="widget-description"
-							placeholder={t('describeWhatThisWidgetDoes', 'Describe what this widget does')}
+							placeholder={t(
+								"describeWhatThisWidgetDoes",
+								"Describe what this widget does",
+							)}
 							value={value.description}
 							onChange={(e) =>
 								onChange({ ...value, description: e.target.value })
@@ -672,10 +703,10 @@ function CreateWidgetDialog({
 							disabled={!value.name.trim()}
 							className="flex-1"
 						>
-							{t('createWidget', 'Create Widget')}
+							{t("createWidget", "Create Widget")}
 						</Button>
 						<Button variant="outline" onClick={() => onOpenChange(false)}>
-							{t('cancel', 'Cancel')}
+							{t("cancel", "Cancel")}
 						</Button>
 					</div>
 				</div>

@@ -74,7 +74,7 @@ export function DataTable<TData, TValue>({
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
 						<Button variant="outline" className="ml-auto">
-							{t('columns', 'Columns')}
+							{t("columns", "Columns")}
 						</Button>
 					</DropdownMenuTrigger>
 					<DropdownMenuContent align="end">
@@ -141,7 +141,7 @@ export function DataTable<TData, TValue>({
 									colSpan={columns.length}
 									className="h-24 text-center"
 								>
-									{t('noResults', 'No results.')}
+									{t("noResults", "No results.")}
 								</TableCell>
 							</TableRow>
 						)}
@@ -155,7 +155,7 @@ export function DataTable<TData, TValue>({
 					onClick={() => table.previousPage()}
 					disabled={!table.getCanPreviousPage()}
 				>
-					{t('previous', 'Previous')}
+					{t("previous", "Previous")}
 				</Button>
 				<Button
 					variant="outline"
@@ -163,7 +163,7 @@ export function DataTable<TData, TValue>({
 					onClick={() => table.nextPage()}
 					disabled={!table.getCanNextPage()}
 				>
-					{t('next', 'Next')}
+					{t("next", "Next")}
 				</Button>
 			</div>
 		</div>

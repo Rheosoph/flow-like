@@ -598,7 +598,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										}}
 									>
 										<span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
-											{i18next.t('asked', 'Asked')}
+											{i18next.t("asked", "Asked")}
 										</span>
 										<p className="line-clamp-6 whitespace-pre-wrap text-sm leading-relaxed">
 											{sendingContent}
@@ -708,9 +708,12 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								sendDisabled={concurrency ? false : isSending || isStreamActive}
 								sendHint={
 									concurrency?.atCapacity
-										? i18next.t('queueThisMessage', 'Queue this message')
+										? i18next.t("queueThisMessage", "Queue this message")
 										: concurrency && concurrency.runs.length > 0
-											? i18next.t('startAnotherResponse', 'Start another response')
+											? i18next.t(
+													"startAnotherResponse",
+													"Start another response",
+												)
 											: undefined
 								}
 								onSteer={

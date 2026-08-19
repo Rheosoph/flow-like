@@ -31,15 +31,27 @@ export function InterfaceLoadError({
 							<div className="space-y-2">
 								<h3 className="text-lg font-semibold">
 									{offline
-										? t('notAvailableOffline', 'Not Available Offline')
-										: t('interfaceCouldNotBeLoaded', 'Interface Could Not Be Loaded')}
+										? t("notAvailableOffline", "Not Available Offline")
+										: t(
+												"interfaceCouldNotBeLoaded",
+												"Interface Could Not Be Loaded",
+											)}
 								</h3>
 								<p className="text-sm text-muted-foreground">
 									{offline
-										? t('thisInterfaceHasNotBeenDownloadedToThisDeviceYetItOpensAutomaticallyOnceYouAreBackOnline', 'This interface has not been downloaded to this device yet. It opens automatically once you are back online.')
+										? t(
+												"thisInterfaceHasNotBeenDownloadedToThisDeviceYetItOpensAutomaticallyOnceYouAreBackOnline",
+												"This interface has not been downloaded to this device yet. It opens automatically once you are back online.",
+											)
 										: retrying
-											? t('reconnectingToLoadThisInterface', 'Reconnecting to load this interface…')
-											: t('thisInterfaceExistsButItsContentCouldNotBeFetchedOnThisDevice', 'This interface exists, but its content could not be fetched on this device.')}
+											? t(
+													"reconnectingToLoadThisInterface",
+													"Reconnecting to load this interface…",
+												)
+											: t(
+													"thisInterfaceExistsButItsContentCouldNotBeFetchedOnThisDevice",
+													"This interface exists, but its content could not be fetched on this device.",
+												)}
 								</p>
 							</div>
 

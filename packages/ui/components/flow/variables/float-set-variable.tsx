@@ -68,7 +68,7 @@ export function FloatSetVariable({
 					onChange={(e) => setNewValue(e.target.value)}
 					onKeyDown={(e) => e.key === "Enter" && handleAdd()}
 					type={variable.secret ? "password" : "number"}
-					placeholder={t('addUniqueNumber', 'Add unique number...')}
+					placeholder={t("addUniqueNumber", "Add unique number...")}
 					disabled={disabled}
 					step="any"
 					className="flex-1 min-w-0"

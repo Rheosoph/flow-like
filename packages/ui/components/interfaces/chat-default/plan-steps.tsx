@@ -155,12 +155,14 @@ function ActivitySummaryLabel({
 			<span className="min-w-0 flex-1 truncate">
 				<span className="text-foreground">{activeTitle ?? "Working…"}</span>
 				<span className="text-muted-foreground">
-					{` · `}{`${summary.settledCount}/${summary.total}`}</span>
+					{` · `}
+					{`${summary.settledCount}/${summary.total}`}
+				</span>
 			</span>
 		);
 	}
 
-	const parts = [t('countSteps', '{{count}} step', { count: summary.total })];
+	const parts = [t("countSteps", "{{count}} step", { count: summary.total })];
 	if (summary.laneCount > 1) parts.push(`across ${summary.laneCount} lanes`);
 	if (summary.durationLabel) parts.push(summary.durationLabel);
 	if (summary.failedCount > 0) {
@@ -265,7 +267,11 @@ function BuildLaneRow({
 					<div className="flex items-center gap-1.5">
 						<AlertTriangle className="size-3 shrink-0 text-amber-500" />
 						<span className="text-[11px] font-medium text-amber-600 dark:text-amber-400">
-							{t('countFunctionsNeedYourLogic', { defaultValue_one: '1 function needs your logic', defaultValue_other: '{{count}} functions need your logic', count: detail.gaps.length })}
+							{t("countFunctionsNeedYourLogic", {
+								defaultValue_one: "1 function needs your logic",
+								defaultValue_other: "{{count}} functions need your logic",
+								count: detail.gaps.length,
+							})}
 						</span>
 					</div>
 					<ul className="mt-0.5 grid gap-0.5">
@@ -624,8 +630,12 @@ export function PlanSteps({
 						>
 							<History className="size-3.5 shrink-0" />
 							<span className="flex-1">
-								{showOlderSteps ? t('hide', 'Hide') : t('show', 'Show')}{" "}
-								{t('countEarlierSteps', { defaultValue_one: "{{count}} earlier step", defaultValue_other: "{{count}} earlier steps", count: olderSteps.length })}
+								{showOlderSteps ? t("hide", "Hide") : t("show", "Show")}{" "}
+								{t("countEarlierSteps", {
+									defaultValue_one: "{{count}} earlier step",
+									defaultValue_other: "{{count}} earlier steps",
+									count: olderSteps.length,
+								})}
 							</span>
 							<ChevronDown
 								className={cn(

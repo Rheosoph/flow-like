@@ -1,6 +1,5 @@
 "use client";
 
-import { i18n as i18next } from "@flow-like/locales";
 import {
 	type IApp,
 	IAppVisibility,
@@ -18,6 +17,7 @@ import {
 	normalizeAppPublicationRequests,
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
 import { VisibilityStatusSwitcher as SharedVisibilityStatusSwitcher } from "@flow-like/flow-like-ui/components/settings/visibility-status/visibility-status-switcher";
+import { i18n as i18next } from "@flow-like/locales";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { ForkAppButton } from "./fork-app-button";
@@ -120,7 +120,10 @@ export function AppComplianceSection({
 	if (isOffline) {
 		return (
 			<p className="text-sm text-muted-foreground">
-				{i18next.t('offlineProjectsAreNeverListedSoNoConformityAssessmentOrPublicationReviewIsRequiredBringTheProjectOnlineToStart', "Offline projects are never listed, so no conformity assessment or publication review is required. Bring the project online to start.")}
+				{i18next.t(
+					"offlineProjectsAreNeverListedSoNoConformityAssessmentOrPublicationReviewIsRequiredBringTheProjectOnlineToStart",
+					"Offline projects are never listed, so no conformity assessment or publication review is required. Bring the project online to start.",
+				)}
 			</p>
 		);
 	}

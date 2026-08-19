@@ -29,12 +29,12 @@ export function GraphSearch({ onSearch, placeholder }: GraphSearchProps) {
 				<Input
 					value={query}
 					onChange={(e) => setQuery(e.target.value)}
-					placeholder={placeholder ?? t('searchNodes', 'Search nodes...')}
+					placeholder={placeholder ?? t("searchNodes", "Search nodes...")}
 					className="pl-8 h-9"
 				/>
 			</div>
 			<Button type="submit" size="sm" variant="secondary">
-				{t('find', 'Find')}
+				{t("find", "Find")}
 			</Button>
 		</form>
 	);

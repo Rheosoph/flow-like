@@ -65,7 +65,7 @@ export function FloatArrayVariable({
 					onChange={(e) => setNewValue(e.target.value)}
 					onKeyDown={(e) => e.key === "Enter" && handleAdd()}
 					type={variable.secret ? "password" : "number"}
-					placeholder={t('addNumber', 'Add number...')}
+					placeholder={t("addNumber", "Add number...")}
 					step="any"
 					className="flex-1 min-w-0"
 				/>

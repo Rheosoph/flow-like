@@ -157,12 +157,18 @@ export function UserManagement({ appId }: Readonly<{ appId: string }>) {
 		<TeamSection>
 			<SectionHeading
 				icon={UsersIcon}
-				title={t('peopleWithAccess', 'People with access')}
+				title={t("peopleWithAccess", "People with access")}
 				count={members.length}
 				description={
 					invites.length > 0
-						? t('everyoneWhoCanOpenThisAppPlusInvitationsThatHaventBeenAcceptedYetRolesDecideWhatTheyCanChange', 'Everyone who can open this app, plus invitations that haven\'t been accepted yet. Roles decide what they can change.')
-						: t('everyoneWhoCanOpenThisAppRolesDecideWhatTheyCanChange', 'Everyone who can open this app. Roles decide what they can change.')
+						? t(
+								"everyoneWhoCanOpenThisAppPlusInvitationsThatHaventBeenAcceptedYetRolesDecideWhatTheyCanChange",
+								"Everyone who can open this app, plus invitations that haven't been accepted yet. Roles decide what they can change.",
+							)
+						: t(
+								"everyoneWhoCanOpenThisAppRolesDecideWhatTheyCanChange",
+								"Everyone who can open this app. Roles decide what they can change.",
+							)
 				}
 			/>
 
@@ -170,15 +176,15 @@ export function UserManagement({ appId }: Readonly<{ appId: string }>) {
 				<TeamSearchInput
 					value={searchQuery}
 					onChange={setSearchQuery}
-					placeholder={t('searchByNameOrHandle', 'Search by name or handle…')}
+					placeholder={t("searchByNameOrHandle", "Search by name or handle…")}
 				/>
 				<Select value={roleFilter} onValueChange={setRoleFilter}>
 					<SelectTrigger className="h-9 w-40">
 						<FilterIcon className="size-4 text-muted-foreground" />
-						<SelectValue placeholder={t('filterByRole', 'Filter by role')} />
+						<SelectValue placeholder={t("filterByRole", "Filter by role")} />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="all">{t('allRoles', 'All roles')}</SelectItem>
+						<SelectItem value="all">{t("allRoles", "All roles")}</SelectItem>
 						{roleList?.map((role) => (
 							<SelectItem key={role.id} value={role.id}>
 								{role.name}
@@ -217,7 +223,7 @@ export function UserManagement({ appId }: Readonly<{ appId: string }>) {
 							>
 								{isFetchingMoreInvites
 									? "Loading..."
-									: t('loadMorePendingInvites', 'Load More Pending Invites')}
+									: t("loadMorePendingInvites", "Load More Pending Invites")}
 							</Button>
 						)}
 
@@ -234,11 +240,17 @@ export function UserManagement({ appId }: Readonly<{ appId: string }>) {
 						{visibleCount === 0 && visibleInviteCount === 0 && (
 							<EmptyState
 								className="max-w-full"
-								title={t('noMembersFound', 'No members found')}
+								title={t("noMembersFound", "No members found")}
 								description={
 									isFiltering
-										? t('tryAdjustingYourSearchOrFilterCriteria', 'Try adjusting your search or filter criteria')
-										: t('noTeamMembersHaveBeenAddedYet', 'No team members have been added yet')
+										? t(
+												"tryAdjustingYourSearchOrFilterCriteria",
+												"Try adjusting your search or filter criteria",
+											)
+										: t(
+												"noTeamMembersHaveBeenAddedYet",
+												"No team members have been added yet",
+											)
 								}
 								icons={[UserXIcon]}
 							/>
@@ -253,18 +265,31 @@ export function UserManagement({ appId }: Readonly<{ appId: string }>) {
 						onClick={() => fetchNextPage()}
 						disabled={isFetchingNextPage}
 					>
-						{isFetchingNextPage ? "Loading..." : t('loadMoreMembers', 'Load More Members')}
+						{isFetchingNextPage
+							? "Loading..."
+							: t("loadMoreMembers", "Load More Members")}
 					</Button>
 				)}
 			</div>
 
 			{members.length > 0 && (
 				<TeamHint>
-					{t('showingVisiblecountOfLengthLoadedValval2val3', 'Showing {{visibleCount}} of {{length}} loaded {{val}}{{val2}}{{val3}}', { visibleCount, length: members.length, val: members.length === 1 ? "member" : "members", val2: hasNextPage ? " · more can be loaded" : "", val3: invites.length > 0
-							? ` · ${invites.length} pending ${
-									invites.length === 1 ? "invitation" : "invitations"
-								}`
-							: "" })}
+					{t(
+						"showingVisiblecountOfLengthLoadedValval2val3",
+						"Showing {{visibleCount}} of {{length}} loaded {{val}}{{val2}}{{val3}}",
+						{
+							visibleCount,
+							length: members.length,
+							val: members.length === 1 ? "member" : "members",
+							val2: hasNextPage ? " · more can be loaded" : "",
+							val3:
+								invites.length > 0
+									? ` · ${invites.length} pending ${
+											invites.length === 1 ? "invitation" : "invitations"
+										}`
+									: "",
+						},
+					)}
 				</TeamHint>
 			)}
 		</TeamSection>
@@ -335,7 +360,10 @@ function PendingInvite({
 			toast.error(
 				apiErrorMessage(
 					error,
-					t('failedToRevokeTheInvitationPleaseTryAgain', 'Failed to revoke the invitation. Please try again.'),
+					t(
+						"failedToRevokeTheInvitationPleaseTryAgain",
+						"Failed to revoke the invitation. Please try again.",
+					),
 				),
 			);
 		}
@@ -364,7 +392,7 @@ function PendingInvite({
 				</div>
 				<div className={TEAM_ROW_META}>
 					<StatusChip tone="attention" icon={MailIcon} pip>
-						{t('invitationPending', 'Invitation pending')}
+						{t("invitationPending", "Invitation pending")}
 					</StatusChip>
 					<span>invited {formatRelativeTime(invite.created_at)}</span>
 				</div>
@@ -380,18 +408,24 @@ function PendingInvite({
 					</AlertDialogTrigger>
 					<AlertDialogContent>
 						<AlertDialogHeader>
-							<AlertDialogTitle>{t('revokeInvitation', 'Revoke Invitation')}</AlertDialogTitle>
+							<AlertDialogTitle>
+								{t("revokeInvitation", "Revoke Invitation")}
+							</AlertDialogTitle>
 							<AlertDialogDescription>
-								{t('revokeTheInvitationForEvaluatednameTheyWillNoLongerBeAbleToAcceptItAndItDisappearsFromTheirNotifications', 'Revoke the invitation for {{evaluatedName}}? They will no longer be able to accept it, and it disappears from their notifications.', { evaluatedName })}
+								{t(
+									"revokeTheInvitationForEvaluatednameTheyWillNoLongerBeAbleToAcceptItAndItDisappearsFromTheirNotifications",
+									"Revoke the invitation for {{evaluatedName}}? They will no longer be able to accept it, and it disappears from their notifications.",
+									{ evaluatedName },
+								)}
 							</AlertDialogDescription>
 						</AlertDialogHeader>
 						<AlertDialogFooter>
-							<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
+							<AlertDialogCancel>{t("cancel", "Cancel")}</AlertDialogCancel>
 							<AlertDialogAction
 								className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 								onClick={handleRevoke}
 							>
-								{t('revoke', 'Revoke')}
+								{t("revoke", "Revoke")}
 							</AlertDialogAction>
 						</AlertDialogFooter>
 					</AlertDialogContent>
@@ -475,7 +509,7 @@ function Member({
 
 	const evaluatedName = userDisplayName(userData, "Unknown User");
 	const handle = userSecondaryLabel(userData);
-	const roleName = userRole?.name ?? t('noRoleAssigned', 'No Role Assigned');
+	const roleName = userRole?.name ?? t("noRoleAssigned", "No Role Assigned");
 
 	return (
 		<div className={teamRowClass()}>
@@ -523,13 +557,19 @@ function Member({
 								<DialogTrigger asChild>
 									<DropdownMenuItem onSelect={(e) => e.preventDefault()}>
 										<SettingsIcon className="size-4" />
-										{t('changeRole', 'Change Role')}
+										{t("changeRole", "Change Role")}
 									</DropdownMenuItem>
 								</DialogTrigger>
 								<DialogContent>
 									<DialogHeader>
-										<DialogTitle>{t('changeRole', 'Change Role')}</DialogTitle>
-										<DialogDescription>{t('selectANewRoleForEvaluatedname', 'Select a new role for {{evaluatedName}}', { evaluatedName })}</DialogDescription>
+										<DialogTitle>{t("changeRole", "Change Role")}</DialogTitle>
+										<DialogDescription>
+											{t(
+												"selectANewRoleForEvaluatedname",
+												"Select a new role for {{evaluatedName}}",
+												{ evaluatedName },
+											)}
+										</DialogDescription>
 									</DialogHeader>
 									<div className="space-y-4 py-4">
 										<div className="space-y-2">
@@ -558,14 +598,14 @@ function Member({
 											variant="outline"
 											onClick={() => setIsChangeRoleOpen(false)}
 										>
-											{t('cancel', 'Cancel')}
+											{t("cancel", "Cancel")}
 										</Button>
 										<Button
 											onClick={async () => {
 												await handleChangeRole(selectedRoleId);
 											}}
 										>
-											{t('saveChanges', 'Save Changes')}
+											{t("saveChanges", "Save Changes")}
 										</Button>
 									</DialogFooter>
 								</DialogContent>
@@ -578,21 +618,31 @@ function Member({
 										onSelect={(e) => e.preventDefault()}
 									>
 										<Trash2Icon className="size-4" />
-										{t('remove', 'Remove')}
+										{t("remove", "Remove")}
 									</DropdownMenuItem>
 								</AlertDialogTrigger>
 								<AlertDialogContent>
 									<AlertDialogHeader>
-										<AlertDialogTitle>{t('removeTeamMember', 'Remove Team Member')}</AlertDialogTitle>
-										<AlertDialogDescription>{t('areYouSureYouWantToRemoveEvaluatednameFromTheTeamThisActionCannotBeUndone', "Are you sure you want to remove {{evaluatedName}} from the team? This action cannot be undone.", { evaluatedName })}</AlertDialogDescription>
+										<AlertDialogTitle>
+											{t("removeTeamMember", "Remove Team Member")}
+										</AlertDialogTitle>
+										<AlertDialogDescription>
+											{t(
+												"areYouSureYouWantToRemoveEvaluatednameFromTheTeamThisActionCannotBeUndone",
+												"Are you sure you want to remove {{evaluatedName}} from the team? This action cannot be undone.",
+												{ evaluatedName },
+											)}
+										</AlertDialogDescription>
 									</AlertDialogHeader>
 									<AlertDialogFooter>
-										<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
+										<AlertDialogCancel>
+											{t("cancel", "Cancel")}
+										</AlertDialogCancel>
 										<AlertDialogAction
 											className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 											onClick={handleRemoveMember}
 										>
-											{t('remove', 'Remove')}
+											{t("remove", "Remove")}
 										</AlertDialogAction>
 									</AlertDialogFooter>
 								</AlertDialogContent>

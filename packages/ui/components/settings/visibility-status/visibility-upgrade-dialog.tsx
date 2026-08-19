@@ -62,15 +62,20 @@ export function VisibilityUpgradeDialog({
 			await invalidate(backend.appState.getApp, [appId]);
 			await invalidate(backend.appState.getApps, []);
 			await onChanged?.(target);
-			toast.success(t('visibilityChangedToTitle', 'Visibility changed to {{title}}', { title: targetMeta.title }), {
-				icon: <targetMeta.Icon className="w-4 h-4" />,
-			});
+			toast.success(
+				t("visibilityChangedToTitle", "Visibility changed to {{title}}", {
+					title: targetMeta.title,
+				}),
+				{
+					icon: <targetMeta.Icon className="w-4 h-4" />,
+				},
+			);
 			onOpenChange(false);
 		} catch (error) {
 			toast.error(
 				error instanceof Error
 					? error.message
-					: t('couldNotChangeTheVisibility', 'Could not change the visibility'),
+					: t("couldNotChangeTheVisibility", "Could not change the visibility"),
 			);
 		} finally {
 			setPending(false);
@@ -99,7 +104,12 @@ export function VisibilityUpgradeDialog({
 						<div className="p-2 rounded-full bg-primary/10">
 							<LockIcon className="h-5 w-5 text-primary" />
 						</div>
-						<AlertDialogTitle className="text-left">{t('featureNeedsTitle', '{{feature}} needs {{title}}', { feature, title: targetMeta.title })}</AlertDialogTitle>
+						<AlertDialogTitle className="text-left">
+							{t("featureNeedsTitle", "{{feature}} needs {{title}}", {
+								feature,
+								title: targetMeta.title,
+							})}
+						</AlertDialogTitle>
 					</div>
 					<AlertDialogDescription className="text-left text-muted-foreground">
 						{reason}
@@ -114,8 +124,12 @@ export function VisibilityUpgradeDialog({
 						<div className={`w-2 h-2 rounded-full ${targetMeta.color}`} />
 						<span className="text-sm font-medium">{targetMeta.title}</span>
 					</div>
-					<p className="text-xs text-muted-foreground">{`${targetMeta.description}. You can switch back to ${currentMeta.title}`}{" "}
-						{t('atAnyTimeThatRemovesEveryoneYouInvited', 'at any time — that removes everyone you invited.')}
+					<p className="text-xs text-muted-foreground">
+						{`${targetMeta.description}. You can switch back to ${currentMeta.title}`}{" "}
+						{t(
+							"atAnyTimeThatRemovesEveryoneYouInvited",
+							"at any time — that removes everyone you invited.",
+						)}
 					</p>
 				</div>
 
@@ -126,14 +140,18 @@ export function VisibilityUpgradeDialog({
 						disabled={pending}
 						onClick={() => onOpenChange(false)}
 					>
-						{t('cancel', 'Cancel')}
+						{t("cancel", "Cancel")}
 					</Button>
 					<Button
 						className="w-full sm:w-auto"
 						disabled={pending}
 						onClick={confirm}
 					>
-						{pending ? "Switching…" : t('switchToTitle', 'Switch to {{title}}', { title: targetMeta.title })}
+						{pending
+							? "Switching…"
+							: t("switchToTitle", "Switch to {{title}}", {
+									title: targetMeta.title,
+								})}
 					</Button>
 				</AlertDialogFooter>
 			</AlertDialogContent>

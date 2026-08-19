@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -37,6 +36,7 @@ import {
 	useSearch,
 	useSetQueryParams,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import {
 	Calendar,
 	CopyIcon,
@@ -157,16 +157,21 @@ export default function TemplatesPage() {
 			{/* Header Section */}
 			<div className="flex items-center justify-between py-4">
 				<div className="space-y-1">
-					<h1 className="text-2xl font-bold">{t('flowTemplates', 'Flow Templates')}</h1>
+					<h1 className="text-2xl font-bold">
+						{t("flowTemplates", "Flow Templates")}
+					</h1>
 					<p className="text-muted-foreground text-sm">
-						{t('saveVersionedSnapshotsOfYourFlowsToShareReuseOrRollBack', 'Save versioned snapshots of your flows to share, reuse, or roll back')}
+						{t(
+							"saveVersionedSnapshotsOfYourFlowsToShareReuseOrRollBack",
+							"Save versioned snapshots of your flows to share, reuse, or roll back",
+						)}
 					</p>
 				</div>
 				<Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
 					<DialogTrigger asChild>
 						<Button className="shadow-sm">
 							<Plus className="w-4 h-4 mr-2" />
-							{t('createTemplate', 'Create Template')}
+							{t("createTemplate", "Create Template")}
 						</Button>
 					</DialogTrigger>
 					<DialogContent className="sm:max-w-md">
@@ -175,7 +180,7 @@ export default function TemplatesPage() {
 								<CopyIcon className="h-6 w-6 text-primary" />
 							</div>
 							<DialogTitle className="text-center text-xl">
-								{t('createNewTemplate', 'Create New Template')}
+								{t("createNewTemplate", "Create New Template")}
 							</DialogTitle>
 							<DialogDescription className="text-center">
 								{`Create a reusable template from an existing workflow`}
@@ -185,11 +190,11 @@ export default function TemplatesPage() {
 						<div className="space-y-6 py-4">
 							<div className="space-y-2">
 								<Label htmlFor="template-name" className="text-sm font-medium">
-									{t('templateName', 'Template Name')}
+									{t("templateName", "Template Name")}
 								</Label>
 								<Input
 									id="template-name"
-									placeholder={t('enterTemplateName', 'Enter template name')}
+									placeholder={t("enterTemplateName", "Enter template name")}
 									value={newTemplate.name}
 									onChange={(e) =>
 										setNewTemplate({ ...newTemplate, name: e.target.value })
@@ -202,11 +207,14 @@ export default function TemplatesPage() {
 									htmlFor="template-description"
 									className="text-sm font-medium"
 								>
-									{t('description', 'Description')}
+									{t("description", "Description")}
 								</Label>
 								<Textarea
 									id="template-description"
-									placeholder={t('describeWhatThisTemplateDoes', 'Describe what this template does')}
+									placeholder={t(
+										"describeWhatThisTemplateDoes",
+										"Describe what this template does",
+									)}
 									value={newTemplate.description}
 									onChange={(e) =>
 										setNewTemplate({
@@ -223,14 +231,16 @@ export default function TemplatesPage() {
 									htmlFor="workflow-select"
 									className="text-sm font-medium"
 								>
-									{t('sourceWorkflow', 'Source Workflow')}
+									{t("sourceWorkflow", "Source Workflow")}
 								</Label>
 								<Select
 									value={selectedWorkflow}
 									onValueChange={setSelectedWorkflow}
 								>
 									<SelectTrigger>
-										<SelectValue placeholder={t('selectAWorkflow', 'Select a workflow')} />
+										<SelectValue
+											placeholder={t("selectAWorkflow", "Select a workflow")}
+										/>
 									</SelectTrigger>
 									<SelectContent>
 										{boards.data?.map((workflow) => (
@@ -248,7 +258,7 @@ export default function TemplatesPage() {
 										htmlFor="version-select"
 										className="text-sm font-medium"
 									>
-										{t('workflowVersion', 'Workflow Version')}
+										{t("workflowVersion", "Workflow Version")}
 									</Label>
 									<Select
 										value={newTemplate.workflowVersion}
@@ -266,7 +276,9 @@ export default function TemplatesPage() {
 										<SelectTrigger>
 											<SelectValue
 												placeholder={
-													versions.isFetching ? t('loadingVersions', 'Loading versions...') : "Latest"
+													versions.isFetching
+														? t("loadingVersions", "Loading versions...")
+														: "Latest"
 												}
 											/>
 										</SelectTrigger>
@@ -275,7 +287,7 @@ export default function TemplatesPage() {
 												<div className="flex items-center justify-center py-4">
 													<div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
 													<span className="ml-2 text-sm text-muted-foreground">
-														{t('loadingVersions', 'Loading versions...')}
+														{t("loadingVersions", "Loading versions...")}
 													</span>
 												</div>
 											) : (
@@ -289,7 +301,7 @@ export default function TemplatesPage() {
 														</SelectItem>
 													))}
 													<SelectItem key={""} value={"none"}>
-														{t('latest', 'Latest')}
+														{t("latest", "Latest")}
 													</SelectItem>
 												</>
 											)}
@@ -306,13 +318,13 @@ export default function TemplatesPage() {
 									disabled={!newTemplate.name || !selectedWorkflow}
 									className="flex-1"
 								>
-									{t('createTemplate', 'Create Template')}
+									{t("createTemplate", "Create Template")}
 								</Button>
 								<Button
 									variant="outline"
 									onClick={() => setIsCreateDialogOpen(false)}
 								>
-									{t('cancel', 'Cancel')}
+									{t("cancel", "Cancel")}
 								</Button>
 							</div>
 						</div>
@@ -325,7 +337,7 @@ export default function TemplatesPage() {
 				<div className="relative flex-1 max-w-md">
 					<Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
 					<Input
-						placeholder={t('searchTemplates', 'Search templates...')}
+						placeholder={t("searchTemplates", "Search templates...")}
 						value={searchTerm}
 						onChange={(e) => setSearchTerm(e.target.value)}
 						className="pl-10"
@@ -333,7 +345,7 @@ export default function TemplatesPage() {
 				</div>
 				<Button variant="outline" size="sm">
 					<Filter className="w-4 h-4 mr-2" />
-					{t('filter', 'Filter')}
+					{t("filter", "Filter")}
 				</Button>
 			</div>
 
@@ -385,7 +397,7 @@ export default function TemplatesPage() {
 												onClick={() => openTemplate(templateId)}
 											>
 												<Edit className="w-4 h-4 mr-2" />
-												{t('edit', 'Edit')}
+												{t("edit", "Edit")}
 											</DropdownMenuItem>
 											<DropdownMenuSeparator />
 											<DropdownMenuItem
@@ -396,7 +408,7 @@ export default function TemplatesPage() {
 												}}
 											>
 												<Trash2 className="w-4 h-4 mr-2" />
-												{t('delete', 'Delete')}
+												{t("delete", "Delete")}
 											</DropdownMenuItem>
 										</DropdownMenuContent>
 									</DropdownMenu>
@@ -439,11 +451,16 @@ export default function TemplatesPage() {
 						<CopyIcon className="w-8 h-8 text-primary" />
 					</div>
 					<h3 className="text-lg font-medium">
-						{searchTerm ? t('noTemplatesFound', 'No templates found') : t('noTemplatesYet', 'No templates yet')}
+						{searchTerm
+							? t("noTemplatesFound", "No templates found")
+							: t("noTemplatesYet", "No templates yet")}
 					</h3>
 					<p className="text-sm text-muted-foreground">
 						{searchTerm
-							? t('tryAdjustingYourSearchTerms', 'Try adjusting your search terms.')
+							? t(
+									"tryAdjustingYourSearchTerms",
+									"Try adjusting your search terms.",
+								)
 							: `Templates let you snapshot a flow at a specific version so you can share, reuse, or roll back to it later.`}
 					</p>
 					{!searchTerm && (
@@ -452,7 +469,7 @@ export default function TemplatesPage() {
 							className="mt-2"
 						>
 							<Plus className="w-4 h-4 mr-2" />
-							{t('createYourFirstTemplate', 'Create Your First Template')}
+							{t("createYourFirstTemplate", "Create Your First Template")}
 						</Button>
 					)}
 				</div>

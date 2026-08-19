@@ -135,16 +135,16 @@ export function ExportToolbarButton(props: DropdownMenuProps) {
 			<DropdownMenuContent align="start">
 				<DropdownMenuGroup>
 					<DropdownMenuItem onSelect={exportToHtml}>
-						{t('exportAsHtml', 'Export as HTML')}
+						{t("exportAsHtml", "Export as HTML")}
 					</DropdownMenuItem>
 					<DropdownMenuItem onSelect={exportToPdf}>
-						{t('exportAsPdf', 'Export as PDF')}
+						{t("exportAsPdf", "Export as PDF")}
 					</DropdownMenuItem>
 					<DropdownMenuItem onSelect={exportToImage}>
-						{t('exportAsImage', 'Export as Image')}
+						{t("exportAsImage", "Export as Image")}
 					</DropdownMenuItem>
 					<DropdownMenuItem onSelect={exportToMarkdown}>
-						{t('exportAsMarkdown', 'Export as Markdown')}
+						{t("exportAsMarkdown", "Export as Markdown")}
 					</DropdownMenuItem>
 				</DropdownMenuGroup>
 			</DropdownMenuContent>

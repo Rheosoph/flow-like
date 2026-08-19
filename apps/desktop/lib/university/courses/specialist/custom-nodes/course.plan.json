@@ -11,12 +11,7 @@
 		"isPublished": true,
 		"iconUrl": null,
 		"bannerUrl": null,
-		"tags": [
-			"developer",
-			"wasm",
-			"typescript",
-			"packages"
-		],
+		"tags": ["developer", "wasm", "typescript", "packages"],
 		"position": 7,
 		"description": "Build, test, and ship your own WebAssembly node \u2014 from an empty folder to the Flow-Like catalog.",
 		"longDescription": "Acme's support team needs a text normalizer the catalog doesn't have, so you'll build it: a real TypeScript Component Model node called normalize_text. You'll write the definition and run function line by line, prove them with mock-host tests, learn exactly what the sandbox does and doesn't enforce, and publish through the package registry \u2014 privately first, publicly when review says go. Along the way you'll internalize the contracts that keep packages alive: stable identifiers, per-node capabilities, manifest resource tiers, and release gates that catch breaking changes before your users do.",
@@ -103,9 +98,7 @@
 											"label": "Any WASM binary \u2014 the runtime adapts to whatever it exports"
 										}
 									],
-									"correct": [
-										"wasm-package"
-									]
+									"correct": ["wasm-package"]
 								}
 							},
 							{
@@ -134,10 +127,7 @@
 											"label": "Renaming a pin's friendly label breaks saved boards"
 										}
 									],
-									"correct": [
-										"data-typed",
-										"exec-path"
-									]
+									"correct": ["data-typed", "exec-path"]
 								}
 							},
 							{
@@ -166,9 +156,7 @@
 											"label": "Neither \u2014 bumping the version number makes any rename safe"
 										}
 									],
-									"correct": [
-										"post-publish"
-									]
+									"correct": ["post-publish"]
 								}
 							}
 						],
@@ -211,9 +199,7 @@
 											"label": "Types recorded the first time each node executes"
 										}
 									],
-									"correct": [
-										"binary-export"
-									]
+									"correct": ["binary-export"]
 								}
 							},
 							{
@@ -242,10 +228,7 @@
 											"label": "A node with zero declared capabilities cannot read its input pins"
 										}
 									],
-									"correct": [
-										"node-capabilities",
-										"manifest-limits"
-									]
+									"correct": ["node-capabilities", "manifest-limits"]
 								}
 							},
 							{
@@ -274,9 +257,7 @@
 											"label": "The node disappears from the catalog until it's fixed"
 										}
 									],
-									"correct": [
-										"downstream-stalls"
-									]
+									"correct": ["downstream-stalls"]
 								}
 							}
 						],
@@ -327,9 +308,7 @@
 											"label": "true, whenever either option is enabled"
 										}
 									],
-									"correct": [
-										"neq"
-									]
+									"correct": ["neq"]
 								}
 							},
 							{
@@ -358,9 +337,7 @@
 											"label": "The mock host masked a logic bug; rerun the tests with more inputs"
 										}
 									],
-									"correct": [
-										"separate-gate"
-									]
+									"correct": ["separate-gate"]
 								}
 							},
 							{
@@ -393,11 +370,7 @@
 											"label": "Raising the memory tier from minimal to light"
 										}
 									],
-									"correct": [
-										"rename-node",
-										"rename-pin",
-										"change-id"
-									]
+									"correct": ["rename-node", "rename-pin", "change-id"]
 								}
 							}
 						],
@@ -440,9 +413,7 @@
 											"label": "Unsafe behavior when a permission is denied"
 										}
 									],
-									"correct": [
-										"silent-rename"
-									]
+									"correct": ["silent-rename"]
 								}
 							},
 							{
@@ -471,11 +442,7 @@
 											"label": "A wrong result for whitespace-only input that the suite explicitly covers"
 										}
 									],
-									"correct": [
-										"componentization",
-										"enforcement",
-										"old-board"
-									]
+									"correct": ["componentization", "enforcement", "old-board"]
 								}
 							},
 							{
@@ -559,11 +526,7 @@
 											"label": "The memory and timeout tiers in the manifest"
 										}
 									],
-									"correct": [
-										"package-id",
-										"node-name",
-										"pin-names"
-									]
+									"correct": ["package-id", "node-name", "pin-names"]
 								}
 							},
 							{
@@ -592,9 +555,7 @@
 											"label": "The new strip_punctuation input is what breaks the board \u2014 added pins invalidate saved nodes"
 										}
 									],
-									"correct": [
-										"wire-breaks"
-									]
+									"correct": ["wire-breaks"]
 								}
 							},
 							{
@@ -623,9 +584,7 @@
 											"label": "The undeclared call crashes the executing app"
 										}
 									],
-									"correct": [
-										"gate-blocks"
-									]
+									"correct": ["gate-blocks"]
 								}
 							},
 							{
@@ -654,10 +613,7 @@
 											"label": "A dependency that cannot be componentized"
 										}
 									],
-									"correct": [
-										"compat",
-										"persistence"
-									]
+									"correct": ["compat", "persistence"]
 								}
 							},
 							{
@@ -686,10 +642,7 @@
 											"label": "Even private users must wait for publication review before using the fix"
 										}
 									],
-									"correct": [
-										"immutable",
-										"private-fast"
-									]
+									"correct": ["immutable", "private-fast"]
 								}
 							},
 							{
@@ -718,9 +671,7 @@
 											"label": "The models capability in the manifest; the memory tier on the node definition"
 										}
 									],
-									"correct": [
-										"correct-split"
-									]
+									"correct": ["correct-split"]
 								}
 							}
 						],

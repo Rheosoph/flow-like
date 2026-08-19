@@ -73,7 +73,9 @@ export function StructArrayVariable({
 	return (
 		<div className="flex flex-col gap-3 w-full min-w-0">
 			{values.length === 0 && (
-				<p className="text-xs text-muted-foreground">{t('noItemsYet', 'No items yet.')}</p>
+				<p className="text-xs text-muted-foreground">
+					{t("noItemsYet", "No items yet.")}
+				</p>
 			)}
 			{values.map((item, index) => (
 				<div
@@ -91,7 +93,7 @@ export function StructArrayVariable({
 							className="h-6 w-6"
 							disabled={disabled}
 							onClick={() => handleRemove(index)}
-							title={t('removeItem', 'Remove item')}
+							title={t("removeItem", "Remove item")}
 						>
 							<XIcon className="w-3.5 h-3.5" />
 						</Button>
@@ -117,7 +119,7 @@ export function StructArrayVariable({
 				className="self-start"
 			>
 				<PlusCircleIcon className="w-4 h-4 mr-1.5" />
-				{t('addItem', 'Add item')}
+				{t("addItem", "Add item")}
 			</Button>
 		</div>
 	);

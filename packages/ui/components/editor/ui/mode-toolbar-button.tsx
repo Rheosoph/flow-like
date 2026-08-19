@@ -38,15 +38,15 @@ export function ModeToolbarButton(props: DropdownMenuProps) {
 	const item: Record<string, { icon: React.ReactNode; label: string }> = {
 		editing: {
 			icon: <PenIcon />,
-			label: t('editing', 'Editing'),
+			label: t("editing", "Editing"),
 		},
 		suggestion: {
 			icon: <PencilLineIcon />,
-			label: t('suggestion', 'Suggestion'),
+			label: t("suggestion", "Suggestion"),
 		},
 		viewing: {
 			icon: <EyeIcon />,
-			label: t('viewing', 'Viewing'),
+			label: t("viewing", "Viewing"),
 		},
 	};
 

@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -45,6 +44,7 @@ import {
 	EDITOR_OPTIONS,
 	TEMPLATE_LANGUAGES,
 } from "@flow-like/flow-like-ui/lib/schema/developer";
+import { useTranslation } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -244,7 +244,11 @@ function ProjectCard({
 									{lintCounts.errors}
 								</Badge>
 							</TooltipTrigger>
-							<TooltipContent>{t('errorsLintError', '{{errors}} lint error', { errors: lintCounts.errors })}{lintCounts.errors !== 1 ? "s" : ""}
+							<TooltipContent>
+								{t("errorsLintError", "{{errors}} lint error", {
+									errors: lintCounts.errors,
+								})}
+								{lintCounts.errors !== 1 ? "s" : ""}
 							</TooltipContent>
 						</Tooltip>
 					)}
@@ -257,9 +261,9 @@ function ProjectCard({
 								</Badge>
 							</TooltipTrigger>
 							<TooltipContent>
-								{t('countLintWarnings', {
-									defaultValue_one: '{{count}} lint warning',
-									defaultValue_other: '{{count}} lint warnings',
+								{t("countLintWarnings", {
+									defaultValue_one: "{{count}} lint warning",
+									defaultValue_other: "{{count}} lint warnings",
 									count: lintCounts.warnings,
 								})}
 							</TooltipContent>
@@ -296,7 +300,9 @@ function ProjectCard({
 								)}
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>{t('openInEditor', 'Open in Editor')}</TooltipContent>
+						<TooltipContent>
+							{t("openInEditor", "Open in Editor")}
+						</TooltipContent>
 					</Tooltip>
 
 					<Tooltip>
@@ -323,8 +329,11 @@ function ProjectCard({
 						</TooltipTrigger>
 						<TooltipContent>
 							{compileStatus === "stale"
-								? t('wasmChangedReloadIntoCatalog', 'WASM changed — Reload into Catalog')
-								: t('loadIntoCatalog', 'Load into Catalog')}
+								? t(
+										"wasmChangedReloadIntoCatalog",
+										"WASM changed — Reload into Catalog",
+									)
+								: t("loadIntoCatalog", "Load into Catalog")}
 						</TooltipContent>
 					</Tooltip>
 
@@ -342,7 +351,9 @@ function ProjectCard({
 								</Button>
 							</Link>
 						</TooltipTrigger>
-						<TooltipContent>{t('publishToRegistry', 'Publish to Registry')}</TooltipContent>
+						<TooltipContent>
+							{t("publishToRegistry", "Publish to Registry")}
+						</TooltipContent>
 					</Tooltip>
 
 					<Tooltip>
@@ -359,7 +370,9 @@ function ProjectCard({
 								</Button>
 							</Link>
 						</TooltipTrigger>
-						<TooltipContent>{t('editManifest', 'Edit Manifest')}</TooltipContent>
+						<TooltipContent>
+							{t("editManifest", "Edit Manifest")}
+						</TooltipContent>
 					</Tooltip>
 
 					<Tooltip>
@@ -376,7 +389,7 @@ function ProjectCard({
 								</Button>
 							</Link>
 						</TooltipTrigger>
-						<TooltipContent>{t('debugAmpTest', "Debug & Test")}</TooltipContent>
+						<TooltipContent>{t("debugAmpTest", "Debug & Test")}</TooltipContent>
 					</Tooltip>
 
 					<Tooltip>
@@ -393,7 +406,7 @@ function ProjectCard({
 								</Button>
 							</Link>
 						</TooltipTrigger>
-						<TooltipContent>{t('testWidgets', 'Test Widgets')}</TooltipContent>
+						<TooltipContent>{t("testWidgets", "Test Widgets")}</TooltipContent>
 					</Tooltip>
 
 					<Tooltip>
@@ -407,7 +420,7 @@ function ProjectCard({
 								<Trash2 className="h-3 w-3" />
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>{t('remove', 'Remove')}</TooltipContent>
+						<TooltipContent>{t("remove", "Remove")}</TooltipContent>
 					</Tooltip>
 				</div>
 			</div>
@@ -444,7 +457,7 @@ function SettingsDialog() {
 	return (
 		<div className="space-y-4">
 			<div className="space-y-2">
-				<Label>{t('preferredEditor', 'Preferred Editor')}</Label>
+				<Label>{t("preferredEditor", "Preferred Editor")}</Label>
 				<Select
 					value={settings.preferredEditor}
 					onValueChange={(v) =>
@@ -465,11 +478,11 @@ function SettingsDialog() {
 			</div>
 			<DialogFooter>
 				<DialogClose asChild>
-					<Button variant="outline">{t('cancel', 'Cancel')}</Button>
+					<Button variant="outline">{t("cancel", "Cancel")}</Button>
 				</DialogClose>
 				<Button onClick={handleSave} disabled={saving}>
 					{saving && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-					{t('save', 'Save')}
+					{t("save", "Save")}
 				</Button>
 			</DialogFooter>
 		</div>
@@ -585,10 +598,13 @@ export default function DeveloperPage() {
 		<div className="h-full space-y-6 overflow-auto">
 			<div className="space-y-1">
 				<h1 className="text-2xl font-semibold tracking-tight">
-					{t('localPackages', 'Local Packages')}
+					{t("localPackages", "Local Packages")}
 				</h1>
 				<p className="text-sm text-muted-foreground/70">
-					{t('createInspectTestAndPublishLocalWasmNodeProjects', 'Create, inspect, test, and publish local WASM node projects.')}
+					{t(
+						"createInspectTestAndPublishLocalWasmNodeProjects",
+						"Create, inspect, test, and publish local WASM node projects.",
+					)}
 				</p>
 			</div>
 
@@ -596,7 +612,7 @@ export default function DeveloperPage() {
 				<div className="relative flex-1">
 					<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40" />
 					<Input
-						placeholder={t('searchProjects', 'Search projects…')}
+						placeholder={t("searchProjects", "Search projects…")}
 						value={search}
 						onChange={(e) => setSearch(e.target.value)}
 						className="pl-10 rounded-full bg-muted/30 border-border/20"
@@ -616,13 +632,18 @@ export default function DeveloperPage() {
 								</Button>
 							</DialogTrigger>
 						</TooltipTrigger>
-						<TooltipContent>{t('settings', 'Settings')}</TooltipContent>
+						<TooltipContent>{t("settings", "Settings")}</TooltipContent>
 					</Tooltip>
 					<DialogContent className="max-w-sm">
 						<DialogHeader>
-							<DialogTitle>{t('developerSettings', 'Developer Settings')}</DialogTitle>
+							<DialogTitle>
+								{t("developerSettings", "Developer Settings")}
+							</DialogTitle>
 							<DialogDescription>
-								{t('configureYourDevelopmentEnvironment', 'Configure your development environment')}
+								{t(
+									"configureYourDevelopmentEnvironment",
+									"Configure your development environment",
+								)}
 							</DialogDescription>
 						</DialogHeader>
 						<SettingsDialog />
@@ -645,7 +666,7 @@ export default function DeveloperPage() {
 							)}
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent>{t('addExisting', 'Add Existing')}</TooltipContent>
+					<TooltipContent>{t("addExisting", "Add Existing")}</TooltipContent>
 				</Tooltip>
 
 				<Tooltip>
@@ -660,7 +681,7 @@ export default function DeveloperPage() {
 							</Button>
 						</Link>
 					</TooltipTrigger>
-					<TooltipContent>{t('newProject', 'New Project')}</TooltipContent>
+					<TooltipContent>{t("newProject", "New Project")}</TooltipContent>
 				</Tooltip>
 
 				<Tooltip>
@@ -677,7 +698,7 @@ export default function DeveloperPage() {
 							/>
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent>{t('refresh', 'Refresh')}</TooltipContent>
+					<TooltipContent>{t("refresh", "Refresh")}</TooltipContent>
 				</Tooltip>
 			</div>
 
@@ -705,12 +726,18 @@ export default function DeveloperPage() {
 				</div>
 			) : projects.length > 0 ? (
 				<div className="flex flex-col items-center justify-center py-20">
-					<p className="text-sm text-muted-foreground/50">{t('noProjectsMatchQuotsearchquot', "No projects match \"{{search}}\"", { search })}</p>
+					<p className="text-sm text-muted-foreground/50">
+						{t(
+							"noProjectsMatchQuotsearchquot",
+							'No projects match "{{search}}"',
+							{ search },
+						)}
+					</p>
 				</div>
 			) : (
 				<EmptyState
 					icons={[Code2, Sparkles, Package]}
-					title={t('noNodeProjectsYet', 'No node projects yet')}
+					title={t("noNodeProjectsYet", "No node projects yet")}
 					description={`Create a new node project from a template, or add an existing one from disk.`}
 					action={[
 						{

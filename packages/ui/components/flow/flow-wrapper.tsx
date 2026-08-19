@@ -1,10 +1,10 @@
-import { useTranslation } from "@flow-like/locales";
 import {
 	DndContext,
 	PointerSensor,
 	useSensor,
 	useSensors,
 } from "@dnd-kit/core";
+import { useTranslation } from "@flow-like/locales";
 import type { ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
@@ -159,7 +159,9 @@ export function FlowWrapper({
 			>
 				<DialogContent>
 					<DialogHeader>
-						<DialogTitle>{t('reference', 'Reference:')} {detail?.variable.name}</DialogTitle>
+						<DialogTitle>
+							{t("reference", "Reference:")} {detail?.variable.name}
+						</DialogTitle>
 					</DialogHeader>
 					<div className="w-full flex items-center justify-start gap-2 max-w-full">
 						<Button
@@ -167,14 +169,14 @@ export function FlowWrapper({
 							variant={"outline"}
 							onClick={() => placeNode("get")}
 						>
-							{t('get', 'Get')}
+							{t("get", "Get")}
 						</Button>
 						<Button
 							className="flex-grow"
 							variant={"outline"}
 							onClick={() => placeNode("set")}
 						>
-							{t('set', 'Set')}
+							{t("set", "Set")}
 						</Button>
 					</div>
 				</DialogContent>

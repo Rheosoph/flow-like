@@ -63,11 +63,14 @@ function ModeToggle({
 						onClick={() => onSelect("launch")}
 					>
 						<RouteIcon className="mr-1 h-3 w-3" />
-						{t('launch', 'Launch')}
+						{t("launch", "Launch")}
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent side="bottom">
-					{t('stepbystepViewWhatToDoNext', 'Step-by-step view — what to do next')}
+					{t(
+						"stepbystepViewWhatToDoNext",
+						"Step-by-step view — what to do next",
+					)}
 				</TooltipContent>
 			</Tooltip>
 			<Tooltip>
@@ -79,11 +82,14 @@ function ModeToggle({
 						onClick={() => onSelect("control")}
 					>
 						<GaugeIcon className="mr-1 h-3 w-3" />
-						{t('operate', 'Operate')}
+						{t("operate", "Operate")}
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent side="bottom">
-					{t('operationsViewHealthSurfacesAndActivity', 'Operations view — health, surfaces and activity')}
+					{t(
+						"operationsViewHealthSurfacesAndActivity",
+						"Operations view — health, surfaces and activity",
+					)}
 				</TooltipContent>
 			</Tooltip>
 		</div>

@@ -150,9 +150,12 @@ export function BoardMeta({
 		>
 			<DialogContent className="max-w-lg">
 				<DialogHeader>
-					<DialogTitle>{t('manageBoard', 'Manage Board')}</DialogTitle>
+					<DialogTitle>{t("manageBoard", "Manage Board")}</DialogTitle>
 					<DialogDescription>
-						{t('configureBoardSettingsAndManagePages', 'Configure board settings and manage pages')}
+						{t(
+							"configureBoardSettingsAndManagePages",
+							"Configure board settings and manage pages",
+						)}
 					</DialogDescription>
 				</DialogHeader>
 
@@ -163,11 +166,11 @@ export function BoardMeta({
 					<TabsList className="grid w-full grid-cols-2">
 						<TabsTrigger value="settings" className="gap-2">
 							<Settings className="h-4 w-4" />
-							{t('settings', 'Settings')}
+							{t("settings", "Settings")}
 						</TabsTrigger>
 						<TabsTrigger value="pages" className="gap-2">
 							<FileText className="h-4 w-4" />
-							{t('pages', 'Pages')}
+							{t("pages", "Pages")}
 							{(pages.data?.length ?? 0) > 0 && (
 								<Badge variant="secondary" className="ml-1 h-5 px-1.5">
 									{pages.data?.length}
@@ -241,7 +244,7 @@ function SettingsTab({
 				/>
 			</div>
 			<div className="grid w-full items-center gap-1.5">
-				<Label htmlFor="description">{t('description', 'Description')}</Label>
+				<Label htmlFor="description">{t("description", "Description")}</Label>
 				<Textarea
 					value={boardMeta.description}
 					onChange={(e) =>
@@ -255,7 +258,7 @@ function SettingsTab({
 				/>
 			</div>
 			<div className="grid w-full items-center gap-1.5">
-				<Label htmlFor="stage">{t('stage', 'Stage')}</Label>
+				<Label htmlFor="stage">{t("stage", "Stage")}</Label>
 				<Select
 					value={boardMeta.stage}
 					onValueChange={(e) =>
@@ -269,18 +272,24 @@ function SettingsTab({
 						<SelectValue placeholder="Stage" />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value={IExecutionStage.Dev}>{t('development', 'Development')}</SelectItem>
-						<SelectItem value={IExecutionStage.Int}>{t('integration', 'Integration')}</SelectItem>
+						<SelectItem value={IExecutionStage.Dev}>
+							{t("development", "Development")}
+						</SelectItem>
+						<SelectItem value={IExecutionStage.Int}>
+							{t("integration", "Integration")}
+						</SelectItem>
 						<SelectItem value={IExecutionStage.QA}>QA</SelectItem>
 						<SelectItem value={IExecutionStage.PreProd}>
-							{t('preproduction', 'Pre-Production')}
+							{t("preproduction", "Pre-Production")}
 						</SelectItem>
-						<SelectItem value={IExecutionStage.Prod}>{t('production', 'Production')}</SelectItem>
+						<SelectItem value={IExecutionStage.Prod}>
+							{t("production", "Production")}
+						</SelectItem>
 					</SelectContent>
 				</Select>
 			</div>
 			<div className="grid w-full items-center gap-1.5">
-				<Label htmlFor="log-level">{t('logLevel', 'Log Level')}</Label>
+				<Label htmlFor="log-level">{t("logLevel", "Log Level")}</Label>
 				<Select
 					value={boardMeta.logLevel}
 					onValueChange={(e) =>
@@ -288,27 +297,40 @@ function SettingsTab({
 					}
 				>
 					<SelectTrigger id="log-level" className="w-full">
-						<SelectValue placeholder={t('logLevel', 'Log Level')} />
+						<SelectValue placeholder={t("logLevel", "Log Level")} />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value={ILogLevel.Debug}>{t('debug', 'Debug')}</SelectItem>
-						<SelectItem value={ILogLevel.Info}>{t('info', 'Info')}</SelectItem>
-						<SelectItem value={ILogLevel.Warn}>{t('warning', 'Warning')}</SelectItem>
-						<SelectItem value={ILogLevel.Error}>{t('error', 'Error')}</SelectItem>
-						<SelectItem value={ILogLevel.Fatal}>{t('fatal', 'Fatal')}</SelectItem>
+						<SelectItem value={ILogLevel.Debug}>
+							{t("debug", "Debug")}
+						</SelectItem>
+						<SelectItem value={ILogLevel.Info}>{t("info", "Info")}</SelectItem>
+						<SelectItem value={ILogLevel.Warn}>
+							{t("warning", "Warning")}
+						</SelectItem>
+						<SelectItem value={ILogLevel.Error}>
+							{t("error", "Error")}
+						</SelectItem>
+						<SelectItem value={ILogLevel.Fatal}>
+							{t("fatal", "Fatal")}
+						</SelectItem>
 					</SelectContent>
 				</Select>
 			</div>
 			<div className="grid w-full items-center gap-1.5">
-				<Label htmlFor="execution-mode">{t('executionMode', 'Execution Mode')}</Label>
+				<Label htmlFor="execution-mode">
+					{t("executionMode", "Execution Mode")}
+				</Label>
 				{isOffline ? (
 					<>
 						<div className="flex items-center gap-2 h-10 px-3 py-2 rounded-md border border-input bg-background text-sm">
 							<Monitor className="h-4 w-4" />
-							<span>{t('local', 'Local')}</span>
+							<span>{t("local", "Local")}</span>
 						</div>
 						<p className="text-xs text-muted-foreground">
-							{t('offlineProjectsOnlySupportLocalExecution', 'Offline projects only support local execution.')}
+							{t(
+								"offlineProjectsOnlySupportLocalExecution",
+								"Offline projects only support local execution.",
+							)}
 						</p>
 					</>
 				) : (
@@ -323,42 +345,53 @@ function SettingsTab({
 							}
 						>
 							<SelectTrigger id="execution-mode" className="w-full">
-								<SelectValue placeholder={t('executionMode', 'Execution Mode')} />
+								<SelectValue
+									placeholder={t("executionMode", "Execution Mode")}
+								/>
 							</SelectTrigger>
 							<SelectContent>
 								<SelectItem value={IExecutionMode.Hybrid}>
 									<div className="flex items-center gap-2">
 										<Shuffle className="h-4 w-4" />
-										<span>{t('hybrid', 'Hybrid')}</span>
+										<span>{t("hybrid", "Hybrid")}</span>
 									</div>
 								</SelectItem>
 								<SelectItem value={IExecutionMode.Remote}>
 									<div className="flex items-center gap-2">
 										<Cloud className="h-4 w-4" />
-										<span>{t('remote', 'Remote')}</span>
+										<span>{t("remote", "Remote")}</span>
 									</div>
 								</SelectItem>
 								<SelectItem value={IExecutionMode.Local}>
 									<div className="flex items-center gap-2">
 										<Monitor className="h-4 w-4" />
-										<span>{t('local', 'Local')}</span>
+										<span>{t("local", "Local")}</span>
 									</div>
 								</SelectItem>
 							</SelectContent>
 						</Select>
 						<p className="text-xs text-muted-foreground">
 							{boardMeta.executionMode === IExecutionMode.Hybrid &&
-								t('runsLocallyWhenPossibleFallsBackToRemoteExecution', 'Runs locally when possible, falls back to remote execution.')}
+								t(
+									"runsLocallyWhenPossibleFallsBackToRemoteExecution",
+									"Runs locally when possible, falls back to remote execution.",
+								)}
 							{boardMeta.executionMode === IExecutionMode.Remote &&
-								t('alwaysRunsOnRemoteServersRequiredForBoardsWithSecrets', 'Always runs on remote servers. Required for boards with secrets.')}
+								t(
+									"alwaysRunsOnRemoteServersRequiredForBoardsWithSecrets",
+									"Always runs on remote servers. Required for boards with secrets.",
+								)}
 							{boardMeta.executionMode === IExecutionMode.Local &&
-								t('alwaysRunsLocallyBestForHighperformanceWorkloadsLikeEmbeddings', 'Always runs locally. Best for high-performance workloads like embeddings.')}
+								t(
+									"alwaysRunsLocallyBestForHighperformanceWorkloadsLikeEmbeddings",
+									"Always runs locally. Best for high-performance workloads like embeddings.",
+								)}
 						</p>
 					</>
 				)}
 			</div>
 			<div className="grid w-full items-center gap-1.5">
-				<Label htmlFor="version">{t('version', 'Version')}</Label>
+				<Label htmlFor="version">{t("version", "Version")}</Label>
 				<Select
 					value={version ? version.join(".") : "Latest"}
 					onValueChange={(e) => {
@@ -397,26 +430,28 @@ function SettingsTab({
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
 						<Button variant="secondary" className="w-1/3">
-							{t('createVersion', 'Create Version')}
+							{t("createVersion", "Create Version")}
 						</Button>
 					</DropdownMenuTrigger>
 					<DropdownMenuContent>
-						<DropdownMenuLabel>{t('versionType', 'Version Type')}</DropdownMenuLabel>
+						<DropdownMenuLabel>
+							{t("versionType", "Version Type")}
+						</DropdownMenuLabel>
 						<DropdownMenuSeparator />
 						<DropdownMenuItem onClick={() => createVersion(IVersionType.Major)}>
-							{t('major', 'Major')}
+							{t("major", "Major")}
 						</DropdownMenuItem>
 						<DropdownMenuItem onClick={() => createVersion(IVersionType.Minor)}>
-							{t('minor', 'Minor')}
+							{t("minor", "Minor")}
 						</DropdownMenuItem>
 						<DropdownMenuItem onClick={() => createVersion(IVersionType.Patch)}>
-							{t('patch', 'Patch')}
+							{t("patch", "Patch")}
 						</DropdownMenuItem>
 					</DropdownMenuContent>
 				</DropdownMenu>
 
 				<Button className="flex-grow" onClick={saveMeta}>
-					{t('save', 'Save')}
+					{t("save", "Save")}
 				</Button>
 			</div>
 		</>
@@ -492,11 +527,16 @@ function PagesTab({
 					onClick={() => setCreateDialog(true)}
 					disabled={!appId}
 					title={
-						!appId ? t('cannotCreatePagesAppContextIsMissing', 'Cannot create pages: app context is missing') : undefined
+						!appId
+							? t(
+									"cannotCreatePagesAppContextIsMissing",
+									"Cannot create pages: app context is missing",
+								)
+							: undefined
 					}
 				>
 					<PlusIcon className="h-4 w-4 mr-1" />
-					{t('addPage', 'Add Page')}
+					{t("addPage", "Add Page")}
 				</Button>
 			</div>
 
@@ -510,7 +550,7 @@ function PagesTab({
 				{!pages.isLoading && (pages.data?.length ?? 0) === 0 && (
 					<div className="text-center py-8 text-muted-foreground">
 						<FileText className="h-10 w-10 mx-auto mb-3 opacity-50" />
-						<p className="text-sm">{t('noPagesYet', 'No pages yet')}</p>
+						<p className="text-sm">{t("noPagesYet", "No pages yet")}</p>
 						<p className="text-xs mt-1">
 							{`Pages let you build UIs that connect to this flow`}
 						</p>
@@ -534,7 +574,7 @@ function PagesTab({
 			<Dialog open={createDialog} onOpenChange={setCreateDialog}>
 				<DialogContent>
 					<DialogHeader>
-						<DialogTitle>{t('createPage', 'Create Page')}</DialogTitle>
+						<DialogTitle>{t("createPage", "Create Page")}</DialogTitle>
 						<DialogDescription>
 							{`Add a new page to this flow. Pages can render UI components.`}
 						</DialogDescription>
@@ -544,7 +584,7 @@ function PagesTab({
 							<Label htmlFor="page-name">Name</Label>
 							<Input
 								id="page-name"
-								placeholder={t('homePage', 'Home Page')}
+								placeholder={t("homePage", "Home Page")}
 								value={newPage.name}
 								onChange={(e) =>
 									setNewPage((p) => ({ ...p, name: e.target.value }))
@@ -552,7 +592,7 @@ function PagesTab({
 							/>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="page-route">{t('route', 'Route')}</Label>
+							<Label htmlFor="page-route">{t("route", "Route")}</Label>
 							<Input
 								id="page-route"
 								placeholder="/"
@@ -562,20 +602,23 @@ function PagesTab({
 								}
 							/>
 							<p className="text-xs text-muted-foreground">
-								{t('theUrlPathForThisPageEgAboutContact', 'The URL path for this page (e.g., /about, /contact)')}
+								{t(
+									"theUrlPathForThisPageEgAboutContact",
+									"The URL path for this page (e.g., /about, /contact)",
+								)}
 							</p>
 						</div>
 					</div>
 					<DialogFooter>
 						<Button variant="outline" onClick={() => setCreateDialog(false)}>
-							{t('cancel', 'Cancel')}
+							{t("cancel", "Cancel")}
 						</Button>
 						<Button
 							onClick={handleCreate}
 							disabled={isCreating || !newPage.name.trim()}
 						>
 							{isCreating && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-							{t('create', 'Create')}
+							{t("create", "Create")}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -629,7 +672,7 @@ function PageCard({
 						<DropdownMenuContent align="end">
 							<DropdownMenuItem onClick={onClick}>
 								<ExternalLink className="h-4 w-4 mr-2" />
-								{t('openInBuilder', 'Open in Builder')}
+								{t("openInBuilder", "Open in Builder")}
 							</DropdownMenuItem>
 							<DropdownMenuSeparator />
 							<DropdownMenuItem
@@ -640,7 +683,7 @@ function PageCard({
 								}}
 							>
 								<Trash2 className="h-4 w-4 mr-2" />
-								{t('deletePage', 'Delete Page')}
+								{t("deletePage", "Delete Page")}
 							</DropdownMenuItem>
 						</DropdownMenuContent>
 					</DropdownMenu>

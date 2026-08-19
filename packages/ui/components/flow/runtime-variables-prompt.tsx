@@ -64,10 +64,13 @@ export function RuntimeVariablesPrompt({
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
 						<KeyIcon className="w-5 h-5" />
-						{t('configureRuntimeVariables', 'Configure Runtime Variables')}
+						{t("configureRuntimeVariables", "Configure Runtime Variables")}
 					</DialogTitle>
 					<DialogDescription>
-						{t('thisFlowRequiresRuntimeVariablesToBeConfiguredBeforeExecutionTheseValuesAreStoredLocallyAndNeverUploaded', "This flow requires runtime variables to be configured before execution. These values are stored locally and never uploaded.")}
+						{t(
+							"thisFlowRequiresRuntimeVariablesToBeConfiguredBeforeExecutionTheseValuesAreStoredLocallyAndNeverUploaded",
+							"This flow requires runtime variables to be configured before execution. These values are stored locally and never uploaded.",
+						)}
 					</DialogDescription>
 				</DialogHeader>
 
@@ -160,7 +163,7 @@ function RuntimeVariablesForm({
 										{variable.secret && (
 											<Badge variant="secondary" className="text-xs gap-1">
 												<KeyIcon className="w-3 h-3" />
-												{t('secret', 'Secret')}
+												{t("secret", "Secret")}
 											</Badge>
 										)}
 									</Label>
@@ -191,7 +194,8 @@ function RuntimeVariablesForm({
 					<AlertCircleIcon className="w-4 h-4" />
 					{t("runtimeVariablesStillNeedToBeConfigured", {
 						defaultValue_one: "{{count}} variable still needs to be configured",
-						defaultValue_other: "{{count}} variables still need to be configured",
+						defaultValue_other:
+							"{{count}} variables still need to be configured",
 						count: missingCount,
 					})}
 				</div>
@@ -199,7 +203,7 @@ function RuntimeVariablesForm({
 
 			<DialogFooter className="gap-2">
 				<Button variant="outline" onClick={onCancel}>
-					{t('cancel', 'Cancel')}
+					{t("cancel", "Cancel")}
 				</Button>
 				<Button
 					onClick={handleSave}
@@ -207,7 +211,7 @@ function RuntimeVariablesForm({
 					className="gap-2"
 				>
 					<SaveIcon className="w-4 h-4" />
-					{t('saveContinue', 'Save & Continue')}
+					{t("saveContinue", "Save & Continue")}
 				</Button>
 			</DialogFooter>
 		</>

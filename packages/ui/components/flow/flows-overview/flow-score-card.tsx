@@ -85,7 +85,7 @@ function ScoreMeter({ row }: Readonly<{ row: IFlowRow }>) {
 							"rounded-md px-1 pb-1 pt-1.5 text-center",
 							isWorst && BAND_TINT[cellBand],
 						)}
-						title={`${t(category, DIMENSION_LABEL[category])}: ${value ?? t('notScored', 'Not scored')}`}
+						title={`${t(category, DIMENSION_LABEL[category])}: ${value ?? t("notScored", "Not scored")}`}
 					>
 						<span
 							className={cn(
@@ -125,11 +125,15 @@ function MetaLine({ row }: Readonly<{ row: IFlowRow }>) {
 			id: "bindings",
 			node: row.bindings.length ? (
 				<span>
-					{t('countBindings', { defaultValue_one: '1 binding', defaultValue_other: '{{count}} bindings', count: row.bindings.length })}
+					{t("countBindings", {
+						defaultValue_one: "1 binding",
+						defaultValue_other: "{{count}} bindings",
+						count: row.bindings.length,
+					})}
 				</span>
 			) : (
 				<span className="text-amber-600 dark:text-amber-400">
-					{t('nothingBound', 'nothing bound')}
+					{t("nothingBound", "nothing bound")}
 				</span>
 			),
 		},
@@ -142,9 +146,17 @@ function MetaLine({ row }: Readonly<{ row: IFlowRow }>) {
 						lowCoverage && "text-amber-600 dark:text-amber-400",
 					)}
 				>
-					{lowCoverage ? "only " : ""}{`${row.coverage.scoredNodeCount}/${row.coverage.nodeCount} scored`}</span>
+					{lowCoverage ? "only " : ""}
+					{`${row.coverage.scoredNodeCount}/${row.coverage.nodeCount} scored`}
+				</span>
 			) : (
-				<span className="font-mono tabular-nums">{t('countNodes', { defaultValue_one: '{{count}} Node', defaultValue_other: '{{count}} Nodes', count: row.nodeTotal })}</span>
+				<span className="font-mono tabular-nums">
+					{t("countNodes", {
+						defaultValue_one: "{{count}} Node",
+						defaultValue_other: "{{count}} Nodes",
+						count: row.nodeTotal,
+					})}
+				</span>
 			),
 		},
 	];
@@ -199,10 +211,21 @@ function PageChip({
 			: `border-dashed border-amber-500/50 bg-amber-500/5`,
 	);
 	const title = unavailable
-		? t('nameThisPagesContentCouldNotBeLoadedOnThisDevice', '{{name}} — this page\'s content could not be loaded on this device', { name: page.name })
+		? t(
+				"nameThisPagesContentCouldNotBeLoadedOnThisDevice",
+				"{{name}} — this page's content could not be loaded on this device",
+				{ name: page.name },
+			)
 		: route
-			? t('nameServedAtRoute', '{{name}} — served at {{route}}', { name: page.name, route })
-			: t('nameNoRouteEventPointsAtThisPage', '{{name}} — no route event points at this page', { name: page.name });
+			? t("nameServedAtRoute", "{{name}} — served at {{route}}", {
+					name: page.name,
+					route,
+				})
+			: t(
+					"nameNoRouteEventPointsAtThisPage",
+					"{{name}} — no route event points at this page",
+					{ name: page.name },
+				);
 
 	if (!href) {
 		return (
@@ -241,7 +264,7 @@ function PageRow({
 		return (
 			<div className="mt-2 flex h-6 items-center px-3">
 				<span className="text-[10px] italic text-muted-foreground/50">
-					{t('noPagesConfigured', 'No pages configured')}
+					{t("noPagesConfigured", "No pages configured")}
 				</span>
 			</div>
 		);
@@ -270,7 +293,10 @@ function CauseList({ row }: Readonly<{ row: IFlowRow }>) {
 	if (row.causes.length === 0) {
 		return (
 			<p className="text-[11px] leading-relaxed text-muted-foreground">
-				{t('noNodeScoresBelow4InAnyCategoryTheLowestScoreIsSimplyTheLowestOfAHealthySet', 'No node scores below 4 in any category — the lowest score is simply the lowest of a healthy set.')}
+				{t(
+					"noNodeScoresBelow4InAnyCategoryTheLowestScoreIsSimplyTheLowestOfAHealthySet",
+					"No node scores below 4 in any category — the lowest score is simply the lowest of a healthy set.",
+				)}
 			</p>
 		);
 	}
@@ -309,17 +335,46 @@ function CauseList({ row }: Readonly<{ row: IFlowRow }>) {
 function CompositionChips({ row }: Readonly<{ row: IFlowRow }>) {
 	const { t } = useTranslation("flow");
 	const chips: string[] = [
-		t('countNodes', { defaultValue_one: '{{count}} Node', defaultValue_other: '{{count}} Nodes', count: row.nodeTotal }),
-		t('countConnections', { defaultValue_one: '{{count}} connection', defaultValue_other: '{{count}} connections', count: row.connections }),
-		t('countEntryPoints', { defaultValue_one: '1 entry point', defaultValue_other: '{{count}} entry points', count: row.entryPoints.length }),
+		t("countNodes", {
+			defaultValue_one: "{{count}} Node",
+			defaultValue_other: "{{count}} Nodes",
+			count: row.nodeTotal,
+		}),
+		t("countConnections", {
+			defaultValue_one: "{{count}} connection",
+			defaultValue_other: "{{count}} connections",
+			count: row.connections,
+		}),
+		t("countEntryPoints", {
+			defaultValue_one: "1 entry point",
+			defaultValue_other: "{{count}} entry points",
+			count: row.entryPoints.length,
+		}),
 		[
-			t('countVariables', { defaultValue_one: '{{count}} variable', defaultValue_other: '{{count}} variables', count: row.variables.total }),
+			t("countVariables", {
+				defaultValue_one: "{{count}} variable",
+				defaultValue_other: "{{count}} variables",
+				count: row.variables.total,
+			}),
 			row.variables.secret
-				? t('countSecretVariables', { defaultValue_one: '{{count}} secret', defaultValue_other: '{{count}} secrets', count: row.variables.secret })
+				? t("countSecretVariables", {
+						defaultValue_one: "{{count}} secret",
+						defaultValue_other: "{{count}} secrets",
+						count: row.variables.secret,
+					})
 				: null,
-		].filter(Boolean).join(' · '),
+		]
+			.filter(Boolean)
+			.join(" · "),
 	];
-	if (row.layers.total > 0) chips.push(t('countLayers', { defaultValue_one: '{{count}} Layer', defaultValue_other: '{{count}} Layers', count: row.layers.total }));
+	if (row.layers.total > 0)
+		chips.push(
+			t("countLayers", {
+				defaultValue_one: "{{count}} Layer",
+				defaultValue_other: "{{count}} Layers",
+				count: row.layers.total,
+			}),
+		);
 	return (
 		<div className="flex flex-wrap gap-1">
 			{chips.map((chip) => (
@@ -402,10 +457,13 @@ export function FlowScoreCard({
 		? t(row.worstDimension, DIMENSION_LABEL[row.worstDimension])
 		: undefined;
 	const expanderLabel = expanded
-		? t('hideDetail', 'Hide detail')
+		? t("hideDetail", "Hide detail")
 		: weakest && row.worst !== undefined
-			? t('whyValIsWorst', 'Why {{val}} is {{worst}}', { val: weakest.toLowerCase(), worst: row.worst })
-			: t('bindingsAndPages', 'Bindings and pages');
+			? t("whyValIsWorst", "Why {{val}} is {{worst}}", {
+					val: weakest.toLowerCase(),
+					worst: row.worst,
+				})
+			: t("bindingsAndPages", "Bindings and pages");
 
 	return (
 		<Card
@@ -430,10 +488,15 @@ export function FlowScoreCard({
 									<span className={cn("font-medium", BAND_TEXT[row.band])}>
 										{weakest}
 									</span>{" "}
-									{t('isItsWeakestOfSix', 'is its weakest of six')}
+									{t("isItsWeakestOfSix", "is its weakest of six")}
 								</>
 							) : (
-								t('noneOfCountNodesDeclaresAScore', { defaultValue_one: 'Its only Node does not declare a score', defaultValue_other: 'None of its {{count}} Nodes declares a score', count: row.nodeTotal })
+								t("noneOfCountNodesDeclaresAScore", {
+									defaultValue_one: "Its only Node does not declare a score",
+									defaultValue_other:
+										"None of its {{count}} Nodes declares a score",
+									count: row.nodeTotal,
+								})
 							)}
 						</p>
 					</div>
@@ -442,13 +505,15 @@ export function FlowScoreCard({
 							variant="ghost"
 							size="icon"
 							className="size-7"
-							title={t('openName', 'Open {{name}}', { name: row.board.name })}
+							title={t("openName", "Open {{name}}", { name: row.board.name })}
 							data-href={boardHref}
 							data-title={row.board.name}
 							onClick={() => onOpenBoard(row.board.id)}
 						>
 							<ExternalLinkIcon className="size-3.5" />
-							<span className="sr-only">{t('openName', 'Open {{name}}', { name: row.board.name })}</span>
+							<span className="sr-only">
+								{t("openName", "Open {{name}}", { name: row.board.name })}
+							</span>
 						</Button>
 						<AlertDialog>
 							<AlertDialogTrigger asChild>
@@ -456,10 +521,16 @@ export function FlowScoreCard({
 									variant="ghost"
 									size="icon"
 									className="size-7 text-muted-foreground hover:text-destructive"
-									title={t('deleteName', 'Delete {{name}}', { name: row.board.name })}
+									title={t("deleteName", "Delete {{name}}", {
+										name: row.board.name,
+									})}
 								>
 									<Trash2Icon className="size-3.5" />
-									<span className="sr-only">{t('deleteName', 'Delete {{name}}', { name: row.board.name })}</span>
+									<span className="sr-only">
+										{t("deleteName", "Delete {{name}}", {
+											name: row.board.name,
+										})}
+									</span>
 								</Button>
 							</AlertDialogTrigger>
 							<AlertDialogContent>
@@ -467,21 +538,35 @@ export function FlowScoreCard({
 									<AlertDialogTitle>
 										Delete &ldquo;{row.board.name}&rdquo;?
 									</AlertDialogTitle>
-								<AlertDialogDescription>{t('thisRemovesTheFlowAndCountPagesInsideIt', { defaultValue_one: 'This removes the Flow and the page inside it.', defaultValue_other: 'This removes the Flow and the {{count}} pages inside it.', count: row.pages.length })}{" "}{row.bindings.length > 0
-											? t('countBoundEventsWillStopFiring', { defaultValue_one: 'One event bound to it will stop firing.', defaultValue_other: '{{count}} events bound to it will stop firing.', count: row.bindings.length })
+									<AlertDialogDescription>
+										{t("thisRemovesTheFlowAndCountPagesInsideIt", {
+											defaultValue_one:
+												"This removes the Flow and the page inside it.",
+											defaultValue_other:
+												"This removes the Flow and the {{count}} pages inside it.",
+											count: row.pages.length,
+										})}{" "}
+										{row.bindings.length > 0
+											? t("countBoundEventsWillStopFiring", {
+													defaultValue_one:
+														"One event bound to it will stop firing.",
+													defaultValue_other:
+														"{{count}} events bound to it will stop firing.",
+													count: row.bindings.length,
+												})
 											: ""}{" "}
-										{t('thisCannotBeUndone', 'This cannot be undone.')}
+										{t("thisCannotBeUndone", "This cannot be undone.")}
 									</AlertDialogDescription>
 								</AlertDialogHeader>
 								<AlertDialogFooter>
-									<AlertDialogCancel>{t('cancel', 'Cancel')}</AlertDialogCancel>
+									<AlertDialogCancel>{t("cancel", "Cancel")}</AlertDialogCancel>
 									<AlertDialogAction
 										className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 										onClick={() => {
 											void onDeleteBoard(row.board.id);
 										}}
 									>
-										{t('deleteFlow', 'Delete flow')}
+										{t("deleteFlow", "Delete flow")}
 									</AlertDialogAction>
 								</AlertDialogFooter>
 							</AlertDialogContent>
@@ -507,7 +592,11 @@ export function FlowScoreCard({
 					<span className="truncate">{expanderLabel}</span>
 					{!expanded && row.causes.length > 0 ? (
 						<span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/60">
-							{t('countCauses', { defaultValue_one: '1 cause', defaultValue_other: '{{count}} causes', count: row.causes.length })}
+							{t("countCauses", {
+								defaultValue_one: "1 cause",
+								defaultValue_other: "{{count}} causes",
+								count: row.causes.length,
+							})}
 						</span>
 					) : null}
 				</button>
@@ -516,21 +605,40 @@ export function FlowScoreCard({
 					<div className="flex flex-col gap-3.5 border-t border-border/50 bg-muted/10 px-3 py-3">
 						{row.scores ? (
 							<div className="flex flex-col gap-2">
-								<BlockTitle note={t('lowestNodeDeterminesTheScore', 'Lowest Node determines the score')}>
+								<BlockTitle
+									note={t(
+										"lowestNodeDeterminesTheScore",
+										"Lowest Node determines the score",
+									)}
+								>
 									{weakest
-										? t('whyValIsWorst', 'Why {{val}} is {{worst}}', { val: weakest.toLowerCase(), worst: row.worst })
-										: t('score', 'Score')}
+										? t("whyValIsWorst", "Why {{val}} is {{worst}}", {
+												val: weakest.toLowerCase(),
+												worst: row.worst,
+											})
+										: t("score", "Score")}
 								</BlockTitle>
 								<CauseList row={row} />
-								<p className="text-[11px] leading-relaxed text-muted-foreground">{t('onlyScoredNodeCountOfNodeCountNodesDeclareAScoreTheRestAreSkipped', 'Only {{scoredNodeCount}} of {{nodeCount}} Nodes declare a score; the rest are skipped.', { scoredNodeCount: row.coverage.scoredNodeCount, nodeCount: row.coverage.nodeCount })}{row.wasm.packageIds.length > 0
-										? ` ${t('scoresFromExternalPackagesAreSelfdeclaredByTheirManifestOnlyPermissionsAreEnforced', 'Scores from external packages are self-declared by their manifest — only permissions are enforced.')}`
+								<p className="text-[11px] leading-relaxed text-muted-foreground">
+									{t(
+										"onlyScoredNodeCountOfNodeCountNodesDeclareAScoreTheRestAreSkipped",
+										"Only {{scoredNodeCount}} of {{nodeCount}} Nodes declare a score; the rest are skipped.",
+										{
+											scoredNodeCount: row.coverage.scoredNodeCount,
+											nodeCount: row.coverage.nodeCount,
+										},
+									)}
+									{row.wasm.packageIds.length > 0
+										? ` ${t("scoresFromExternalPackagesAreSelfdeclaredByTheirManifestOnlyPermissionsAreEnforced", "Scores from external packages are self-declared by their manifest — only permissions are enforced.")}`
 										: ""}
 								</p>
 							</div>
 						) : null}
 
 						<div className="flex flex-col gap-2">
-							<BlockTitle note={t('joinedFromEvents', 'Joined from Events')}>{t('bindings', 'Bindings')}</BlockTitle>
+							<BlockTitle note={t("joinedFromEvents", "Joined from Events")}>
+								{t("bindings", "Bindings")}
+							</BlockTitle>
 							<FlowCardBindings
 								row={row}
 								healthByEvent={healthByEvent}
@@ -539,18 +647,23 @@ export function FlowScoreCard({
 						</div>
 
 						<div className="flex flex-col gap-2">
-							<BlockTitle note="owned by this flow">{t('entryPoints', 'Entry points')}</BlockTitle>
+							<BlockTitle note="owned by this flow">
+								{t("entryPoints", "Entry points")}
+							</BlockTitle>
 							{row.entryPoints.length > 0 ? (
 								<FlowCardEntryPoints row={row} />
 							) : (
 								<p className="text-[11px] text-muted-foreground">
-									{t('noNodeInThisFlowIsMarkedAsAStartSoARunHasNowhereToBegin', "No node in this flow is marked as a start, so a run has nowhere to begin.")}
+									{t(
+										"noNodeInThisFlowIsMarkedAsAStartSoARunHasNowhereToBegin",
+										"No node in this flow is marked as a start, so a run has nowhere to begin.",
+									)}
 								</p>
 							)}
 						</div>
 
 						<div className="flex flex-col gap-2">
-							<BlockTitle>{t('composition', 'Composition')}</BlockTitle>
+							<BlockTitle>{t("composition", "Composition")}</BlockTitle>
 							<CompositionChips row={row} />
 						</div>
 					</div>

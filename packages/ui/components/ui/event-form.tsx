@@ -132,9 +132,11 @@ export function EventForm({
 		Record<string, IOAuthToken>
 	>({});
 
-	const boards = useInvoke(backend.boardState.getBoardSummaries, backend.boardState, [
-		appId,
-	]);
+	const boards = useInvoke(
+		backend.boardState.getBoardSummaries,
+		backend.boardState,
+		[appId],
+	);
 	const pages = useInvoke(
 		backend.pageState.getPages,
 		backend.pageState,
@@ -427,7 +429,7 @@ export function EventForm({
 
 	const boardVersionSelector = formData.board_id ? (
 		<div className="space-y-2">
-			<Label>{t('flowVersion', 'Flow Version')}</Label>
+			<Label>{t("flowVersion", "Flow Version")}</Label>
 			<Select
 				value={formData.board_version?.join(".") ?? "latest"}
 				onValueChange={(value) => {
@@ -444,7 +446,7 @@ export function EventForm({
 					<SelectValue />
 				</SelectTrigger>
 				<SelectContent>
-					<SelectItem value="latest">{t('latest', 'Latest')}</SelectItem>
+					<SelectItem value="latest">{t("latest", "Latest")}</SelectItem>
 					{versions.data?.map((version) => (
 						<SelectItem key={version.join(".")} value={version.join(".")}>
 							v{version.join(".")}
@@ -453,7 +455,10 @@ export function EventForm({
 				</SelectContent>
 			</Select>
 			<p className="text-xs text-muted-foreground">
-				{t('latestFollowsTheCurrentFlowAPinnedVersionAlwaysRunsThatExactSnapshot', "Latest follows the current flow. A pinned version always runs that exact snapshot.")}
+				{t(
+					"latestFollowsTheCurrentFlowAPinnedVersionAlwaysRunsThatExactSnapshot",
+					"Latest follows the current flow. A pinned version always runs that exact snapshot.",
+				)}
 			</p>
 		</div>
 	) : null;
@@ -463,23 +468,23 @@ export function EventForm({
 			{/* Basic Information */}
 			<div className="space-y-4">
 				<div className="space-y-2">
-					<Label htmlFor="name">{t('eventName', 'Event Name')}</Label>
+					<Label htmlFor="name">{t("eventName", "Event Name")}</Label>
 					<Input
 						id="name"
 						value={formData.name}
 						onChange={(e) => handleInputChange("name", e.target.value)}
-						placeholder={t('enterEventName', 'Enter event name')}
+						placeholder={t("enterEventName", "Enter event name")}
 						required
 					/>
 				</div>
 
 				<div className="space-y-2">
-					<Label htmlFor="description">{t('description', 'Description')}</Label>
+					<Label htmlFor="description">{t("description", "Description")}</Label>
 					<Textarea
 						id="description"
 						value={formData.description}
 						onChange={(e) => handleInputChange("description", e.target.value)}
-						placeholder={t('enterEventDescription', 'Enter event description')}
+						placeholder={t("enterEventDescription", "Enter event description")}
 						rows={3}
 					/>
 				</div>
@@ -490,7 +495,7 @@ export function EventForm({
 			{/* Target Selection */}
 			<div className="space-y-4">
 				<div className="space-y-2">
-					<Label>{t('target', 'Target')}</Label>
+					<Label>{t("target", "Target")}</Label>
 					<Select
 						value={formData.target_kind}
 						onValueChange={(value) => {
@@ -507,8 +512,10 @@ export function EventForm({
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="board">{t('boardEvent', 'Board Event')}</SelectItem>
-							<SelectItem value="page">{t('page', 'Page')}</SelectItem>
+							<SelectItem value="board">
+								{t("boardEvent", "Board Event")}
+							</SelectItem>
+							<SelectItem value="page">{t("page", "Page")}</SelectItem>
 						</SelectContent>
 					</Select>
 				</div>
@@ -517,13 +524,13 @@ export function EventForm({
 			{isPageEvent ? (
 				<div className="space-y-4">
 					<div className="space-y-2">
-						<Label>{t('page', 'Page')}</Label>
+						<Label>{t("page", "Page")}</Label>
 						<Select
 							value={(formData.default_page_id ?? "") as string}
 							onValueChange={handleSelectPage}
 						>
 							<SelectTrigger>
-								<SelectValue placeholder={t('selectAPage', 'Select a page')} />
+								<SelectValue placeholder={t("selectAPage", "Select a page")} />
 							</SelectTrigger>
 							<SelectContent>
 								{(pages.data ?? []).map((p: PageListItem) => (
@@ -538,7 +545,7 @@ export function EventForm({
 					{boardVersionSelector}
 
 					<div className="space-y-2">
-						<Label htmlFor="path">{t('routePath', 'Route Path')}</Label>
+						<Label htmlFor="path">{t("routePath", "Route Path")}</Label>
 						<Input
 							id="path"
 							value={formData.path}
@@ -551,8 +558,12 @@ export function EventForm({
 						{pathError ? (
 							<p className="text-sm text-destructive">{pathError}</p>
 						) : (
-							<p className="text-xs text-muted-foreground"><Trans i18nKey="defaultIsSpanClassnamefontmonospanEachPathCanOnlyBeUsedOnce">Default is <span className="font-mono">/</span>. Each path can
-								only be used once.</Trans></p>
+							<p className="text-xs text-muted-foreground">
+								<Trans i18nKey="defaultIsSpanClassnamefontmonospanEachPathCanOnlyBeUsedOnce">
+									Default is <span className="font-mono">/</span>. Each path can
+									only be used once.
+								</Trans>
+							</p>
 						)}
 					</div>
 				</div>
@@ -561,7 +572,7 @@ export function EventForm({
 					{/* Board Selection */}
 					<div className="space-y-4">
 						<div className="space-y-2">
-							<Label htmlFor="board">{t('flow', 'Flow')}</Label>
+							<Label htmlFor="board">{t("flow", "Flow")}</Label>
 							<Select
 								value={formData.board_id}
 								onValueChange={(value) => {
@@ -573,7 +584,9 @@ export function EventForm({
 								}}
 							>
 								<SelectTrigger>
-									<SelectValue placeholder={t('selectABoard', 'Select a board')} />
+									<SelectValue
+										placeholder={t("selectABoard", "Select a board")}
+									/>
 								</SelectTrigger>
 								<SelectContent>
 									{boards.data?.map((board) => (
@@ -594,7 +607,9 @@ export function EventForm({
 					    the board is Hybrid. */}
 					{formData.board_id && (
 						<div className="space-y-2">
-							<Label htmlFor="execution_mode">{t('executionMode', 'Execution Mode')}</Label>
+							<Label htmlFor="execution_mode">
+								{t("executionMode", "Execution Mode")}
+							</Label>
 							<Select
 								value={formData.execution_mode}
 								onValueChange={(value) =>
@@ -613,17 +628,24 @@ export function EventForm({
 										value={IEventExecutionMode.Local}
 										disabled={!canPickLocal && !executionModeLocked}
 									>
-										{t('localRunsOnThisDevice', 'Local — runs on this device')}
+										{t("localRunsOnThisDevice", "Local — runs on this device")}
 									</SelectItem>
 									<SelectItem value={IEventExecutionMode.Remote}>
-										{t('remoteRunsOnTheServer', 'Remote — runs on the server')}
+										{t("remoteRunsOnTheServer", "Remote — runs on the server")}
 									</SelectItem>
 								</SelectContent>
 							</Select>
 							<p className="text-xs text-muted-foreground">
 								{executionModeLocked
-									? t('lockedByTheFlowsExecutionModeBoardexecutionmode', 'Locked by the flow\'s execution mode ({{boardExecutionMode}}).', { boardExecutionMode })
-									: t('anEventAlwaysRunsInExactlyOneEnvironmentTheUiEndpointsAndCredentialsDifferBetweenTheTwo', 'An event always runs in exactly one environment — the UI, endpoints, and credentials differ between the two.')}
+									? t(
+											"lockedByTheFlowsExecutionModeBoardexecutionmode",
+											"Locked by the flow's execution mode ({{boardExecutionMode}}).",
+											{ boardExecutionMode },
+										)
+									: t(
+											"anEventAlwaysRunsInExactlyOneEnvironmentTheUiEndpointsAndCredentialsDifferBetweenTheTwo",
+											"An event always runs in exactly one environment — the UI, endpoints, and credentials differ between the two.",
+										)}
 							</p>
 						</div>
 					)}
@@ -634,7 +656,7 @@ export function EventForm({
 			{!isPageEvent && board.data && (
 				<div className="space-y-4">
 					<div className="space-y-2">
-						<Label htmlFor="node">{t('node', 'Node')}</Label>
+						<Label htmlFor="node">{t("node", "Node")}</Label>
 						<Select
 							value={formData.node_id}
 							onValueChange={(value) => {
@@ -656,7 +678,7 @@ export function EventForm({
 							}}
 						>
 							<SelectTrigger>
-								<SelectValue placeholder={t('selectANode', 'Select a node')} />
+								<SelectValue placeholder={t("selectANode", "Select a node")} />
 							</SelectTrigger>
 							<SelectContent>
 								{Object.values(board.data.nodes)
@@ -697,7 +719,9 @@ export function EventForm({
 
 							return (
 								<div className="space-y-2">
-									<Label htmlFor="event_type">{t('eventType', 'Event Type')}</Label>
+									<Label htmlFor="event_type">
+										{t("eventType", "Event Type")}
+									</Label>
 									<Select
 										value={
 											formData.event_type || nodeEventConfig.defaultEventType
@@ -714,7 +738,9 @@ export function EventForm({
 										}}
 									>
 										<SelectTrigger>
-											<SelectValue placeholder={t('selectEventType', 'Select event type')} />
+											<SelectValue
+												placeholder={t("selectEventType", "Select event type")}
+											/>
 										</SelectTrigger>
 										<SelectContent>
 											{visibleTypes.map((type) => (
@@ -730,7 +756,7 @@ export function EventForm({
 
 					{shouldRequireRoutePath && (
 						<div className="space-y-2">
-							<Label htmlFor="path">{t('routePath', 'Route Path')}</Label>
+							<Label htmlFor="path">{t("routePath", "Route Path")}</Label>
 							<Input
 								id="path"
 								value={formData.path}
@@ -743,8 +769,12 @@ export function EventForm({
 							{pathError ? (
 								<p className="text-sm text-destructive">{pathError}</p>
 							) : (
-								<p className="text-xs text-muted-foreground"><Trans i18nKey="defaultIsSpanClassnamefontmonospanEachPathCanOnlyBeUsedOnce2">Default is <span className="font-mono">/</span>. Each path can
-									only be used once.</Trans></p>
+								<p className="text-xs text-muted-foreground">
+									<Trans i18nKey="defaultIsSpanClassnamefontmonospanEachPathCanOnlyBeUsedOnce2">
+										Default is <span className="font-mono">/</span>. Each path
+										can only be used once.
+									</Trans>
+								</p>
 							)}
 						</div>
 					)}
@@ -773,7 +803,7 @@ export function EventForm({
 					disabled={isSubmitting}
 					className="h-10 sm:h-9"
 				>
-					{t('cancel', 'Cancel')}
+					{t("cancel", "Cancel")}
 				</Button>
 				<Button
 					type="submit"
@@ -792,8 +822,8 @@ export function EventForm({
 							? "Updating…"
 							: "Creating…"
 						: isEditing
-							? t('updateEvent', 'Update Event')
-							: t('createEvent', 'Create Event')}
+							? t("updateEvent", "Update Event")
+							: t("createEvent", "Create Event")}
 				</Button>
 			</div>
 

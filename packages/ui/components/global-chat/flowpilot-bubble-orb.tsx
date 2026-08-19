@@ -28,7 +28,7 @@ export const FlowPilotBubbleOrb = forwardRef<
 		type = "button",
 		orbState = "idle",
 		ackNonce = 0,
-		"aria-label": ariaLabel = i18next.t('askFlowpilot', 'Ask FlowPilot'),
+		"aria-label": ariaLabel = i18next.t("askFlowpilot", "Ask FlowPilot"),
 		...props
 	},
 	forwardedRef,

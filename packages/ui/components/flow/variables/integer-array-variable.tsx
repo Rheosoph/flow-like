@@ -64,7 +64,7 @@ export function IntegerArrayVariable({
 					onChange={(e) => setNewValue(e.target.value)}
 					onKeyDown={(e) => e.key === "Enter" && handleAdd()}
 					type={variable.secret ? "password" : "number"}
-					placeholder={t('addInteger', 'Add integer...')}
+					placeholder={t("addInteger", "Add integer...")}
 					step={1}
 					disabled={disabled}
 					className="flex-1 min-w-0"

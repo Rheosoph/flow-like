@@ -1,11 +1,11 @@
 "use client";
-import { useTranslation } from "@flow-like/locales";
 import {
 	CertificateCard,
 	EmptyState,
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Award, Compass, ScrollText, Sparkles } from "lucide-react";
@@ -54,20 +54,24 @@ export default function CertificatesPage() {
 						<Award className="size-7 text-amber-500" />
 					</div>
 					<h1 className="text-3xl md:text-4xl font-semibold tracking-tight">
-						{t('yourCertificates', 'Your certificates')}
+						{t("yourCertificates", "Your certificates")}
 					</h1>
 					<p className="text-muted-foreground">
-						{t('eachCertificateIsSignedAndVerifiableByHash', 'Each certificate is signed and verifiable by hash.')}
+						{t(
+							"eachCertificateIsSignedAndVerifiableByHash",
+							"Each certificate is signed and verifiable by hash.",
+						)}
 					</p>
 				</motion.section>
 
 				{certificates.length === 0 ? (
 					<div className="flex justify-center py-6">
 						<EmptyState
-							title={t('noCertificatesYet', 'No certificates — yet')}
-							description={
-								t('finishACourseEndtoendToEarnOneAndPutItOnDisplay', "Finish a course end-to-end to earn one and put it on display.")
-							}
+							title={t("noCertificatesYet", "No certificates — yet")}
+							description={t(
+								"finishACourseEndtoendToEarnOneAndPutItOnDisplay",
+								"Finish a course end-to-end to earn one and put it on display.",
+							)}
 							icons={[Compass, ScrollText, Sparkles]}
 							action={{
 								label: "Browse courses",

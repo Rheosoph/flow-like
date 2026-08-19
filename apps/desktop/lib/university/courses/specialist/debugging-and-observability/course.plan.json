@@ -131,7 +131,11 @@
 											"label": "The loop starts with fixing, since fixing is the goal"
 										}
 									],
-									"correct": ["same-input", "smallest-change", "verify-same-input"]
+									"correct": [
+										"same-input",
+										"smallest-change",
+										"verify-same-input"
+									]
 								}
 							},
 							{
@@ -374,7 +378,11 @@
 											"label": "The node named in the error is always the one that must be fixed"
 										}
 									],
-									"correct": ["pure-no-exec", "open-layer", "comments-never-run"]
+									"correct": [
+										"pure-no-exec",
+										"open-layer",
+										"comments-never-run"
+									]
 								}
 							}
 						],

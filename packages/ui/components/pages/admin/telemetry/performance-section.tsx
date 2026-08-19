@@ -239,10 +239,12 @@ function PathTable({ rows }: { readonly rows: ITelemetryPerfPathRow[] }) {
 		<Table>
 			<TableHeader>
 				<TableRow>
-					<TableHead>{t('path', 'Path')}</TableHead>
-					<TableHead>{t('metric', 'Metric')}</TableHead>
+					<TableHead>{t("path", "Path")}</TableHead>
+					<TableHead>{t("metric", "Metric")}</TableHead>
 					<TableHead className="text-right">p75</TableHead>
-					<TableHead className="text-right">{t('samples', 'Samples')}</TableHead>
+					<TableHead className="text-right">
+						{t("samples", "Samples")}
+					</TableHead>
 				</TableRow>
 			</TableHeader>
 			<TableBody>
@@ -338,7 +340,7 @@ export function PerformanceSection({
 		<section className="space-y-4">
 			<h2 className="flex items-center gap-2 text-xl font-semibold">
 				<Gauge className="h-5 w-5 text-primary" />
-				{t('performance', 'Performance')}
+				{t("performance", "Performance")}
 				<TelemetryGranularityNotice response={performance.data} />
 			</h2>
 
@@ -369,10 +371,14 @@ export function PerformanceSection({
 						<CardHeader className="pb-3">
 							<div className="flex flex-wrap items-start justify-between gap-2">
 								<div className="space-y-1">
-									<CardTitle className="text-base">{t('p75OverTime', 'p75 over time')}</CardTitle>
+									<CardTitle className="text-base">
+										{t("p75OverTime", "p75 over time")}
+									</CardTitle>
 									<CardDescription>
-										{t('75thPercentileOf', '75th percentile of')}{" "}
-										<span className="font-mono">{activeMetric}</span>{t('bucketedBy', ", bucketed by")} <span className="font-mono">{bucket}</span>.
+										{t("75thPercentileOf", "75th percentile of")}{" "}
+										<span className="font-mono">{activeMetric}</span>
+										{t("bucketedBy", ", bucketed by")}{" "}
+										<span className="font-mono">{bucket}</span>.
 									</CardDescription>
 								</div>
 								<Select
@@ -384,7 +390,9 @@ export function PerformanceSection({
 									</SelectTrigger>
 									<SelectContent>
 										{metrics.map((summary) => (
-											<SelectItem key={summary.metric} value={summary.metric}>{`${summary.metric} —`}{perfMetricLabel(summary.metric)}
+											<SelectItem key={summary.metric} value={summary.metric}>
+												{`${summary.metric} —`}
+												{perfMetricLabel(summary.metric)}
 											</SelectItem>
 										))}
 									</SelectContent>
@@ -402,10 +410,13 @@ export function PerformanceSection({
 
 					<Card>
 						<CardHeader className="pb-3">
-							<CardTitle className="text-base">{t('byPath', 'By path')}</CardTitle>
+							<CardTitle className="text-base">
+								{t("byPath", "By path")}
+							</CardTitle>
 							<CardDescription>
-								{t('slowestPathsFor', 'Slowest paths for')}{" "}
-								<span className="font-mono">{activeMetric}</span>{t('worstFirst', ', worst first.')}
+								{t("slowestPathsFor", "Slowest paths for")}{" "}
+								<span className="font-mono">{activeMetric}</span>
+								{t("worstFirst", ", worst first.")}
 							</CardDescription>
 						</CardHeader>
 						<CardContent className="p-0">

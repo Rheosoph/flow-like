@@ -90,7 +90,7 @@ export function TurnIntoToolbarButton(props: DropdownMenuProps) {
 					onValueChange={(type) => {
 						setBlockType(editor, type);
 					}}
-					label={t('turnInto', 'Turn into')}
+					label={t("turnInto", "Turn into")}
 				>
 					{turnIntoItems.map(({ icon, label, value: itemValue }) => (
 						<DropdownMenuRadioItem

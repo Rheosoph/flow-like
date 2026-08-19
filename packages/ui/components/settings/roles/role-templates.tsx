@@ -30,11 +30,14 @@ export function TemplatePicker({
 						{`Start from a shape that already works`}
 					</h2>
 					<p className="text-xs text-muted-foreground">
-						{t('pickTheClosestFitThenAdjustNothingIsLockedIn', 'Pick the closest fit, then adjust. Nothing is locked in.')}
+						{t(
+							"pickTheClosestFitThenAdjustNothingIsLockedIn",
+							"Pick the closest fit, then adjust. Nothing is locked in.",
+						)}
 					</p>
 				</div>
 				<Button variant="ghost" size="sm" onClick={onCancel}>
-					{t('cancel', 'Cancel')}
+					{t("cancel", "Cancel")}
 				</Button>
 			</div>
 			<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">

@@ -67,15 +67,15 @@ export function TrustRow() {
 		<div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs text-muted-foreground">
 			<span className="flex items-center gap-1.5">
 				<ShieldCheck className="h-3.5 w-3.5" />
-				{t('secureCheckoutViaStripe', 'Secure checkout via Stripe')}
+				{t("secureCheckoutViaStripe", "Secure checkout via Stripe")}
 			</span>
 			<span className="flex items-center gap-1.5">
 				<Zap className="h-3.5 w-3.5" />
-				{t('instantActivation', 'Instant activation')}
+				{t("instantActivation", "Instant activation")}
 			</span>
 			<span className="flex items-center gap-1.5">
 				<Sparkles className="h-3.5 w-3.5" />
-				{t('cancelAnytime', 'Cancel anytime')}
+				{t("cancelAnytime", "Cancel anytime")}
 			</span>
 		</div>
 	);
@@ -117,7 +117,14 @@ export function EnterpriseContent({
 	const { t } = useTranslation("common");
 	const message =
 		contact.message ??
-		t('valIsManagedByYourOrganizationReachOutToVal2ToUnlockMoreCapacityForYourAccount', '{{val}} is managed by your organization. Reach out to {{val2}} to unlock more capacity for your account.', { val: hubName ?? "This workspace", val2: contact.name ?? "your administrator" });
+		t(
+			"valIsManagedByYourOrganizationReachOutToVal2ToUnlockMoreCapacityForYourAccount",
+			"{{val}} is managed by your organization. Reach out to {{val2}} to unlock more capacity for your account.",
+			{
+				val: hubName ?? "This workspace",
+				val2: contact.name ?? "your administrator",
+			},
+		);
 	const title = headline ?? `Need more from your workspace?`;
 
 	return (
@@ -157,14 +164,17 @@ export function EnterpriseContent({
 							rel="noreferrer external"
 						>
 							<Mail className="h-4 w-4" />
-							{contactLabel ?? t('contactVal', 'Contact {{val}}', { val: contact.name ?? "us" })}
+							{contactLabel ??
+								t("contactVal", "Contact {{val}}", {
+									val: contact.name ?? "us",
+								})}
 						</a>
 					</Button>
 				)}
 				{contact.url && (
 					<Button variant="outline" asChild>
 						<a href={contact.url} target="_blank" rel="noreferrer external">
-							{t('learnMore', 'Learn more')}
+							{t("learnMore", "Learn more")}
 							<ArrowRight className="h-4 w-4" />
 						</a>
 					</Button>
@@ -258,7 +268,10 @@ export function UpgradeDialogBody({
 
 					{!isAuthenticated ? (
 						<p className="py-4 text-center text-sm text-muted-foreground">
-							{t('signInToSeeUpgradeOptionsForYourAccount', 'Sign in to see upgrade options for your account.')}
+							{t(
+								"signInToSeeUpgradeOptionsForYourAccount",
+								"Sign in to see upgrade options for your account.",
+							)}
 						</p>
 					) : pricingStatus === "loading" ? (
 						<div className="flex items-center justify-center py-12">
@@ -267,10 +280,13 @@ export function UpgradeDialogBody({
 					) : pricingStatus === "error" ? (
 						<div className="flex flex-col items-center gap-3 py-8 text-center">
 							<p className="text-sm text-muted-foreground">
-								{t('couldntLoadUpgradeOptionsPleaseCheckYourConnection', 'Couldn\'t load upgrade options. Please check your connection.')}
+								{t(
+									"couldntLoadUpgradeOptionsPleaseCheckYourConnection",
+									"Couldn't load upgrade options. Please check your connection.",
+								)}
 							</p>
 							<Button variant="outline" size="sm" onClick={onRetryPricing}>
-								{t('tryAgain', 'Try again')}
+								{t("tryAgain", "Try again")}
 							</Button>
 						</div>
 					) : upgradeTiers.length > 0 ? (
@@ -293,7 +309,11 @@ export function UpgradeDialogBody({
 						<EnterpriseContent
 							contact={{
 								...contact,
-								message: t('youreAlreadyOnTheHighestSelfservePlanForEnterpriseCapacityGovernanceAndCustomAgreementsTalkToVal', 'You\'re already on the highest self-serve plan. For enterprise capacity, governance and custom agreements, talk to {{val}}.', { val: contact.name ?? "sales" }),
+								message: t(
+									"youreAlreadyOnTheHighestSelfservePlanForEnterpriseCapacityGovernanceAndCustomAgreementsTalkToVal",
+									"You're already on the highest self-serve plan. For enterprise capacity, governance and custom agreements, talk to {{val}}.",
+									{ val: contact.name ?? "sales" },
+								),
 							}}
 							headline="You're on our highest plan"
 							triggerMessage={undefined}
@@ -306,7 +326,10 @@ export function UpgradeDialogBody({
 						<div className="flex flex-col items-center gap-4">
 							{enterpriseTier && (
 								<p className="text-xs text-muted-foreground">
-									{t('needEnterpriseScaleGovernanceOrCustomAgreements', 'Need enterprise scale, governance or custom agreements?')}{" "}
+									{t(
+										"needEnterpriseScaleGovernanceOrCustomAgreements",
+										"Need enterprise scale, governance or custom agreements?",
+									)}{" "}
 									<a
 										className="font-medium text-primary hover:underline"
 										href={
@@ -316,7 +339,7 @@ export function UpgradeDialogBody({
 										target="_blank"
 										rel="noreferrer external"
 									>
-										{t('talkToSales', 'Talk to sales')}
+										{t("talkToSales", "Talk to sales")}
 									</a>
 								</p>
 							)}
@@ -326,7 +349,7 @@ export function UpgradeDialogBody({
 								onClick={onClose}
 								className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
 							>
-								{t('compareAllPlans', 'Compare all plans')}
+								{t("compareAllPlans", "Compare all plans")}
 							</Link>
 						</div>
 					)}

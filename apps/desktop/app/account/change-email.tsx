@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Alert,
 	AlertDescription,
@@ -16,6 +15,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import {
 	confirmUserAttribute,
 	sendUserAttributeVerificationCode,
@@ -132,7 +132,7 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
 						<Mail className="h-5 w-5" />
-						{t('changeEmailAddress', 'Change Email Address')}
+						{t("changeEmailAddress", "Change Email Address")}
 					</DialogTitle>
 					<DialogDescription>
 						{step === "email"
@@ -151,7 +151,9 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 					{step === "email" ? (
 						<>
 							<div className="space-y-2">
-								<Label htmlFor="current-email">{t('currentEmail', 'Current Email')}</Label>
+								<Label htmlFor="current-email">
+									{t("currentEmail", "Current Email")}
+								</Label>
 								<Input
 									id="current-email"
 									value={info.data?.email}
@@ -161,7 +163,9 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 							</div>
 
 							<div className="space-y-2">
-								<Label htmlFor="new-email">{t('newEmailAddress', 'New Email Address')}</Label>
+								<Label htmlFor="new-email">
+									{t("newEmailAddress", "New Email Address")}
+								</Label>
 								<Input
 									id="new-email"
 									type="email"
@@ -179,17 +183,19 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 									onClick={handleClose}
 									className="flex-1"
 								>
-									{t('cancel', 'Cancel')}
+									{t("cancel", "Cancel")}
 								</Button>
 								<Button onClick={handleEmailSubmit} className="flex-1">
-									{t('continue', 'Continue')}
+									{t("continue", "Continue")}
 								</Button>
 							</div>
 						</>
 					) : (
 						<>
 							<div className="space-y-2">
-								<Label htmlFor="new-email-display">{t('newEmail', 'New Email')}</Label>
+								<Label htmlFor="new-email-display">
+									{t("newEmail", "New Email")}
+								</Label>
 								<Input
 									id="new-email-display"
 									value={formData.newEmail}
@@ -199,17 +205,25 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 							</div>
 
 							<div className="space-y-2">
-								<Label htmlFor="confirmation-code">{t('confirmationCode', 'Confirmation Code')}</Label>
+								<Label htmlFor="confirmation-code">
+									{t("confirmationCode", "Confirmation Code")}
+								</Label>
 								<Input
 									id="confirmation-code"
 									value={formData.confirmationCode}
 									onChange={(e) =>
 										handleInputChange("confirmationCode", e.target.value)
 									}
-									placeholder={t('enterConfirmationCode', 'Enter confirmation code')}
+									placeholder={t(
+										"enterConfirmationCode",
+										"Enter confirmation code",
+									)}
 								/>
 								<p className="text-sm text-muted-foreground">
-									{t('checkYourEmailForAConfirmationCode', 'Check your email for a confirmation code')}
+									{t(
+										"checkYourEmailForAConfirmationCode",
+										"Check your email for a confirmation code",
+									)}
 								</p>
 							</div>
 
@@ -222,17 +236,19 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 										});
 									}}
 								>
-									{t('resend', 'Resend')}
+									{t("resend", "Resend")}
 								</Button>
 								<Button variant="outline" onClick={handleBack}>
-									{t('back', 'Back')}
+									{t("back", "Back")}
 								</Button>
 								<Button
 									onClick={handleVerificationSubmit}
 									disabled={isLoading}
 									className="sm:flex-1"
 								>
-									{isLoading ? "Verifying..." : t('verifyChange', 'Verify & Change')}
+									{isLoading
+										? "Verifying..."
+										: t("verifyChange", "Verify & Change")}
 								</Button>
 							</div>
 						</>

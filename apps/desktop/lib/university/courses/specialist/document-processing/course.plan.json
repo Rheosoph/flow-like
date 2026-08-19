@@ -386,7 +386,11 @@
 											"label": "No source field — the original file gets deleted once the record exists"
 										}
 									],
-									"correct": ["source-reference", "keywords-summary", "pagecount-type"]
+									"correct": [
+										"source-reference",
+										"keywords-summary",
+										"pagecount-type"
+									]
 								}
 							}
 						],
@@ -462,7 +466,11 @@
 											"label": "The signer's nickname used in the greeting"
 										}
 									],
-									"correct": ["email-address", "iban-payment", "phone-signature"]
+									"correct": [
+										"email-address",
+										"iban-payment",
+										"phone-signature"
+									]
 								}
 							},
 							{
@@ -567,7 +575,11 @@
 											"label": "The PII values that were masked, to prove the masks worked"
 										}
 									],
-									"correct": ["outcome-counts", "failed-ids", "durations-checkpoint"]
+									"correct": [
+										"outcome-counts",
+										"failed-ids",
+										"durations-checkpoint"
+									]
 								}
 							},
 							{
@@ -709,7 +721,11 @@
 											"label": "The AI mask alone is the cheaper way to cover all three"
 										}
 									],
-									"correct": ["regex-shaped-pii", "ai-pass-names", "counts-as-evidence"]
+									"correct": [
+										"regex-shaped-pii",
+										"ai-pass-names",
+										"counts-as-evidence"
+									]
 								}
 							},
 							{

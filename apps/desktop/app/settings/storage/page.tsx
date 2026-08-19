@@ -1,6 +1,5 @@
 "use client";
 
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -24,6 +23,7 @@ import {
 	cn,
 } from "@flow-like/flow-like-ui";
 import { humanFileSize } from "@flow-like/flow-like-ui/lib/utils";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
 import {
 	Archive,
@@ -221,7 +221,7 @@ async function estimateBrowserStorage(): Promise<StorageCategory> {
 	const estimate = await navigator.storage?.estimate?.().catch(() => undefined);
 	return {
 		key: "browser",
-		label: i18next.t('browserStorage', 'Browser storage'),
+		label: i18next.t("browserStorage", "Browser storage"),
 		description: BROWSER_DESCRIPTION,
 		sizeBytes: estimate?.usage ?? 0,
 		itemCount: 0,
@@ -242,7 +242,10 @@ async function inspectBrowserStorage(): Promise<StorageCategory> {
 			items.push({
 				id: `browser:local:${key}`,
 				name: key,
-				detail: i18next.t('localPreferenceStoredByTheStudioWebview', 'Local preference stored by the Studio WebView'),
+				detail: i18next.t(
+					"localPreferenceStoredByTheStudioWebview",
+					"Local preference stored by the Studio WebView",
+				),
 				sizeBytes,
 				fileCount: 1,
 				deletable: false,
@@ -268,7 +271,15 @@ async function inspectBrowserStorage(): Promise<StorageCategory> {
 				items.push({
 					id: `browser:idb:${info.name}`,
 					name: info.name,
-					detail: i18next.t('indexeddbStoresValVal2Records', 'IndexedDB · {{stores}} {{val}} · {{val2}} records', { stores: measured.stores, val: measured.stores === 1 ? "store" : "stores", val2: measured.records.toLocaleString() }),
+					detail: i18next.t(
+						"indexeddbStoresValVal2Records",
+						"IndexedDB · {{stores}} {{val}} · {{val2}} records",
+						{
+							stores: measured.stores,
+							val: measured.stores === 1 ? "store" : "stores",
+							val2: measured.records.toLocaleString(),
+						},
+					),
 					sizeBytes: measured.bytes,
 					fileCount: measured.records,
 					deletable: false,
@@ -277,7 +288,10 @@ async function inspectBrowserStorage(): Promise<StorageCategory> {
 				items.push({
 					id: `browser:idb:${info.name}`,
 					name: info.name,
-					detail: i18next.t('indexeddbCurrentlyInUse', 'IndexedDB · currently in use'),
+					detail: i18next.t(
+						"indexeddbCurrentlyInUse",
+						"IndexedDB · currently in use",
+					),
 					sizeBytes: 0,
 					fileCount: 0,
 					deletable: false,
@@ -292,8 +306,11 @@ async function inspectBrowserStorage(): Promise<StorageCategory> {
 	if (otherBytes > 0) {
 		items.push({
 			id: "browser:other",
-			name: i18next.t('otherWebviewData', 'Other WebView data'),
-			detail: i18next.t('browsermanagedStorageNotAttributableToOneDatabase', 'Browser-managed storage not attributable to one database'),
+			name: i18next.t("otherWebviewData", "Other WebView data"),
+			detail: i18next.t(
+				"browsermanagedStorageNotAttributableToOneDatabase",
+				"Browser-managed storage not attributable to one database",
+			),
 			sizeBytes: otherBytes,
 			fileCount: 0,
 			deletable: false,
@@ -302,7 +319,7 @@ async function inspectBrowserStorage(): Promise<StorageCategory> {
 	items.sort((a, b) => b.sizeBytes - a.sizeBytes);
 	return {
 		key: "browser",
-		label: i18next.t('browserStorage', 'Browser storage'),
+		label: i18next.t("browserStorage", "Browser storage"),
 		description: BROWSER_DESCRIPTION,
 		sizeBytes: Math.max(measuredBytes, originUsage),
 		itemCount: items.length,
@@ -474,20 +491,34 @@ export default function LocalStoragePage() {
 			await refresh();
 			if (result.deletedItems > 0) {
 				toast.success(
-					t('removedDeleteditemsOldVal', 'Removed {{deletedItems}} old {{val}}', { deletedItems: result.deletedItems, val: result.deletedItems === 1 ? "run" : "runs" }),
-					{ description: t('valFreed', '{{val}} freed', { val: humanFileSize(result.freedBytes) }) },
+					t(
+						"removedDeleteditemsOldVal",
+						"Removed {{deletedItems}} old {{val}}",
+						{
+							deletedItems: result.deletedItems,
+							val: result.deletedItems === 1 ? "run" : "runs",
+						},
+					),
+					{
+						description: t("valFreed", "{{val}} freed", {
+							val: humanFileSize(result.freedBytes),
+						}),
+					},
 				);
 			} else {
 				toast.success(
 					nextEnabled
-						? t('automaticCleanupEnabled', 'Automatic cleanup enabled')
-						: t('automaticCleanupDisabled', 'Automatic cleanup disabled'),
+						? t("automaticCleanupEnabled", "Automatic cleanup enabled")
+						: t("automaticCleanupDisabled", "Automatic cleanup disabled"),
 				);
 			}
 		} catch (error) {
-			toast.error(t('couldNotUpdateLogRetention', 'Could not update log retention'), {
-				description: String(error),
-			});
+			toast.error(
+				t("couldNotUpdateLogRetention", "Could not update log retention"),
+				{
+					description: String(error),
+				},
+			);
 		} finally {
 			setSavingPolicy(false);
 		}
@@ -502,23 +533,36 @@ export default function LocalStoragePage() {
 				ids: pendingDelete.map((item) => item.id),
 			});
 			toast.success(
-				t('deletedDeleteditemsVal', 'Deleted {{deletedItems}} {{val}}', { deletedItems: result.deletedItems, val: result.deletedItems === 1 ? "item" : "items" }),
+				t("deletedDeleteditemsVal", "Deleted {{deletedItems}} {{val}}", {
+					deletedItems: result.deletedItems,
+					val: result.deletedItems === 1 ? "item" : "items",
+				}),
 				{
 					description: `${humanFileSize(result.freedBytes)} freed from this device`,
 				},
 			);
 			if (result.skippedItems.length) {
 				toast.warning(
-					t('lengthItemsCouldNotBeDeleted', '{{length}} item(s) could not be deleted', { length: result.skippedItems.length }),
+					t(
+						"lengthItemsCouldNotBeDeleted",
+						"{{length}} item(s) could not be deleted",
+						{ length: result.skippedItems.length },
+					),
 				);
 			}
 			setSelected(new Set());
 			setPendingDelete(null);
 			await refresh();
 		} catch (error) {
-			toast.error(t('couldNotDeleteTheSelectedFiles', 'Could not delete the selected files'), {
-				description: String(error),
-			});
+			toast.error(
+				t(
+					"couldNotDeleteTheSelectedFiles",
+					"Could not delete the selected files",
+				),
+				{
+					description: String(error),
+				},
+			);
 		} finally {
 			setDeleting(false);
 		}
@@ -543,13 +587,18 @@ export default function LocalStoragePage() {
 						<div className="mx-auto mb-2 flex size-11 items-center justify-center rounded-full bg-destructive/10 text-destructive">
 							<TriangleAlert className="size-5" />
 						</div>
-						<CardTitle>{t('storageCouldntBeInspected', 'Storage couldn’t be inspected')}</CardTitle>
+						<CardTitle>
+							{t("storageCouldntBeInspected", "Storage couldn’t be inspected")}
+						</CardTitle>
 						<CardDescription>
-							{t('studioCouldNotReadOneOrMoreLocalStorageDirectories', 'Studio could not read one or more local storage directories.')}
+							{t(
+								"studioCouldNotReadOneOrMoreLocalStorageDirectories",
+								"Studio could not read one or more local storage directories.",
+							)}
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
-						<Button onClick={refresh}>{t('tryAgain', 'Try again')}</Button>
+						<Button onClick={refresh}>{t("tryAgain", "Try again")}</Button>
 					</CardContent>
 				</Card>
 			</div>
@@ -571,7 +620,7 @@ export default function LocalStoragePage() {
 								</div>
 								<div>
 									<p className="text-sm font-medium text-muted-foreground">
-										{t('usedByFlowlikeStudio', 'Used by Flow-Like Studio')}
+										{t("usedByFlowlikeStudio", "Used by Flow-Like Studio")}
 									</p>
 									<p className="text-4xl font-semibold tracking-tight md:text-5xl">
 										{humanFileSize(totalBytes)}
@@ -608,7 +657,7 @@ export default function LocalStoragePage() {
 									{categories.reduce((sum, item) => sum + item.itemCount, 0)}
 								</span>
 								<span className="text-xs text-muted-foreground">
-									{t('storedItems', 'stored items')}
+									{t("storedItems", "stored items")}
 								</span>
 							</div>
 						</div>
@@ -647,7 +696,11 @@ export default function LocalStoragePage() {
 											<p className="text-lg font-semibold tabular-nums">
 												{humanFileSize(entry.sizeBytes)}
 											</p>
-											<p className="text-xs text-muted-foreground">{t('itemcountItems', '{{itemCount}} items', { itemCount: entry.itemCount })}</p>
+											<p className="text-xs text-muted-foreground">
+												{t("itemcountItems", "{{itemCount}} items", {
+													itemCount: entry.itemCount,
+												})}
+											</p>
 										</div>
 									</button>
 								);
@@ -674,7 +727,8 @@ export default function LocalStoragePage() {
 											size="sm"
 											onClick={() => setPendingDelete(selectedItems)}
 										>
-											<Trash2 />{`Delete ${selectedItems.length} ·`}{" "}
+											<Trash2 />
+											{`Delete ${selectedItems.length} ·`}{" "}
 											{humanFileSize(selectedBytes)}
 										</Button>
 									)}
@@ -684,7 +738,9 @@ export default function LocalStoragePage() {
 									<Input
 										value={search}
 										onChange={(event) => setSearch(event.target.value)}
-										placeholder={t('searchVal', 'Search {{val}}', { val: category?.label.toLocaleLowerCase() ?? "files" })}
+										placeholder={t("searchVal", "Search {{val}}", {
+											val: category?.label.toLocaleLowerCase() ?? "files",
+										})}
 										className="pl-9"
 									/>
 								</div>
@@ -697,9 +753,14 @@ export default function LocalStoragePage() {
 										<div className="mb-3 flex size-11 items-center justify-center rounded-full bg-muted text-muted-foreground">
 											<RefreshCw className="size-5 animate-spin" />
 										</div>
-										<p className="font-medium">{t('scanningBrowserStorage', 'Scanning browser storage…')}</p>
+										<p className="font-medium">
+											{t("scanningBrowserStorage", "Scanning browser storage…")}
+										</p>
 										<p className="mt-1 text-sm text-muted-foreground">
-											{t('measuringIndexeddbRecordsInThisWebview', 'Measuring IndexedDB records in this WebView.')}
+											{t(
+												"measuringIndexeddbRecordsInThisWebview",
+												"Measuring IndexedDB records in this WebView.",
+											)}
 										</p>
 									</div>
 								) : filteredItems.length === 0 ? (
@@ -708,19 +769,27 @@ export default function LocalStoragePage() {
 											<CheckCircle2 className="size-5" />
 										</div>
 										<p className="font-medium">
-											{search ? t('noMatchingItems', 'No matching items') : t('nothingStoredHere', 'Nothing stored here')}
+											{search
+												? t("noMatchingItems", "No matching items")
+												: t("nothingStoredHere", "Nothing stored here")}
 										</p>
 										<p className="mt-1 text-sm text-muted-foreground">
 											{search
-												? t('tryADifferentSearch', 'Try a different search.')
-												: t('thisCategoryIsAlreadyClean', 'This category is already clean.')}
+												? t("tryADifferentSearch", "Try a different search.")
+												: t(
+														"thisCategoryIsAlreadyClean",
+														"This category is already clean.",
+													)}
 										</p>
 									</div>
 								) : (
 									<div className="divide-y">
 										<div className="grid grid-cols-[32px_minmax(0,1fr)_100px_138px_40px] items-center gap-3 px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-muted-foreground max-md:grid-cols-[32px_minmax(0,1fr)_88px_40px]">
 											<Checkbox
-												aria-label={t('selectAllVisibleItems', 'Select all visible items')}
+												aria-label={t(
+													"selectAllVisibleItems",
+													"Select all visible items",
+												)}
 												checked={
 													filteredItems.filter((item) => item.deletable)
 														.length > 0 &&
@@ -739,10 +808,10 @@ export default function LocalStoragePage() {
 													setSelected(next);
 												}}
 											/>
-											<span>{t('item', 'Item')}</span>
-											<span className="text-right">{t('size', 'Size')}</span>
+											<span>{t("item", "Item")}</span>
+											<span className="text-right">{t("size", "Size")}</span>
 											<span className="text-right max-md:hidden">
-												{t('lastChanged', 'Last changed')}
+												{t("lastChanged", "Last changed")}
 											</span>
 											<span />
 										</div>
@@ -816,7 +885,7 @@ export default function LocalStoragePage() {
 										</div>
 										<div>
 											<CardTitle className="text-base">
-												{t('automaticLogCleanup', 'Automatic log cleanup')}
+												{t("automaticLogCleanup", "Automatic log cleanup")}
 											</CardTitle>
 											<CardDescription className="mt-1">
 												{`Keep debug runs from growing unnoticed.`}
@@ -830,7 +899,10 @@ export default function LocalStoragePage() {
 											setRetentionEnabled(checked);
 											void savePolicy(checked, days);
 										}}
-										aria-label={t('automaticallyDeleteOldRunLogs', 'Automatically delete old run logs')}
+										aria-label={t(
+											"automaticallyDeleteOldRunLogs",
+											"Automatically delete old run logs",
+										)}
 									/>
 								</div>
 							</CardHeader>
@@ -845,7 +917,7 @@ export default function LocalStoragePage() {
 										htmlFor="retention-days"
 										className="text-sm font-medium"
 									>
-										{t('deleteRunLogsOlderThan', 'Delete run logs older than')}
+										{t("deleteRunLogsOlderThan", "Delete run logs older than")}
 									</label>
 									<div className="grid grid-cols-4 gap-2">
 										{RETENTION_OPTIONS.slice(0, 4).map((option) => (
@@ -884,19 +956,23 @@ export default function LocalStoragePage() {
 											}
 											onClick={() => savePolicy(enabled, days)}
 										>
-											{t('save', 'Save')}
+											{t("save", "Save")}
 										</Button>
 									</div>
 								</div>
 								<div className="flex gap-2.5 rounded-lg bg-muted/60 p-3 text-xs text-muted-foreground">
 									<ShieldCheck className="mt-0.5 size-4 shrink-0 text-foreground" />
 									<p>
-										{t('onlyCompletedLocalRunLogsAreRemovedAppsBoardsAndActiveRunsAreNeverPartOfAutomaticCleanup', "Only completed local run logs are removed. Apps, boards, and active runs are never part of automatic cleanup.")}
+										{t(
+											"onlyCompletedLocalRunLogsAreRemovedAppsBoardsAndActiveRunsAreNeverPartOfAutomaticCleanup",
+											"Only completed local run logs are removed. Apps, boards, and active runs are never part of automatic cleanup.",
+										)}
 									</p>
 								</div>
 								{policy?.lastCleanupMs && (
 									<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-										<Clock3 className="size-3.5" /> {t('lastChecked', 'Last checked')}{" "}
+										<Clock3 className="size-3.5" />{" "}
+										{t("lastChecked", "Last checked")}{" "}
 										{formatDate(policy.lastCleanupMs)}
 									</p>
 								)}
@@ -908,10 +984,16 @@ export default function LocalStoragePage() {
 								<Info className="mt-0.5 size-4 shrink-0 text-primary" />
 								<div className="space-y-1">
 									<p className="text-sm font-medium">
-										{t('everythingShownHereIsLocal', 'Everything shown here is local')}
+										{t(
+											"everythingShownHereIsLocal",
+											"Everything shown here is local",
+										)}
 									</p>
 									<p className="text-xs leading-relaxed text-muted-foreground">
-										{t('thisPageInspectsFilesOnThisDeviceOnlyItDoesNotCountOrDeleteCloudData', "This page inspects files on this device only. It does not count or delete cloud data.")}
+										{t(
+											"thisPageInspectsFilesOnThisDeviceOnlyItDoesNotCountOrDeleteCloudData",
+											"This page inspects files on this device only. It does not count or delete cloud data.",
+										)}
 									</p>
 								</div>
 							</div>
@@ -927,22 +1009,36 @@ export default function LocalStoragePage() {
 				<AlertDialogContent>
 					<AlertDialogHeader>
 						<AlertDialogTitle>
-							{t('delete', 'Delete')} {pendingDelete?.length ?? 0} local{" "}{t('items', { defaultValue_one: 'item?', defaultValue_other: 'items?', count: pendingDelete?.length })}</AlertDialogTitle>
+							{t("delete", "Delete")} {pendingDelete?.length ?? 0} local{" "}
+							{t("items", {
+								defaultValue_one: "item?",
+								defaultValue_other: "items?",
+								count: pendingDelete?.length,
+							})}
+						</AlertDialogTitle>
 						<AlertDialogDescription>
-							{t('thisWillPermanentlyRemove', 'This will permanently remove')}{" "}
+							{t("thisWillPermanentlyRemove", "This will permanently remove")}{" "}
 							{humanFileSize(
 								pendingDelete?.reduce((sum, item) => sum + item.sizeBytes, 0) ??
 									0,
 							)}{" "}
 							{`from this device.`}
 							{activeCategory === "apps" &&
-								t('deletedAppsAndTheirLocalProjectFilesCannotBeRecovered', "Deleted apps and their local project files cannot be recovered.")}
+								t(
+									"deletedAppsAndTheirLocalProjectFilesCannotBeRecovered",
+									"Deleted apps and their local project files cannot be recovered.",
+								)}
 							{activeCategory === "bits" &&
-								t('downloadedBitsCanBeDownloadedAgainWhenNeeded', "Downloaded bits can be downloaded again when needed.")}
+								t(
+									"downloadedBitsCanBeDownloadedAgainWhenNeeded",
+									"Downloaded bits can be downloaded again when needed.",
+								)}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
-						<AlertDialogCancel disabled={deleting}>{t('cancel', 'Cancel')}</AlertDialogCancel>
+						<AlertDialogCancel disabled={deleting}>
+							{t("cancel", "Cancel")}
+						</AlertDialogCancel>
 						<AlertDialogAction
 							disabled={deleting}
 							onClick={(event) => {
@@ -951,7 +1047,9 @@ export default function LocalStoragePage() {
 							}}
 							className="bg-destructive text-white hover:bg-destructive/90"
 						>
-							{deleting ? "Deleting…" : t('deletePermanently', 'Delete permanently')}
+							{deleting
+								? "Deleting…"
+								: t("deletePermanently", "Delete permanently")}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>
@@ -975,11 +1073,16 @@ function PageHeader({
 					href="/settings"
 					className="mb-2 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
 				>
-					<ArrowLeft className="size-4" /> {t('settings', 'Settings')}
+					<ArrowLeft className="size-4" /> {t("settings", "Settings")}
 				</Link>
-				<h1 className="text-3xl font-bold tracking-tight">{t('localStorage', 'Local storage')}</h1>
+				<h1 className="text-3xl font-bold tracking-tight">
+					{t("localStorage", "Local storage")}
+				</h1>
 				<p className="mt-1 text-muted-foreground">
-					{t('understandWhatStudioKeepsOnThisDeviceAndTakeControlOfIt', 'Understand what Studio keeps on this device and take control of it.')}
+					{t(
+						"understandWhatStudioKeepsOnThisDeviceAndTakeControlOfIt",
+						"Understand what Studio keeps on this device and take control of it.",
+					)}
 				</p>
 			</div>
 			<Button
@@ -988,7 +1091,8 @@ function PageHeader({
 				onClick={onRefresh}
 				disabled={refreshing}
 			>
-				<RefreshCw className={cn(refreshing && "animate-spin")} /> {t('refresh', 'Refresh')}
+				<RefreshCw className={cn(refreshing && "animate-spin")} />{" "}
+				{t("refresh", "Refresh")}
 			</Button>
 		</div>
 	);

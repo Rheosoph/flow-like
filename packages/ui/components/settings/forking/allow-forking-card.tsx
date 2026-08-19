@@ -77,8 +77,12 @@ export function AllowForkingCard({
 				setPolicy(previous);
 				toast.error(
 					err instanceof Error
-						? t('couldntUpdateForkSettingsMessage', 'Couldn\'t update fork settings: {{message}}', { message: err.message })
-						: t('couldntUpdateForkSettings', 'Couldn\'t update fork settings'),
+						? t(
+								"couldntUpdateForkSettingsMessage",
+								"Couldn't update fork settings: {{message}}",
+								{ message: err.message },
+							)
+						: t("couldntUpdateForkSettings", "Couldn't update fork settings"),
 				);
 			} finally {
 				setSaving(false);

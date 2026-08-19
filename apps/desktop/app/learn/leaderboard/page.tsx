@@ -1,5 +1,4 @@
 "use client";
-import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	Input,
@@ -10,6 +9,7 @@ import {
 	useInvoke,
 } from "@flow-like/flow-like-ui";
 import type { LeaderboardOptIn } from "@flow-like/flow-like-ui/lib/learn/types";
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Eye, EyeOff, Pencil, Trophy } from "lucide-react";
@@ -113,10 +113,13 @@ export default function LeaderboardPage() {
 					<div className="flex-1">
 						<h1 className="text-2xl md:text-3xl font-semibold tracking-tight inline-flex items-center gap-2">
 							<Trophy className="size-6 text-yellow-500" />
-							{t('leaderboard', 'Leaderboard')}
+							{t("leaderboard", "Leaderboard")}
 						</h1>
 						<p className="text-sm text-muted-foreground mt-0.5">
-							{t('earnPointsBySolvingChallengesAndCompletingLessons', 'Earn points by solving challenges and completing lessons.')}
+							{t(
+								"earnPointsBySolvingChallengesAndCompletingLessons",
+								"Earn points by solving challenges and completing lessons.",
+							)}
 						</p>
 					</div>
 				</motion.section>
@@ -137,13 +140,21 @@ export default function LeaderboardPage() {
 					</div>
 					<div className="flex-1 min-w-0">
 						<div className="text-sm font-medium truncate">
-							{optedIn ? t('visibleAs', "Visible as") : t('hiddenWouldAppearAs', "Hidden — would appear as")}
+							{optedIn
+								? t("visibleAs", "Visible as")
+								: t("hiddenWouldAppearAs", "Hidden — would appear as")}
 							<span className="text-foreground">{displayName}</span>
 						</div>
 						<div className="text-xs text-muted-foreground">
 							{optedIn
-								? t('youreOnThePublicLeaderboard', 'You\'re on the public leaderboard.')
-								: t('flipTheSwitchToCompetePublicly', 'Flip the switch to compete publicly.')}
+								? t(
+										"youreOnThePublicLeaderboard",
+										"You're on the public leaderboard.",
+									)
+								: t(
+										"flipTheSwitchToCompetePublicly",
+										"Flip the switch to compete publicly.",
+									)}
 						</div>
 					</div>
 					<EditNameButton
@@ -197,7 +208,7 @@ function EditNameButton({
 				size="sm"
 				className="h-8 px-2 text-muted-foreground hover:text-foreground"
 				onClick={() => setOpen(true)}
-				title={t('changeDisplayName', 'Change display name')}
+				title={t("changeDisplayName", "Change display name")}
 			>
 				<Pencil className="size-3.5" />
 			</Button>
@@ -207,7 +218,7 @@ function EditNameButton({
 	return (
 		<div className="flex items-center gap-2">
 			<Label htmlFor="display-name" className="sr-only">
-				{t('displayName2', 'Display name')}
+				{t("displayName2", "Display name")}
 			</Label>
 			<Input
 				id="display-name"
@@ -227,7 +238,7 @@ function EditNameButton({
 					setOpen(false);
 				}}
 			>
-				{t('save', 'Save')}
+				{t("save", "Save")}
 			</Button>
 			<Button
 				variant="ghost"
@@ -235,7 +246,7 @@ function EditNameButton({
 				className="h-8 rounded-lg"
 				onClick={() => setOpen(false)}
 			>
-				{t('cancel', 'Cancel')}
+				{t("cancel", "Cancel")}
 			</Button>
 		</div>
 	);

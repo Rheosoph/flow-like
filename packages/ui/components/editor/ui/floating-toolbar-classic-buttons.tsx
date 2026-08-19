@@ -33,7 +33,7 @@ export function FloatingToolbarButtons() {
 					<ToolbarGroup>
 						<AIToolbarButton tooltip="AI commands">
 							<WandSparklesIcon />
-							{t('askAi', 'Ask AI')}
+							{t("askAi", "Ask AI")}
 						</AIToolbarButton>
 					</ToolbarGroup>
 

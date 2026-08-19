@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -30,6 +29,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { useDebounce } from "@uidotdev/usehooks";
 import { Plus, RefreshCw, Save, Search, Trash2, Wrench } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -404,7 +404,7 @@ export default function EditBitsPage() {
 			setParametersError(
 				error instanceof Error
 					? error.message
-					: t('parametersMustBeValidJson', 'Parameters must be valid JSON'),
+					: t("parametersMustBeValidJson", "Parameters must be valid JSON"),
 			);
 		}
 	}, [applyParsedParameters, parametersText]);
@@ -428,7 +428,10 @@ export default function EditBitsPage() {
 			setProviderParamsError(
 				error instanceof Error
 					? error.message
-					: t('providerParamsMustBeValidJson', 'Provider params must be valid JSON'),
+					: t(
+							"providerParamsMustBeValidJson",
+							"Provider params must be valid JSON",
+						),
 			);
 		}
 	}, [providerParamsText, updateStructuredParameters]);
@@ -540,7 +543,10 @@ export default function EditBitsPage() {
 			queryClient.invalidateQueries({ queryKey: ["bit-search"] });
 			queryClient.invalidateQueries({ queryKey: ["bit", savedBit.id] });
 		} catch (error) {
-			const message = error instanceof Error ? error.message : t('unknownError', 'Unknown error');
+			const message =
+				error instanceof Error
+					? error.message
+					: t("unknownError", "Unknown error");
 			toast.error(`Failed to update bit: ${message}`);
 		} finally {
 			setIsSaving(false);
@@ -573,7 +579,10 @@ export default function EditBitsPage() {
 			setSelectedId(null);
 			queryClient.invalidateQueries({ queryKey: ["bit-search"] });
 		} catch (error) {
-			const message = error instanceof Error ? error.message : t('unknownError', 'Unknown error');
+			const message =
+				error instanceof Error
+					? error.message
+					: t("unknownError", "Unknown error");
 			toast.error(`Failed to delete bit: ${message}`);
 		} finally {
 			setIsDeleting(false);
@@ -592,8 +601,12 @@ export default function EditBitsPage() {
 			const replacementBit = pack.bits[0];
 			toast.success(
 				replacementBit?.id && replacementBit.id !== draft.id
-					? t('createdReplacementTtsBitId', 'Created replacement TTS bit {{id}}', { id: replacementBit.id })
-					: t('ttsBitRepairCompleted', 'TTS bit repair completed'),
+					? t(
+							"createdReplacementTtsBitId",
+							"Created replacement TTS bit {{id}}",
+							{ id: replacementBit.id },
+						)
+					: t("ttsBitRepairCompleted", "TTS bit repair completed"),
 			);
 			if (replacementBit?.id && replacementBit.id !== draft.id) {
 				setSelectedId(replacementBit.id);
@@ -604,7 +617,10 @@ export default function EditBitsPage() {
 				queryClient.invalidateQueries({ queryKey: ["bit", replacementBit.id] });
 			}
 		} catch (error) {
-			const message = error instanceof Error ? error.message : t('unknownError', 'Unknown error');
+			const message =
+				error instanceof Error
+					? error.message
+					: t("unknownError", "Unknown error");
 			toast.error(`Failed to repair TTS assets: ${message}`);
 		} finally {
 			setIsRepairingTts(false);
@@ -633,7 +649,9 @@ export default function EditBitsPage() {
 				<div className="space-y-6">
 					<div className="flex items-center justify-between gap-4">
 						<div>
-							<h1 className="text-3xl font-bold">{t('bitManagement', 'Bit Management')}</h1>
+							<h1 className="text-3xl font-bold">
+								{t("bitManagement", "Bit Management")}
+							</h1>
 							<p className="text-muted-foreground">
 								{`Search, inspect, edit, and remove published bits from one screen.`}
 							</p>
@@ -641,20 +659,23 @@ export default function EditBitsPage() {
 						<div className="flex items-center gap-2">
 							<Button variant="outline" size="sm" onClick={handleRefresh}>
 								<RefreshCw className="mr-2 h-4 w-4" />
-								{t('refresh', 'Refresh')}
+								{t("refresh", "Refresh")}
 							</Button>
 							<Button size="sm" onClick={() => router.push("/admin/bits/add")}>
 								<Plus className="mr-2 h-4 w-4" />
-								{t('addBit', 'Add Bit')}
+								{t("addBit", "Add Bit")}
 							</Button>
 						</div>
 					</div>
 
 					<Card>
 						<CardHeader>
-							<CardTitle>{t('search', 'Search')}</CardTitle>
+							<CardTitle>{t("search", "Search")}</CardTitle>
 							<CardDescription>
-								{t('filterByNameDescriptionTypeOrHostedmodelCategory', 'Filter by name, description, type, or hosted-model category.')}
+								{t(
+									"filterByNameDescriptionTypeOrHostedmodelCategory",
+									"Filter by name, description, type, or hosted-model category.",
+								)}
 							</CardDescription>
 						</CardHeader>
 						<CardContent className="grid gap-4 md:grid-cols-[1fr,240px,160px]">
@@ -662,7 +683,7 @@ export default function EditBitsPage() {
 								<Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
 								<Input
 									className="pl-10"
-									placeholder={t('searchBits', 'Search bits...')}
+									placeholder={t("searchBits", "Search bits...")}
 									value={searchTerm}
 									onChange={(event) => setSearchTerm(event.target.value)}
 								/>
@@ -672,11 +693,17 @@ export default function EditBitsPage() {
 								onValueChange={(v) => setSelectedType(v as BitFilterValue)}
 							>
 								<SelectTrigger>
-									<SelectValue placeholder={t('allCategories', 'All categories')} />
+									<SelectValue
+										placeholder={t("allCategories", "All categories")}
+									/>
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="all">{t('allCategories', 'All categories')}</SelectItem>
-									<SelectItem value={HOSTED_FILTER}>{t('hostedModels', 'Hosted models')}</SelectItem>
+									<SelectItem value="all">
+										{t("allCategories", "All categories")}
+									</SelectItem>
+									<SelectItem value={HOSTED_FILTER}>
+										{t("hostedModels", "Hosted models")}
+									</SelectItem>
 									{ALL_BIT_TYPES.map((bitType) => (
 										<SelectItem key={bitType} value={bitType}>
 											{bitType}
@@ -689,11 +716,13 @@ export default function EditBitsPage() {
 								onValueChange={(value) => setItemsPerPage(Number(value))}
 							>
 								<SelectTrigger>
-									<SelectValue placeholder={t('pageSize', 'Page size')} />
+									<SelectValue placeholder={t("pageSize", "Page size")} />
 								</SelectTrigger>
 								<SelectContent>
 									{ITEMS_PER_PAGE_OPTIONS.map((option) => (
-										<SelectItem key={option} value={option.toString()}>{t('optionPerPage', '{{option}} per page', { option })}</SelectItem>
+										<SelectItem key={option} value={option.toString()}>
+											{t("optionPerPage", "{{option}} per page", { option })}
+										</SelectItem>
 									))}
 								</SelectContent>
 							</Select>
@@ -703,11 +732,15 @@ export default function EditBitsPage() {
 					<div className="grid gap-6 lg:grid-cols-[360px,minmax(0,1fr)]">
 						<Card className="min-h-180">
 							<CardHeader>
-								<CardTitle>{t('matchingBits', 'Matching Bits')}</CardTitle>
+								<CardTitle>{t("matchingBits", "Matching Bits")}</CardTitle>
 								<CardDescription>
 									{bits.isLoading
-										? t('loadingBits', 'Loading bits...')
-										: t('lengthVisibleOnThisPage', '{{length}} visible on this page', { length: visibleBits.length })}
+										? t("loadingBits", "Loading bits...")
+										: t(
+												"lengthVisibleOnThisPage",
+												"{{length}} visible on this page",
+												{ length: visibleBits.length },
+											)}
 								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-3">
@@ -722,7 +755,10 @@ export default function EditBitsPage() {
 									</div>
 								) : visibleBits.length === 0 ? (
 									<div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-										{t('noBitsMatchedTheCurrentFilters', 'No bits matched the current filters.')}
+										{t(
+											"noBitsMatchedTheCurrentFilters",
+											"No bits matched the current filters.",
+										)}
 									</div>
 								) : (
 									visibleBits.map((bit) => {
@@ -751,7 +787,9 @@ export default function EditBitsPage() {
 													</div>
 													<div className="flex items-center gap-2">
 														{isHostedBit(bit) ? (
-															<Badge variant="outline">{t('hosted', 'Hosted')}</Badge>
+															<Badge variant="outline">
+																{t("hosted", "Hosted")}
+															</Badge>
 														) : null}
 														<Badge variant="secondary">{bit.type}</Badge>
 													</div>
@@ -762,8 +800,13 @@ export default function EditBitsPage() {
 													</p>
 												)}
 												<div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-													<span>{t('version', 'Version')} {bit.version ?? "-"}</span>
-													<span>{bit.repository || t('noRepository', 'No repository')}</span>
+													<span>
+														{t("version", "Version")} {bit.version ?? "-"}
+													</span>
+													<span>
+														{bit.repository ||
+															t("noRepository", "No repository")}
+													</span>
 												</div>
 											</button>
 										);
@@ -779,16 +822,20 @@ export default function EditBitsPage() {
 											setCurrentPage((page) => Math.max(1, page - 1))
 										}
 									>
-										{t('previous', 'Previous')}
+										{t("previous", "Previous")}
 									</Button>
-									<span className="text-xs text-muted-foreground">{t('pageCurrentpage', 'Page {{currentPage}}', { currentPage })}</span>
+									<span className="text-xs text-muted-foreground">
+										{t("pageCurrentpage", "Page {{currentPage}}", {
+											currentPage,
+										})}
+									</span>
 									<Button
 										variant="outline"
 										size="sm"
 										disabled={!hasMorePages}
 										onClick={() => setCurrentPage((page) => page + 1)}
 									>
-										{t('next', 'Next')}
+										{t("next", "Next")}
 									</Button>
 								</div>
 							</CardContent>
@@ -796,7 +843,7 @@ export default function EditBitsPage() {
 
 						<Card className="min-h-180">
 							<CardHeader>
-								<CardTitle>{t('editor', 'Editor')}</CardTitle>
+								<CardTitle>{t("editor", "Editor")}</CardTitle>
 								<CardDescription>
 									{`Update core fields, metadata, and model runtime settings from one screen.`}
 								</CardDescription>
@@ -819,21 +866,29 @@ export default function EditBitsPage() {
 									<>
 										<div className="grid gap-4 md:grid-cols-2">
 											<div className="space-y-2">
-												<Label htmlFor="bit-id">{t('bitId', 'Bit ID')}</Label>
+												<Label htmlFor="bit-id">{t("bitId", "Bit ID")}</Label>
 												<Input id="bit-id" value={draft.id} disabled />
 											</div>
 											<div className="space-y-2">
-												<Label htmlFor="bit-slug">{t('modelSlug', 'Model Slug')}</Label>
+												<Label htmlFor="bit-slug">
+													{t("modelSlug", "Model Slug")}
+												</Label>
 												<Input
 													id="bit-slug"
 													value={draft.name ?? ""}
 													onChange={(event) =>
 														updateDraft("name", event.target.value)
 													}
-													placeholder={t('egStep35flash', 'e.g. step-3-5-flash')}
+													placeholder={t(
+														"egStep35flash",
+														"e.g. step-3-5-flash",
+													)}
 												/>
 												<p className="text-xs text-muted-foreground">
-													{t('usedToAutocomputeCapabilityScoresForHostedModels', "Used to auto-compute capability scores for hosted models.")}
+													{t(
+														"usedToAutocomputeCapabilityScoresForHostedModels",
+														"Used to auto-compute capability scores for hosted models.",
+													)}
 												</p>
 											</div>
 											<div className="space-y-2">
@@ -859,7 +914,7 @@ export default function EditBitsPage() {
 											{modelParameters ? (
 												<div className="space-y-2">
 													<Label htmlFor="bit-model-category">
-														{t('modelCategory', 'Model Category')}
+														{t("modelCategory", "Model Category")}
 													</Label>
 													<Select
 														value={draftIsHosted ? HOSTED_FILTER : "local"}
@@ -874,17 +929,19 @@ export default function EditBitsPage() {
 														</SelectTrigger>
 														<SelectContent>
 															<SelectItem value="local">
-																{t('localWeights', 'Local weights')}
+																{t("localWeights", "Local weights")}
 															</SelectItem>
 															<SelectItem value={HOSTED_FILTER}>
-																{t('hostedModel', 'Hosted model')}
+																{t("hostedModel", "Hosted model")}
 															</SelectItem>
 														</SelectContent>
 													</Select>
 												</div>
 											) : null}
 											<div className="space-y-2 md:col-span-2">
-												<Label htmlFor="bit-name">{t('displayName', 'Display Name')}</Label>
+												<Label htmlFor="bit-name">
+													{t("displayName", "Display Name")}
+												</Label>
 												<Input
 													id="bit-name"
 													value={draft.meta.en?.name ?? ""}
@@ -894,7 +951,9 @@ export default function EditBitsPage() {
 												/>
 											</div>
 											<div className="space-y-2 md:col-span-2">
-												<Label htmlFor="bit-description">{t('description', 'Description')}</Label>
+												<Label htmlFor="bit-description">
+													{t("description", "Description")}
+												</Label>
 												<Textarea
 													id="bit-description"
 													rows={3}
@@ -906,7 +965,7 @@ export default function EditBitsPage() {
 											</div>
 											<div className="space-y-2 md:col-span-2">
 												<Label htmlFor="bit-long-description">
-													{t('longDescription', 'Long Description')}
+													{t("longDescription", "Long Description")}
 												</Label>
 												<Textarea
 													id="bit-long-description"
@@ -918,7 +977,9 @@ export default function EditBitsPage() {
 												/>
 											</div>
 											<div className="space-y-2">
-												<Label htmlFor="bit-version">{t('version', 'Version')}</Label>
+												<Label htmlFor="bit-version">
+													{t("version", "Version")}
+												</Label>
 												<Input
 													id="bit-version"
 													value={draft.version ?? ""}
@@ -928,7 +989,9 @@ export default function EditBitsPage() {
 												/>
 											</div>
 											<div className="space-y-2">
-												<Label htmlFor="bit-license">{t('license', 'License')}</Label>
+												<Label htmlFor="bit-license">
+													{t("license", "License")}
+												</Label>
 												<Input
 													id="bit-license"
 													value={draft.license ?? ""}
@@ -938,7 +1001,9 @@ export default function EditBitsPage() {
 												/>
 											</div>
 											<div className="space-y-2 md:col-span-2">
-												<Label htmlFor="bit-repository">{t('repository', 'Repository')}</Label>
+												<Label htmlFor="bit-repository">
+													{t("repository", "Repository")}
+												</Label>
 												<Input
 													id="bit-repository"
 													value={draft.repository ?? ""}
@@ -951,7 +1016,7 @@ export default function EditBitsPage() {
 												<>
 													<div className="space-y-2">
 														<Label htmlFor="bit-context-length">
-															{t('contextLength', 'Context Length')}
+															{t("contextLength", "Context Length")}
 														</Label>
 														<Input
 															id="bit-context-length"
@@ -967,7 +1032,9 @@ export default function EditBitsPage() {
 														/>
 													</div>
 													<div className="space-y-2">
-														<Label htmlFor="bit-provider-name">{t('provider', 'Provider')}</Label>
+														<Label htmlFor="bit-provider-name">
+															{t("provider", "Provider")}
+														</Label>
 														<Select
 															value={modelParameters.provider.provider_name}
 															onValueChange={(value) =>
@@ -984,9 +1051,13 @@ export default function EditBitsPage() {
 																<SelectValue />
 															</SelectTrigger>
 															<SelectContent>
-																<SelectItem value="Local">{t('local', 'Local')}</SelectItem>
+																<SelectItem value="Local">
+																	{t("local", "Local")}
+																</SelectItem>
 																<SelectItem value="MLX">MLX</SelectItem>
-																<SelectItem value="Premium">{t('premium', 'Premium')}</SelectItem>
+																<SelectItem value="Premium">
+																	{t("premium", "Premium")}
+																</SelectItem>
 																{HOSTED_PROVIDER_OPTIONS.map((providerName) => (
 																	<SelectItem
 																		key={providerName}
@@ -999,7 +1070,9 @@ export default function EditBitsPage() {
 														</Select>
 													</div>
 													<div className="space-y-2">
-														<Label htmlFor="bit-model-id">{t('modelId', 'Model ID')}</Label>
+														<Label htmlFor="bit-model-id">
+															{t("modelId", "Model ID")}
+														</Label>
 														<Input
 															id="bit-model-id"
 															value={modelParameters.provider.model_id ?? ""}
@@ -1016,7 +1089,7 @@ export default function EditBitsPage() {
 													</div>
 													<div className="space-y-2">
 														<Label htmlFor="bit-provider-version">
-															{t('providerVersion', 'Provider Version')}
+															{t("providerVersion", "Provider Version")}
 														</Label>
 														<Input
 															id="bit-provider-version"
@@ -1036,7 +1109,7 @@ export default function EditBitsPage() {
 														<>
 															<div className="space-y-2 md:col-span-2">
 																<Label htmlFor="bit-provider-endpoint">
-																	{t('endpoint', 'Endpoint')}
+																	{t("endpoint", "Endpoint")}
 																</Label>
 																<Input
 																	id="bit-provider-endpoint"
@@ -1067,7 +1140,10 @@ export default function EditBitsPage() {
 															</div>
 															<div className="space-y-2 md:col-span-2">
 																<Label htmlFor="bit-provider-params">
-																	{t('providerParamsJson', 'Provider Params JSON')}
+																	{t(
+																		"providerParamsJson",
+																		"Provider Params JSON",
+																	)}
 																</Label>
 																<Textarea
 																	id="bit-provider-params"
@@ -1085,7 +1161,10 @@ export default function EditBitsPage() {
 																	</p>
 																) : (
 																	<p className="text-xs text-muted-foreground">
-																		{t('hostedModelsUseProviderParamsForEndpointOverridesAndProviderspecificMetadata', "Hosted models use provider params for endpoint overrides and provider-specific metadata.")}
+																		{t(
+																			"hostedModelsUseProviderParamsForEndpointOverridesAndProviderspecificMetadata",
+																			"Hosted models use provider params for endpoint overrides and provider-specific metadata.",
+																		)}
 																	</p>
 																)}
 															</div>
@@ -1095,13 +1174,16 @@ export default function EditBitsPage() {
 											) : null}
 											{draftIsMlx ? (
 												<div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground md:col-span-2">
-													{t('mlxLlmvlmEntriesAreVirtualRootsKeepTheRootArtifactEmptyAndListEveryModelbundleFileBitBelowAsADependencyEachDependencysFileNameIsItsDirectoryrelativePath', "MLX LLM/VLM entries are virtual roots. Keep the root artifact empty and list every model-bundle file bit below as a dependency. Each dependency’s File Name is its directory-relative path.")}
+													{t(
+														"mlxLlmvlmEntriesAreVirtualRootsKeepTheRootArtifactEmptyAndListEveryModelbundleFileBitBelowAsADependencyEachDependencysFileNameIsItsDirectoryrelativePath",
+														"MLX LLM/VLM entries are virtual roots. Keep the root artifact empty and list every model-bundle file bit below as a dependency. Each dependency’s File Name is its directory-relative path.",
+													)}
 												</div>
 											) : !draftIsHosted ? (
 												<>
 													<div className="space-y-2 md:col-span-2">
 														<Label htmlFor="bit-download-link">
-															{t('downloadLink', 'Download Link')}
+															{t("downloadLink", "Download Link")}
 														</Label>
 														<Input
 															id="bit-download-link"
@@ -1112,7 +1194,9 @@ export default function EditBitsPage() {
 														/>
 													</div>
 													<div className="space-y-2">
-														<Label htmlFor="bit-file-name">{t('fileName', 'File Name')}</Label>
+														<Label htmlFor="bit-file-name">
+															{t("fileName", "File Name")}
+														</Label>
 														<Input
 															id="bit-file-name"
 															value={draft.file_name ?? ""}
@@ -1121,7 +1205,10 @@ export default function EditBitsPage() {
 															}
 														/>
 														<p className="text-xs text-muted-foreground">
-															{t('mlxDependencyFilesMayUseSafeRelativePathsSuchAs', "MLX dependency files may use safe relative paths, such as")}{" "}
+															{t(
+																"mlxDependencyFilesMayUseSafeRelativePathsSuchAs",
+																"MLX dependency files may use safe relative paths, such as",
+															)}{" "}
 															<code>
 																weights/model-00001-of-00002.safetensors
 															</code>
@@ -1129,7 +1216,9 @@ export default function EditBitsPage() {
 														</p>
 													</div>
 													<div className="space-y-2">
-														<Label htmlFor="bit-size">{t('sizeBytes', 'Size (bytes)')}</Label>
+														<Label htmlFor="bit-size">
+															{t("sizeBytes", "Size (bytes)")}
+														</Label>
 														<Input
 															id="bit-size"
 															type="number"
@@ -1142,14 +1231,22 @@ export default function EditBitsPage() {
 												</>
 											) : (
 												<div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground md:col-span-2">
-													{t('hostedModelsAreRoutedThroughProviderMetadataAndDoNotNeedADownloadableArtifactStoredFileNameOrLocalSize', "Hosted models are routed through provider metadata and do not need a downloadable artifact, stored file name, or local size.")}
+													{t(
+														"hostedModelsAreRoutedThroughProviderMetadataAndDoNotNeedADownloadableArtifactStoredFileNameOrLocalSize",
+														"Hosted models are routed through provider metadata and do not need a downloadable artifact, stored file name, or local size.",
+													)}
 												</div>
 											)}
 											<div className="space-y-2 md:col-span-2">
-												<Label htmlFor="bit-authors">{t('authors', 'Authors')}</Label>
+												<Label htmlFor="bit-authors">
+													{t("authors", "Authors")}
+												</Label>
 												<Input
 													id="bit-authors"
-													placeholder={t('commaOrNewlineSeparated', 'Comma or newline separated')}
+													placeholder={t(
+														"commaOrNewlineSeparated",
+														"Comma or newline separated",
+													)}
 													value={authorsText}
 													onChange={(event) =>
 														setAuthorsText(event.target.value)
@@ -1157,11 +1254,16 @@ export default function EditBitsPage() {
 												/>
 											</div>
 											<div className="space-y-2 md:col-span-2">
-												<Label htmlFor="bit-dependencies">{t('dependencies', 'Dependencies')}</Label>
+												<Label htmlFor="bit-dependencies">
+													{t("dependencies", "Dependencies")}
+												</Label>
 												<Textarea
 													id="bit-dependencies"
 													rows={4}
-													placeholder={t('oneModelfileDependencyBitPerLineOrCommaSeparated', 'One model-file dependency bit per line or comma separated')}
+													placeholder={t(
+														"oneModelfileDependencyBitPerLineOrCommaSeparated",
+														"One model-file dependency bit per line or comma separated",
+													)}
 													value={dependenciesText}
 													onChange={(event) =>
 														setDependenciesText(event.target.value)
@@ -1169,21 +1271,29 @@ export default function EditBitsPage() {
 												/>
 												{draftIsMlx ? (
 													<p className="text-xs text-muted-foreground">
-														{t('includeRootConfigjsonTokenizerjsonTokenizer_configjsonSafetensorsAndForVlmARootProcessorconfigDependencyBit', "Include root config.json, tokenizer.json, tokenizer_config.json, safetensors, and (for VLM) a root processor-config dependency bit.")}
+														{t(
+															"includeRootConfigjsonTokenizerjsonTokenizer_configjsonSafetensorsAndForVlmARootProcessorconfigDependencyBit",
+															"Include root config.json, tokenizer.json, tokenizer_config.json, safetensors, and (for VLM) a root processor-config dependency bit.",
+														)}
 													</p>
 												) : null}
 											</div>
 											<div className="space-y-2 md:col-span-2">
-												<Label htmlFor="bit-tags">{t('tags', 'Tags')}</Label>
+												<Label htmlFor="bit-tags">{t("tags", "Tags")}</Label>
 												<Input
 													id="bit-tags"
-													placeholder={t('commaOrNewlineSeparated', 'Comma or newline separated')}
+													placeholder={t(
+														"commaOrNewlineSeparated",
+														"Comma or newline separated",
+													)}
 													value={tagsText}
 													onChange={(event) => setTagsText(event.target.value)}
 												/>
 											</div>
 											<div className="space-y-2 md:col-span-2">
-												<Label htmlFor="bit-parameters">{t('parametersJson', 'Parameters JSON')}</Label>
+												<Label htmlFor="bit-parameters">
+													{t("parametersJson", "Parameters JSON")}
+												</Label>
 												<Textarea
 													id="bit-parameters"
 													rows={16}
@@ -1200,7 +1310,10 @@ export default function EditBitsPage() {
 													</p>
 												) : (
 													<p className="text-xs text-muted-foreground">
-														{t('advancedOverridesRemainAvailableHereStructuredModelFieldsAboveKeepThisJsonInSync', "Advanced overrides remain available here. Structured model fields above keep this JSON in sync.")}
+														{t(
+															"advancedOverridesRemainAvailableHereStructuredModelFieldsAboveKeepThisJsonInSync",
+															"Advanced overrides remain available here. Structured model fields above keep this JSON in sync.",
+														)}
 													</p>
 												)}
 											</div>
@@ -1208,7 +1321,9 @@ export default function EditBitsPage() {
 
 										<div className="flex items-center justify-between rounded-lg border p-4">
 											<div>
-												<p className="font-medium">{t('dangerZone', 'Danger Zone')}</p>
+												<p className="font-medium">
+													{t("dangerZone", "Danger Zone")}
+												</p>
 												<p className="text-sm text-muted-foreground">
 													{`Deleting a bit removes it from the registry and deletes the stored artifact.`}
 												</p>
@@ -1219,13 +1334,13 @@ export default function EditBitsPage() {
 												disabled={isDeleting}
 											>
 												<Trash2 className="mr-2 h-4 w-4" />
-												{t('deleteBit', 'Delete Bit')}
+												{t("deleteBit", "Delete Bit")}
 											</Button>
 										</div>
 
 										<div className="flex justify-end gap-2">
 											<Button variant="outline" onClick={handleRefresh}>
-												{t('refresh', 'Refresh')}
+												{t("refresh", "Refresh")}
 											</Button>
 											{canRepairTtsAssets ? (
 												<Button
@@ -1234,12 +1349,12 @@ export default function EditBitsPage() {
 													disabled={isRepairingTts}
 												>
 													<Wrench className="mr-2 h-4 w-4" />
-													{t('repairTtsAssets', 'Repair TTS Assets')}
+													{t("repairTtsAssets", "Repair TTS Assets")}
 												</Button>
 											) : null}
 											<Button onClick={handleSave} disabled={isSaving}>
 												<Save className="mr-2 h-4 w-4" />
-												{t('saveChanges', 'Save Changes')}
+												{t("saveChanges", "Save Changes")}
 											</Button>
 										</div>
 									</>

@@ -64,7 +64,7 @@ export function CapabilityBadges({
 			{capabilities.events && (
 				<span className="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
 					<Zap className="h-2.5 w-2.5" />
-					{t('events', 'Events')}
+					{t("events", "Events")}
 				</span>
 			)}
 			{capabilities.database && (

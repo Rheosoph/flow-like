@@ -112,7 +112,7 @@ export function BlockContextMenu({ children }: { children: React.ReactNode }) {
 							setValue("askAI");
 						}}
 					>
-						{t('askAi', 'Ask AI')}
+						{t("askAi", "Ask AI")}
 					</ContextMenuItem>
 					<ContextMenuItem
 						onClick={() => {
@@ -122,7 +122,7 @@ export function BlockContextMenu({ children }: { children: React.ReactNode }) {
 							editor.tf.focus();
 						}}
 					>
-						{t('delete', 'Delete')}
+						{t("delete", "Delete")}
 					</ContextMenuItem>
 					<ContextMenuItem
 						onClick={() => {
@@ -131,27 +131,29 @@ export function BlockContextMenu({ children }: { children: React.ReactNode }) {
 								.blockSelection.duplicate();
 						}}
 					>
-						{t('duplicate', 'Duplicate')}
+						{t("duplicate", "Duplicate")}
 						{/* <ContextMenuShortcut>⌘ + D</ContextMenuShortcut> */}
 					</ContextMenuItem>
 					<ContextMenuSub>
-						<ContextMenuSubTrigger>{t('turnInto', 'Turn into')}</ContextMenuSubTrigger>
+						<ContextMenuSubTrigger>
+							{t("turnInto", "Turn into")}
+						</ContextMenuSubTrigger>
 						<ContextMenuSubContent className="w-48">
 							<ContextMenuItem onClick={() => handleTurnInto(KEYS.p)}>
-								{t('paragraph', 'Paragraph')}
+								{t("paragraph", "Paragraph")}
 							</ContextMenuItem>
 
 							<ContextMenuItem onClick={() => handleTurnInto(KEYS.h1)}>
-								{t('heading1', 'Heading 1')}
+								{t("heading1", "Heading 1")}
 							</ContextMenuItem>
 							<ContextMenuItem onClick={() => handleTurnInto(KEYS.h2)}>
-								{t('heading2', 'Heading 2')}
+								{t("heading2", "Heading 2")}
 							</ContextMenuItem>
 							<ContextMenuItem onClick={() => handleTurnInto(KEYS.h3)}>
-								{t('heading3', 'Heading 3')}
+								{t("heading3", "Heading 3")}
 							</ContextMenuItem>
 							<ContextMenuItem onClick={() => handleTurnInto(KEYS.blockquote)}>
-								{t('blockquote', 'Blockquote')}
+								{t("blockquote", "Blockquote")}
 							</ContextMenuItem>
 						</ContextMenuSubContent>
 					</ContextMenuSub>
@@ -165,7 +167,7 @@ export function BlockContextMenu({ children }: { children: React.ReactNode }) {
 								.blockSelection.setIndent(1)
 						}
 					>
-						{t('indent', 'Indent')}
+						{t("indent", "Indent")}
 					</ContextMenuItem>
 					<ContextMenuItem
 						onClick={() =>
@@ -174,19 +176,19 @@ export function BlockContextMenu({ children }: { children: React.ReactNode }) {
 								.blockSelection.setIndent(-1)
 						}
 					>
-						{t('outdent', 'Outdent')}
+						{t("outdent", "Outdent")}
 					</ContextMenuItem>
 					<ContextMenuSub>
-						<ContextMenuSubTrigger>{t('align', 'Align')}</ContextMenuSubTrigger>
+						<ContextMenuSubTrigger>{t("align", "Align")}</ContextMenuSubTrigger>
 						<ContextMenuSubContent className="w-48">
 							<ContextMenuItem onClick={() => handleAlign("left")}>
-								{t('left', 'Left')}
+								{t("left", "Left")}
 							</ContextMenuItem>
 							<ContextMenuItem onClick={() => handleAlign("center")}>
-								{t('center', 'Center')}
+								{t("center", "Center")}
 							</ContextMenuItem>
 							<ContextMenuItem onClick={() => handleAlign("right")}>
-								{t('right', 'Right')}
+								{t("right", "Right")}
 							</ContextMenuItem>
 						</ContextMenuSubContent>
 					</ContextMenuSub>

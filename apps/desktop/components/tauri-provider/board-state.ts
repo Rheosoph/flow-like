@@ -53,11 +53,11 @@ import {
 	showProgressToast,
 } from "@flow-like/flow-like-ui";
 import type { IJwks, IRealtimeAccess } from "@flow-like/flow-like-ui";
+import type { IProfile } from "@flow-like/flow-like-ui";
 import type {
 	CanvasSettings,
 	SurfaceComponent,
 } from "@flow-like/flow-like-ui/components/a2ui/types";
-import type { IProfile } from "@flow-like/flow-like-ui";
 import { ApiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import {
 	BoardSyncClient,

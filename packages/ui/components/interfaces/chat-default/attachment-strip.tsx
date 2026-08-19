@@ -115,8 +115,14 @@ function MediaTile({
 			title={file.displayName}
 			aria-label={
 				overflowCount
-					? t('showOverflowcountMoreAttachments', 'Show {{overflowCount}} more attachments', { overflowCount })
-					: t('openDisplayname', 'Open {{displayName}}', { displayName: file.displayName })
+					? t(
+							"showOverflowcountMoreAttachments",
+							"Show {{overflowCount}} more attachments",
+							{ overflowCount },
+						)
+					: t("openDisplayname", "Open {{displayName}}", {
+							displayName: file.displayName,
+						})
 			}
 			className={cn(
 				"group relative overflow-hidden rounded-lg border bg-muted/40 outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
@@ -316,7 +322,9 @@ function AudioAttachment({
 						step={0.1}
 						value={Math.min(current, duration || 0)}
 						disabled={!duration}
-						aria-label={t('seekDisplayname', 'Seek {{displayName}}', { displayName: file.displayName })}
+						aria-label={t("seekDisplayname", "Seek {{displayName}}", {
+							displayName: file.displayName,
+						})}
 						onChange={(event) => {
 							const next = Number(event.target.value);
 							setCurrent(next);
@@ -438,7 +446,11 @@ function AttachmentManifest({
 				))}
 			</span>
 			<span className="flex min-w-0 flex-1 flex-col">
-				<span className="text-[13px] font-medium">{t('lengthAttachments', '{{length}} attachments', { length: files.length })}</span>
+				<span className="text-[13px] font-medium">
+					{t("lengthAttachments", "{{length}} attachments", {
+						length: files.length,
+					})}
+				</span>
 				<span className="truncate font-mono text-[10px] text-muted-foreground">
 					{summariseKinds(files)}
 					{totalSize > 0 ? ` · ${humanFileSize(totalSize, true)}` : ""}
@@ -462,14 +474,14 @@ function StripHeader({
 }>) {
 	const { t } = useTranslation("chat");
 	const trailing = onCollapse
-		? { label: t('showLess', 'Show less'), action: onCollapse }
+		? { label: t("showLess", "Show less"), action: onCollapse }
 		: onShowAll
-			? { label: t('showAll', 'Show all'), action: onShowAll }
+			? { label: t("showAll", "Show all"), action: onShowAll }
 			: undefined;
 
 	return (
 		<div className="flex items-center gap-1.5 font-mono text-[10px] tracking-wide text-muted-foreground">
-			<span>{t('countFiles', '{{count}} files', { count })}</span>
+			<span>{t("countFiles", "{{count}} files", { count })}</span>
 			{totalSize > 0 && (
 				<>
 					<span className="opacity-60">·</span>
@@ -583,7 +595,9 @@ export function AttachmentStrip({
 						type="button"
 						onClick={onShowAll}
 						className="h-9 rounded-[10px] border border-dashed px-2.5 font-mono text-[11px] text-muted-foreground outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-primary/50"
-					>{t('chipoverflowMore', '+{{chipOverflow}} more', { chipOverflow })}</button>
+					>
+						{t("chipoverflowMore", "+{{chipOverflow}} more", { chipOverflow })}
+					</button>
 				)}
 			</div>,
 		);

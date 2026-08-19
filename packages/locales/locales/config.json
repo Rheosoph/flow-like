@@ -11,15 +11,5 @@
 		"interfaces",
 		"admin"
 	],
-	"languages": [
-		"de",
-		"en",
-		"es",
-		"fr",
-		"ja",
-		"ko",
-		"pl",
-		"pt-BR",
-		"zh"
-	]
+	"languages": ["de", "en", "es", "fr", "ja", "ko", "pl", "pt-BR", "zh"]
 }

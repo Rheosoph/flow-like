@@ -36,7 +36,7 @@ export function A2UIVideo({
 				)}
 				style={resolveInlineStyle(style)}
 			>
-				{t('videoUnavailable', 'Video unavailable')}
+				{t("videoUnavailable", "Video unavailable")}
 			</div>
 		);
 	}

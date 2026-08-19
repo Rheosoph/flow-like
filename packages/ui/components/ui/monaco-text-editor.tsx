@@ -25,7 +25,7 @@ export function MonacoTextEditor({
 	value,
 	onChange,
 	disabled = false,
-	placeholder = i18next.t('enterText', 'Enter text...'),
+	placeholder = i18next.t("enterText", "Enter text..."),
 	height = "400px",
 }: Readonly<{
 	value: string;

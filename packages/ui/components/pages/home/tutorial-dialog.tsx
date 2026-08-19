@@ -1,7 +1,7 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import { Button, Switch, useDeveloperMode } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { GitHubLogoIcon } from "@radix-ui/react-icons";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -560,11 +560,11 @@ function StageMotif({ stepId }: { stepId: string }) {
 			</div>
 			<img
 				src="/app-logo.webp"
-				alt={t('flowlike', 'Flow-Like')}
+				alt={t("flowlike", "Flow-Like")}
 				className="size-24 drop-shadow-[0_8px_30px_rgba(0,0,0,0.5)]"
 			/>
 			<span className="mt-4 font-mono text-[11px] uppercase tracking-[0.24em] text-white/70">
-				{t('visualLocalAnywhere', 'visual · local · anywhere')}
+				{t("visualLocalAnywhere", "visual · local · anywhere")}
 			</span>
 		</div>
 	);
@@ -673,7 +673,10 @@ export function TutorialDialog() {
 			// biome-ignore lint/a11y/useSemanticElements: custom-composited overlay; a native <dialog> cannot host the WebGL stage + framer-motion layout
 			role="dialog"
 			aria-modal="true"
-			aria-label={t('gettingStartedWithFlowlike', 'Getting started with Flow-Like')}
+			aria-label={t(
+				"gettingStartedWithFlowlike",
+				"Getting started with Flow-Like",
+			)}
 		>
 			<style>{`@keyframes fl-onb-drift{0%{transform:translate3d(-3%,-2%,0) scale(1.05)}100%{transform:translate3d(4%,3%,0) scale(1.12)}} @keyframes fl-onb-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}} .fl-onb-bob{animation:fl-onb-bob 5s ease-in-out infinite} @media (prefers-reduced-motion: reduce){.fl-onb-bob{animation:none}}`}</style>
 
@@ -681,7 +684,7 @@ export function TutorialDialog() {
 			<button
 				type="button"
 				tabIndex={-1}
-				aria-label={t('closeGettingStarted', 'Close getting started')}
+				aria-label={t("closeGettingStarted", "Close getting started")}
 				onClick={finish}
 				className={`absolute inset-0 ${supportsBackdrop ? "bg-background/80 backdrop-blur-md" : "bg-background/92"}`}
 			/>
@@ -710,7 +713,7 @@ export function TutorialDialog() {
 					<div className="absolute left-6 top-5 z-10 flex items-center gap-2.5">
 						<img src="/app-logo.webp" alt="" className="size-6 rounded-md" />
 						<b className="text-sm font-bold tracking-tight drop-shadow">
-							{t('flowlike', 'Flow-Like')}
+							{t("flowlike", "Flow-Like")}
 						</b>
 					</div>
 
@@ -730,7 +733,11 @@ export function TutorialDialog() {
 					</div>
 
 					<span className="absolute bottom-5 left-6 z-10 hidden font-mono text-[11px] uppercase tracking-[0.14em] text-white/70 sm:block">
-						{t('stepBadge', 'Step 0{{step}} — {{name}}', { step: step + 1, name: active.name })}</span>
+						{t("stepBadge", "Step 0{{step}} — {{name}}", {
+							step: step + 1,
+							name: active.name,
+						})}
+					</span>
 				</aside>
 
 				{/* ── RIGHT: stepper content ── */}
@@ -738,7 +745,7 @@ export function TutorialDialog() {
 					<button
 						type="button"
 						onClick={finish}
-						aria-label={t('close', 'Close')}
+						aria-label={t("close", "Close")}
 						className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
 					>
 						<X className="size-4" />
@@ -754,7 +761,10 @@ export function TutorialDialog() {
 								<button
 									type="button"
 									onClick={() => goTo(i)}
-									aria-label={t('stepValName', 'Step {{val}}: {{name}}', { val: i + 1, name: s.name })}
+									aria-label={t("stepValName", "Step {{val}}: {{name}}", {
+										val: i + 1,
+										name: s.name,
+									})}
 									aria-current={i === step ? "step" : undefined}
 									className={`grid size-7 flex-none place-items-center rounded-full border font-mono text-[11px] font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
 										i <= step
@@ -807,9 +817,15 @@ export function TutorialDialog() {
 										<BubbleOrb size={40} bloom={1.5} />
 										<p className="text-[13px] leading-snug text-muted-foreground">
 											<b className="text-foreground">
-												{t('lookToTheBottomrightCorner', 'Look to the bottom-right corner.')}
+												{t(
+													"lookToTheBottomrightCorner",
+													"Look to the bottom-right corner.",
+												)}
 											</b>{" "}
-											{t('theShimmeringBubbleIsFlowpilotClickItAnytimeToStartAChat', "The shimmering bubble is FlowPilot — click it anytime to start a chat.")}
+											{t(
+												"theShimmeringBubbleIsFlowpilotClickItAnytimeToStartAChat",
+												"The shimmering bubble is FlowPilot — click it anytime to start a chat.",
+											)}
 										</p>
 									</div>
 								)}
@@ -847,13 +863,21 @@ export function TutorialDialog() {
 											<Code2 className="size-5" />
 										</span>
 										<span className="flex flex-col leading-tight">
-											<b className="text-sm font-bold">{t('planningToBuild', 'Planning to build?')}</b>
+											<b className="text-sm font-bold">
+												{t("planningToBuild", "Planning to build?")}
+											</b>
 											<small className="text-xs text-muted-foreground">
-												{t('developerModeUnhidesFlowsEventsAndDataToolingChangeItAnytimeInSettings', "Developer mode unhides flows, events, and data tooling. Change it anytime in Settings.")}
+												{t(
+													"developerModeUnhidesFlowsEventsAndDataToolingChangeItAnytimeInSettings",
+													"Developer mode unhides flows, events, and data tooling. Change it anytime in Settings.",
+												)}
 											</small>
 										</span>
 										<Switch
-											aria-label={t('enableDeveloperMode', 'Enable developer mode')}
+											aria-label={t(
+												"enableDeveloperMode",
+												"Enable developer mode",
+											)}
 											className="ml-auto"
 											checked={developerMode}
 											onCheckedChange={setDeveloperMode}
@@ -873,17 +897,19 @@ export function TutorialDialog() {
 							className="rounded-xl"
 						>
 							<ArrowLeft className="size-4" />
-							{t('back', 'Back')}
+							{t("back", "Back")}
 						</Button>
 						<Button
 							variant="ghost"
 							onClick={finish}
 							className="rounded-xl text-muted-foreground"
 						>
-							{t('skipIntro', 'Skip intro')}
+							{t("skipIntro", "Skip intro")}
 						</Button>
 						<Button onClick={next} className="ml-auto rounded-xl">
-							{step === total - 1 ? t('startBuilding', 'Start building') : "Next"}
+							{step === total - 1
+								? t("startBuilding", "Start building")
+								: "Next"}
 							<ArrowRight className="size-4" />
 						</Button>
 					</div>

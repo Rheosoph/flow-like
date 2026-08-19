@@ -39,7 +39,7 @@ export function DateElementStatic(props: SlateElementProps<TDateElement>) {
 						});
 					})()
 				) : (
-					<span>{t('pickADate', 'Pick a date')}</span>
+					<span>{t("pickADate", "Pick a date")}</span>
 				)}
 			</span>
 			{props.children}

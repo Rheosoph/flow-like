@@ -207,7 +207,7 @@ export function A2UIPlotlyChart({
 					y: DEFAULT_SAMPLE_DATA.y,
 					type: "scatter",
 					mode: "lines+markers",
-					name: t('sampleData', 'Sample Data'),
+					name: t("sampleData", "Sample Data"),
 					marker: { color: tokens.palette[0] },
 				},
 			];

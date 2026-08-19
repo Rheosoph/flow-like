@@ -58,7 +58,7 @@ export function TelemetryGranularityNotice({
 			title={DAILY_GRANULARITY_HINT}
 		>
 			<Layers className="h-3 w-3" />
-			{t('dailyAggregates', 'Daily aggregates')}
+			{t("dailyAggregates", "Daily aggregates")}
 		</Badge>
 	);
 }

@@ -51,7 +51,7 @@ function FlowCopilotWrapperImpl({
 	return (
 		<FlowPilot
 			agentMode="board"
-			title={t('flowpilot', 'FlowPilot')}
+			title={t("flowpilot", "FlowPilot")}
 			appId={appId}
 			board={board}
 			catalogNodes={catalogNodes}

@@ -182,9 +182,14 @@ function FlowLibraryScoreBar({ scores }: { scores: AggregatedScores }) {
 			</HoverCardTrigger>
 			<HoverCardContent side="left" align="start" className="w-64 p-0">
 				<div className="px-3 py-2 bg-muted/50 border-b">
-					<p className="text-xs font-semibold">{t('qualityOverview', 'Quality Overview')}</p>
+					<p className="text-xs font-semibold">
+						{t("qualityOverview", "Quality Overview")}
+					</p>
 					<p className="text-xs text-muted-foreground">
-						{t('minimumScoresAcrossAllNodes', 'Minimum scores across all nodes')}
+						{t(
+							"minimumScoresAcrossAllNodes",
+							"Minimum scores across all nodes",
+						)}
 					</p>
 				</div>
 				<div className="p-3 space-y-2.5">
@@ -226,10 +231,13 @@ export function FlowLibraryHeader({
 			<div className="flex items-center justify-between">
 				<div className="space-y-2">
 					<h1 className="text-4xl font-bold tracking-tight bg-linear-to-r from-foreground to-foreground/70 bg-clip-text text-transparent">
-						{t('projectFlows', 'Project Flows')}
+						{t("projectFlows", "Project Flows")}
 					</h1>
 					<p className="text-muted-foreground text-lg">
-						{t('manageAndOrganizeYourApplicationWorkflows', 'Manage and organize your application workflows')}
+						{t(
+							"manageAndOrganizeYourApplicationWorkflows",
+							"Manage and organize your application workflows",
+						)}
 					</p>
 				</div>
 				<FlowLibraryCreateDialog
@@ -259,12 +267,14 @@ export function FlowLibraryCreateDialog({
 					className="gap-2 shadow-lg hover:shadow-xl transition-all duration-200 bg-linear-to-r from-primary to-primary/80"
 				>
 					<PlusCircleIcon className="h-5 w-5" />
-					{t('createNewFlow', 'Create New Flow')}
+					{t("createNewFlow", "Create New Flow")}
 				</Button>
 			</DialogTrigger>
 			<DialogContent className="sm:max-w-md">
 				<DialogHeader>
-					<DialogTitle className="text-2xl">{t('createNewFlow', 'Create New Flow')}</DialogTitle>
+					<DialogTitle className="text-2xl">
+						{t("createNewFlow", "Create New Flow")}
+					</DialogTitle>
 					<DialogDescription className="text-base">
 						{`Design a new flow for your application`}
 					</DialogDescription>
@@ -272,12 +282,12 @@ export function FlowLibraryCreateDialog({
 				<div className="space-y-4 py-4">
 					<div className="space-y-2">
 						<Label htmlFor="name" className="text-sm font-medium">
-							{t('flowName', 'Flow Name')}
+							{t("flowName", "Flow Name")}
 						</Label>
 						<Input
 							value={boardCreation.name}
 							id="name"
-							placeholder={t('enterFlowName', 'Enter flow name...')}
+							placeholder={t("enterFlowName", "Enter flow name...")}
 							className="h-11"
 							onChange={(event) => {
 								setBoardCreation((old) => ({
@@ -289,12 +299,15 @@ export function FlowLibraryCreateDialog({
 					</div>
 					<div className="space-y-2">
 						<Label htmlFor="description" className="text-sm font-medium">
-							{t('description', 'Description')}
+							{t("description", "Description")}
 						</Label>
 						<Textarea
 							value={boardCreation.description}
 							id="description"
-							placeholder={t('describeThePurposeOfThisFlow', 'Describe the purpose of this flow...')}
+							placeholder={t(
+								"describeThePurposeOfThisFlow",
+								"Describe the purpose of this flow...",
+							)}
 							className="min-h-[100px] resize-none"
 							onChange={(event) => {
 								setBoardCreation((old) => ({
@@ -310,13 +323,13 @@ export function FlowLibraryCreateDialog({
 						variant="outline"
 						onClick={() => setBoardCreation({ ...boardCreation, open: false })}
 					>
-						{t('cancel', 'Cancel')}
+						{t("cancel", "Cancel")}
 					</Button>
 					<Button
 						onClick={onCreateBoard}
 						className="bg-linear-to-r from-primary to-primary/80"
 					>
-						{t('createBoard', 'Create Board')}
+						{t("createBoard", "Create Board")}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
@@ -407,16 +420,21 @@ export function FlowLibraryEmptyBoards({
 		<Card className="border-0 shadow-md bg-linear-to-br from-muted/50 to-muted/20">
 			<CardContent className="flex flex-col items-center justify-center py-16">
 				<WorkflowIcon className="h-16 w-16 text-muted-foreground/50 mb-4" />
-				<h3 className="text-xl font-semibold mb-2">{t('noBoardsYet', 'No boards yet')}</h3>
+				<h3 className="text-xl font-semibold mb-2">
+					{t("noBoardsYet", "No boards yet")}
+				</h3>
 				<p className="text-muted-foreground text-center mb-6 max-w-md">
-					{t('createYourFirstFlowToStartBuildingAmazingAutomations', 'Create your first flow to start building amazing automations')}
+					{t(
+						"createYourFirstFlowToStartBuildingAmazingAutomations",
+						"Create your first flow to start building amazing automations",
+					)}
 				</p>
 				<Button
 					onClick={() => setBoardCreation({ ...boardCreation, open: true })}
 					className="gap-2"
 				>
 					<PlusCircleIcon className="h-4 w-4" />
-					{t('createYourFirstBoard', 'Create Your First Board')}
+					{t("createYourFirstBoard", "Create Your First Board")}
 				</Button>
 			</CardContent>
 		</Card>
@@ -446,13 +464,13 @@ export function FlowLibraryBoardCard({
 			actions={[
 				{
 					id: "open",
-					label: t('openBoard', 'Open Board'),
+					label: t("openBoard", "Open Board"),
 					icon: <ExternalLink className="h-4 w-4 text-foreground" />,
 					onClick: () => onOpenBoard(board.id),
 				},
 				{
 					id: "delete",
-					label: t('deleteBoard', 'Delete Board'),
+					label: t("deleteBoard", "Delete Board"),
 					icon: <Trash2 className="h-4 w-4 text-foreground" />,
 					variant: "destructive",
 					onClick: () => onDeleteBoard(board.id),
@@ -561,7 +579,7 @@ export function FlowLibraryBoardCard({
 										{board.nodeCount}
 									</span>
 								</TooltipTrigger>
-								<TooltipContent>{t('nodes', 'Nodes')}</TooltipContent>
+								<TooltipContent>{t("nodes", "Nodes")}</TooltipContent>
 							</Tooltip>
 							<Tooltip>
 								<TooltipTrigger asChild>
@@ -570,7 +588,7 @@ export function FlowLibraryBoardCard({
 										{board.variableCount}
 									</span>
 								</TooltipTrigger>
-								<TooltipContent>{t('variables', 'Variables')}</TooltipContent>
+								<TooltipContent>{t("variables", "Variables")}</TooltipContent>
 							</Tooltip>
 							<Tooltip>
 								<TooltipTrigger asChild>
@@ -579,7 +597,7 @@ export function FlowLibraryBoardCard({
 										{pages.data?.length ?? 0}
 									</span>
 								</TooltipTrigger>
-								<TooltipContent>{t('pages', 'Pages')}</TooltipContent>
+								<TooltipContent>{t("pages", "Pages")}</TooltipContent>
 							</Tooltip>
 						</div>
 						<span className="flex items-center gap-1">
@@ -606,15 +624,15 @@ function ExecutionModeBadge({ mode }: Readonly<{ mode?: IExecutionMode }>) {
 	const config = {
 		[IExecutionMode.Hybrid]: {
 			icon: <Shuffle className="h-2.5 w-2.5" />,
-			label: t('hybrid', 'Hybrid'),
+			label: t("hybrid", "Hybrid"),
 		},
 		[IExecutionMode.Remote]: {
 			icon: <Cloud className="h-2.5 w-2.5" />,
-			label: t('remote', 'Remote'),
+			label: t("remote", "Remote"),
 		},
 		[IExecutionMode.Local]: {
 			icon: <Monitor className="h-2.5 w-2.5" />,
-			label: t('local', 'Local'),
+			label: t("local", "Local"),
 		},
 	}[effectiveMode];
 
@@ -628,10 +646,14 @@ function ExecutionModeBadge({ mode }: Readonly<{ mode?: IExecutionMode }>) {
 			</TooltipTrigger>
 			<TooltipContent>
 				{effectiveMode === IExecutionMode.Hybrid &&
-					t('runsLocallyWhenPossibleFallsBackToRemote', 'Runs locally when possible, falls back to remote')}
+					t(
+						"runsLocallyWhenPossibleFallsBackToRemote",
+						"Runs locally when possible, falls back to remote",
+					)}
 				{effectiveMode === IExecutionMode.Remote &&
-					t('alwaysRunsOnRemoteServers', 'Always runs on remote servers')}
-				{effectiveMode === IExecutionMode.Local && t('alwaysRunsLocally', 'Always runs locally')}
+					t("alwaysRunsOnRemoteServers", "Always runs on remote servers")}
+				{effectiveMode === IExecutionMode.Local &&
+					t("alwaysRunsLocally", "Always runs locally")}
 			</TooltipContent>
 		</Tooltip>
 	);

@@ -1,5 +1,4 @@
 "use client";
-import { useTranslation } from "@flow-like/locales";
 import {
 	Shortcuts as ShortcutsUI,
 	nowSystemTime,
@@ -8,6 +7,7 @@ import {
 	useInvoke,
 } from "@flow-like/flow-like-ui";
 import { IBitTypes } from "@flow-like/flow-like-ui/lib/schema/hub/bit-search-query";
+import { useTranslation } from "@flow-like/locales";
 import { useLiveQuery } from "dexie-react-hooks";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback } from "react";
@@ -48,7 +48,11 @@ export function Shortcuts() {
 		async (projectName: string, isOnline: boolean) => {
 			const meta = {
 				name: projectName,
-				description: t('codingProjectProjectname', 'Coding project: {{projectName}}', { projectName }),
+				description: t(
+					"codingProjectProjectname",
+					"Coding project: {{projectName}}",
+					{ projectName },
+				),
 				tags: ["coding", "development"],
 				use_case: "Development",
 				created_at: nowSystemTime(),

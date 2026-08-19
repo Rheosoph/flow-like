@@ -45,7 +45,7 @@ export function A2UICopilot({
 		<FlowPilot
 			agentMode="ui"
 			appId={appId}
-			title={t('flowpilot', 'FlowPilot')}
+			title={t("flowpilot", "FlowPilot")}
 			className={className}
 			onClose={onClose}
 			currentComponents={currentComponents}

@@ -57,36 +57,44 @@ function statusConfig(status: string): {
 				variant: "default",
 				icon: <CheckCircle2 className="h-5 w-5 text-green-600" />,
 				color: "border-green-500/30 bg-green-500/5",
-				label: i18next.t('accepted', 'Accepted'),
-				description:
-					i18next.t('yourAppHasBeenApprovedAndTheVisibilityChangeIsNowActive', 'Your app has been approved and the visibility change is now active.'),
+				label: i18next.t("accepted", "Accepted"),
+				description: i18next.t(
+					"yourAppHasBeenApprovedAndTheVisibilityChangeIsNowActive",
+					"Your app has been approved and the visibility change is now active.",
+				),
 			};
 		case "rejected":
 			return {
 				variant: "destructive",
 				icon: <XCircle className="h-5 w-5 text-red-600" />,
 				color: "border-red-500/30 bg-red-500/5",
-				label: i18next.t('rejected', 'Rejected'),
-				description:
-					i18next.t('yourRequestWasNotApprovedReviewTheAuditorFeedbackBelowAndTryAgainAfterMakingTheSuggestedChanges', 'Your request was not approved. Review the auditor feedback below and try again after making the suggested changes.'),
+				label: i18next.t("rejected", "Rejected"),
+				description: i18next.t(
+					"yourRequestWasNotApprovedReviewTheAuditorFeedbackBelowAndTryAgainAfterMakingTheSuggestedChanges",
+					"Your request was not approved. Review the auditor feedback below and try again after making the suggested changes.",
+				),
 			};
 		case "on_hold":
 			return {
 				variant: "secondary",
 				icon: <PauseCircle className="h-5 w-5 text-orange-500" />,
 				color: "border-orange-500/30 bg-orange-500/5",
-				label: i18next.t('onHold', 'On Hold'),
-				description:
-					i18next.t('yourRequestIsOnHoldAnAuditorMayNeedMoreInformationOrTimeToReviewCheckBackSoon', 'Your request is on hold. An auditor may need more information or time to review. Check back soon.'),
+				label: i18next.t("onHold", "On Hold"),
+				description: i18next.t(
+					"yourRequestIsOnHoldAnAuditorMayNeedMoreInformationOrTimeToReviewCheckBackSoon",
+					"Your request is on hold. An auditor may need more information or time to review. Check back soon.",
+				),
 			};
 		default:
 			return {
 				variant: "secondary",
 				icon: <Clock3 className="h-5 w-5 text-blue-500" />,
 				color: "border-blue-500/30 bg-blue-500/5",
-				label: i18next.t('pendingReview', 'Pending Review'),
-				description:
-					i18next.t('yourRequestIsInTheReviewQueueThisTypicallyTakes13BusinessDays', 'Your request is in the review queue. This typically takes 1–3 business days.'),
+				label: i18next.t("pendingReview", "Pending Review"),
+				description: i18next.t(
+					"yourRequestIsInTheReviewQueueThisTypicallyTakes13BusinessDays",
+					"Your request is in the review queue. This typically takes 1–3 business days.",
+				),
 			};
 	}
 }
@@ -161,10 +169,12 @@ export function AppPublicationPage({
 			{onBack && (
 				<Button variant="ghost" size="sm" onClick={onBack}>
 					<ArrowLeft className="h-4 w-4 mr-1" />
-					{t('back', 'Back')}
+					{t("back", "Back")}
 				</Button>
 			)}
-			<h2 className="text-lg font-semibold">{t('publicationReview', 'Publication Review')}</h2>
+			<h2 className="text-lg font-semibold">
+				{t("publicationReview", "Publication Review")}
+			</h2>
 		</div>
 	);
 
@@ -211,11 +221,17 @@ export function AppPublicationPage({
 						<div className="text-center py-8 space-y-3">
 							<Send className="h-10 w-10 mx-auto text-muted-foreground/50" />
 							<p className="text-sm text-muted-foreground">
-								{t('noPublicationRequestsYetChangeYourAppapossVisibilityToPublicToSubmitItForReview', "No publication requests yet. Change your app's visibility to Public to submit it for review.")}
+								{t(
+									"noPublicationRequestsYetChangeYourAppapossVisibilityToPublicToSubmitItForReview",
+									"No publication requests yet. Change your app's visibility to Public to submit it for review.",
+								)}
 							</p>
 							<a href={docsUrl} target="_blank" rel="noreferrer">
 								<Button variant="link" size="sm" className="gap-1">
-									{t('learnAboutThePublicationProcess', 'Learn about the publication process')}
+									{t(
+										"learnAboutThePublicationProcess",
+										"Learn about the publication process",
+									)}
 									<ExternalLink className="h-3 w-3" />
 								</Button>
 							</a>
@@ -253,7 +269,8 @@ export function AppPublicationPage({
 										</div>
 									</div>
 									<Badge variant="outline">
-										{t('target', 'Target:')} {formatLabel(request.targetVisibility)}
+										{t("target", "Target:")}{" "}
+										{formatLabel(request.targetVisibility)}
 									</Badge>
 								</div>
 							</CardHeader>
@@ -276,16 +293,16 @@ export function AppPublicationPage({
 								</div>
 								<div className="flex justify-between mt-2">
 									<span className="text-xs text-muted-foreground">
-										{t('submitted', 'Submitted')}
+										{t("submitted", "Submitted")}
 									</span>
 									<span className="text-xs text-muted-foreground">
-										{t('inReview', 'In Review')}
+										{t("inReview", "In Review")}
 									</span>
 									<span className="text-xs text-muted-foreground">
-										{t('decision', 'Decision')}
+										{t("decision", "Decision")}
 									</span>
 									<span className="text-xs text-muted-foreground">
-										{t('published', 'Published')}
+										{t("published", "Published")}
 									</span>
 								</div>
 
@@ -293,7 +310,9 @@ export function AppPublicationPage({
 
 								<div className="grid grid-cols-2 gap-4 text-sm">
 									<div>
-										<span className="text-muted-foreground">{t('submitted', 'Submitted')}</span>
+										<span className="text-muted-foreground">
+											{t("submitted", "Submitted")}
+										</span>
 										<div className="font-medium">
 											<RelativeTime
 												value={request.createdAt}
@@ -302,7 +321,9 @@ export function AppPublicationPage({
 										</div>
 									</div>
 									<div>
-										<span className="text-muted-foreground">{t('lastUpdated', 'Last Updated')}</span>
+										<span className="text-muted-foreground">
+											{t("lastUpdated", "Last Updated")}
+										</span>
 										<div className="font-medium">
 											<RelativeTime
 												value={request.updatedAt}
@@ -319,7 +340,7 @@ export function AppPublicationPage({
 							<CardHeader>
 								<CardTitle className="text-base flex items-center gap-2">
 									<MessageSquare className="h-4 w-4" />
-									{t('reviewActivity', 'Review Activity')}
+									{t("reviewActivity", "Review Activity")}
 								</CardTitle>
 								<CardDescription>
 									{`Communication and status updates from auditors`}
@@ -330,7 +351,10 @@ export function AppPublicationPage({
 									<div className="text-center py-6">
 										<Clock3 className="h-8 w-8 mx-auto text-muted-foreground/40 mb-2" />
 										<p className="text-sm text-muted-foreground">
-											{t('noReviewActivityYetYourRequestIsInTheQueue', 'No review activity yet. Your request is in the queue.')}
+											{t(
+												"noReviewActivityYetYourRequestIsInTheQueue",
+												"No review activity yet. Your request is in the queue.",
+											)}
 										</p>
 									</div>
 								) : (
@@ -378,7 +402,10 @@ export function AppPublicationPage({
 																</p>
 															) : (
 																<p className="mt-1 text-sm text-muted-foreground italic">
-																	{t('noCommentProvided', 'No comment provided.')}
+																	{t(
+																		"noCommentProvided",
+																		"No comment provided.",
+																	)}
 																</p>
 															)}
 														</div>
@@ -396,32 +423,47 @@ export function AppPublicationPage({
 							<CardHeader>
 								<CardTitle className="text-base flex items-center gap-2">
 									<FileText className="h-4 w-4" />
-									{t('whatToExpect', 'What to Expect')}
+									{t("whatToExpect", "What to Expect")}
 								</CardTitle>
 							</CardHeader>
 							<CardContent>
 								<ul className="space-y-2 text-sm text-muted-foreground">
 									<li className="flex items-start gap-2">
 										<CheckCircle2 className="h-4 w-4 mt-0.5 text-green-600 shrink-0" />
-										{t('reviewsTypicallyTake13BusinessDays', 'Reviews typically take 1–3 business days.')}
+										{t(
+											"reviewsTypicallyTake13BusinessDays",
+											"Reviews typically take 1–3 business days.",
+										)}
 									</li>
 									<li className="flex items-start gap-2">
 										<CheckCircle2 className="h-4 w-4 mt-0.5 text-green-600 shrink-0" />
-										{t('anAuditorWillCheckYourAppMetadataDescriptionAndContent', "An auditor will check your app metadata, description, and content.")}
+										{t(
+											"anAuditorWillCheckYourAppMetadataDescriptionAndContent",
+											"An auditor will check your app metadata, description, and content.",
+										)}
 									</li>
 									<li className="flex items-start gap-2">
 										<CheckCircle2 className="h-4 w-4 mt-0.5 text-green-600 shrink-0" />
-										{t('youaposllReceiveAnEmailNotificationWhenADecisionIsMade', "You'll receive an email notification when a decision is made.")}
+										{t(
+											"youaposllReceiveAnEmailNotificationWhenADecisionIsMade",
+											"You'll receive an email notification when a decision is made.",
+										)}
 									</li>
 									<li className="flex items-start gap-2">
 										<CheckCircle2 className="h-4 w-4 mt-0.5 text-green-600 shrink-0" />
-										{t('ifRejectedYouCanAddressTheFeedbackAndResubmit', 'If rejected, you can address the feedback and resubmit.')}
+										{t(
+											"ifRejectedYouCanAddressTheFeedbackAndResubmit",
+											"If rejected, you can address the feedback and resubmit.",
+										)}
 									</li>
 								</ul>
 								<div className="mt-4">
 									<a href={docsUrl} target="_blank" rel="noreferrer">
 										<Button variant="outline" size="sm" className="gap-1">
-											{t('readThePublicationGuidelines', 'Read the publication guidelines')}
+											{t(
+												"readThePublicationGuidelines",
+												"Read the publication guidelines",
+											)}
 											<ExternalLink className="h-3 w-3" />
 										</Button>
 									</a>
@@ -436,9 +478,14 @@ export function AppPublicationPage({
 			{pastRequests.length > 0 && (
 				<Card>
 					<CardHeader>
-						<CardTitle className="text-base">{t('previousRequests', 'Previous Requests')}</CardTitle>
+						<CardTitle className="text-base">
+							{t("previousRequests", "Previous Requests")}
+						</CardTitle>
 						<CardDescription>
-							{t('historyOfPastPublicationReviewDecisions', 'History of past publication review decisions')}
+							{t(
+								"historyOfPastPublicationReviewDecisions",
+								"History of past publication review decisions",
+							)}
 						</CardDescription>
 					</CardHeader>
 					<CardContent className="space-y-3">
@@ -458,7 +505,8 @@ export function AppPublicationPage({
 											</span>
 										</Badge>
 										<Badge variant="outline">
-											{t('target', 'Target:')} {formatLabel(request.targetVisibility)}
+											{t("target", "Target:")}{" "}
+											{formatLabel(request.targetVisibility)}
 										</Badge>
 										<span className="text-xs text-muted-foreground">
 											<RelativeTime

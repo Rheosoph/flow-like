@@ -92,7 +92,9 @@ export function DaemonConfig({
 		<div className="w-full space-y-4">
 			{shows("supervision") && (
 				<div className="space-y-2">
-					<Label htmlFor="daemon_restart_policy">{t('restartPolicy', 'Restart Policy')}</Label>
+					<Label htmlFor="daemon_restart_policy">
+						{t("restartPolicy", "Restart Policy")}
+					</Label>
 					<Select
 						value={current.restart_policy}
 						onValueChange={(value) =>
@@ -104,9 +106,11 @@ export function DaemonConfig({
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="on_failure">{t('onFailure', 'On Failure')}</SelectItem>
-							<SelectItem value="always">{t('always', 'Always')}</SelectItem>
-							<SelectItem value="never">{t('never', 'Never')}</SelectItem>
+							<SelectItem value="on_failure">
+								{t("onFailure", "On Failure")}
+							</SelectItem>
+							<SelectItem value="always">{t("always", "Always")}</SelectItem>
+							<SelectItem value="never">{t("never", "Never")}</SelectItem>
 						</SelectContent>
 					</Select>
 				</div>
@@ -116,19 +120,19 @@ export function DaemonConfig({
 				<div className="grid gap-4 md:grid-cols-2">
 					{numberInput(
 						"min_restart_delay_ms",
-						t('minRestartDelayMs', 'Min Restart Delay (ms)'),
+						t("minRestartDelayMs", "Min Restart Delay (ms)"),
 						DEFAULTS.min_restart_delay_ms,
 						100,
 					)}
 					{numberInput(
 						"max_restart_delay_ms",
-						t('maxRestartDelayMs', 'Max Restart Delay (ms)'),
+						t("maxRestartDelayMs", "Max Restart Delay (ms)"),
 						DEFAULTS.max_restart_delay_ms,
 						100,
 					)}
 					{numberInput(
 						"healthy_reset_ms",
-						t('healthyResetWindowMs', 'Healthy Reset Window (ms)'),
+						t("healthyResetWindowMs", "Healthy Reset Window (ms)"),
 						DEFAULTS.healthy_reset_ms,
 						1000,
 					)}
@@ -139,19 +143,19 @@ export function DaemonConfig({
 				<div className="grid gap-4 md:grid-cols-2">
 					{numberInput(
 						"board_poll_interval_ms",
-						t('boardPollIntervalMs', 'Board Poll Interval (ms)'),
+						t("boardPollIntervalMs", "Board Poll Interval (ms)"),
 						DEFAULTS.board_poll_interval_ms,
 						500,
 					)}
 					{numberInput(
 						"log_flush_interval_ms",
-						t('logFlushIntervalMs', 'Log Flush Interval (ms)'),
+						t("logFlushIntervalMs", "Log Flush Interval (ms)"),
 						DEFAULTS.log_flush_interval_ms,
 						500,
 					)}
 					{numberInput(
 						"log_batch_size",
-						t('logBatchSize', 'Log Batch Size'),
+						t("logBatchSize", "Log Batch Size"),
 						DEFAULTS.log_batch_size,
 						1,
 						1,

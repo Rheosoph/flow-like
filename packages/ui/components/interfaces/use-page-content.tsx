@@ -1017,7 +1017,12 @@ export function UsePageContent({
 				return (
 					<InterfaceLoadError
 						message={
-							isOnline ? t('thisAppsEventsCouldNotBeLoaded', 'This app\'s events could not be loaded.') : undefined
+							isOnline
+								? t(
+										"thisAppsEventsCouldNotBeLoaded",
+										"This app's events could not be loaded.",
+									)
+								: undefined
 						}
 						offline={!isOnline}
 						retrying={events.isFetching}

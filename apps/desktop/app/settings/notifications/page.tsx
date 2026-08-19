@@ -1,6 +1,5 @@
 "use client";
 
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -19,6 +18,7 @@ import type {
 	IPushNotificationsConfig,
 	IPushTargetStatus,
 } from "@flow-like/flow-like-ui";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	AlertTriangle,
 	Bell,
@@ -73,23 +73,35 @@ function errorMessage(error: unknown): string {
 
 function statusBadge(status: IPushTargetStatus | null, localEnabled: boolean) {
 	if (!localEnabled) {
-		return { label: i18next.t('offOnThisDevice', 'Off on this device'), variant: "secondary" as const };
+		return {
+			label: i18next.t("offOnThisDevice", "Off on this device"),
+			variant: "secondary" as const,
+		};
 	}
 	if (!status?.registered) {
-		return { label: i18next.t('notRegistered', 'Not registered'), variant: "outline" as const };
+		return {
+			label: i18next.t("notRegistered", "Not registered"),
+			variant: "outline" as const,
+		};
 	}
 	if (status.push_enabled && !status.invalidated_at) {
-		return { label: i18next.t('enabled', 'Enabled'), variant: "default" as const };
+		return {
+			label: i18next.t("enabled", "Enabled"),
+			variant: "default" as const,
+		};
 	}
-	return { label: i18next.t('disabled', 'Disabled'), variant: "destructive" as const };
+	return {
+		label: i18next.t("disabled", "Disabled"),
+		variant: "destructive" as const,
+	};
 }
 
 function hubConfigLabel(
 	pushConfig: IPushNotificationsConfig | undefined,
 ): string {
-	if (!pushConfig) return i18next.t('notLoaded', 'Not loaded');
+	if (!pushConfig) return i18next.t("notLoaded", "Not loaded");
 	if (!pushConfig.enabled) return "Disabled";
-	if (pushConfig.provider !== "fcm") return i18next.t('notFcm', 'Not FCM');
+	if (pushConfig.provider !== "fcm") return i18next.t("notFcm", "Not FCM");
 	if (pushConfig.allow_mobile !== true) return "Mobile off";
 	return "Enabled";
 }
@@ -142,20 +154,38 @@ export default function NotificationsSettingsPage() {
 			status?.registered && status.push_enabled && !status.invalidated_at,
 		);
 	const switchDisabledReason = useMemo(() => {
-		if (saving) return t('savingPushSettings', 'Saving push settings.');
-		if (loading) return t('checkingPushStatus', 'Checking push status.');
-		if (!isMobile) return t('thisDeviceWasNotDetectedAsIosOrAndroid', 'This device was not detected as iOS or Android.');
+		if (saving) return t("savingPushSettings", "Saving push settings.");
+		if (loading) return t("checkingPushStatus", "Checking push status.");
+		if (!isMobile)
+			return t(
+				"thisDeviceWasNotDetectedAsIosOrAndroid",
+				"This device was not detected as iOS or Android.",
+			);
 		if (!pushConfig) return `Hub config has not loaded from this profile.`;
-		if (!pushConfig.enabled) return t('pushIsDisabledInTheHubConfig', 'Push is disabled in the hub config.');
+		if (!pushConfig.enabled)
+			return t(
+				"pushIsDisabledInTheHubConfig",
+				"Push is disabled in the hub config.",
+			);
 		if (pushConfig.provider !== "fcm")
-			return t('mobilePushRequiresTheFcmProvider', 'Mobile push requires the FCM provider.');
+			return t(
+				"mobilePushRequiresTheFcmProvider",
+				"Mobile push requires the FCM provider.",
+			);
 		if (pushConfig.allow_mobile !== true) {
-			return t('mobilePushIsNotEnabledInTheHubConfig', 'Mobile push is not enabled in the hub config.');
+			return t(
+				"mobilePushIsNotEnabledInTheHubConfig",
+				"Mobile push is not enabled in the hub config.",
+			);
 		}
 		if (pluginState !== "available") {
-			return t('theNativeRemotepushPluginIsNotAvailableInThisAppBuild', 'The native remote-push plugin is not available in this app build.');
+			return t(
+				"theNativeRemotepushPluginIsNotAvailableInThisAppBuild",
+				"The native remote-push plugin is not available in this app build.",
+			);
 		}
-		if (!deviceId) return t('noDeviceIdIsAvailable', 'No device id is available.');
+		if (!deviceId)
+			return t("noDeviceIdIsAvailable", "No device id is available.");
 		return null;
 	}, [deviceId, isMobile, loading, pluginState, pushConfig, saving]);
 
@@ -255,12 +285,16 @@ export default function NotificationsSettingsPage() {
 				setStatus(nextStatus);
 				toast.success(
 					enabled
-						? t('pushNotificationsEnabled', 'Push notifications enabled')
-						: t('pushNotificationsDisabled', 'Push notifications disabled'),
+						? t("pushNotificationsEnabled", "Push notifications enabled")
+						: t("pushNotificationsDisabled", "Push notifications disabled"),
 				);
 			} catch (error) {
 				toast.error(
-					t('failedToUpdatePushNotificationsVal', 'Failed to update push notifications: {{val}}', { val: errorMessage(error) }),
+					t(
+						"failedToUpdatePushNotificationsVal",
+						"Failed to update push notifications: {{val}}",
+						{ val: errorMessage(error) },
+					),
 				);
 			} finally {
 				setSaving(false);
@@ -273,9 +307,14 @@ export default function NotificationsSettingsPage() {
 		<div className="h-full min-h-0 overflow-auto">
 			<div className="container mx-auto flex max-w-5xl flex-col gap-6 px-2 pb-4">
 				<div className="flex flex-col gap-1 pt-2">
-					<h1 className="text-3xl font-bold tracking-tight">{t('notifications', 'Notifications')}</h1>
+					<h1 className="text-3xl font-bold tracking-tight">
+						{t("notifications", "Notifications")}
+					</h1>
 					<p className="text-muted-foreground">
-						{t('mobilePushDeliveryForThisDeviceAndHubProfile', 'Mobile push delivery for this device and hub profile')}
+						{t(
+							"mobilePushDeliveryForThisDeviceAndHubProfile",
+							"Mobile push delivery for this device and hub profile",
+						)}
 					</p>
 				</div>
 
@@ -289,12 +328,18 @@ export default function NotificationsSettingsPage() {
 									) : (
 										<BellOff className="h-5 w-5 text-muted-foreground" />
 									)}
-									{t('pushDelivery', 'Push delivery')}
+									{t("pushDelivery", "Push delivery")}
 								</CardTitle>
 								<CardDescription>
 									{isMobile
-										? t('currentNativePushTargetState', 'Current native push target state')
-										: t('nativeMobilePushIsAvailableOnIosAndAndroid', 'Native mobile push is available on iOS and Android')}
+										? t(
+												"currentNativePushTargetState",
+												"Current native push target state",
+											)
+										: t(
+												"nativeMobilePushIsAvailableOnIosAndAndroid",
+												"Native mobile push is available on iOS and Android",
+											)}
 								</CardDescription>
 							</div>
 							<Badge variant={badge.variant}>{badge.label}</Badge>
@@ -302,11 +347,19 @@ export default function NotificationsSettingsPage() {
 						<CardContent className="flex flex-col gap-5">
 							<div className="flex items-center justify-between gap-4 rounded-md border border-border/60 bg-muted/20 p-4">
 								<div className="min-w-0">
-									<div className="font-medium">{t('enablePushNotifications', 'Enable push notifications')}</div>
+									<div className="font-medium">
+										{t("enablePushNotifications", "Enable push notifications")}
+									</div>
 									<div className="text-sm text-muted-foreground">
 										{status?.registered
-											? t('registeredTargetControlsServerDelivery', 'Registered target controls server delivery')
-											: t('createsAServerTargetAfterNativePermission', 'Creates a server target after native permission')}
+											? t(
+													"registeredTargetControlsServerDelivery",
+													"Registered target controls server delivery",
+												)
+											: t(
+													"createsAServerTargetAfterNativePermission",
+													"Creates a server target after native permission",
+												)}
 									</div>
 								</div>
 								<Switch
@@ -339,13 +392,13 @@ export default function NotificationsSettingsPage() {
 								/>
 								<StatusTile
 									icon={Server}
-									label={t('hubConfig', 'Hub config')}
+									label={t("hubConfig", "Hub config")}
 									value={hubConfigLabel(pushConfig)}
 									ok={canUseRemotePush}
 								/>
 								<StatusTile
 									icon={ShieldCheck}
-									label={t('nativePlugin', 'Native plugin')}
+									label={t("nativePlugin", "Native plugin")}
 									value={
 										pluginState === "loading"
 											? "Checking"
@@ -365,7 +418,7 @@ export default function NotificationsSettingsPage() {
 												? "Denied"
 												: permissionState === "unavailable"
 													? "Unavailable"
-													: t('notChecked', 'Not checked')
+													: t("notChecked", "Not checked")
 									}
 									ok={permissionState === "granted"}
 								/>
@@ -376,12 +429,16 @@ export default function NotificationsSettingsPage() {
 					<Card>
 						<CardHeader className="gap-3 sm:flex sm:flex-row sm:items-start sm:justify-between">
 							<div className="space-y-1.5">
-								<CardTitle className="text-xl">{t('targetDetails', 'Target details')}</CardTitle>
-								<CardDescription>{t('serverRowForThisDevice', 'Server row for this device')}</CardDescription>
+								<CardTitle className="text-xl">
+									{t("targetDetails", "Target details")}
+								</CardTitle>
+								<CardDescription>
+									{t("serverRowForThisDevice", "Server row for this device")}
+								</CardDescription>
 							</div>
 							<Button variant="outline" size="sm" onClick={refreshAll}>
 								<RefreshCw className="h-4 w-4" />
-								{t('refresh', 'Refresh')}
+								{t("refresh", "Refresh")}
 							</Button>
 						</CardHeader>
 						<CardContent>
@@ -395,7 +452,7 @@ export default function NotificationsSettingsPage() {
 							) : (
 								<div className="flex flex-col">
 									<StatusRow
-										label={t('deviceId', 'Device ID')}
+										label={t("deviceId", "Device ID")}
 										value={
 											deviceId ? (
 												<span className="break-all font-mono text-xs">
@@ -418,21 +475,21 @@ export default function NotificationsSettingsPage() {
 										muted={!status?.provider && !pushConfig?.provider}
 									/>
 									<StatusRow
-										label={t('serverEnabled', 'Server enabled')}
+										label={t("serverEnabled", "Server enabled")}
 										value={status?.push_enabled ? "Yes" : "No"}
 										muted={!status?.push_enabled}
 									/>
 									<StatusRow
-										label={t('failureCount', 'Failure count')}
+										label={t("failureCount", "Failure count")}
 										value={status?.failure_count ?? 0}
 									/>
 									<StatusRow
-										label={t('lastRegistered', 'Last registered')}
+										label={t("lastRegistered", "Last registered")}
 										value={formatDate(status?.last_registered_at)}
 										muted={!status?.last_registered_at}
 									/>
 									<StatusRow
-										label={t('lastSeen', 'Last seen')}
+										label={t("lastSeen", "Last seen")}
 										value={formatDate(status?.last_seen_at)}
 										muted={!status?.last_seen_at}
 									/>

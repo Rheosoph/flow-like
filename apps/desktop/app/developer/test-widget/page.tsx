@@ -1,6 +1,5 @@
 "use client";
 
-import { Trans, i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -17,6 +16,7 @@ import type {
 	WidgetInspection,
 	WidgetPreviewBundle,
 } from "@flow-like/flow-like-ui/lib/schema/developer";
+import { Trans, i18n as i18next, useTranslation } from "@flow-like/locales";
 import { contractDefaults } from "@flow-like/widget-sdk";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -51,10 +51,22 @@ import { WidgetPropsForm } from "./props-form";
 
 function contractSummary(widget: WidgetInspection): string {
 	return [
-		i18next.t('countInputs', { defaultValue_one: '{{count}} input', defaultValue_other: '{{count}} inputs', count: widget.inputCount }),
-		i18next.t('countEvents', { defaultValue_one: '{{count}} event', defaultValue_other: '{{count}} events', count: widget.eventCount }),
-		i18next.t('countQueries', { defaultValue_one: '{{count}} query', defaultValue_other: '{{count}} queries', count: widget.queryCount }),
-	].join(' · ');
+		i18next.t("countInputs", {
+			defaultValue_one: "{{count}} input",
+			defaultValue_other: "{{count}} inputs",
+			count: widget.inputCount,
+		}),
+		i18next.t("countEvents", {
+			defaultValue_one: "{{count}} event",
+			defaultValue_other: "{{count}} events",
+			count: widget.eventCount,
+		}),
+		i18next.t("countQueries", {
+			defaultValue_one: "{{count}} query",
+			defaultValue_other: "{{count}} queries",
+			count: widget.queryCount,
+		}),
+	].join(" · ");
 }
 
 function WidgetListItem({
@@ -129,7 +141,10 @@ function WidgetPreviewFrame({
 	if (!Renderer) {
 		return (
 			<p className="text-sm text-destructive">
-				{t('theMicroWidgetRendererIsNotRegistered', 'The micro widget renderer is not registered.')}
+				{t(
+					"theMicroWidgetRendererIsNotRegistered",
+					"The micro widget renderer is not registered.",
+				)}
 			</p>
 		);
 	}
@@ -248,7 +263,10 @@ function TestWidgetPageContent() {
 					<button
 						type="button"
 						onClick={() => router.push("/developer")}
-						aria-label={t('backToDeveloperProjects', 'Back to developer projects')}
+						aria-label={t(
+							"backToDeveloperProjects",
+							"Back to developer projects",
+						)}
 						className="h-8 w-8 rounded-full flex items-center justify-center text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30 transition-colors"
 					>
 						<ArrowLeft className="h-4 w-4" />
@@ -256,10 +274,13 @@ function TestWidgetPageContent() {
 					<div>
 						<h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
 							<LayoutTemplate className="h-6 w-6" />
-							{t('testWidget', 'Test Widget')}
+							{t("testWidget", "Test Widget")}
 						</h1>
 						<p className="text-sm text-muted-foreground/70">
-							{t('renderYourProjectsBuiltWidgetsThroughTheRealSandboxedHost', "Render your project's built widgets through the real sandboxed host")}
+							{t(
+								"renderYourProjectsBuiltWidgetsThroughTheRealSandboxedHost",
+								"Render your project's built widgets through the real sandboxed host",
+							)}
 						</p>
 					</div>
 				</div>
@@ -286,7 +307,7 @@ function TestWidgetPageContent() {
 							) : (
 								<RefreshCw className="h-4 w-4" />
 							)}
-							{t('reload', 'Reload')}
+							{t("reload", "Reload")}
 						</Button>
 					)}
 				</div>
@@ -302,14 +323,23 @@ function TestWidgetPageContent() {
 				{!projectDir && (
 					<Card className="max-w-md mx-auto mt-12">
 						<CardHeader>
-							<CardTitle>{t('noProjectSelected', 'No Project Selected')}</CardTitle>
+							<CardTitle>
+								{t("noProjectSelected", "No Project Selected")}
+							</CardTitle>
 							<CardDescription>
-								{t('pickALocalProjectDirectoryContainingABuilt', 'Pick a local project directory containing a built')}{" "}<Trans i18nKey="codewidgetsflwbcodeToPreviewItsWidgets"><code>widgets.flwb</code> to preview its widgets.</Trans></CardDescription>
+								{t(
+									"pickALocalProjectDirectoryContainingABuilt",
+									"Pick a local project directory containing a built",
+								)}{" "}
+								<Trans i18nKey="codewidgetsflwbcodeToPreviewItsWidgets">
+									<code>widgets.flwb</code> to preview its widgets.
+								</Trans>
+							</CardDescription>
 						</CardHeader>
 						<CardContent>
 							<Button onClick={selectDirectory} className="gap-1.5">
 								<FolderOpen className="h-4 w-4" />
-								{t('selectProjectDirectory', 'Select Project Directory')}
+								{t("selectProjectDirectory", "Select Project Directory")}
 							</Button>
 						</CardContent>
 					</Card>
@@ -321,13 +351,20 @@ function TestWidgetPageContent() {
 							<AlertTriangle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
 							<div className="min-w-0">
 								<p className="font-medium text-destructive">
-									{t('failedToPrepareWidgetPreview', 'Failed to prepare widget preview')}
+									{t(
+										"failedToPrepareWidgetPreview",
+										"Failed to prepare widget preview",
+									)}
 								</p>
 								<p className="text-muted-foreground mt-1 wrap-break-word">
 									{error}
 								</p>
-								<p className="text-muted-foreground mt-2"><Trans i18nKey="buildTheBundleFirstCodemiseRunBuildcodeInTheProjectDirectory">Build the bundle first: <code>mise run build</code> in the
-									project directory.</Trans></p>
+								<p className="text-muted-foreground mt-2">
+									<Trans i18nKey="buildTheBundleFirstCodemiseRunBuildcodeInTheProjectDirectory">
+										Build the bundle first: <code>mise run build</code> in the
+										project directory.
+									</Trans>
+								</p>
 							</div>
 						</CardContent>
 					</Card>
@@ -343,7 +380,9 @@ function TestWidgetPageContent() {
 					<div className="grid grid-cols-[260px_1fr] gap-6 items-start">
 						<div className="space-y-3">
 							<div className="flex items-baseline justify-between">
-								<h3 className="text-sm font-medium">{t('widgets', 'Widgets')}</h3>
+								<h3 className="text-sm font-medium">
+									{t("widgets", "Widgets")}
+								</h3>
 								<span className="text-xs text-muted-foreground/60">
 									{bundle.widgets.length}
 								</span>
@@ -359,7 +398,14 @@ function TestWidgetPageContent() {
 							<div className="rounded-lg border border-border/20 bg-muted/5 p-3 text-xs text-muted-foreground/70 flex items-start gap-2">
 								<Terminal className="h-3.5 w-3.5 mt-0.5 shrink-0" />
 								<span>
-									{t('forTheRichDevLoopHmrPropsPanelEventLogRun', 'For the rich dev loop (HMR, props panel, event log) run')}{" "}<Trans i18nKey="codeflowlikewidgetsDevcodeInTheProject"><code>flow-like-widgets dev</code> in the project.</Trans></span>
+									{t(
+										"forTheRichDevLoopHmrPropsPanelEventLogRun",
+										"For the rich dev loop (HMR, props panel, event log) run",
+									)}{" "}
+									<Trans i18nKey="codeflowlikewidgetsDevcodeInTheProject">
+										<code>flow-like-widgets dev</code> in the project.
+									</Trans>
+								</span>
 							</div>
 						</div>
 
@@ -385,7 +431,7 @@ function TestWidgetPageContent() {
 										<div className="flex items-end justify-between gap-4">
 											<div className="space-y-1">
 												<h2 className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-													{t('props', 'Props')}
+													{t("props", "Props")}
 												</h2>
 												<p className="text-xs text-muted-foreground/60">
 													{`Generated from the widget's bundled type contract.`}
@@ -399,7 +445,7 @@ function TestWidgetPageContent() {
 													selectedInputCount === 0 || !propsValidation.valid
 												}
 											>
-												{t('apply', 'Apply')}
+												{t("apply", "Apply")}
 											</Button>
 										</div>
 										<WidgetPropsForm
@@ -409,14 +455,20 @@ function TestWidgetPageContent() {
 											onChange={updatePropsDraft}
 										/>
 										<p className="text-xs text-muted-foreground/60">
-											{t('structuredPropsUseJsonAndAreCheckedAgainstTheirSchemaBeforeTheUpdateIsApplied', "Structured props use JSON and are checked against their schema before the update is applied.")}
+											{t(
+												"structuredPropsUseJsonAndAreCheckedAgainstTheirSchemaBeforeTheUpdateIsApplied",
+												"Structured props use JSON and are checked against their schema before the update is applied.",
+											)}
 										</p>
 									</form>
 								</>
 							) : (
 								<Card>
 									<CardContent className="p-6 text-sm text-muted-foreground">
-										{t('theBundleContainsNoWidgets', 'The bundle contains no widgets.')}
+										{t(
+											"theBundleContainsNoWidgets",
+											"The bundle contains no widgets.",
+										)}
 									</CardContent>
 								</Card>
 							)}

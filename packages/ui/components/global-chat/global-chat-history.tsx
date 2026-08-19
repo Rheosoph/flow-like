@@ -173,7 +173,7 @@ export function GlobalChatHistory({
 			variant="ghost"
 			size="icon"
 			className="h-9 w-9 rounded-lg md:h-8 md:w-8"
-			aria-label={t('chatHistory', 'Chat history')}
+			aria-label={t("chatHistory", "Chat history")}
 		>
 			<HistoryIcon className="size-4" />
 		</Button>
@@ -187,14 +187,14 @@ export function GlobalChatHistory({
 						variant="ghost"
 						size="icon"
 						className="h-9 w-9 rounded-lg md:h-8 md:w-8"
-						aria-label={t('newChat', 'New chat')}
+						aria-label={t("newChat", "New chat")}
 						onClick={newConversation}
 					>
 						<SquarePenIcon className="size-4" />
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent side="bottom" className="text-xs">
-					{t('newChat', 'New chat')}
+					{t("newChat", "New chat")}
 				</TooltipContent>
 			</Tooltip>
 
@@ -210,7 +210,9 @@ export function GlobalChatHistory({
 						className="z-[10001] flex h-[85dvh] max-h-[85dvh] flex-col overflow-hidden rounded-t-2xl p-0"
 					>
 						<SheetHeader className="shrink-0 px-4 pb-0 pt-4">
-							<SheetTitle className="text-base">{t('conversations', 'Conversations')}</SheetTitle>
+							<SheetTitle className="text-base">
+								{t("conversations", "Conversations")}
+							</SheetTitle>
 						</SheetHeader>
 						{/* SheetContent wraps children in a flex column; without min-h-0 this never scrolls. */}
 						<div className="flex min-h-0 flex-1 flex-col">{list}</div>
@@ -223,7 +225,7 @@ export function GlobalChatHistory({
 							<PopoverTrigger asChild>{trigger}</PopoverTrigger>
 						</TooltipTrigger>
 						<TooltipContent side="bottom" className="text-xs">
-							{t('history', 'History')}
+							{t("history", "History")}
 						</TooltipContent>
 					</Tooltip>
 					<PopoverContent

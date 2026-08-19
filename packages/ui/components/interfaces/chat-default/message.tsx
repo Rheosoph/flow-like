@@ -194,14 +194,16 @@ const FullscreenEditDialog = ({
 	return (
 		<div className="absolute inset-0 z-50 bg-background flex flex-col">
 			<div className="flex items-center justify-between px-6 py-4 border-b bg-background">
-				<h2 className="text-xl font-semibold">{t('editMessage', 'Edit Message')}</h2>
+				<h2 className="text-xl font-semibold">
+					{t("editMessage", "Edit Message")}
+				</h2>
 				<div className="flex gap-2">
 					<Button variant="outline" onClick={handleCancel}>
-						{t('cancel', 'Cancel')}
+						{t("cancel", "Cancel")}
 					</Button>
 					<Button onClick={handleSave}>
 						<CheckIcon className="w-4 h-4 mr-2" />
-						{t('saveChanges', 'Save Changes')}
+						{t("saveChanges", "Save Changes")}
 					</Button>
 				</div>
 			</div>
@@ -265,18 +267,24 @@ const FeedbackDialog = ({
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
 						<MessageSquareIcon className="w-5 h-5 text-primary" />
-						{t('shareAdditionalFeedback', 'Share Additional Feedback')}
+						{t("shareAdditionalFeedback", "Share Additional Feedback")}
 					</DialogTitle>
 					<DialogDescription>
-						{t('helpUsImproveBySharingMoreDetailsAboutYourExperienceWithThisResponse', "Help us improve by sharing more details about your experience with this response.")}
+						{t(
+							"helpUsImproveBySharingMoreDetailsAboutYourExperienceWithThisResponse",
+							"Help us improve by sharing more details about your experience with this response.",
+						)}
 					</DialogDescription>
 				</DialogHeader>
 
 				<div className="space-y-4 py-4">
 					<div className="space-y-2">
-						<Label>{t('yourFeedback', 'Your feedback')}</Label>
+						<Label>{t("yourFeedback", "Your feedback")}</Label>
 						<Textarea
-							placeholder={t('tellUsWhatYouThinkAboutThisResponse', 'Tell us what you think about this response...')}
+							placeholder={t(
+								"tellUsWhatYouThinkAboutThisResponse",
+								"Tell us what you think about this response...",
+							)}
 							value={feedbackComment}
 							onChange={(e) => setFeedbackComment(e.target.value)}
 							className="min-h-25 resize-none"
@@ -291,7 +299,10 @@ const FeedbackDialog = ({
 								onCheckedChange={setIncludeChatHistory}
 							/>
 							<Label htmlFor="chat-history">
-								{t('includeChatHistoryWithFeedback', 'Include chat history with feedback')}
+								{t(
+									"includeChatHistoryWithFeedback",
+									"Include chat history with feedback",
+								)}
 							</Label>
 						</div>
 
@@ -302,7 +313,10 @@ const FeedbackDialog = ({
 								onCheckedChange={setCanContact}
 							/>
 							<Label htmlFor="can-contact">
-								{t('youMayContactMeAboutThisFeedback', 'You may contact me about this feedback')}
+								{t(
+									"youMayContactMeAboutThisFeedback",
+									"You may contact me about this feedback",
+								)}
 							</Label>
 						</div>
 					</div>
@@ -310,9 +324,11 @@ const FeedbackDialog = ({
 
 				<DialogFooter>
 					<Button variant="outline" onClick={() => onOpenChange(false)}>
-						{t('cancel', 'Cancel')}
+						{t("cancel", "Cancel")}
 					</Button>
-					<Button onClick={handleSubmit}>{t('submitFeedback', 'Submit Feedback')}</Button>
+					<Button onClick={handleSubmit}>
+						{t("submitFeedback", "Submit Feedback")}
+					</Button>
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>
@@ -387,16 +403,24 @@ const MessageActions = ({
 					variant={gaveMoreFeedback ? "outline" : "default"}
 					className="h-6 rounded-full"
 				>
-					{gaveMoreFeedback ? i18next.t('feedbackProvided', '✅ Feedback provided') : "Provide feedback"}
+					{gaveMoreFeedback
+						? i18next.t("feedbackProvided", "✅ Feedback provided")
+						: "Provide feedback"}
 				</Badge>
 			</button>
 		)}
 		{!isUser && (
-			<MessageActionButton onClick={onEdit} title={i18next.t('editMessage2', 'Edit message')}>
+			<MessageActionButton
+				onClick={onEdit}
+				title={i18next.t("editMessage2", "Edit message")}
+			>
 				<EditIcon className="w-4 h-4" />
 			</MessageActionButton>
 		)}
-		<MessageActionButton onClick={onCopy} title={i18next.t('copyMessage', 'Copy message')}>
+		<MessageActionButton
+			onClick={onCopy}
+			title={i18next.t("copyMessage", "Copy message")}
+		>
 			<CopyIcon className="w-4 h-4" />
 		</MessageActionButton>
 	</div>
@@ -715,7 +739,7 @@ export const MessageComponent = memo(
 					>
 						{isUser && (
 							<span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
-								{t('asked', 'Asked')}
+								{t("asked", "Asked")}
 							</span>
 						)}
 						{!isUser && !inlineSegments && planSteps.length > 0 && (
@@ -821,12 +845,12 @@ export const MessageComponent = memo(
 								{isExpanded ? (
 									<>
 										<ChevronUp className="w-3 h-3" />
-										{t('showLess', 'Show less')}
+										{t("showLess", "Show less")}
 									</>
 								) : (
 									<>
 										<ChevronDown className="w-3 h-3" />
-										{t('showMore', 'Show more')}
+										{t("showMore", "Show more")}
 									</>
 								)}
 							</Button>
@@ -897,7 +921,7 @@ export const MessageComponent = memo(
 											className="pointer-events-auto size-10 shrink-0 rounded-full bg-black/40 text-white hover:bg-black/60 hover:text-white"
 										>
 											<XIcon className="size-5" />
-											<span className="sr-only">{t('close', 'Close')}</span>
+											<span className="sr-only">{t("close", "Close")}</span>
 										</Button>
 									</DialogClose>
 								</div>

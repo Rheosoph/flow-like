@@ -1,5 +1,4 @@
 "use client";
-import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	CertificateCard,
@@ -7,6 +6,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
@@ -62,16 +62,19 @@ export default function CertificatesPage() {
 						<Award className="size-7 text-amber-500" />
 					</div>
 					<h1 className="text-3xl md:text-4xl font-semibold tracking-tight">
-						{t('yourCertificates', 'Your certificates')}
+						{t("yourCertificates", "Your certificates")}
 					</h1>
 					<p className="text-muted-foreground">
-						{t('eachCertificateIsSignedAndVerifiableByHash', 'Each certificate is signed and verifiable by hash.')}
+						{t(
+							"eachCertificateIsSignedAndVerifiableByHash",
+							"Each certificate is signed and verifiable by hash.",
+						)}
 					</p>
 					<div className="pt-2">
 						<Button asChild variant="outline" size="sm" className="gap-1.5">
 							<Link href="/verify">
 								<ShieldCheck className="size-3.5" />
-								{t('verifyACertificate', 'Verify a certificate')}
+								{t("verifyACertificate", "Verify a certificate")}
 							</Link>
 						</Button>
 					</div>
@@ -80,10 +83,11 @@ export default function CertificatesPage() {
 				{certificates.length === 0 ? (
 					<div className="flex justify-center py-6">
 						<EmptyState
-							title={t('noCertificatesYet', 'No certificates — yet')}
-							description={
-								t('finishACourseEndtoendToEarnOneAndPutItOnDisplay', "Finish a course end-to-end to earn one and put it on display.")
-							}
+							title={t("noCertificatesYet", "No certificates — yet")}
+							description={t(
+								"finishACourseEndtoendToEarnOneAndPutItOnDisplay",
+								"Finish a course end-to-end to earn one and put it on display.",
+							)}
 							icons={[Compass, ScrollText, Sparkles]}
 							action={{
 								label: "Browse courses",

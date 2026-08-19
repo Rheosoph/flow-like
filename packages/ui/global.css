@@ -1985,11 +1985,9 @@ html[data-engine="webkit"] [class*="backdrop-blur"] {
 
 /* Array — a plate stacked behind the chip. */
 .fl-tok--array .fl-tok-btn {
-	box-shadow:
-		calc(var(--fl-tok-plate) * -1) calc(var(--fl-tok-plate) * -1) 0 -1px
-			var(--fl-tok-body),
-		calc(var(--fl-tok-plate) * -1) calc(var(--fl-tok-plate) * -1) 0 0
-			var(--fl-tok-edge);
+	box-shadow: calc(var(--fl-tok-plate) * -1) calc(var(--fl-tok-plate) * -1) 0
+		-1px var(--fl-tok-body), calc(var(--fl-tok-plate) * -1)
+		calc(var(--fl-tok-plate) * -1) 0 0 var(--fl-tok-edge);
 }
 
 /* HashSet — chamfered opposing corners. */

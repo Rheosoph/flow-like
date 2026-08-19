@@ -27,18 +27,26 @@ export function DeveloperModeCard() {
 			<CardHeader>
 				<CardTitle className="flex items-center gap-2">
 					<Code2 className="h-5 w-5" />
-					{t('developerMode', 'Developer Mode')}
+					{t("developerMode", "Developer Mode")}
 				</CardTitle>
 				<CardDescription>
-					{t('showAdvancedBuildingToolsAcrossTheApp', 'Show advanced building tools across the app')}
+					{t(
+						"showAdvancedBuildingToolsAcrossTheApp",
+						"Show advanced building tools across the app",
+					)}
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
 				<div className="flex items-center justify-between">
 					<div className="space-y-0.5">
-						<Label htmlFor="developer-mode">{t('enableDeveloperMode', 'Enable developer mode')}</Label>
+						<Label htmlFor="developer-mode">
+							{t("enableDeveloperMode", "Enable developer mode")}
+						</Label>
 						<p className="text-sm text-muted-foreground">
-							{t('unhidesFlowsEventsDataToolingAndPackageRegistriesSyncedAcrossYourDevices', "Unhides flows, events, data tooling, and package registries. Synced across your devices.")}
+							{t(
+								"unhidesFlowsEventsDataToolingAndPackageRegistriesSyncedAcrossYourDevices",
+								"Unhides flows, events, data tooling, and package registries. Synced across your devices.",
+							)}
 						</p>
 					</div>
 					<Switch

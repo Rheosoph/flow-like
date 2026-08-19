@@ -1,6 +1,5 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	type IListTokensResponse,
 	type IRegisterSinkRequest,
@@ -13,6 +12,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -72,7 +72,9 @@ export default function AdminSinksPage() {
 				return response;
 			} catch (error) {
 				const message =
-					error instanceof Error ? error.message : t('unknownError', 'Unknown error');
+					error instanceof Error
+						? error.message
+						: t("unknownError", "Unknown error");
 				toast.error(`Failed to create token: ${message}`);
 				throw error;
 			}
@@ -93,7 +95,9 @@ export default function AdminSinksPage() {
 				return response;
 			} catch (error) {
 				const message =
-					error instanceof Error ? error.message : t('unknownError', 'Unknown error');
+					error instanceof Error
+						? error.message
+						: t("unknownError", "Unknown error");
 				toast.error(`Failed to revoke token: ${message}`);
 				throw error;
 			}

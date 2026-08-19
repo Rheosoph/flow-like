@@ -53,7 +53,10 @@ export function PresetPicker({ nodes, edges, onApply }: PresetPickerProps) {
 	return (
 		<div className="space-y-3">
 			<p className="text-sm text-muted-foreground">
-				{t('pickADomainPresetToAutostyleYourNodeAndEdgeMappings', 'Pick a domain preset to auto-style your node and edge mappings.')}
+				{t(
+					"pickADomainPresetToAutostyleYourNodeAndEdgeMappings",
+					"Pick a domain preset to auto-style your node and edge mappings.",
+				)}
 			</p>
 			<div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
 				{presets.map((preset) => {

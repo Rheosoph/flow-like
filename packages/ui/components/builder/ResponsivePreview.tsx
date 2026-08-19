@@ -151,7 +151,7 @@ function PreviewFrame({ width, height, scale, children }: PreviewFrameProps) {
 		<>
 			<iframe
 				ref={iframeRef}
-				title={t('responsivePreview', 'Responsive preview')}
+				title={t("responsivePreview", "Responsive preview")}
 				className="bg-background"
 				style={{
 					width,
@@ -263,7 +263,7 @@ export function ResponsivePreview({
 						variant="ghost"
 						size="sm"
 						onClick={toggleOrientation}
-						title={t('toggleOrientation', 'Toggle orientation')}
+						title={t("toggleOrientation", "Toggle orientation")}
 					>
 						<RotateCcw className="h-4 w-4" />
 					</Button>
@@ -337,7 +337,9 @@ export function ResponsivePreview({
 									? "bg-primary/10 text-primary font-medium"
 									: "text-muted-foreground",
 							)}
-						>{t('nameWidthpx', '{{name}} ({{width}}px)', { name, width })}</div>
+						>
+							{t("nameWidthpx", "{{name}} ({{width}}px)", { name, width })}
+						</div>
 					))}
 				</div>
 			</div>

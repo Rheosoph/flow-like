@@ -1,4 +1,3 @@
-import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -24,6 +23,7 @@ import {
 	mlxAssetPathError,
 	resolveHuggingFaceGgufSelection,
 } from "@flow-like/flow-like-ui";
+import { Trans, useTranslation } from "@flow-like/locales";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { CheckCircle2, Loader2, Plus, Search, Trash2 } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
@@ -65,7 +65,10 @@ export function HuggingFaceModelImporter({
 			setError(
 				cause instanceof Error
 					? cause.message
-					: t('theSelectedGgufFilesAreNotUsable', 'The selected GGUF files are not usable'),
+					: t(
+							"theSelectedGgufFilesAreNotUsable",
+							"The selected GGUF files are not usable",
+						),
 			);
 			return false;
 		}
@@ -83,7 +86,10 @@ export function HuggingFaceModelImporter({
 			if (sequence !== inspectionSequence.current) return;
 			if (result.access.private || result.access.gated !== false) {
 				throw new Error(
-					t('privateAndGatedRepositoriesCannotBeMirroredIntoTheSharedStore', 'Private and gated repositories cannot be mirrored into the shared store'),
+					t(
+						"privateAndGatedRepositoriesCannotBeMirroredIntoTheSharedStore",
+						"Private and gated repositories cannot be mirrored into the shared store",
+					),
 				);
 			}
 			setImported(result);
@@ -114,7 +120,10 @@ export function HuggingFaceModelImporter({
 			setError(
 				cause instanceof Error
 					? cause.message
-					: t('failedToInspectTheHuggingFaceRepository', 'Failed to inspect the Hugging Face repository'),
+					: t(
+							"failedToInspectTheHuggingFaceRepository",
+							"Failed to inspect the Hugging Face repository",
+						),
 			);
 		} finally {
 			if (sequence === inspectionSequence.current) setInspecting(false);
@@ -142,7 +151,10 @@ export function HuggingFaceModelImporter({
 			)
 		) {
 			setError(
-				t('thisRepositoryHasNoProcessorMetadataRequiredByAnMlxVlm', 'This repository has no processor metadata required by an MLX VLM'),
+				t(
+					"thisRepositoryHasNoProcessorMetadataRequiredByAnMlxVlm",
+					"This repository has no processor metadata required by an MLX VLM",
+				),
 			);
 			return;
 		}
@@ -152,7 +164,11 @@ export function HuggingFaceModelImporter({
 		const overridden = {
 			...imported,
 			kind: nextKind,
-			kindEvidence: [t('manuallySelectedVal', 'Manually selected {{val}}', { val: nextKind.toUpperCase() })],
+			kindEvidence: [
+				t("manuallySelectedVal", "Manually selected {{val}}", {
+					val: nextKind.toUpperCase(),
+				}),
+			],
 		};
 		setImported(overridden);
 		onImported(overridden);
@@ -179,9 +195,14 @@ export function HuggingFaceModelImporter({
 	return (
 		<Card className="w-full max-w-screen-lg">
 			<CardHeader>
-				<CardTitle>{t('importAHuggingFaceModel', 'Import a Hugging Face model')}</CardTitle>
+				<CardTitle>
+					{t("importAHuggingFaceModel", "Import a Hugging Face model")}
+				</CardTitle>
 				<CardDescription>
-					{t('pasteAPublicMlxOrGgufRepositoryFlowlikePinsItsImmutableSnapshotSelectsTheRuntimeFilesAndFillsTheBitForm', "Paste a public MLX or GGUF repository. Flow-Like pins its immutable snapshot, selects the runtime files, and fills the Bit form.")}
+					{t(
+						"pasteAPublicMlxOrGgufRepositoryFlowlikePinsItsImmutableSnapshotSelectsTheRuntimeFilesAndFillsTheBitForm",
+						"Paste a public MLX or GGUF repository. Flow-Like pins its immutable snapshot, selects the runtime files, and fills the Bit form.",
+					)}
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-3">
@@ -220,7 +241,7 @@ export function HuggingFaceModelImporter({
 						) : (
 							<Search className="h-4 w-4" />
 						)}
-						{t('inspectAmpFill', "Inspect & fill")}
+						{t("inspectAmpFill", "Inspect & fill")}
 					</Button>
 				</div>
 
@@ -232,7 +253,13 @@ export function HuggingFaceModelImporter({
 							<CheckCircle2 className="h-4 w-4 text-emerald-500" />
 							<span className="font-medium">{imported.repoId}</span>
 							<Badge variant="default">{imported.format.toUpperCase()}</Badge>
-							<Badge variant="secondary">{t('countRuntimeFiles', { defaultValue_one: '{{count}} runtime file', defaultValue_other: '{{count}} runtime files', count: runtimeFileCount })}</Badge>
+							<Badge variant="secondary">
+								{t("countRuntimeFiles", {
+									defaultValue_one: "{{count}} runtime file",
+									defaultValue_other: "{{count}} runtime files",
+									count: runtimeFileCount,
+								})}
+							</Badge>
 							<Badge variant="secondary">{humanFileSize(totalSize)}</Badge>
 							<Badge variant="outline">{imported.license}</Badge>
 							<Badge variant="outline">{imported.revision.slice(0, 10)}</Badge>
@@ -240,7 +267,9 @@ export function HuggingFaceModelImporter({
 						{imported.format === "gguf" ? (
 							<div className="grid gap-3 sm:grid-cols-2">
 								<div className="space-y-1.5">
-									<Label htmlFor="hf-gguf-variant">{t('quantization', 'Quantization')}</Label>
+									<Label htmlFor="hf-gguf-variant">
+										{t("quantization", "Quantization")}
+									</Label>
 									<Select
 										value={variantId}
 										onValueChange={(nextVariantId) => {
@@ -253,7 +282,9 @@ export function HuggingFaceModelImporter({
 										}}
 									>
 										<SelectTrigger id="hf-gguf-variant">
-											<SelectValue placeholder={t('chooseAGgufFile', 'Choose a GGUF file')} />
+											<SelectValue
+												placeholder={t("chooseAGgufFile", "Choose a GGUF file")}
+											/>
 										</SelectTrigger>
 										<SelectContent>
 											{imported.variants.map((variant) => (
@@ -261,8 +292,12 @@ export function HuggingFaceModelImporter({
 													key={variant.id}
 													value={variant.id}
 													disabled={!variant.complete || variant.split}
-												>{`${variant.label} ·`}{humanFileSize(variant.totalSize)}
-													{variant.split ? t('splitUnsupported', "· split (unsupported)") : ""}
+												>
+													{`${variant.label} ·`}
+													{humanFileSize(variant.totalSize)}
+													{variant.split
+														? t("splitUnsupported", "· split (unsupported)")
+														: ""}
 												</SelectItem>
 											))}
 										</SelectContent>
@@ -270,7 +305,9 @@ export function HuggingFaceModelImporter({
 								</div>
 								{kind === "vlm" ? (
 									<div className="space-y-1.5">
-										<Label htmlFor="hf-gguf-projector">{t('visionProjector', 'Vision projector')}</Label>
+										<Label htmlFor="hf-gguf-projector">
+											{t("visionProjector", "Vision projector")}
+										</Label>
 										<Select
 											value={projectorPath}
 											onValueChange={(nextProjectorPath) => {
@@ -283,14 +320,21 @@ export function HuggingFaceModelImporter({
 											}}
 										>
 											<SelectTrigger id="hf-gguf-projector">
-												<SelectValue placeholder={t('chooseAnMmprojFile', 'Choose an mmproj file')} />
+												<SelectValue
+													placeholder={t(
+														"chooseAnMmprojFile",
+														"Choose an mmproj file",
+													)}
+												/>
 											</SelectTrigger>
 											<SelectContent>
 												{imported.projectors.map((projector) => (
 													<SelectItem
 														key={projector.path}
 														value={projector.path}
-													>{`${projector.path} ·`}{humanFileSize(projector.size)}
+													>
+														{`${projector.path} ·`}
+														{humanFileSize(projector.size)}
 													</SelectItem>
 												))}
 											</SelectContent>
@@ -300,7 +344,9 @@ export function HuggingFaceModelImporter({
 							</div>
 						) : null}
 						<div className="flex flex-wrap items-center gap-2 text-sm">
-							<span className="text-muted-foreground">{t('useAs', 'Use as:')}</span>
+							<span className="text-muted-foreground">
+								{t("useAs", "Use as:")}
+							</span>
 							<Button
 								type="button"
 								size="sm"
@@ -332,7 +378,11 @@ export function HuggingFaceModelImporter({
 						</div>
 						<p className="text-xs text-muted-foreground">
 							{imported.ignoredPaths.length > 0
-								? t('lengthDocumentationOrIncompatibleFilesWereIgnored', '{{length}} documentation or incompatible files were ignored.', { length: imported.ignoredPaths.length })
+								? t(
+										"lengthDocumentationOrIncompatibleFilesWereIgnored",
+										"{{length}} documentation or incompatible files were ignored.",
+										{ length: imported.ignoredPaths.length },
+									)
 								: ""}
 							{`Submitting this form asks the backend to copy the selected, pinned files from Hugging Face into the shared CDN Bit store.`}
 						</p>
@@ -344,7 +394,10 @@ export function HuggingFaceModelImporter({
 					</div>
 				) : (
 					<p className="text-xs text-muted-foreground">
-						{t('privateAndGatedRepositoriesAreIntentionallyNotAcceptedBecauseThisAdminFlowRepublishesModelBytesToTheCdn', "Private and gated repositories are intentionally not accepted because this admin flow republishes model bytes to the CDN.")}
+						{t(
+							"privateAndGatedRepositoriesAreIntentionallyNotAcceptedBecauseThisAdminFlowRepublishesModelBytesToTheCdn",
+							"Private and gated repositories are intentionally not accepted because this admin flow republishes model bytes to the CDN.",
+						)}
 					</p>
 				)}
 			</CardContent>
@@ -385,9 +438,12 @@ export function MlxAssetsConfiguration({
 			<CardHeader>
 				<div className="flex items-start justify-between gap-4">
 					<div className="space-y-1.5">
-						<CardTitle>{t('mlxModelBundle', 'MLX Model Bundle')}</CardTitle>
+						<CardTitle>{t("mlxModelBundle", "MLX Model Bundle")}</CardTitle>
 						<CardDescription>
-							{t('theLlmvlmEntryIsAVirtualRootAddEveryHuggingFaceRepositoryFileAsADependencyAndPreserveItsModelrelativePath', "The LLM/VLM entry is a virtual root. Add every Hugging Face repository file as a dependency and preserve its model-relative path.")}
+							{t(
+								"theLlmvlmEntryIsAVirtualRootAddEveryHuggingFaceRepositoryFileAsADependencyAndPreserveItsModelrelativePath",
+								"The LLM/VLM entry is a virtual root. Add every Hugging Face repository file as a dependency and preserve its model-relative path.",
+							)}
 						</CardDescription>
 					</div>
 					<Button
@@ -398,14 +454,20 @@ export function MlxAssetsConfiguration({
 						onClick={() => setAssets((current) => [...current, createAsset()])}
 					>
 						<Plus className="h-3.5 w-3.5" />
-						{t('addFile', 'Add file')}
+						{t("addFile", "Add file")}
 					</Button>
 				</div>
 			</CardHeader>
 			<CardContent className="space-y-4">
-				<div className="rounded-md border border-dashed bg-muted/35 px-3 py-2 text-xs text-muted-foreground"><Trans i18nKey="requiredAtTheRootCodeconfigjsoncode">Required at the root: <code>config.json</code>,</Trans>{" "}<Trans i18nKey="codetokenizerjsoncodeAndCodetokenizer_configjsoncodePlusOneOrMoreCodesafetensorscodeFilesAndAProcessorConfigForVlmsOtherPathsMayContainDirectoriesForExample"><code>tokenizer.json</code>, and <code>tokenizer_config.json</code>,
-					plus one or more <code>.safetensors</code> files and a processor
-					config for VLMs. Other paths may contain directories, for example</Trans>{" "}
+				<div className="rounded-md border border-dashed bg-muted/35 px-3 py-2 text-xs text-muted-foreground">
+					<Trans i18nKey="requiredAtTheRootCodeconfigjsoncode">
+						Required at the root: <code>config.json</code>,
+					</Trans>{" "}
+					<Trans i18nKey="codetokenizerjsoncodeAndCodetokenizer_configjsoncodePlusOneOrMoreCodesafetensorscodeFilesAndAProcessorConfigForVlmsOtherPathsMayContainDirectoriesForExample">
+						<code>tokenizer.json</code>, and <code>tokenizer_config.json</code>,
+						plus one or more <code>.safetensors</code> files and a processor
+						config for VLMs. Other paths may contain directories, for example
+					</Trans>{" "}
 					<code>weights/model-00001-of-00002.safetensors</code>.
 				</div>
 
@@ -422,7 +484,9 @@ export function MlxAssetsConfiguration({
 						>
 							<div className="flex items-center justify-between gap-2">
 								<div className="flex items-center gap-2">
-									<span className="text-sm font-medium">{t('file', 'File')} {index + 1}</span>
+									<span className="text-sm font-medium">
+										{t("file", "File")} {index + 1}
+									</span>
 									<Badge variant="secondary">{inferredType}</Badge>
 									{typeof asset.size === "number" && asset.size > 0 ? (
 										<span className="text-xs text-muted-foreground">
@@ -434,7 +498,9 @@ export function MlxAssetsConfiguration({
 									type="button"
 									variant="ghost"
 									size="icon"
-									aria-label={t('removeMlxFileVal', 'Remove MLX file {{val}}', { val: index + 1 })}
+									aria-label={t("removeMlxFileVal", "Remove MLX file {{val}}", {
+										val: index + 1,
+									})}
 									onClick={() =>
 										setAssets((current) =>
 											current.filter((_, assetIndex) => assetIndex !== index),
@@ -446,11 +512,16 @@ export function MlxAssetsConfiguration({
 							</div>
 							<div className="grid gap-3 md:grid-cols-2">
 								<div className="space-y-2">
-									<Label htmlFor={`mlx-path-${asset.id}`}>{t('storedPath', 'Stored path *')}</Label>
+									<Label htmlFor={`mlx-path-${asset.id}`}>
+										{t("storedPath", "Stored path *")}
+									</Label>
 									<Input
 										id={`mlx-path-${asset.id}`}
 										value={fileName}
-										placeholder={t('configjsonOrWeightsmodelsafetensors', 'config.json or weights/model.safetensors')}
+										placeholder={t(
+											"configjsonOrWeightsmodelsafetensors",
+											"config.json or weights/model.safetensors",
+										)}
 										onChange={(event) => {
 											const nextFileName = event.target.value;
 											updateAsset(index, {
@@ -469,12 +540,17 @@ export function MlxAssetsConfiguration({
 										<p className="text-xs text-destructive">{pathError}</p>
 									) : (
 										<p className="text-xs text-muted-foreground">
-											{t('relativeToTheMaterializedMlxModelDirectory', 'Relative to the materialized MLX model directory.')}
+											{t(
+												"relativeToTheMaterializedMlxModelDirectory",
+												"Relative to the materialized MLX model directory.",
+											)}
 										</p>
 									)}
 								</div>
 								<div className="space-y-2">
-									<Label htmlFor={`mlx-url-${asset.id}`}>{t('downloadUrl', 'Download URL *')}</Label>
+									<Label htmlFor={`mlx-url-${asset.id}`}>
+										{t("downloadUrl", "Download URL *")}
+									</Label>
 									<Input
 										id={`mlx-url-${asset.id}`}
 										value={asset.download_link ?? ""}
@@ -501,7 +577,10 @@ export function MlxAssetsConfiguration({
 
 				{assets.length === 0 ? (
 					<div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-						{t('addTheFilesThatMakeUpThisMlxModelBundle', 'Add the files that make up this MLX model bundle.')}
+						{t(
+							"addTheFilesThatMakeUpThisMlxModelBundle",
+							"Add the files that make up this MLX model bundle.",
+						)}
 					</div>
 				) : null}
 			</CardContent>

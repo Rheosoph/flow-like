@@ -163,7 +163,7 @@ function TipCard({ tip, transitioning }: { tip: Tip; transitioning: boolean }) {
 					hint ? "text-primary/60" : "text-muted-foreground/40",
 				)}
 			>
-				{hint ? t('didYouKnow', 'Did you know?') : "Tip"}
+				{hint ? t("didYouKnow", "Did you know?") : "Tip"}
 			</span>
 
 			{/* body */}
@@ -229,7 +229,7 @@ export function LoadingScreen({
 						<p className="text-sm text-foreground/70">{message}</p>
 					) : (
 						<p className="text-sm text-muted-foreground/60">
-							{t('loadingYourWorkspace', 'Loading your workspace')}
+							{t("loadingYourWorkspace", "Loading your workspace")}
 						</p>
 					)}
 					{clamped > 0 && (
@@ -259,7 +259,7 @@ export function LoadingScreen({
 				style={{ animationDelay: "0.3s" }}
 			>
 				<span className="text-[10px] tracking-widest uppercase text-muted-foreground/30">
-					{t('flowLike', 'Flow Like')}
+					{t("flowLike", "Flow Like")}
 				</span>
 			</div>
 

@@ -1,12 +1,12 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	useBackend,
 	useInvoke,
 	useNetworkStatus,
 } from "@flow-like/flow-like-ui";
 import { useSpotlightStore } from "@flow-like/flow-like-ui/state/spotlight-state";
+import { useTranslation } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useRouter } from "next/navigation";
@@ -40,7 +40,9 @@ const TrayProvider: React.FC = () => {
 	const syncStatus = useMemo<TraySyncStatus>(
 		() => ({
 			status: isOnline ? "Online" : "Offline",
-			detail: isOnline ? t('cloudSyncActive', 'Cloud sync active') : t('waitingForNetwork', 'Waiting for network'),
+			detail: isOnline
+				? t("cloudSyncActive", "Cloud sync active")
+				: t("waitingForNetwork", "Waiting for network"),
 		}),
 		[isOnline],
 	);

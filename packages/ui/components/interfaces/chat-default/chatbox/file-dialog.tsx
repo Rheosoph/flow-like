@@ -344,10 +344,16 @@ export function FileManagerDialog({
 									{fileCount}
 								</Badge>
 								{selectionState === "partial" && (
-									<Badge className="text-xs bg-primary/10 text-primary border-primary/30 shrink-0">{t('selectedcountSelected', '{{selectedCount}} selected', { selectedCount })}</Badge>
+									<Badge className="text-xs bg-primary/10 text-primary border-primary/30 shrink-0">
+										{t("selectedcountSelected", "{{selectedCount}} selected", {
+											selectedCount,
+										})}
+									</Badge>
 								)}
 								{selectionState === "all" && (
-									<Badge className="text-xs shrink-0">{t('allSelected', 'All selected')}</Badge>
+									<Badge className="text-xs shrink-0">
+										{t("allSelected", "All selected")}
+									</Badge>
 								)}
 							</button>
 							<div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
@@ -362,7 +368,7 @@ export function FileManagerDialog({
 										className="h-8 px-3 text-xs hover:bg-destructive/10 hover:text-destructive"
 									>
 										<FolderMinus className="w-3 h-3 mr-1" />
-										{t('deselect', 'Deselect')}
+										{t("deselect", "Deselect")}
 									</Button>
 								)}
 								{selectionState !== "all" && (
@@ -376,7 +382,7 @@ export function FileManagerDialog({
 										className="h-8 px-3 text-xs hover:bg-primary/10 hover:text-primary"
 									>
 										<FolderPlus className="w-3 h-3 mr-1" />
-										{t('select', 'Select')}
+										{t("select", "Select")}
 									</Button>
 								)}
 							</div>
@@ -477,10 +483,12 @@ export function FileManagerDialog({
 					<DialogTitle className="flex items-center justify-between">
 						<div className="flex items-center gap-3">
 							<Files className="w-5 h-5" />
-							<span>{t('manageAttachedFiles', 'Manage Attached Files')}</span>
+							<span>{t("manageAttachedFiles", "Manage Attached Files")}</span>
 						</div>
 						<div className="flex items-center gap-3">
-							<Badge variant="outline" className="text-sm font-normal">{t('lengthFiles', '{{length}} files', { length: files.length })}</Badge>
+							<Badge variant="outline" className="text-sm font-normal">
+								{t("lengthFiles", "{{length}} files", { length: files.length })}
+							</Badge>
 							<Badge variant="outline" className="text-sm font-normal">
 								{humanFileSize(totalSize, true)}
 							</Badge>
@@ -492,7 +500,7 @@ export function FileManagerDialog({
 						<div className="relative flex-1">
 							<Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
 							<Input
-								placeholder={t('searchFiles', 'Search files...')}
+								placeholder={t("searchFiles", "Search files...")}
 								value={searchTerm}
 								onChange={(e) => setSearchTerm(e.target.value)}
 								className="pl-10 h-10"
@@ -506,14 +514,18 @@ export function FileManagerDialog({
 									className="h-10"
 								>
 									<X className="w-4 h-4 mr-2" />
-									{t('deselectAll', 'Deselect All')}
+									{t("deselectAll", "Deselect All")}
 								</Button>
 								<Button
 									variant="destructive"
 									onClick={removeSelectedFiles}
 									className="h-10"
 								>
-									<Trash2 className="w-4 h-4 mr-2" />{t('removeSize', 'Remove {{size}}', { size: selectedFiles.size })}</Button>
+									<Trash2 className="w-4 h-4 mr-2" />
+									{t("removeSize", "Remove {{size}}", {
+										size: selectedFiles.size,
+									})}
+								</Button>
 							</>
 						)}
 						<Button
@@ -522,7 +534,7 @@ export function FileManagerDialog({
 							className="h-10 hover:bg-destructive/10 hover:text-destructive hover:border-destructive/20"
 						>
 							<Trash2 className="w-4 h-4 mr-2" />
-							{t('clearAll2', 'Clear All')}
+							{t("clearAll2", "Clear All")}
 						</Button>
 					</div>
 				</DialogHeader>
@@ -539,11 +551,19 @@ export function FileManagerDialog({
 								<div className="w-20 h-20 mx-auto mb-6 rounded-full bg-muted/30 flex items-center justify-center">
 									<Files className="w-10 h-10 text-muted-foreground/50" />
 								</div>
-								<h3 className="text-lg font-semibold mb-2">{t('noFilesFound', 'No files found')}</h3>
+								<h3 className="text-lg font-semibold mb-2">
+									{t("noFilesFound", "No files found")}
+								</h3>
 								<p className="text-muted-foreground max-w-sm mx-auto">
 									{searchTerm
-										? t('tryAdjustingYourSearchTermsToFindFiles', 'Try adjusting your search terms to find files')
-										: t('noFilesHaveBeenAttachedToThisConversationYet', 'No files have been attached to this conversation yet')}
+										? t(
+												"tryAdjustingYourSearchTermsToFindFiles",
+												"Try adjusting your search terms to find files",
+											)
+										: t(
+												"noFilesHaveBeenAttachedToThisConversationYet",
+												"No files have been attached to this conversation yet",
+											)}
 								</p>
 							</div>
 						)}
@@ -555,11 +575,16 @@ export function FileManagerDialog({
 				{/* Footer Stats */}
 				<div className="flex items-center justify-between pt-4 text-sm text-muted-foreground">
 					<span className="flex items-center gap-2">
-						<Badge variant="secondary" className="text-xs">{t('filteredcountOfLength', '{{filteredCount}} of {{length}}', { filteredCount, length: files.length })}</Badge>
-						{t('filesShown', 'files shown')}
+						<Badge variant="secondary" className="text-xs">
+							{t("filteredcountOfLength", "{{filteredCount}} of {{length}}", {
+								filteredCount,
+								length: files.length,
+							})}
+						</Badge>
+						{t("filesShown", "files shown")}
 					</span>
 					<span className="font-medium">
-						{t('total', 'Total:')} {humanFileSize(totalSize, true)}
+						{t("total", "Total:")} {humanFileSize(totalSize, true)}
 					</span>
 				</div>
 			</DialogContent>

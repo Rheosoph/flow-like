@@ -80,7 +80,9 @@ export function TelemetryTraceDetailSheet({
 							}}
 						>
 							<Copy className="h-3 w-3" />
-							<span className="sr-only">{t('copyTraceId', 'Copy trace id')}</span>
+							<span className="sr-only">
+								{t("copyTraceId", "Copy trace id")}
+							</span>
 						</Button>
 					</SheetDescription>
 				</SheetHeader>
@@ -102,7 +104,7 @@ export function TelemetryTraceDetailSheet({
 								<div className="rounded-lg border border-border bg-muted/40 px-3 py-2">
 									<div className="flex items-center justify-between text-muted-foreground">
 										<span className="text-[10px] uppercase tracking-wide">
-											{t('totalDuration', 'Total duration')}
+											{t("totalDuration", "Total duration")}
 										</span>
 										<Timer className="h-3.5 w-3.5" />
 									</div>
@@ -113,7 +115,7 @@ export function TelemetryTraceDetailSheet({
 								<div className="rounded-lg border border-border bg-muted/40 px-3 py-2">
 									<div className="flex items-center justify-between text-muted-foreground">
 										<span className="text-[10px] uppercase tracking-wide">
-											{t('spans', 'Spans')}
+											{t("spans", "Spans")}
 										</span>
 										<Layers className="h-3.5 w-3.5" />
 									</div>
@@ -124,10 +126,14 @@ export function TelemetryTraceDetailSheet({
 								<div className="rounded-lg border border-border bg-muted/40 px-3 py-2">
 									<div className="flex items-center justify-between text-muted-foreground">
 										<span className="text-[10px] uppercase tracking-wide">
-											{t('started', 'Started')}
+											{t("started", "Started")}
 										</span>
 										{errorSpans > 0 ? (
-											<Badge variant="destructive" className="text-[10px]">{t('errorspansFailing', '{{errorSpans}} failing', { errorSpans })}</Badge>
+											<Badge variant="destructive" className="text-[10px]">
+												{t("errorspansFailing", "{{errorSpans}} failing", {
+													errorSpans,
+												})}
+											</Badge>
 										) : null}
 									</div>
 									<div className="mt-0.5 text-sm">

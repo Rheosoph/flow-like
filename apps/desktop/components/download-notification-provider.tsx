@@ -1,10 +1,10 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import {
 	type DownloadCompleteListener,
 	useDownloadManager,
 } from "@flow-like/flow-like-ui";
+import { useTranslation } from "@flow-like/locales";
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 
@@ -65,12 +65,20 @@ export default function DownloadNotificationProvider() {
 
 			if (notificationApi.current && permissionGranted.current) {
 				notificationApi.current.sendNotification({
-					title: t('downloadComplete', 'Download Complete'),
-					body: t('modelnameHasBeenDownloadedSuccessfully', '{{modelName}} has been downloaded successfully.', { modelName }),
+					title: t("downloadComplete", "Download Complete"),
+					body: t(
+						"modelnameHasBeenDownloadedSuccessfully",
+						"{{modelName}} has been downloaded successfully.",
+						{ modelName },
+					),
 				});
 			} else {
-				toast.success(t('downloadComplete', 'Download Complete'), {
-					description: t('modelnameHasBeenDownloadedSuccessfully', '{{modelName}} has been downloaded successfully.', { modelName }),
+				toast.success(t("downloadComplete", "Download Complete"), {
+					description: t(
+						"modelnameHasBeenDownloadedSuccessfully",
+						"{{modelName}} has been downloaded successfully.",
+						{ modelName },
+					),
 				});
 			}
 		};

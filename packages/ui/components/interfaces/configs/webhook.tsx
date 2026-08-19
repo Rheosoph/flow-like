@@ -35,10 +35,15 @@ export function WebhookConfig({
 							setValue("allow_file_upload", checked);
 						}}
 					/>
-					<Label htmlFor="allow_file_upload">{t('allowFileUpload', 'Allow File Upload')}</Label>
+					<Label htmlFor="allow_file_upload">
+						{t("allowFileUpload", "Allow File Upload")}
+					</Label>
 				</div>
 				<p className="text-sm text-muted-foreground">
-					{t('enableUsersToUploadFilesDuringChatConversations', 'Enable users to upload files during chat conversations')}
+					{t(
+						"enableUsersToUploadFilesDuringChatConversations",
+						"Enable users to upload files during chat conversations",
+					)}
 				</p>
 			</div>
 
@@ -52,10 +57,15 @@ export function WebhookConfig({
 							setValue("allow_voice_input", checked);
 						}}
 					/>
-					<Label htmlFor="allow_voice_input">{t('allowVoiceInput', 'Allow Voice Input')}</Label>
+					<Label htmlFor="allow_voice_input">
+						{t("allowVoiceInput", "Allow Voice Input")}
+					</Label>
 				</div>
 				<p className="text-sm text-muted-foreground">
-					{t('enableUsersToUseVoiceInputForChatMessages', 'Enable users to use voice input for chat messages')}
+					{t(
+						"enableUsersToUseVoiceInputForChatMessages",
+						"Enable users to use voice input for chat messages",
+					)}
 				</p>
 			</div>
 
@@ -69,15 +79,22 @@ export function WebhookConfig({
 							setValue("allow_voice_mode", checked);
 						}}
 					/>
-					<Label htmlFor="allow_voice_mode">{t('allowVoiceMode', 'Allow Voice Mode')}</Label>
+					<Label htmlFor="allow_voice_mode">
+						{t("allowVoiceMode", "Allow Voice Mode")}
+					</Label>
 				</div>
 				<p className="text-sm text-muted-foreground">
-					{t('enableVoiceModeWithAutoSilenceDetection', 'Enable voice mode with auto silence detection')}
+					{t(
+						"enableVoiceModeWithAutoSilenceDetection",
+						"Enable voice mode with auto silence detection",
+					)}
 				</p>
 			</div>
 
 			<div className="space-y-3">
-				<Label htmlFor="history_elements">{t('historyElements', 'History Elements')}</Label>
+				<Label htmlFor="history_elements">
+					{t("historyElements", "History Elements")}
+				</Label>
 				{isEditing ? (
 					<Input
 						value={config?.history_elements ?? 5}
@@ -99,12 +116,15 @@ export function WebhookConfig({
 					</div>
 				)}
 				<p className="text-sm text-muted-foreground">
-					{t('numberOfPreviousMessagesToIncludeInChatContext', 'Number of previous messages to include in chat context')}
+					{t(
+						"numberOfPreviousMessagesToIncludeInChatContext",
+						"Number of previous messages to include in chat context",
+					)}
 				</p>
 			</div>
 
 			<div className="space-y-3">
-				<Label htmlFor="tools">{t('availableTools', 'Available Tools')}</Label>
+				<Label htmlFor="tools">{t("availableTools", "Available Tools")}</Label>
 				{isEditing ? (
 					<div className="space-y-2">
 						<div className="flex flex-wrap gap-2">
@@ -129,7 +149,10 @@ export function WebhookConfig({
 							))}
 						</div>
 						<Input
-							placeholder={t('typeAToolNameAndPressEnter', 'Type a tool name and press Enter')}
+							placeholder={t(
+								"typeAToolNameAndPressEnter",
+								"Type a tool name and press Enter",
+							)}
 							onKeyDown={(e) => {
 								if (e.key === "Enter" && e.currentTarget.value.trim()) {
 									e.preventDefault();
@@ -158,7 +181,7 @@ export function WebhookConfig({
 							</div>
 						) : (
 							<div className="flex h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm">
-								{t('noToolsConfigured', 'No tools configured')}
+								{t("noToolsConfigured", "No tools configured")}
 							</div>
 						)}
 					</div>
@@ -169,7 +192,9 @@ export function WebhookConfig({
 			</div>
 
 			<div className="space-y-3">
-				<Label htmlFor="default_tools">{t('defaultTools', 'Default Tools')}</Label>
+				<Label htmlFor="default_tools">
+					{t("defaultTools", "Default Tools")}
+				</Label>
 				{isEditing ? (
 					<div className="space-y-2">
 						<div className="flex flex-wrap gap-2">
@@ -194,7 +219,10 @@ export function WebhookConfig({
 							))}
 						</div>
 						<Input
-							placeholder={t('typeAToolNameAndPressEnter', 'Type a tool name and press Enter')}
+							placeholder={t(
+								"typeAToolNameAndPressEnter",
+								"Type a tool name and press Enter",
+							)}
 							onKeyDown={(e) => {
 								if (e.key === "Enter" && e.currentTarget.value.trim()) {
 									e.preventDefault();
@@ -223,7 +251,7 @@ export function WebhookConfig({
 							</div>
 						) : (
 							<div className="flex h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm">
-								{t('noDefaultTools', 'No default tools')}
+								{t("noDefaultTools", "No default tools")}
 							</div>
 						)}
 					</div>
@@ -234,7 +262,9 @@ export function WebhookConfig({
 			</div>
 
 			<div className="space-y-3">
-				<Label htmlFor="example_messages">{t('exampleMessages', 'Example Messages')}</Label>
+				<Label htmlFor="example_messages">
+					{t("exampleMessages", "Example Messages")}
+				</Label>
 				{isEditing ? (
 					<div className="space-y-2">
 						<div className="flex flex-wrap gap-2">
@@ -259,7 +289,10 @@ export function WebhookConfig({
 							))}
 						</div>
 						<Input
-							placeholder={t('typeAnExampleMessageAndPressEnter', 'Type an example message and press Enter')}
+							placeholder={t(
+								"typeAnExampleMessageAndPressEnter",
+								"Type an example message and press Enter",
+							)}
 							onKeyDown={(e) => {
 								if (e.key === "Enter" && e.currentTarget.value.trim()) {
 									e.preventDefault();
@@ -291,7 +324,7 @@ export function WebhookConfig({
 							</div>
 						) : (
 							<div className="flex h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm">
-								{t('noExampleMessages', 'No example messages')}
+								{t("noExampleMessages", "No example messages")}
 							</div>
 						)}
 					</div>

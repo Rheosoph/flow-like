@@ -84,8 +84,7 @@ export const FLOW_DECORATORS: readonly DecoratorDef[] = [
 		argumentKind: "optional-cache-settings",
 		detail:
 			'@cache, @cache({}), or @cache({ namespace: "…", ttlSeconds: 300, scope: "user" })',
-		doc:
-			'Caches this function\'s outputs. A cache hit skips the entire function body, including side effects, so use it only when outputs are determined by inputs. Bare `@cache` and `@cache({})` use the `"global"` namespace, a 300-second lifetime, and app scope. In the settings object, `namespace` separates cache keys, `ttlSeconds` is a non-negative integer (`0` means no expiry), and `scope` is `"app"` or `"user"`.',
+		doc: 'Caches this function\'s outputs. A cache hit skips the entire function body, including side effects, so use it only when outputs are determined by inputs. Bare `@cache` and `@cache({})` use the `"global"` namespace, a 300-second lifetime, and app scope. In the settings object, `namespace` separates cache keys, `ttlSeconds` is a non-negative integer (`0` means no expiry), and `scope` is `"app"` or `"user"`.',
 		snippet:
 			'@cache({ namespace: "${1:global}", ttlSeconds: ${2:300}, scope: "${3|app,user|}" })',
 	},
