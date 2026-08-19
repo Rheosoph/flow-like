@@ -224,7 +224,7 @@
 		"@types/react-window": "^1.8.8",
 		"@types/three": "^0.182.0",
 		"@types/tinycolor2": "^1.4.6",
-		"adm-zip": "^0.5.16",
+		"adm-zip": "^0.6.0",
 		"axios": "^1.7.9",
 		"cheerio": "^1.0.0",
 		"eslint": "^9.31.0",

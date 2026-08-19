@@ -2379,7 +2379,7 @@ dependencies = [
  "query_map",
  "serde",
  "serde_json",
- "serde_with 3.18.0",
+ "serde_with 3.22.0",
 ]
 
 [[package]]
@@ -2399,7 +2399,7 @@ dependencies = [
  "serde",
  "serde_dynamo",
  "serde_json",
- "serde_with 3.18.0",
+ "serde_with 3.22.0",
 ]
 
 [[package]]
@@ -3205,7 +3205,7 @@ version = "3.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "519bd3116aeeb42d5372c29d982d16d0170d3d4a5ed85fc7dd91642ffff3c67c"
 dependencies = [
- "darling 0.23.0",
+ "darling 0.20.11",
  "ident_case",
  "prettyplease",
  "proc-macro2",
@@ -3263,6 +3263,15 @@ checksum = "874bb8112abecc98cbd6d81ea4fa7e94fb9449648c93cc89aa40c81c24d7de03"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
+]
+
+[[package]]
+name = "bs58"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf88ba1141d185c399bee5288d850d63b8369520c1eafc32a0430b5b6c287bf4"
+dependencies = [
+ "tinyvec",
 ]
 
 [[package]]
@@ -4068,9 +4077,9 @@ dependencies = [
 
 [[package]]
 name = "cmov"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f88a43d011fc4a6876cb7344703e297c71dda42494fee094d5f7c76bf13f746"
+checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
 name = "cobs"
@@ -9772,8 +9781,8 @@ dependencies = [
  "libc",
  "log",
  "rustversion",
- "windows-link 0.2.1",
- "windows-result 0.4.1",
+ "windows-link 0.1.3",
+ "windows-result 0.3.4",
 ]
 
 [[package]]
@@ -10316,7 +10325,7 @@ dependencies = [
  "google-cloud-wkt",
  "serde",
  "serde_json",
- "serde_with 3.18.0",
+ "serde_with 3.22.0",
  "tracing",
 ]
 
@@ -10330,7 +10339,7 @@ dependencies = [
  "google-cloud-wkt",
  "serde",
  "serde_json",
- "serde_with 3.18.0",
+ "serde_with 3.22.0",
 ]
 
 [[package]]
@@ -10426,7 +10435,7 @@ dependencies = [
  "google-cloud-wkt",
  "serde",
  "serde_json",
- "serde_with 3.18.0",
+ "serde_with 3.22.0",
  "tracing",
 ]
 
@@ -10443,7 +10452,7 @@ dependencies = [
  "google-cloud-wkt",
  "serde",
  "serde_json",
- "serde_with 3.18.0",
+ "serde_with 3.22.0",
  "tracing",
 ]
 
@@ -10461,7 +10470,7 @@ dependencies = [
  "google-cloud-wkt",
  "serde",
  "serde_json",
- "serde_with 3.18.0",
+ "serde_with 3.22.0",
  "tracing",
 ]
 
@@ -10490,7 +10499,7 @@ dependencies = [
  "google-cloud-wkt",
  "serde",
  "serde_json",
- "serde_with 3.18.0",
+ "serde_with 3.22.0",
 ]
 
 [[package]]
@@ -10508,7 +10517,7 @@ dependencies = [
  "google-cloud-wkt",
  "serde",
  "serde_json",
- "serde_with 3.18.0",
+ "serde_with 3.22.0",
  "tracing",
 ]
 
@@ -10522,7 +10531,7 @@ dependencies = [
  "google-cloud-wkt",
  "serde",
  "serde_json",
- "serde_with 3.18.0",
+ "serde_with 3.22.0",
 ]
 
 [[package]]
@@ -10535,7 +10544,7 @@ dependencies = [
  "bytes",
  "serde",
  "serde_json",
- "serde_with 3.18.0",
+ "serde_with 3.22.0",
  "thiserror 2.0.18",
  "time",
  "url",
@@ -11572,7 +11581,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -11641,7 +11650,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "serde_repr",
- "serde_with 3.18.0",
+ "serde_with 3.22.0",
  "strum 0.27.2",
  "tokio",
  "typed-builder",
@@ -13711,7 +13720,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "serde_with 3.18.0",
+ "serde_with 3.22.0",
  "snafu 0.8.9",
  "tempfile",
  "tokio",
@@ -16174,7 +16183,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.21.7",
  "chrono",
  "getrandom 0.2.17",
  "http 1.4.0",
@@ -18899,15 +18908,16 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.14"
+version = "0.11.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
+checksum = "04759210543be93709136e28212294a659ef5001836ff4eab4d663e4529bba83"
 dependencies = [
  "aws-lc-rs",
  "bytes",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "lru-slab",
- "rand 0.9.3",
+ "rand 0.10.1",
+ "rand_pcg 0.10.2",
  "ring",
  "rustc-hash 2.1.2",
  "rustls 0.23.38",
@@ -19018,7 +19028,7 @@ dependencies = [
  "rand_chacha 0.2.2",
  "rand_core 0.5.1",
  "rand_hc",
- "rand_pcg",
+ "rand_pcg 0.2.1",
 ]
 
 [[package]]
@@ -19152,6 +19162,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16abd0c1b639e9eb4d7c50c0b8100b0d0f849be2349829c740fe8e6eb4816429"
 dependencies = [
  "rand_core 0.5.1",
+]
+
+[[package]]
+name = "rand_pcg"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
+dependencies = [
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -21510,20 +21529,22 @@ dependencies = [
 
 [[package]]
 name = "serde_with"
-version = "3.18.0"
+version = "3.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd5414fad8e6907dbdd5bc441a50ae8d6e26151a03b1de04d89a5576de61d01f"
+checksum = "ee78f1fbe43ac4a0e47aadb3dbd357b69eb0d3793e948624cd03dd2750ab1c0a"
 dependencies = [
  "base64 0.22.1",
+ "bs58",
  "chrono",
  "hex",
  "indexmap 1.9.3",
  "indexmap 2.14.0",
+ "jiff",
  "schemars 0.9.0",
  "schemars 1.2.1",
  "serde_core",
  "serde_json",
- "serde_with_macros 3.18.0",
+ "serde_with_macros 3.22.0",
  "time",
 ]
 
@@ -21541,9 +21562,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with_macros"
-version = "3.18.0"
+version = "3.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3db8978e608f1fe7357e211969fd9abdcae80bac1ba7a3369bb7eb6b404eb65"
+checksum = "8705578779c2b6bd90d84d66eb2e206b708b1a4d7b9f17641b293545bf1c7e46"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -23828,7 +23849,7 @@ dependencies = [
  "serde",
  "serde-untagged",
  "serde_json",
- "serde_with 3.18.0",
+ "serde_with 3.22.0",
  "swift-rs",
  "thiserror 2.0.18",
  "toml 1.1.2+spec-1.1.0",
@@ -23977,7 +23998,7 @@ dependencies = [
  "rgb",
  "serde",
  "serde_json",
- "serde_with 3.18.0",
+ "serde_with 3.22.0",
  "stacker",
  "take_mut",
  "takecell",

@@ -23,7 +23,7 @@
 	},
 	"overrides": {
 		"vite": "7.3.5",
-		"postcss": "8.5.14",
+		"postcss": "8.5.26",
 		"rollup": "4.60.3",
 		"esbuild": "0.28.1",
 		"picomatch": "4.0.4"
