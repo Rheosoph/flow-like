@@ -62,7 +62,8 @@ export function toMarkdownTable(
 	columns: readonly QueryColumn[],
 	rows: readonly Record<string, unknown>[],
 ): string {
-	const esc = (value: unknown) => cellToString(value).replace(/\|/g, "\\|");
+	const esc = (value: unknown) =>
+		cellToString(value).replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
 	const header = `| ${columns.map((column) => esc(column.name)).join(" | ")} |`;
 	const divider = `| ${columns.map(() => "---").join(" | ")} |`;
 	const body = rows

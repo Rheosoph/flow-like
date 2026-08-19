@@ -60,7 +60,9 @@ const openInBrowser = async (href: string) => {
 			window.open(href, "_blank", "noopener,noreferrer");
 			return true;
 		} catch {
-			location.href = href; // last-resort fallback
+			// Last-resort fallback; anchor hrefs are page content, so only
+			// navigate schemes that cannot execute script in this webview.
+			if (isHttpish(href)) location.href = href;
 			return true;
 		}
 	}

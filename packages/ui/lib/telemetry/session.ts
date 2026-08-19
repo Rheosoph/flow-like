@@ -37,6 +37,8 @@ let activeSession: ActiveTelemetrySession | undefined;
 let unloadHandler: (() => void) | undefined;
 let unloadFlushed = false;
 
+let sessionIdFallbackCounter = 0;
+
 function randomSessionId(): string {
 	try {
 		if (
@@ -44,10 +46,20 @@ function randomSessionId(): string {
 			typeof crypto.randomUUID === "function"
 		)
 			return crypto.randomUUID();
+		if (
+			typeof crypto !== "undefined" &&
+			typeof crypto.getRandomValues === "function"
+		) {
+			const bytes = crypto.getRandomValues(new Uint8Array(16));
+			return Array.from(bytes, (byte) =>
+				byte.toString(16).padStart(2, "0"),
+			).join("");
+		}
 	} catch {
-		// Fall through to the arithmetic fallback below.
+		// Fall through to the counter fallback below.
 	}
-	return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+	sessionIdFallbackCounter += 1;
+	return `${Date.now().toString(36)}-${sessionIdFallbackCounter.toString(36)}`;
 }
 
 function deliverTelemetrySession(session: ITelemetryCapturedSession) {

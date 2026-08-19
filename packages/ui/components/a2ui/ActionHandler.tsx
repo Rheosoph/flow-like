@@ -65,6 +65,18 @@ type ExecuteActionFn = (
 	additionalContext?: Record<string, unknown>,
 ) => Promise<void>;
 
+const UNSAFE_STATE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * Page and global state keys arrive from surface messages, so a `__proto__`
+ * key would otherwise walk straight into `Object.prototype`.
+ */
+function isSafeStateKey(key: unknown): key is string {
+	return (
+		typeof key === "string" && key.length > 0 && !UNSAFE_STATE_KEYS.has(key)
+	);
+}
+
 function toBoundValue(value: unknown): Record<string, unknown> {
 	if (typeof value === "boolean") return { literalBool: value };
 	if (typeof value === "number") return { literalNumber: value };
@@ -536,6 +548,7 @@ export function ActionProvider({
 
 	const setGlobalState = useCallback(
 		(key: string, value: unknown) => {
+			if (!isSafeStateKey(key)) return;
 			setGlobalStateMap((prev) => {
 				const next = { ...prev, [key]: value };
 				// Persist to IndexedDB
@@ -554,6 +567,7 @@ export function ActionProvider({
 
 	const setPageState = useCallback(
 		(key: string, value: unknown) => {
+			if (!isSafeStateKey(key)) return;
 			const pageId = pageStateId;
 			if (!pageStateRef.current[pageId]) {
 				pageStateRef.current[pageId] = {};
@@ -600,6 +614,7 @@ export function ActionProvider({
 						value: unknown;
 					};
 					const currentPageId = pageStateId;
+					if (!isSafeStateKey(pageId)) break;
 					// Only apply if it's for the current page
 					if (pageId === currentPageId) {
 						setPageState(key, value);
@@ -625,6 +640,7 @@ export function ActionProvider({
 				}
 				case "clearPageState": {
 					const { pageId } = message as { pageId: string };
+					if (!isSafeStateKey(pageId)) break;
 					pageStateRef.current[pageId] = {};
 					if (pageId === pageStateId) {
 						setPageStateLocal({});

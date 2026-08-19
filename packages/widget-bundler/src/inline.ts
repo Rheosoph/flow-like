@@ -69,7 +69,7 @@ export function inlineHtml(
 	const external = new Set<string>();
 
 	let out = html.replace(
-		/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi,
+		/<script\b([^>]*)>([\s\S]*?)<\/script(?:\s[^>]*)?>/gi,
 		(full, attrs: string, body: string) => {
 			const src = attrValue(`<script${attrs}>`, "src");
 			if (src === null) return full;

@@ -670,7 +670,7 @@ export function telemetryQueryFileName(
 	const slug = name
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "");
+		.replace(/^-|-$/g, "");
 	const suffix = truncated ? `-capped-at-${TELEMETRY_QUERY_MAX_ROWS}-rows` : "";
 	return `${slug || "telemetry-query"}${suffix}.csv`;
 }
