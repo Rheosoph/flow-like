@@ -57,48 +57,57 @@ const langFlags: Record<string, string> = {
 
 type Lang = keyof typeof languages;
 
-function useTranslation() {
-	const [lang, setLang] = useState<Lang>("en");
+function resolveLang(path: string): Lang {
+	for (const l of Object.keys(languages) as Lang[]) {
+		if (l !== "en" && (path.startsWith(`/${l}/`) || path === `/${l}`)) return l;
+	}
+	return "en";
+}
+
+// The header is server-rendered, so the first client render has to produce the
+// same markup: the pathname the layout passes down wins, and reading the real
+// location is only a fallback for call sites that pass nothing.
+function usePathname(pathname?: string) {
+	const [path, setPath] = useState(pathname ?? "/");
 
 	useEffect(() => {
-		if (typeof window === "undefined") return;
-		const path = window.location.pathname;
-		const langs = Object.keys(languages) as Lang[];
-		for (const l of langs) {
-			if (l !== "en" && (path.startsWith(`/${l}/`) || path === `/${l}`)) {
-				setLang(l);
-				return;
-			}
-		}
-		setLang("en");
-	}, []);
+		if (pathname) return;
+		setPath(window.location.pathname);
+	}, [pathname]);
 
-	const t = (key: string): string => {
-		return translationsCommon[lang]?.[key] ?? translationsCommon.en[key] ?? key;
-	};
+	return path;
+}
 
+function useTranslation(path: string) {
+	const lang = resolveLang(path);
+	const t = (key: string): string =>
+		translationsCommon[lang]?.[key] ?? translationsCommon.en[key] ?? key;
 	return { t, lang };
 }
 
-function getLocalizedPath(currentLang: Lang, targetLang: Lang) {
-	if (typeof window === "undefined") return "/";
-	let path = window.location.pathname;
+function getLocalizedPath(path: string, targetLang: Lang) {
+	let rest = path;
 	for (const l of Object.keys(languages)) {
-		if (path.startsWith(`/${l}/`) || path === `/${l}`) {
-			path = path.slice(l.length + 1) || "/";
+		if (rest.startsWith(`/${l}/`) || rest === `/${l}`) {
+			rest = rest.slice(l.length + 1) || "/";
 			break;
 		}
 	}
 	if (targetLang === "en") {
-		return path || "/";
+		return rest || "/";
 	}
-	return `/${targetLang}${path === "/" ? "" : path}`;
+	return `/${targetLang}${rest === "/" ? "" : rest}`;
 }
 
 function localizeHref(lang: Lang, href: string): string {
 	if (lang === "en" || href.startsWith("http") || href.startsWith("mailto:"))
 		return href;
 	return `/${lang}${href}`;
+}
+
+interface HeaderProps {
+	pathname?: string;
+	darkHero?: boolean;
 }
 
 interface DropdownItem {
@@ -302,7 +311,10 @@ function NavSolutionsDropdown({ groups }: { groups: SolutionsGroup[] }) {
 	);
 }
 
-function LanguageSelector({ currentLang }: { currentLang: Lang }) {
+function LanguageSelector({
+	currentLang,
+	path,
+}: { currentLang: Lang; path: string }) {
 	const { open, setOpen, handleMouseEnter, handleMouseLeave } = useHoverMenu();
 
 	return (
@@ -331,7 +343,7 @@ function LanguageSelector({ currentLang }: { currentLang: Lang }) {
 							([code, name]) => (
 								<a
 									key={code}
-									href={getLocalizedPath(currentLang, code)}
+									href={getLocalizedPath(path, code)}
 									className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-300 ${
 										code === currentLang
 											? "bg-primary/10 text-primary font-medium"
@@ -356,12 +368,14 @@ function MobileMenu({
 	onClose,
 	t,
 	currentLang,
+	path,
 	stars,
 }: {
 	open: boolean;
 	onClose: () => void;
 	t: (key: string) => string;
 	currentLang: Lang;
+	path: string;
 	stars: number | null;
 }) {
 	const [mounted, setMounted] = useState(false);
@@ -649,7 +663,7 @@ function MobileMenu({
 									([code, name]) => (
 										<a
 											key={code}
-											href={getLocalizedPath(currentLang, code)}
+											href={getLocalizedPath(path, code)}
 											className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all duration-300 ${
 												code === currentLang
 													? "bg-primary/10 text-primary font-medium"
@@ -730,28 +744,29 @@ function MobileNavItem({
 	);
 }
 
-export function Header() {
-	const { t, lang } = useTranslation();
+export function Header({ pathname, darkHero = false }: HeaderProps) {
+	const path = usePathname(pathname);
+	const { t, lang } = useTranslation(path);
 	const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 	const [scrolled, setScrolled] = useState(false);
 	// Pages with a dark hero (e.g. the landing) mark it with [data-dark-hero];
-	// while the transparent header sits over it, invert the header tokens.
-	const [heroDark, setHeroDark] = useState(
-		() =>
-			typeof document !== "undefined" &&
-			!!document.querySelector("[data-dark-hero]"),
-	);
+	// while the transparent header sits over it, invert the header tokens. The
+	// layout declares it up front so the server-rendered header already has the
+	// right palette; the DOM probe covers pages that only mark the hero.
+	const [heroDark, setHeroDark] = useState(darkHero);
 	const stars = useGitHubStars();
 
 	useEffect(() => {
 		const handleScroll = () => setScrolled(window.scrollY > 20);
+		handleScroll();
 		window.addEventListener("scroll", handleScroll, { passive: true });
 		return () => window.removeEventListener("scroll", handleScroll);
 	}, []);
 
 	useEffect(() => {
+		if (darkHero) return;
 		setHeroDark(!!document.querySelector("[data-dark-hero]"));
-	}, []);
+	}, [darkHero]);
 
 	const overDarkHero = heroDark && !scrolled;
 
@@ -935,7 +950,7 @@ export function Header() {
 
 					{/* Desktop Actions */}
 					<div className="hidden lg:flex items-center gap-2">
-						<LanguageSelector currentLang={lang} />
+						<LanguageSelector currentLang={lang} path={path} />
 						<a
 							href={webAppUrl}
 							target="_blank"
@@ -975,6 +990,7 @@ export function Header() {
 				onClose={() => setMobileMenuOpen(false)}
 				t={t}
 				currentLang={lang}
+				path={path}
 				stars={stars}
 			/>
 		</>

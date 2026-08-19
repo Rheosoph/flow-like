@@ -185,7 +185,7 @@ const ldBreadcrumb = {
 		<PostHog />
 	</head>
 	<body class="bg-background text-foreground antialiased overflow-x-hidden max-w-full">
-		<Header client:only="react" />
+		<Header client:load pathname={Astro.url.pathname} />
 
 		<main class="pt-16">
 			<section class="border-b border-border/50 bg-background">

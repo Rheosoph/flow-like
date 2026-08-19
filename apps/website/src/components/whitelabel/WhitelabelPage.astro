@@ -119,7 +119,7 @@ const oemCards = [
   </head>
 
   <body class="bg-background text-foreground antialiased overflow-x-hidden max-w-full">
-    <Header client:only="react" />
+    <Header client:load pathname={Astro.url.pathname} />
 
     <main class="pt-16">
       <section class="relative min-h-[70vh] flex items-center overflow-hidden" data-c1="hsl(268 84% 62% / .06)" data-c2="hsl(161 40% 44% / .06)">

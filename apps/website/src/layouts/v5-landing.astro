@@ -152,7 +152,7 @@ const websiteLd = {
   </head>
   <body class="bg-background text-foreground antialiased selection:bg-primary/25 selection:text-foreground">
     <a href="#content" class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-background focus:px-4 focus:py-2 focus:text-sm focus:shadow-xl">Skip to content</a>
-    <Header client:only="react" />
+    <Header client:load pathname={Astro.url.pathname} darkHero />
     <main id="content" class="w-full max-w-full overflow-x-clip">
       <V5Hero lang={lang} />
       <V5Apps lang={lang} />

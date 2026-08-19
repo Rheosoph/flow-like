@@ -214,7 +214,7 @@ const alternateLinks = Object.keys(languages).map(l => ({
   >
     <main id="content" class="w-full max-w-[100vw] overflow-x-clip pt-16">
       <AmbientGlow />
-      <Header client:only="react"/>
+      <Header client:load pathname={Astro.url.pathname} />
 
       <!-- Language-specific hero -->
       <slot name="hero" />

@@ -52,7 +52,7 @@ const cover = "/og.png";
 		<PostHog />
 	</head>
 	<body>
-		<Header client:only="react"/>
+		<Header client:load pathname={Astro.url.pathname} />
 		<slot />
 		<Footer client:only="react"/>
 	</body>
