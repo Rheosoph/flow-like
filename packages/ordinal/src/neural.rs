@@ -618,7 +618,7 @@ impl<F: Float> OrdinalNeural<F> {
                 output
                     .iter()
                     .map(|z| {
-                        running = running * sigmoid(*z);
+                        running *= sigmoid(*z);
                         running
                     })
                     .collect()
@@ -938,10 +938,9 @@ impl<F: Float> Backbone<F> {
             let input = &cache.inputs[layer];
             for (out_index, d) in delta.iter().enumerate() {
                 for (in_index, value) in input.iter().enumerate() {
-                    grad_weights[layer][[out_index, in_index]] =
-                        grad_weights[layer][[out_index, in_index]] + *d * *value;
+                    grad_weights[layer][[out_index, in_index]] += *d * *value;
                 }
-                grad_biases[layer][out_index] = grad_biases[layer][out_index] + *d;
+                grad_biases[layer][out_index] += *d;
             }
             if layer > 0 {
                 // dL/d(input of layer) = W' delta, then through the activation below it.
@@ -1002,8 +1001,8 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
                     objective = objective + softplus(z) - target * z;
 
                     let residual = sigmoid(z) - target;
-                    d_score = d_score + residual;
-                    grad_task_biases[cut] = grad_task_biases[cut] + residual;
+                    d_score += residual;
+                    grad_task_biases[cut] += residual;
                 }
                 delta[0] = d_score;
             }
@@ -1029,7 +1028,7 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
     let mut grad_head = Array1::<F>::zeros(head_params.len());
     let mut suffix = F::zero();
     for cut in (0..grad_task_biases.len()).rev() {
-        suffix = suffix + grad_task_biases[cut];
+        suffix += grad_task_biases[cut];
         grad_head[cut] = if cut == 0 {
             suffix
         } else {
@@ -1043,11 +1042,11 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
     let mut penalty = F::zero();
     for (layer, matrix) in backbone.weights.iter().enumerate() {
         for (index, value) in matrix.indexed_iter() {
-            penalty = penalty + *value * *value;
-            grad_weights[layer][index] = grad_weights[layer][index] + alpha * *value;
+            penalty += *value * *value;
+            grad_weights[layer][index] += alpha * *value;
         }
     }
-    objective = objective + half * alpha * penalty;
+    objective += half * alpha * penalty;
 
     let finite = grad_weights
         .iter()
@@ -1087,7 +1086,7 @@ fn adam_update<'a, F: Float + 'a>(
             beta2 * second_moment[index] + (F::one() - beta2) * *gradient * *gradient;
         let m_hat = first_moment[index] / correction1;
         let v_hat = second_moment[index] / correction2;
-        *parameter = *parameter - learning_rate * m_hat / (v_hat.sqrt() + eps);
+        *parameter -= learning_rate * m_hat / (v_hat.sqrt() + eps);
     }
 }
 

@@ -13704,9 +13704,11 @@ impl ExternalAgentInvocation {
             envs,
             // The global surface relies on Claude's supported-model default ToolSearch behavior.
             // Do not let an ambient desktop/shell override force eager loading or disable it.
-            env_removals: defer_tool_schemas
-                .then(|| vec!["ENABLE_TOOL_SEARCH".to_string()])
-                .unwrap_or_default(),
+            env_removals: if defer_tool_schemas {
+                vec!["ENABLE_TOOL_SEARCH".to_string()]
+            } else {
+                Default::default()
+            },
             final_output_path: Some(mcp_config_path),
         })
     }

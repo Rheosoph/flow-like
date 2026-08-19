@@ -730,7 +730,7 @@ impl ObjectDetection for YoloV4Like {
             for gy in 0..grid_h {
                 for gx in 0..grid_w {
                     for anchor in 0..anchors.min(anchor_dims.len()) {
-                        let base = (((gy * grid_w + gx) * anchors + anchor) * attrs);
+                        let base = ((gy * grid_w + gx) * anchors + anchor) * attrs;
                         let objectness = sigmoid(output[base + 4]);
                         let mut best_class = 0usize;
                         let mut best_score = f32::NEG_INFINITY;

@@ -553,13 +553,14 @@ impl ExecutionStateStore for CosmosStateStore {
                     "run is bound to a different broker job".to_string(),
                 ));
             }
-            if let Some(lease) = document.lease.as_ref() {
-                if lease.token != lease_token && lease.expires_at > now {
-                    return Ok(RunLeaseClaim::Busy {
-                        run: document.record,
-                        expires_at: lease.expires_at,
-                    });
-                }
+            if let Some(lease) = document.lease.as_ref()
+                && lease.token != lease_token
+                && lease.expires_at > now
+            {
+                return Ok(RunLeaseClaim::Busy {
+                    run: document.record,
+                    expires_at: lease.expires_at,
+                });
             }
 
             let expires_at = now.saturating_add(lease_duration_ms);

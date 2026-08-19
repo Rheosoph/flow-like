@@ -459,7 +459,7 @@ impl<F: Float> OrdinalLogistic<F> {
     fn score_at(&self, row: &ArrayView1<'_, F>, cut: usize) -> F {
         let mut score = row.dot(&self.coefficients);
         for (slot, feature) in self.free_features.iter().enumerate() {
-            score = score + row[*feature] * self.free_coefficients[[cut, slot]];
+            score += row[*feature] * self.free_coefficients[[cut, slot]];
         }
         score
     }
@@ -663,13 +663,13 @@ impl<F: Float, D: Data<Elem = F>, T: AsSingleTargets<Elem = usize>>
                 let v_hat = v[index] / bias_correction2;
                 let update = self.learning_rate * m_hat / (v_hat.sqrt() + eps);
                 if index < gamma_offset {
-                    beta[index] = beta[index] - update;
+                    beta[index] -= update;
                 } else if index < raw_offset {
                     let flat = index - gamma_offset;
                     let cell = [flat / n_free.max(1), flat % n_free.max(1)];
-                    gamma[cell] = gamma[cell] - update;
+                    gamma[cell] -= update;
                 } else {
-                    raw[index - raw_offset] = raw[index - raw_offset] - update;
+                    raw[index - raw_offset] -= update;
                 }
             }
         }
@@ -774,14 +774,14 @@ fn initial_raw_thresholds<F: Float>(targets: &[usize], n_classes: usize, link: L
 
     let mut counts = vec![F::zero(); n_classes];
     for &rank in targets {
-        counts[rank] = counts[rank] + F::one();
+        counts[rank] += F::one();
     }
 
     let floor = F::cast(1e-6);
     let mut cumulative = F::zero();
     let mut thresholds: Vec<F> = Vec::with_capacity(n_cuts);
     for count in counts.iter().take(n_cuts) {
-        cumulative = cumulative + *count;
+        cumulative += *count;
         // Clamped away from 0 and 1 so an unobserved level cannot make the logit infinite.
         let proportion = (cumulative / total).min(F::one() - floor).max(floor);
         thresholds.push(link.inverse_cdf(proportion));
@@ -824,7 +824,7 @@ fn probabilities_from_cumulative<F: Float>(cumulative: &[F], n_classes: usize) -
     let total = probabilities.iter().fold(F::zero(), |acc, v| acc + *v);
     if total > F::zero() {
         for value in probabilities.iter_mut() {
-            *value = *value / total;
+            *value /= total;
         }
     } else {
         let uniform = F::one() / F::cast(n_classes);
@@ -882,7 +882,7 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
         let score_at = |cut: usize| -> F {
             let mut value = shared;
             for (slot, feature) in free_features.iter().enumerate() {
-                value = value + row[*feature] * gamma[[cut, slot]];
+                value += row[*feature] * gamma[[cut, slot]];
             }
             value
         };
@@ -907,32 +907,32 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
                 let upper_s = upper.map_or(F::one(), |(_, s, _)| s);
                 let lower_s = lower.map_or(F::zero(), |(_, s, _)| s);
                 let probability = (upper_s - lower_s).max(min_probability::<F>());
-                objective = objective - probability.ln();
+                objective -= probability.ln();
 
                 // d(-ln P)/d eta at each adjacent cut.
                 let d_upper = upper.map_or(F::zero(), |(_, _, g)| g / probability);
                 let d_lower = lower.map_or(F::zero(), |(_, _, g)| -g / probability);
 
                 if let Some((cut, _, g)) = upper {
-                    grad_theta[cut] = grad_theta[cut] - g / probability;
+                    grad_theta[cut] -= g / probability;
                 }
                 if let Some((cut, _, g)) = lower {
-                    grad_theta[cut] = grad_theta[cut] + g / probability;
+                    grad_theta[cut] += g / probability;
                 }
 
                 // The shared coefficients feed BOTH adjacent scores, so they take the sum.
                 let combined = d_upper + d_lower;
                 for (index, feature) in row.iter().enumerate() {
-                    grad_beta[index] = grad_beta[index] + combined * *feature;
+                    grad_beta[index] += combined * *feature;
                 }
                 if let Some((cut, _, _)) = upper {
                     for (slot, feature) in free_features.iter().enumerate() {
-                        grad_gamma[[cut, slot]] = grad_gamma[[cut, slot]] + d_upper * row[*feature];
+                        grad_gamma[[cut, slot]] += d_upper * row[*feature];
                     }
                 }
                 if let Some((cut, _, _)) = lower {
                     for (slot, feature) in free_features.iter().enumerate() {
-                        grad_gamma[[cut, slot]] = grad_gamma[[cut, slot]] + d_lower * row[*feature];
+                        grad_gamma[[cut, slot]] += d_lower * row[*feature];
                     }
                 }
             }
@@ -951,17 +951,17 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
                 for cut in first..last {
                     let sign = if rank > cut { F::one() } else { -F::one() };
                     let score = sign * (thresholds[cut] - score_at(cut));
-                    objective = objective + margin.loss(score);
+                    objective += margin.loss(score);
 
                     let slope = margin.derivative(score);
-                    grad_theta[cut] = grad_theta[cut] + sign * slope;
+                    grad_theta[cut] += sign * slope;
 
                     let d_eta = -sign * slope;
                     for (index, feature) in row.iter().enumerate() {
-                        grad_beta[index] = grad_beta[index] + d_eta * *feature;
+                        grad_beta[index] += d_eta * *feature;
                     }
                     for (slot, feature) in free_features.iter().enumerate() {
-                        grad_gamma[[cut, slot]] = grad_gamma[[cut, slot]] + d_eta * row[*feature];
+                        grad_gamma[[cut, slot]] += d_eta * row[*feature];
                     }
                 }
             }
@@ -973,12 +973,12 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
     let half = F::cast(0.5);
     let shared_penalty = beta.iter().fold(F::zero(), |acc, b| acc + *b * *b);
     let free_penalty = gamma.iter().fold(F::zero(), |acc, g| acc + *g * *g);
-    objective = objective + half * alpha * (shared_penalty + free_penalty);
+    objective += half * alpha * (shared_penalty + free_penalty);
     for (index, value) in beta.iter().enumerate() {
-        grad_beta[index] = grad_beta[index] + alpha * *value;
+        grad_beta[index] += alpha * *value;
     }
     for (index, value) in gamma.indexed_iter() {
-        grad_gamma[index] = grad_gamma[index] + alpha * *value;
+        grad_gamma[index] += alpha * *value;
     }
 
     // A freed feature's slope lives entirely in `gamma`; its shared entry is pinned at zero so the
@@ -992,7 +992,7 @@ fn objective_and_gradient<F: Float, D: Data<Elem = F>>(
     let mut grad_raw = vec![F::zero(); n_cuts];
     let mut suffix = F::zero();
     for index in (0..n_cuts).rev() {
-        suffix = suffix + grad_theta[index];
+        suffix += grad_theta[index];
         grad_raw[index] = if index == 0 {
             suffix
         } else {

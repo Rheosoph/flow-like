@@ -146,11 +146,11 @@ async fn record_creation(
         .await
         .map_err(map_cosmos)?;
 
-    if let Some(existing) = &existing {
-        if is_stale(existing, event.sequencer.as_deref()) {
-            tracing::info!(key, "ignoring stale BlobCreated event");
-            return Ok(size);
-        }
+    if let Some(existing) = &existing
+        && is_stale(existing, event.sequencer.as_deref())
+    {
+        tracing::info!(key, "ignoring stale BlobCreated event");
+        return Ok(size);
     }
 
     let document = LedgerDocument {

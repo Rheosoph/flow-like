@@ -887,7 +887,7 @@ fn append_processed_variants<F>(
     variants: &mut Vec<DecodeVariant>,
     source_count: usize,
     max_variants: usize,
-    mut build_variant: F,
+    build_variant: F,
 ) where
     F: FnMut(&DecodeVariant) -> Option<DecodeVariant>,
 {

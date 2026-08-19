@@ -221,7 +221,7 @@ impl<F: Float, D: Data<Elem = F>, T: AsSingleTargets<Elem = usize>>
         for row in records.rows() {
             feature_means = feature_means + row.to_owned();
         }
-        feature_means = feature_means / F::cast(n_samples);
+        feature_means /= F::cast(n_samples);
 
         let ranks: Array1<F> = targets.iter().map(|rank| F::cast(*rank)).collect();
         let rank_mean = ranks.iter().fold(F::zero(), |acc, v| acc + *v) / F::cast(n_samples);
@@ -237,7 +237,7 @@ impl<F: Float, D: Data<Elem = F>, T: AsSingleTargets<Elem = usize>>
         // Normal equations: (X'X + alpha I) beta = X'y, positive definite for alpha > 0.
         let mut gram = centered.t().dot(&centered);
         for index in 0..n_features {
-            gram[[index, index]] = gram[[index, index]] + self.alpha;
+            gram[[index, index]] += self.alpha;
         }
         let rhs = centered.t().dot(&centered_ranks);
         let coefficients = cholesky_solve(gram, rhs)?;
@@ -347,7 +347,7 @@ fn cholesky_solve<F: Float>(mut a: Array2<F>, b: Array1<F>) -> Result<Array1<F>>
     for column in 0..n {
         let mut diagonal = a[[column, column]];
         for k in 0..column {
-            diagonal = diagonal - a[[column, k]] * a[[column, k]];
+            diagonal -= a[[column, k]] * a[[column, k]];
         }
         if !diagonal.is_finite() || diagonal <= F::zero() {
             return Err(OrdinalError::NotPositiveDefinite);
@@ -358,7 +358,7 @@ fn cholesky_solve<F: Float>(mut a: Array2<F>, b: Array1<F>) -> Result<Array1<F>>
         for row in column + 1..n {
             let mut value = a[[row, column]];
             for k in 0..column {
-                value = value - a[[row, k]] * a[[column, k]];
+                value -= a[[row, k]] * a[[column, k]];
             }
             a[[row, column]] = value / diagonal;
         }
@@ -369,7 +369,7 @@ fn cholesky_solve<F: Float>(mut a: Array2<F>, b: Array1<F>) -> Result<Array1<F>>
     for row in 0..n {
         let mut value = b[row];
         for k in 0..row {
-            value = value - a[[row, k]] * y[k];
+            value -= a[[row, k]] * y[k];
         }
         y[row] = value / a[[row, row]];
     }
@@ -379,7 +379,7 @@ fn cholesky_solve<F: Float>(mut a: Array2<F>, b: Array1<F>) -> Result<Array1<F>>
     for row in (0..n).rev() {
         let mut value = y[row];
         for k in row + 1..n {
-            value = value - a[[k, row]] * x[k];
+            value -= a[[k, row]] * x[k];
         }
         x[row] = value / a[[row, row]];
     }

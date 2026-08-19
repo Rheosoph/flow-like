@@ -185,7 +185,7 @@ async fn validate_security_prerequisites(state: &State) -> Result<(), StartupErr
             })?;
         let value = secret.expose_secret();
 
-        if value.trim().is_empty() || value.as_bytes().len() < *minimum_length {
+        if value.trim().is_empty() || value.len() < *minimum_length {
             return Err(StartupError(format!(
                 "required Secret Manager secret {name} must contain at least {minimum_length} bytes"
             )));
@@ -281,7 +281,7 @@ mod metrics_endpoint {
         let env_filter = flow_like_api::warn_env_filter();
         let otel_layer =
             init_tracing().map(|tracer| tracing_opentelemetry::layer().with_tracer(tracer));
-        let sentry_layer = sentry_guard.is_some().then(|| sentry_tracing::layer());
+        let sentry_layer = sentry_guard.is_some().then(sentry_tracing::layer);
 
         tracing_subscriber::registry()
             .with(format_layer)

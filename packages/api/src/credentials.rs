@@ -115,7 +115,7 @@ pub fn storage_path_segment(value: &str, fallback: &str) -> String {
         .chars()
         .take(MAX_STORAGE_PATH_SEGMENT_CHARS - STORAGE_PATH_SEGMENT_DIGEST_CHARS - 1)
         .collect();
-    let base = base.trim_end_matches(|ch| ch == '.' || ch == '_');
+    let base = base.trim_end_matches(['.', '_']);
     let base = if base.is_empty() { fallback } else { base };
     format!("{base}-{digest}")
 }

@@ -130,7 +130,7 @@ impl CallFunctionNode {
     /// other's results.
     fn cache_key(layer_id: &str, inputs: &HashMap<String, Value>) -> String {
         let mut sorted: Vec<(&String, &Value)> = inputs.iter().collect();
-        sorted.sort_by(|(left, _), (right, _)| left.cmp(right));
+        sorted.sort_by_key(|(left, _)| *left);
 
         let mut hasher = blake3::Hasher::new();
         hasher.update(layer_id.as_bytes());

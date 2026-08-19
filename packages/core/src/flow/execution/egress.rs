@@ -120,14 +120,12 @@ pub async fn resolve_socket_addrs(
     if addrs.is_empty() {
         return Err(anyhow!("'{host}' did not resolve to any address"));
     }
-    if guarded {
-        if let Some(blocked) = addrs.iter().find(|addr| is_blocked_ip(addr.ip())) {
-            return Err(anyhow!(
-                "Connection to '{host}' refused: it resolves to {}, which is on the executor's \
+    if guarded && let Some(blocked) = addrs.iter().find(|addr| is_blocked_ip(addr.ip())) {
+        return Err(anyhow!(
+            "Connection to '{host}' refused: it resolves to {}, which is on the executor's \
                  own network plane and may not be reached in server-side execution.",
-                blocked.ip()
-            ));
-        }
+            blocked.ip()
+        ));
     }
     Ok(addrs)
 }

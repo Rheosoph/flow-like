@@ -934,7 +934,7 @@ impl State {
     async fn configured_jwk(&self, kid: &str) -> Result<Jwk> {
         {
             let jwks = self.jwks.read().await;
-            if let Some(jwk) = find_unique_jwk(&*jwks, kid)? {
+            if let Some(jwk) = find_unique_jwk(&jwks, kid)? {
                 return Ok(jwk);
             }
         }
@@ -945,7 +945,7 @@ impl State {
         let mut refresh = self.jwks_refresh.lock().await;
         {
             let jwks = self.jwks.read().await;
-            if let Some(jwk) = find_unique_jwk(&*jwks, kid)? {
+            if let Some(jwk) = find_unique_jwk(&jwks, kid)? {
                 return Ok(jwk);
             }
         }

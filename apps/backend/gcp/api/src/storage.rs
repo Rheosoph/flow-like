@@ -1,5 +1,7 @@
 use crate::config::Config;
-use flow_like_storage::{files::store::FlowLikeStore, object_store::gcp::GoogleCloudStorageBuilder};
+use flow_like_storage::{
+    files::store::FlowLikeStore, object_store::gcp::GoogleCloudStorageBuilder,
+};
 use std::sync::Arc;
 
 pub fn create_cdn_store(config: &Config) -> Result<FlowLikeStore, StorageError> {

@@ -9,7 +9,7 @@ mod azure;
 mod gcp;
 
 use crate::config::ProviderConfig;
-use crate::error::{Result, SecretError};
+use crate::error::Result;
 use crate::{SecretProviderKind, SecretRef, SecretValue};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -75,9 +75,9 @@ pub(crate) async fn build_provider(config: &ProviderConfig) -> Result<Arc<dyn Se
         ProviderConfig::GcpSecretManager(config) => {
             #[cfg(feature = "gcp")]
             {
-                return Ok(Arc::new(
+                Ok(Arc::new(
                     GcpSecretManagerProvider::new(config.clone()).await?,
-                ));
+                ))
             }
             #[cfg(not(feature = "gcp"))]
             {
@@ -90,7 +90,7 @@ pub(crate) async fn build_provider(config: &ProviderConfig) -> Result<Arc<dyn Se
         ProviderConfig::AzureKeyVault(config) => {
             #[cfg(feature = "azure")]
             {
-                return Ok(Arc::new(AzureKeyVaultProvider::new(config.clone())?));
+                Ok(Arc::new(AzureKeyVaultProvider::new(config.clone())?))
             }
             #[cfg(not(feature = "azure"))]
             {

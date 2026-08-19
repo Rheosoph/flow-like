@@ -353,13 +353,13 @@ impl NodeLogic for LazyRegisterFunctionToolsNode {
 
         // Only build the vector index once we have enough rows for it to help.
         let row_count = db_arc.read().await.count(None).await.unwrap_or(0);
-        if row_count >= VECTOR_INDEX_THRESHOLD {
-            if let Err(error) = db_arc.read().await.index("vector", None).await {
-                context.log_message(
-                    &format!("Lazy tool database vector index failed: {error:#}"),
-                    LogLevel::Error,
-                );
-            }
+        if row_count >= VECTOR_INDEX_THRESHOLD
+            && let Err(error) = db_arc.read().await.index("vector", None).await
+        {
+            context.log_message(
+                &format!("Lazy tool database vector index failed: {error:#}"),
+                LogLevel::Error,
+            );
         }
 
         // ── Register the lazy ref and shared embedding model on the agent ─────

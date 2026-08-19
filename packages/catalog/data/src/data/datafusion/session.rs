@@ -232,10 +232,10 @@ fn build_session_config(
 /// "No suitable object store found" error.
 fn create_runtime_env(environment: ExecutionEnvironment) -> Arc<RuntimeEnv> {
     let registry = DefaultObjectStoreRegistry::new();
-    if environment == ExecutionEnvironment::Server {
-        if let Ok(file_scheme) = Url::parse("file:///") {
-            let _ = registry.deregister_store(&file_scheme);
-        }
+    if environment == ExecutionEnvironment::Server
+        && let Ok(file_scheme) = Url::parse("file:///")
+    {
+        let _ = registry.deregister_store(&file_scheme);
     }
     RuntimeEnvBuilder::new()
         .with_object_store_registry(Arc::new(registry))

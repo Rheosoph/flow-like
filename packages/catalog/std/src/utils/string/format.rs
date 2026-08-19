@@ -5,7 +5,7 @@ use flow_like::flow::{
     pin::{Pin, PinType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json};
+use flow_like_types::{async_trait, json::json};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
