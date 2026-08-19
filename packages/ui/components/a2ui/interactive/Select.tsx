@@ -18,6 +18,7 @@ import {
 	valueRevisionOf,
 } from "../hooks/use-bound-input-value";
 import type { BoundValue, SelectComponent } from "../types";
+import { normalizeOptions, toOptionValue } from "./options";
 
 /** Events added after select shipped never inherit `*` or `actions[0]`. */
 const EXACT_ONLY = { legacyFallback: false, wildcardFallback: false };
@@ -53,9 +54,7 @@ export function A2UISelect({
 	const [value, setValue] = useBoundInputValue<string>(component.value, "", {
 		revision: valueRevisionOf(component),
 	});
-	const options =
-		useResolved<Array<{ value: string; label: string }>>(component.options) ??
-		[];
+	const options = normalizeOptions(useResolved<unknown>(component.options));
 	const disabled = useResolved<boolean>(component.disabled);
 	const label = resolveStringOrBound(
 		component.label as string | BoundValue | undefined,
@@ -95,7 +94,7 @@ export function A2UISelect({
 		>
 			{label && <Label>{label}</Label>}
 			<Select
-				value={value}
+				value={toOptionValue(value)}
 				onValueChange={handleChange}
 				onOpenChange={handleOpenChange}
 				disabled={disabled}
