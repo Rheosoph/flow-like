@@ -100,10 +100,8 @@ import { FlowScriptPanel } from "../../components/flow/flowscript/flowscript-pan
 import { MediaNode } from "../../components/flow/media-node";
 import { Traces } from "../../components/flow/traces";
 import { UploadPlaceholderNode } from "../../components/flow/upload-placeholder-node";
-import {
-	Variable,
-	VariablesMenu,
-} from "../../components/flow/variables/variables-menu";
+import { VariablesMenu } from "../../components/flow/variables/variables-menu";
+import { typeToColor } from "../../components/flow/utils";
 import {
 	ResizableHandle,
 	ResizablePanel,
@@ -3808,12 +3806,19 @@ export function FlowBoard({
 												</span>
 											</div>
 										) : (active?.data?.current as IVariable)?.id ? (
-											<Variable
-												variable={active?.data?.current as IVariable}
-												preview
-												onVariableChange={() => {}}
-												onVariableDeleted={() => {}}
-											/>
+											<div className="flex items-center gap-2 rounded-md border bg-background px-3 py-2 shadow-floating">
+												<span
+													className="h-2 w-4 rounded-full"
+													style={{
+														backgroundColor: typeToColor(
+															(active?.data?.current as IVariable).data_type,
+														),
+													}}
+												/>
+												<span className="font-mono text-sm font-medium">
+													{(active?.data?.current as IVariable).name}
+												</span>
+											</div>
 										) : null}
 									</DragOverlay>
 								</div>

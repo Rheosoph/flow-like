@@ -1,6 +1,6 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReactFlowInstance } from "@xyflow/react";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { type IBoard, type ILayer, ILayerType } from "../lib/schema/flow/board";
 import type { INode } from "../lib/schema/flow/node";
 import type { ViewportHold } from "./use-viewport-manager";
@@ -37,6 +37,73 @@ export function resolveLayerChain(
 
 function chainToPath(chain: string[]): string | undefined {
 	return chain.length > 0 ? chain.join("/") : undefined;
+}
+
+/** The path one level up, or undefined when `path` is already a top-level layer. */
+export function parentPath(path: string): string | undefined {
+	const segments = path.split("/");
+	return segments.length > 1 ? segments.slice(0, -1).join("/") : undefined;
+}
+
+/** One step the user took into a layer: the path they were on, and the one they opened. */
+export interface LayerVisit {
+	from: string | undefined;
+	to: string;
+}
+
+/** Long enough for any real trail; a goto that never gets popped must not grow it forever. */
+const MAX_TRAIL_LENGTH = 64;
+
+/**
+ * Appends a step, keeping the trail bounded. Re-opening the layer that is already on screen
+ * is not a step — recording it would make that layer its own way out.
+ */
+export function recordVisit(
+	trail: readonly LayerVisit[],
+	visit: LayerVisit,
+): LayerVisit[] {
+	if (visit.from === visit.to) return [...trail];
+
+	const next = [...trail, visit];
+	return next.length > MAX_TRAIL_LENGTH
+		? next.slice(next.length - MAX_TRAIL_LENGTH)
+		: next;
+}
+
+/**
+ * Where "layer up" lands, and the trail that is left behind. Functions hang off the board
+ * root no matter which Call Function node opened them, so their parent chain leads to the
+ * root rather than back to the caller — a function opened from inside another function
+ * would drop the user all the way out. The trail retraces the way in instead, and the most
+ * recent visit wins so entering the same function twice still unwinds one step at a time.
+ *
+ * Falls back to the parent chain whenever the trail does not describe where the user
+ * currently is — they got there through a breadcrumb, a goto or a peer jump.
+ */
+export function resolveExit(
+	trail: readonly LayerVisit[],
+	layerPath: string,
+): { path: string | undefined; trail: LayerVisit[] } {
+	for (let index = trail.length - 1; index >= 0; index--) {
+		if (trail[index].to !== layerPath) continue;
+		return { path: trail[index].from, trail: trail.slice(0, index) };
+	}
+
+	return { path: parentPath(layerPath), trail: [] };
+}
+
+/**
+ * Drops the trail from the last visit to `path` onward. A goto lands on a layer without
+ * walking into it, so the steps recorded for it no longer describe how it was reached.
+ */
+export function dropVisitsTo(
+	trail: readonly LayerVisit[],
+	path: string,
+): LayerVisit[] {
+	for (let index = trail.length - 1; index >= 0; index--) {
+		if (trail[index].to === path) return trail.slice(0, index);
+	}
+	return [...trail];
 }
 
 export interface FocusTarget {
@@ -99,6 +166,9 @@ export function useLayerNavigation({
 	fitView,
 	getNodes,
 }: UseLayerNavigationProps) {
+	/** The layers the user walked into, in order, so leaving them retraces the way back. */
+	const trail = useRef<LayerVisit[]>([]);
+
 	/**
 	 * Navigates to anything addressable on the canvas: a node (in whichever layer or
 	 * function body owns it), a layer, or a function. Every "go to" entry point — run
@@ -129,6 +199,13 @@ export function useLayerNavigation({
 			// Leaving a layer discards what is on screen; keep its viewport so coming back
 			// lands where the user left off.
 			if (switchesLayer) void saveViewport();
+
+			// A goto into another layer lands on its real place in the hierarchy, so the steps
+			// recorded for it no longer describe how it was reached. Staying in the current
+			// layer — jumping to a node inside it — leaves the way in untouched.
+			if (switchesLayer && targetPath) {
+				trail.current = dropVisitsTo(trail.current, targetPath);
+			}
 
 			const release = holdViewport();
 			setCurrentLayer(targetLayer);
@@ -202,19 +279,26 @@ export function useLayerNavigation({
 			// Call Function nodes anywhere on the board, so the layer being opened is often
 			// not a child of the one currently open.
 			const chain = resolveLayerChain(board.data?.layers ?? {}, pushedLayer.id);
+			const targetPath =
+				chainToPath(chain) ??
+				// Layer created in this session and not in the query cache yet.
+				(layerPath ? `${layerPath}/${pushedLayer.id}` : pushedLayer.id);
+
+			trail.current = recordVisit(trail.current, {
+				from: layerPath,
+				to: targetPath,
+			});
 
 			setCurrentLayer(pushedLayer.id);
-			if (chain.length > 0) {
-				setLayerPath(chainToPath(chain));
-				return;
-			}
-
-			// Layer created in this session and not in the query cache yet.
-			setLayerPath((old) =>
-				old ? `${old}/${pushedLayer.id}` : pushedLayer.id,
-			);
+			setLayerPath(targetPath);
 		},
-		[board.data?.layers, saveViewport, setCurrentLayer, setLayerPath],
+		[
+			board.data?.layers,
+			layerPath,
+			saveViewport,
+			setCurrentLayer,
+			setLayerPath,
+		],
 	);
 
 	const popLayer = useCallback(() => {
@@ -222,16 +306,11 @@ export function useLayerNavigation({
 
 		void saveViewport();
 
-		const segments = layerPath.split("/");
-		if (segments.length === 1) {
-			setLayerPath(undefined);
-			setCurrentLayer(undefined);
-			return;
-		}
-		const newPath = segments.slice(0, -1).join("/");
-		setLayerPath(newPath);
-		const segment = newPath.split("/").pop();
-		setCurrentLayer(segment);
+		const exit = resolveExit(trail.current, layerPath);
+		trail.current = exit.trail;
+
+		setLayerPath(exit.path);
+		setCurrentLayer(exit.path?.split("/").pop());
 	}, [layerPath, saveViewport, setCurrentLayer, setLayerPath]);
 
 	return {

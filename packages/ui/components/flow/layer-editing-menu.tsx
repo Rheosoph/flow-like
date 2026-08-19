@@ -85,7 +85,7 @@ import {
 import { typeToColor } from "./utils";
 import { ValueTypeIcon } from "./variables/variables-menu";
 
-type PinEdit = {
+export type PinEdit = {
 	id: string;
 	name: string;
 	friendly_name: string;
@@ -209,80 +209,56 @@ const buildInitialEdits = (
 	return out;
 };
 
-interface LayerEditMenuProps {
-	open: boolean;
-	onOpenChange: (open: boolean) => void;
-	layer?: ILayer;
-	node?: INode;
-	onApply: (updated: ILayer | INode) => Promise<void>;
-	boardRef?: RefObject<IBoard | undefined>;
-	mode?: "layer" | "node";
+export interface IPinEditor {
+	edits: Record<string, PinEdit>;
+	inputs: PinEdit[];
+	outputs: PinEdit[];
+	reset: () => void;
+	editPin: (id: string, patch: Partial<PinEdit>) => void;
+	addPin: (pin_type: IPinType) => void;
+	removePin: (id: string) => void;
+	movePin: (id: string, dir: "up" | "down") => void;
+	reorderByIds: (orderedIds: string[]) => void;
+	/** Serializes the edits back onto the entity's pin map, re-indexed per group. */
+	buildPins: () => Record<string, IPin>;
 }
 
-export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
-	open,
-	onOpenChange,
-	layer,
-	node,
-	onApply,
-	boardRef,
-	mode = "layer",
-}) => {
-	const { t } = useTranslation("flow");
-	const entity = layer ?? node;
-	const isNodeMode =
-		mode === "node" || (node !== undefined && layer === undefined);
-	const isGenericEvent = isNodeMode && node?.name === "events_generic";
-	// Only function layers have a call boundary to cache at — a collapsed layer runs
-	// inline with the rest of the graph.
-	const isFunctionLayer = !isNodeMode && layer?.type === ILayerType.Function;
+/**
+ * The pin editing state machine, shared by the layer/node dialog and the function
+ * overlay so both surfaces stay on one pin model.
+ */
+export function usePinEditor(
+	entity: ILayer | INode | undefined,
+	boardRef?: RefObject<IBoard | undefined>,
+): IPinEditor {
+	const isGenericEvent =
+		entity !== undefined &&
+		"friendly_name" in entity &&
+		(entity as INode).name === "events_generic";
 
 	const [edits, setEdits] = useState<Record<string, PinEdit>>(() =>
 		entity ? buildInitialEdits(entity, boardRef) : {},
 	);
-	const [nodeName, setNodeName] = useState<string>("");
-	const [nodeDescription, setNodeDescription] = useState<string>("");
-	const [cache, setCache] = useState<ILayerCache>(() =>
-		buildInitialCache(layer),
-	);
 	const { inputs, outputs } = useGroupedPins(edits);
-	const [tab, setTab] = useState<"inputs" | "outputs" | "metadata" | "caching">(
-		isGenericEvent ? "metadata" : "inputs",
+
+	const reset = useCallback(() => {
+		setEdits(entity ? buildInitialEdits(entity, boardRef) : {});
+	}, [entity, boardRef]);
+
+	const patchPin = useCallback(
+		(id: string, updater: (p: PinEdit) => PinEdit) => {
+			setEdits((prev) => {
+				const curr = prev[id];
+				if (!curr) return prev;
+				return { ...prev, [id]: updater(curr) };
+			});
+		},
+		[],
 	);
-
-	useEffect(() => {
-		if (open && entity) {
-			setEdits(buildInitialEdits(entity, boardRef));
-			setCache(buildInitialCache(layer));
-			setTab(isGenericEvent ? "metadata" : "inputs");
-			if (isNodeMode && node) {
-				setNodeName(node.friendly_name || "");
-				// Resolve node description ref if it's a hash
-				let desc = node.description || "";
-				const descRef = boardRef?.current?.refs?.[desc];
-				if (descRef) {
-					desc = descRef;
-				}
-				// Hash for empty string
-				if (desc === "16248035215404677707") {
-					desc = "";
-				}
-				setNodeDescription(desc);
-			}
-		}
-	}, [open, entity, boardRef, isNodeMode, node, isGenericEvent, layer]);
-
-	const setPin = useCallback((id: string, updater: (p: PinEdit) => PinEdit) => {
-		setEdits((prev) => {
-			const curr = prev[id];
-			if (!curr) return prev;
-			return { ...prev, [id]: updater(curr) };
-		});
-	}, []);
 
 	const editPin = useCallback(
 		(id: string, patch: Partial<PinEdit>) => {
-			setPin(id, (p) => {
+			patchPin(id, (p) => {
 				const next: PinEdit = { ...p, ...patch };
 				if (patch.friendly_name !== undefined) {
 					next.name = toMachineName(patch.friendly_name);
@@ -290,10 +266,10 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 				return next;
 			});
 		},
-		[setPin],
+		[patchPin],
 	);
 
-	const reindexGroupInState = useCallback((group: PinEdit[]) => {
+	const reindexGroup = useCallback((group: PinEdit[]) => {
 		const re = reindex(group);
 		setEdits((prev) => {
 			const copy = { ...prev };
@@ -305,7 +281,7 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 	const movePin = useCallback(
 		(id: string, dir: "up" | "down") => {
 			const group = edits[id]?.pin_type === IPinType.Input ? inputs : outputs;
-			const idx = group.findIndex((p: any) => p.id === id);
+			const idx = group.findIndex((p) => p.id === id);
 			if (idx < 0) return;
 
 			const nextIdx = dir === "up" ? idx - 1 : idx + 1;
@@ -313,9 +289,9 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 
 			const swapped = [...group];
 			[swapped[idx], swapped[nextIdx]] = [swapped[nextIdx], swapped[idx]];
-			reindexGroupInState(swapped);
+			reindexGroup(swapped);
 		},
-		[edits, inputs, outputs, reindexGroupInState],
+		[edits, inputs, outputs, reindexGroup],
 	);
 
 	const addPin = useCallback((pin_type: IPinType) => {
@@ -345,7 +321,7 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 				const pin = prev[id];
 				if (!pin) return prev;
 
-				// Prevent removing the "payload" pin on generic_event nodes
+				// The payload pin is the contract of a generic event — it cannot be removed.
 				if (isGenericEvent && pin.name === "payload") {
 					return prev;
 				}
@@ -374,18 +350,15 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 		});
 	}, []);
 
-	const applyChanges = useCallback(async () => {
-		if (!entity) return;
-
-		const original = entity.pins;
+	const buildPins = useCallback((): Record<string, IPin> => {
+		const original = (entity?.pins ?? {}) as Record<string, IPin>;
 		const nextPins: Record<string, IPin> = {};
-
 		const zeroIndexed = Object.values(edits).find((p) => p.index <= 0);
 
 		for (const edit of Object.values(edits)) {
-			const prev = original[edit.id] as IPin | undefined;
+			const prev = original[edit.id];
 
-			const merged: IPin = {
+			nextPins[edit.id] = {
 				...(prev as IPin),
 				id: edit.id,
 				pin_type: edit.pin_type,
@@ -401,8 +374,6 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 				schema: edit.schema ?? null,
 				value_type: edit.value_type ?? IValueType.Normal,
 			};
-
-			nextPins[edit.id] = merged;
 		}
 
 		const nextInputs = reindex(
@@ -415,11 +386,102 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 				Object.values(nextPins).filter((p) => p.pin_type === IPinType.Output),
 			),
 		);
-
 		for (const p of nextInputs)
 			nextPins[p.id] = { ...nextPins[p.id], index: p.index };
 		for (const p of nextOutputs)
 			nextPins[p.id] = { ...nextPins[p.id], index: p.index };
+
+		return nextPins;
+	}, [edits, entity]);
+
+	return {
+		edits,
+		inputs,
+		outputs,
+		reset,
+		editPin,
+		addPin,
+		removePin,
+		movePin,
+		reorderByIds,
+		buildPins,
+	};
+}
+
+interface LayerEditMenuProps {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	layer?: ILayer;
+	node?: INode;
+	onApply: (updated: ILayer | INode) => Promise<void>;
+	boardRef?: RefObject<IBoard | undefined>;
+	mode?: "layer" | "node";
+}
+
+export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
+	open,
+	onOpenChange,
+	layer,
+	node,
+	onApply,
+	boardRef,
+	mode = "layer",
+}) => {
+	const { t } = useTranslation("flow");
+	const entity = layer ?? node;
+	const isNodeMode =
+		mode === "node" || (node !== undefined && layer === undefined);
+	const isGenericEvent = isNodeMode && node?.name === "events_generic";
+	// Only function layers have a call boundary to cache at — a collapsed layer runs
+	// inline with the rest of the graph.
+	const isFunctionLayer = !isNodeMode && layer?.type === ILayerType.Function;
+
+	const {
+		inputs,
+		outputs,
+		reset: resetPins,
+		editPin,
+		addPin,
+		removePin,
+		movePin,
+		reorderByIds,
+		buildPins,
+	} = usePinEditor(entity, boardRef);
+	const [nodeName, setNodeName] = useState<string>("");
+	const [nodeDescription, setNodeDescription] = useState<string>("");
+	const [cache, setCache] = useState<ILayerCache>(() =>
+		buildInitialCache(layer),
+	);
+	const [tab, setTab] = useState<"inputs" | "outputs" | "metadata" | "caching">(
+		isGenericEvent ? "metadata" : "inputs",
+	);
+
+	useEffect(() => {
+		if (open && entity) {
+			resetPins();
+			setCache(buildInitialCache(layer));
+			setTab(isGenericEvent ? "metadata" : "inputs");
+			if (isNodeMode && node) {
+				setNodeName(node.friendly_name || "");
+				// Resolve node description ref if it's a hash
+				let desc = node.description || "";
+				const descRef = boardRef?.current?.refs?.[desc];
+				if (descRef) {
+					desc = descRef;
+				}
+				// Hash for empty string
+				if (desc === "16248035215404677707") {
+					desc = "";
+				}
+				setNodeDescription(desc);
+			}
+		}
+	}, [open, entity, boardRef, isNodeMode, node, isGenericEvent, layer, resetPins]);
+
+	const applyChanges = useCallback(async () => {
+		if (!entity) return;
+
+		const nextPins = buildPins();
 
 		if (isNodeMode && node) {
 			const updated: INode = {
@@ -442,7 +504,7 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 			await onApply(updated);
 		}
 	}, [
-		edits,
+		buildPins,
 		entity,
 		layer,
 		node,
@@ -575,7 +637,7 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 	);
 };
 
-const CacheSettings: React.FC<{
+export const CacheSettings: React.FC<{
 	cache: ILayerCache;
 	onChange: (next: ILayerCache) => void;
 }> = ({ cache, onChange }) => {
@@ -808,7 +870,7 @@ const PinDataTypeSelectInline: React.FC<{
 	);
 };
 
-const PinList: React.FC<PinListProps> = ({
+export const PinList: React.FC<PinListProps> = ({
 	items,
 	onEdit,
 	onMoveUp,

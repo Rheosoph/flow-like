@@ -312,6 +312,7 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 		label: str("Upload File"),
 		accept: str("*/*"),
 		multiple: bool(false),
+		directory: bool(false),
 		disabled: bool(false),
 	},
 	imageInput: {

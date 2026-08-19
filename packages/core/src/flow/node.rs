@@ -524,7 +524,13 @@ impl Node {
                     }
                 }
                 None => {
-                    mutable_pin.depends_on.remove(first_node);
+                    // The source pin is not on the board handed to us, which is not evidence that
+                    // the edge is stale: `node_updates` lifts the node being updated out of the
+                    // board before calling `on_update`, and on load this runs before `cleanup` has
+                    // repaired anything. Dropping `depends_on` here deletes a wire on an incomplete
+                    // view, and `fix_pin_connections` then removes the producer's surviving half —
+                    // the whole connection disappears with no error. That cleanup sees the entire
+                    // board and is the single authority on pruning.
                 }
             }
         }
@@ -750,6 +756,64 @@ pub fn mints_pins_on_update(node_type: &str) -> bool {
             | "df_write_delta"
             | "graph_sql_query"
     )
+}
+
+/// The literal a node derives its dynamic pins from, or `None` when it cannot be read.
+///
+/// `None` means "unknown", never "declares nothing": the config pin is wired (what runs is decided
+/// at runtime), holds no value yet, or holds a non-string. An `on_update` that treats those cases
+/// as an empty template reconciles every dynamic pin away — with its wires — so callers must leave
+/// their existing pins untouched instead.
+pub fn dynamic_pin_source_literal(node: &Node, config_pin: &str) -> Option<String> {
+    let pin = node.get_pin_by_name(config_pin)?;
+    if !pin.depends_on.is_empty() {
+        return None;
+    }
+    let bytes = pin.default_value.as_ref()?;
+    flow_like_types::json::from_slice::<flow_like_types::Value>(bytes)
+        .ok()?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
+/// Whether `pin` carries a graph edge in either direction.
+pub fn pin_is_wired(pin: &Pin) -> bool {
+    !pin.depends_on.is_empty() || !pin.connected_to.is_empty()
+}
+
+/// Drop the stale dynamic pins named by `stale_ids`, but keep any that still carry a wire and
+/// record them on `node.error`.
+///
+/// An `on_update` that removes a wired pin also removes its half of the edge; `Board::cleanup`'s
+/// `fix_pin_connections` then prunes the surviving half on the producer, so the connection
+/// disappears from both ends with no error anywhere and the producer is left dead on the canvas.
+/// Reconciling a pin away is only ever safe while nothing is attached to it — when something is,
+/// the wire is the user's intent and the stale declaration is the thing to report.
+pub fn remove_unwired_pins(node: &mut Node, stale_ids: &[String]) {
+    let mut kept: Vec<String> = Vec::new();
+    for id in stale_ids {
+        match node.pins.get(id) {
+            Some(pin) if pin_is_wired(pin) => kept.push(pin.name.clone()),
+            Some(_) => {
+                node.pins.remove(id);
+            }
+            None => {}
+        }
+    }
+
+    if kept.is_empty() {
+        return;
+    }
+    kept.sort();
+    kept.dedup();
+    let message = format!(
+        "Still connected but no longer declared: {}. Disconnect them, or restore what declared them.",
+        kept.join(", ")
+    );
+    node.error = Some(match node.error.take() {
+        Some(existing) if !existing.is_empty() => format!("{existing} {message}"),
+        _ => message,
+    });
 }
 
 /// Utility for .on_update()

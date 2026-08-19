@@ -1811,3 +1811,281 @@ html[data-engine="webkit"] [class*="backdrop-blur"] {
 		order: var(--a2ui-xxl-order);
 	}
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Flow sidebar tokens.
+
+   Variables and function layers render as typed chips on a wrapping board.
+   Colour carries the data type, form carries the container: plain = single
+   value, stacked plate = Array, chamfered ends = HashSet, paired cells =
+   HashMap, arrow tail = callable. Form is deliberately readable before the
+   glyph is, so a board of thirty chips can be scanned by shape alone.
+
+   The pin palette is theme-independent, but four of its hues (Boolean, Byte,
+   Generic, PathBuf) sit too dark to survive as a filled ground on the near
+   black editor canvas — the dark theme lifts their lightness and keeps hue
+   and chroma, and each fill carries the ink colour that reads on it.
+   ───────────────────────────────────────────────────────────────────────── */
+:root {
+	--tok-string: var(--pin-string);
+	--tok-string-ink: oklch(0.18 0.008 285);
+	--tok-integer: var(--pin-integer);
+	--tok-integer-ink: oklch(0.18 0.008 285);
+	--tok-float: var(--pin-float);
+	--tok-float-ink: oklch(0.18 0.008 285);
+	--tok-date: var(--pin-date);
+	--tok-date-ink: oklch(0.18 0.008 285);
+	--tok-boolean: var(--pin-boolean);
+	--tok-boolean-ink: oklch(0.99 0 0);
+	--tok-struct: var(--pin-struct);
+	--tok-struct-ink: oklch(0.99 0 0);
+	--tok-byte: var(--pin-byte);
+	--tok-byte-ink: oklch(0.99 0 0);
+	--tok-generic: var(--pin-generic);
+	--tok-generic-ink: oklch(0.99 0 0);
+	--tok-pathbuf: var(--pin-pathbuf);
+	--tok-pathbuf-ink: oklch(0.99 0 0);
+	--tok-function: var(--pin-fn-ref);
+	--tok-function-ink: oklch(0.99 0 0);
+	--tok-execution: var(--foreground);
+	--tok-execution-ink: var(--background);
+}
+
+.dark {
+	--tok-boolean: oklch(0.665 0.205 16.935);
+	--tok-boolean-ink: oklch(0.16 0.012 268);
+	--tok-struct: oklch(0.68 0.235 302.321);
+	--tok-struct-ink: oklch(0.16 0.012 268);
+	--tok-byte: oklch(0.68 0.1 166.913);
+	--tok-byte-ink: oklch(0.16 0.012 268);
+	--tok-generic: oklch(0.7 0.046 257.417);
+	--tok-generic-ink: oklch(0.16 0.012 268);
+	--tok-pathbuf: oklch(0.7 0.018 73.639);
+	--tok-pathbuf-ink: oklch(0.16 0.012 268);
+	--tok-string-ink: oklch(0.16 0.012 268);
+	--tok-integer-ink: oklch(0.16 0.012 268);
+	--tok-float-ink: oklch(0.16 0.012 268);
+	--tok-date-ink: oklch(0.16 0.012 268);
+	--tok-function: oklch(0.7 0.175 43.26);
+	--tok-function-ink: oklch(0.16 0.012 268);
+}
+
+.fl-tok {
+	--fl-tok-h: 26px;
+	--fl-tok-slug: 19px;
+	--fl-tok-font: 11.5px;
+	--fl-tok-radius: 4px;
+	--fl-tok-plate: 3px;
+	--fl-tok-chamfer: 5px;
+	--fl-tok-tail: 7px;
+	--fl-tok-color: var(--tok-generic);
+	--fl-tok-ink: var(--tok-generic-ink);
+	--fl-tok-body: color-mix(in oklab, var(--fl-tok-color) 14%, var(--card));
+	--fl-tok-edge: color-mix(in oklab, var(--fl-tok-color) 32%, var(--border));
+	position: relative;
+	display: inline-flex;
+	max-width: 100%;
+	vertical-align: top;
+	line-height: 1;
+	border-radius: calc(var(--fl-tok-radius) + 1px);
+}
+
+.fl-tok-btn {
+	display: block;
+	max-width: 100%;
+	padding: 1px;
+	border: 0;
+	border-radius: var(--fl-tok-radius);
+	background: var(--fl-tok-edge);
+	cursor: grab;
+	text-align: left;
+	font: inherit;
+	transition: filter 0.12s ease;
+}
+.fl-tok-btn:active {
+	cursor: grabbing;
+}
+.fl-tok:hover .fl-tok-btn {
+	filter: brightness(1.1);
+}
+.fl-tok-btn:focus {
+	outline: none;
+}
+.fl-tok-btn:focus-visible {
+	outline: 2px solid var(--primary);
+	outline-offset: 2px;
+}
+
+.fl-tok-in {
+	display: flex;
+	align-items: stretch;
+	overflow: hidden;
+	max-width: 100%;
+	height: calc(var(--fl-tok-h) - 2px);
+	border-radius: calc(var(--fl-tok-radius) - 1px);
+	background: var(--fl-tok-body);
+}
+
+.fl-tok-slug {
+	display: flex;
+	flex: 0 0 var(--fl-tok-slug);
+	align-items: center;
+	justify-content: center;
+	background: var(--fl-tok-color);
+	color: var(--fl-tok-ink);
+	font-family: var(--font-mono);
+	font-size: calc(var(--fl-tok-font) * 0.92);
+	font-weight: 500;
+	line-height: 1;
+}
+.fl-tok-slug[data-wide="true"] {
+	font-size: calc(var(--fl-tok-font) * 0.72);
+	letter-spacing: -0.03em;
+}
+/* HashMap reads as two cells: the key hue, then the value hue. */
+.fl-tok-slug[data-role="key"] {
+	flex-basis: calc(var(--fl-tok-slug) - 2px);
+	border-right: 1px solid var(--fl-tok-body);
+	background: var(--fl-tok-key-color, var(--fl-tok-color));
+	color: var(--fl-tok-key-ink, var(--fl-tok-ink));
+}
+
+.fl-tok-name {
+	display: flex;
+	flex: 1 1 auto;
+	align-items: center;
+	min-width: 0;
+	padding: 0 calc(var(--fl-tok-font) * 0.55);
+	overflow: hidden;
+	color: var(--card-foreground);
+	font-family: var(--font-mono);
+	font-size: var(--fl-tok-font);
+	font-weight: 500;
+	line-height: 1;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.fl-tok-tail {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+	gap: 0.28em;
+	padding-right: calc(var(--fl-tok-font) * 0.5);
+	color: var(--muted-foreground);
+	font-family: var(--font-mono);
+	font-size: calc(var(--fl-tok-font) * 0.74);
+	font-weight: 500;
+	letter-spacing: 0.06em;
+}
+.fl-tok-tail > b {
+	color: var(--card-foreground);
+	font-weight: 500;
+}
+
+/* Array — a plate stacked behind the chip. */
+.fl-tok--array .fl-tok-btn {
+	box-shadow:
+		calc(var(--fl-tok-plate) * -1) calc(var(--fl-tok-plate) * -1) 0 -1px
+			var(--fl-tok-body),
+		calc(var(--fl-tok-plate) * -1) calc(var(--fl-tok-plate) * -1) 0 0
+			var(--fl-tok-edge);
+}
+
+/* HashSet — chamfered opposing corners. */
+.fl-tok--set .fl-tok-btn,
+.fl-tok--set .fl-tok-in {
+	clip-path: polygon(
+		var(--fl-tok-chamfer) 0,
+		100% 0,
+		100% calc(100% - var(--fl-tok-chamfer)),
+		calc(100% - var(--fl-tok-chamfer)) 100%,
+		0 100%,
+		0 var(--fl-tok-chamfer)
+	);
+}
+
+/* Function — outlined, with an arrow tail that says callable. */
+.fl-tok--fn .fl-tok-btn,
+.fl-tok--fn .fl-tok-in {
+	clip-path: polygon(
+		0 0,
+		calc(100% - var(--fl-tok-tail)) 0,
+		100% 50%,
+		calc(100% - var(--fl-tok-tail)) 100%,
+		0 100%
+	);
+}
+.fl-tok--fn {
+	--fl-tok-body: var(--card);
+	--fl-tok-edge: color-mix(in oklab, var(--fl-tok-color) 46%, var(--border));
+}
+.fl-tok--fn .fl-tok-tail {
+	padding-right: calc(var(--fl-tok-tail) + var(--fl-tok-font) * 0.55);
+}
+
+/* Nothing on the board reads or writes it. */
+.fl-tok--dead .fl-tok-btn {
+	padding: 0;
+	border: 1px dashed var(--fl-tok-edge);
+	background: transparent;
+}
+.fl-tok--dead .fl-tok-in {
+	background: transparent;
+}
+
+/* Tint off — the glyph and the form still carry the type. */
+.fl-tok--flat {
+	--fl-tok-color: var(--muted-foreground);
+	--fl-tok-ink: var(--background);
+	--fl-tok-key-color: var(--muted-foreground);
+	--fl-tok-key-ink: var(--background);
+	--fl-tok-body: var(--card);
+	--fl-tok-edge: var(--border);
+}
+.fl-tok--flat .fl-tok-slug {
+	background: var(--muted);
+	color: var(--muted-foreground);
+}
+
+.fl-tok--selected {
+	outline: 2px solid var(--primary);
+	outline-offset: 2px;
+}
+.fl-tok--dragging .fl-tok-btn {
+	opacity: 0.28;
+}
+
+.fl-tok-caret {
+	display: none;
+	position: absolute;
+	top: -6px;
+	right: -6px;
+	align-items: center;
+	justify-content: center;
+	z-index: 3;
+	width: 15px;
+	height: 15px;
+	padding: 0;
+	border: 1px solid var(--border);
+	border-radius: 50%;
+	background: var(--popover);
+	color: var(--muted-foreground);
+	font-size: 9px;
+	line-height: 1;
+	cursor: pointer;
+}
+.fl-tok:hover .fl-tok-caret,
+.fl-tok:focus-within .fl-tok-caret {
+	display: flex;
+}
+.fl-tok-caret:hover {
+	border-color: var(--muted-foreground);
+	color: var(--card-foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.fl-tok-btn {
+		transition: none;
+	}
+}

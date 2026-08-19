@@ -1045,6 +1045,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upsert_round_trips_rows_read_back_with_integer_timestamps() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "round_trip".to_string()).await?;
+        db.insert(vec![json!({
+            "id": "a",
+            "first_seen_at": "2026-08-16T12:00:00.000Z",
+            "hits": 1
+        })])
+        .await?;
+
+        let mut row = db.list(None, 10, 0).await?.remove(0);
+        let first_seen_at = row["first_seen_at"]
+            .as_i64()
+            .expect("timestamps are read back as native-unit integers");
+        row["hits"] = json!(2);
+
+        db.upsert(vec![row], "id".to_string()).await?;
+
+        let rows = db.list(None, 10, 0).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["hits"], json!(2));
+        assert_eq!(rows[0]["first_seen_at"].as_i64(), Some(first_seen_at));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn buffered_upsert_persists_rows_carrying_integer_timestamps() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+
+        let inner =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "buffered_round_trip".to_string())
+                .await?;
+        let mut db = BufferedVectorStore::new(inner, 2);
+        db.upsert(
+            vec![json!({ "id": "a", "first_seen_at": "2026-08-16T12:00:00.000Z", "hits": 1 })],
+            "id".to_string(),
+        )
+        .await?;
+        db.flush().await?;
+
+        let mut row = db.list(None, 10, 0).await?.remove(0);
+        row["hits"] = json!(2);
+
+        let origin = BufferedWriteOrigin::new(Arc::from("writer"), Some("operation".to_string()));
+        db.upsert_with_origin(vec![row], "id".to_string(), origin)
+            .await?;
+        db.flush().await?;
+
+        assert!(!db.has_write_failures());
+        let rows = db.list(None, 10, 0).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["hits"], json!(2));
+        assert_eq!(rows[0]["first_seen_at"].as_i64(), Some(1_786_881_600_000));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn sql_supports_queries_that_project_no_columns() -> Result<()> {
         let test_path = format!("./tmp/{}", create_id());
         std::fs::create_dir_all(&test_path)?;

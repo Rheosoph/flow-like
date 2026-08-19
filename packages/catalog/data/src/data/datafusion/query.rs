@@ -282,9 +282,13 @@ fn array_value_to_json(
         DataType::Date32 => {
             let arr = array.as_any().downcast_ref::<Date32Array>().unwrap();
             let days = arr.value(idx);
-            let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-            let date = epoch + chrono::Duration::days(days as i64);
-            JsonValue::String(date.format("%Y-%m-%d").to_string())
+            let epoch = chrono::DateTime::UNIX_EPOCH.date_naive();
+            match chrono::TimeDelta::try_days(days as i64)
+                .and_then(|offset| epoch.checked_add_signed(offset))
+            {
+                Some(date) => JsonValue::String(date.format("%Y-%m-%d").to_string()),
+                None => JsonValue::Null,
+            }
         }
         DataType::Date64 => {
             let arr = array.as_any().downcast_ref::<Date64Array>().unwrap();
@@ -436,6 +440,20 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn date32_values_out_of_range_read_back_as_null() {
+        let schema = Arc::new(Schema::new(vec![Field::new("day", DataType::Date32, true)]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Date32Array::from(vec![20_675, i32::MAX]))],
+        )
+        .unwrap();
+
+        let rows = batches_to_rows(&[batch]).unwrap();
+        assert_eq!(rows[0].get("day"), Some(&json!("2026-08-10")));
+        assert_eq!(rows[1].get("day"), Some(&Value::Null));
     }
 
     #[tokio::test]

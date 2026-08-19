@@ -52,7 +52,7 @@ pub mod log;
 pub mod trace;
 pub mod user_context;
 
-pub use user_context::{LOCAL_USER_SUB, RoleContext, UserExecutionContext};
+pub use user_context::{ExecutionPrincipal, LOCAL_USER_SUB, RoleContext, UserExecutionContext};
 
 const USE_DEPENDENCY_GRAPH: bool = false;
 const RUN_LOCK_TIMEOUT: Duration = Duration::from_secs(3);
@@ -1464,13 +1464,35 @@ impl InternalRun {
         self.user_context = Some(UserExecutionContext::offline());
     }
 
-    /// Set the user execution context for a trusted local run, adopting the
-    /// run's subject. Signed-in runs keep the caller's identity; unauthenticated
-    /// ones fall back to the offline placeholder. Call after any subject
-    /// override so the context matches the run.
+    /// Set the user execution context for a run with no server-side role to
+    /// consult — an offline app, or a signed-out session — adopting the run's
+    /// subject. Those runs are owner-equivalent. Signed-in runs keep the
+    /// caller's identity; unauthenticated ones fall back to the offline
+    /// placeholder. Call after any subject override so the context matches the
+    /// run.
     pub async fn set_local_user_context(&mut self) {
         let sub = self.run.lock().await.sub.clone();
         self.user_context = Some(UserExecutionContext::local(sub));
+    }
+
+    /// Set the context for a hosted app whose role could not be resolved. The
+    /// run keeps its subject but carries no permissions, so a permission gate
+    /// fails closed instead of silently passing as owner.
+    pub async fn set_unresolved_user_context(&mut self) {
+        let sub = self.run.lock().await.sub.clone();
+        self.user_context = Some(UserExecutionContext::new(sub));
+    }
+
+    /// Adopt an identity resolved against the hub. Sets the run subject as well
+    /// as the context so the two identity channels agree: storage paths, WASM
+    /// nodes and `Get Executing User` all name the same subject. Used by local
+    /// runs of hosted apps, where the role has to come from the server rather
+    /// than being assumed.
+    pub async fn set_resolved_user_context(&mut self, user_context: UserExecutionContext) {
+        if !user_context.sub.is_empty() {
+            self.set_execution_sub(user_context.sub.clone()).await;
+        }
+        self.user_context = Some(user_context);
     }
 
     /// Get the user execution context if available

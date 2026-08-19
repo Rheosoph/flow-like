@@ -51,6 +51,18 @@ impl BoardCleanupLogic for FixPinsCleanup {
                 }
                 None => {
                     if let Some(owner_parent_id) = owner_parent_id_opt {
+                        // The counterpart is not on the board at all, usually because a node's
+                        // `on_update` reconciled that pin away. Pruning is right, but this is the
+                        // last place the edge exists: without a record it simply vanishes from
+                        // both ends with nothing reported anywhere, which is what made this class
+                        // of dynamic-pin wire loss so hard to trace.
+                        tracing::warn!(
+                            owner = %owner_parent_id,
+                            pin = %pin.id,
+                            pin_name = %pin.name,
+                            counterpart = %connected_to,
+                            "dropping an outgoing connection whose target pin is gone"
+                        );
                         self.node_pins_connected_to_remove
                             .entry(owner_parent_id.clone())
                             .or_default()
@@ -78,6 +90,13 @@ impl BoardCleanupLogic for FixPinsCleanup {
                 }
                 None => {
                     if let Some(owner_parent_id) = owner_parent_id_opt {
+                        tracing::warn!(
+                            owner = %owner_parent_id,
+                            pin = %pin.id,
+                            pin_name = %pin.name,
+                            counterpart = %depends_on,
+                            "dropping an incoming connection whose source pin is gone"
+                        );
                         self.node_pins_depends_on_remove
                             .entry(owner_parent_id.clone())
                             .or_default()

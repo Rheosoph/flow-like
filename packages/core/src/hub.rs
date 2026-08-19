@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     bit::{Bit, BitTypes},
     credentials::SharedCredentials,
+    flow::execution::UserExecutionContext,
     profile::Profile,
     utils::{http::HTTPClient, recursion::RecursionGuard},
 };
@@ -742,18 +743,61 @@ impl Hub {
         Ok(url)
     }
 
+    /// Resolve the caller's execution identity for an app: subject, role,
+    /// permissions and attributes exactly as the server would grant them.
+    ///
+    /// A hosted app executed on the desktop has to ask for this rather than
+    /// assume owner rights, or the same board answers `Has Permission`
+    /// differently locally than in the cloud.
+    pub async fn execution_context(
+        &self,
+        token: &str,
+        app_id: &str,
+    ) -> Result<UserExecutionContext> {
+        let context_url = self.construct_url(&format!("api/v1/apps/{}/invoke/context", app_id))?;
+        let client = self.http_client().client();
+
+        let request = client
+            .get(context_url)
+            .header("Authorization", Self::authorization_value(token))
+            .build()
+            .map_err(flow_like_types::Error::from)?;
+
+        let resp = client
+            .execute(request)
+            .await
+            .map_err(flow_like_types::Error::from)?;
+
+        let status = resp.status();
+        let body_text = resp.text().await.map_err(flow_like_types::Error::from)?;
+
+        if !status.is_success() {
+            return Err(flow_like_types::Error::msg(format!(
+                "execution context failed: status={} body={}",
+                status, body_text
+            )));
+        }
+
+        flow_like_types::json::from_str(&body_text)
+            .map_err(|e| flow_like_types::Error::msg(format!("JSON parse error: {}", e)))
+    }
+
+    /// Personal access tokens are sent verbatim; everything else is a bearer
+    /// token and gets the scheme prefixed unless the caller already did.
+    fn authorization_value(token: &str) -> String {
+        if token.starts_with("pat_") || token.starts_with("Bearer ") {
+            token.to_string()
+        } else {
+            format!("Bearer {}", token)
+        }
+    }
+
     pub async fn shared_credentials(&self, token: &str, app_id: &str) -> Result<SharedCredentials> {
         let presign_path = format!("api/v1/apps/{}/invoke/presign", app_id);
 
         let presign_url = self.construct_url(&presign_path)?;
 
-        let auth_val = if token.starts_with("pat_") {
-            token.to_string()
-        } else if token.starts_with("Bearer ") {
-            token.to_string()
-        } else {
-            format!("Bearer {}", token)
-        };
+        let auth_val = Self::authorization_value(token);
 
         let client = self.http_client().client();
 

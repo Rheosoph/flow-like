@@ -384,6 +384,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::realtime::access,
         // Invoke presign
         crate::routes::app::invoke::presign::presign,
+        crate::routes::app::invoke::context::execution_context,
         // Database routes
         crate::routes::app::db::list_tables::list_tables,
         crate::routes::app::db::db_list::list_items,
@@ -478,6 +479,7 @@ impl Modify for SecurityAddon {
         crate::routes::solution::track_solution,
         // Tmp routes
         crate::routes::tmp::get_temporary_upload,
+        crate::routes::tmp::create_temporary_uploads,
         // Telemetry routes
         crate::routes::telemetry::ingest_events,
         crate::routes::telemetry::errors::ingest_errors,

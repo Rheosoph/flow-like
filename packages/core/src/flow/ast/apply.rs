@@ -1576,18 +1576,13 @@ fn resolve_pin_id_in_pins(
         let mut matching = pins
             .values()
             .filter(|pin| pin_matches_direction(pin, expected.as_ref()))
-            .filter(|pin| {
-                pin_lookup_keys(&pin.name)
-                    .iter()
-                    .chain(pin_lookup_keys(&pin.friendly_name).iter())
-                    .any(|key| requested.contains(key))
-            })
+            .filter_map(|pin| pin_ref_match_rank(pin, &requested).map(|rank| (rank, pin)))
             .collect::<Vec<_>>();
         // Pin ids are regenerated when a node is added, but the catalog pin indices survive.
-        // Sorting by index (then id for malformed duplicate indices) makes the selector stable
-        // across setup-time default writes and later connections.
-        matching.sort_by_key(|pin| (pin.index, pin.id.clone()));
-        if let Some(pin) = matching.get(occurrence) {
+        // Sorting by match rank, then index (then id for malformed duplicate indices) makes the
+        // selector stable across setup-time default writes and later connections.
+        matching.sort_by_key(|(rank, pin)| (*rank, pin.index, pin.id.clone()));
+        if let Some((_, pin)) = matching.get(occurrence) {
             return Ok(pin.id.clone());
         }
         return Err(flow_like_types::anyhow!(
@@ -1596,17 +1591,16 @@ fn resolve_pin_id_in_pins(
     }
 
     let requested = pin_lookup_keys(pin_ref);
-    for pin in pins.values() {
-        if !pin_matches_direction(pin, expected.as_ref()) {
-            continue;
-        }
-        if pin_lookup_keys(&pin.name)
-            .iter()
-            .chain(pin_lookup_keys(&pin.friendly_name).iter())
-            .any(|key| requested.contains(key))
-        {
-            return Ok(pin.id.clone());
-        }
+    let mut matching = pins
+        .values()
+        .filter(|pin| pin_matches_direction(pin, expected.as_ref()))
+        .filter_map(|pin| pin_ref_match_rank(pin, &requested).map(|rank| (rank, pin)))
+        .collect::<Vec<_>>();
+    // `pins` is a HashMap, so without an explicit order the winner among several matches was
+    // whichever the iterator happened to yield first.
+    matching.sort_by_key(|(rank, pin)| (*rank, pin.index, pin.id.clone()));
+    if let Some((_, pin)) = matching.first() {
+        return Ok(pin.id.clone());
     }
 
     if expected.as_ref() != Some(&PinType::Input)
@@ -1641,6 +1635,24 @@ fn default_data_output_pin(pins: &HashMap<String, Pin>) -> Option<&Pin> {
 
 fn pin_matches_direction(pin: &Pin, expected: Option<&PinType>) -> bool {
     expected.is_none_or(|expected| &pin.pin_type == expected)
+}
+
+/// How closely `pin` answers to the already-normalized `requested` lookup keys: `Some(0)` when its
+/// own name matches, `Some(1)` when only its friendly name does, `None` when neither. Mirrors
+/// `reconcile::pin_name_match_rank` — a pin's own name must outrank another pin's friendly name, or
+/// `string_format`'s config pin (named `format_string`, presented as "Input") swallows the value
+/// meant for an `{input}` placeholder and the template is overwritten.
+fn pin_ref_match_rank(pin: &Pin, requested: &HashSet<String>) -> Option<u8> {
+    if pin_lookup_keys(&pin.name)
+        .iter()
+        .any(|key| requested.contains(key))
+    {
+        return Some(0);
+    }
+    pin_lookup_keys(&pin.friendly_name)
+        .iter()
+        .any(|key| requested.contains(key))
+        .then_some(1)
 }
 
 fn pin_lookup_keys(value: &str) -> HashSet<String> {

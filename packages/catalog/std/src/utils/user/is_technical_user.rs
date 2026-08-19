@@ -1,5 +1,5 @@
 use flow_like::flow::{
-    execution::context::ExecutionContext,
+    execution::{ExecutionPrincipal, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     variable::VariableType,
 };
@@ -22,22 +22,44 @@ impl NodeLogic for IsTechnicalUserNode {
         let mut node = Node::new(
             "utils_user_is_technical_user",
             "Is Technical User",
-            "Checks if the current execution is triggered by a technical user (API key) rather than a human user. Technical users don't have a human identity (sub) but do have a key_id.",
+            "Checks whether a machine rather than a person triggered this run. Machine callers have no human identity (sub): an API key reports its Key ID, an app calling through an app connection reports the calling app instead.",
             "Utils/User",
         );
         node.add_icon("/flow/icons/key.svg");
+        node.set_version(2);
 
         node.add_output_pin(
             "is_technical",
             "Is Technical User",
-            "True if the execution is by a technical user (API key), false otherwise",
+            "True if a machine triggered the run (API key or app connection), false for a person",
             VariableType::Boolean,
         );
 
         node.add_output_pin(
             "key_id",
             "Key ID",
-            "The API key identifier for technical users, empty string for human users",
+            "The API key identifier, empty for every other caller",
+            VariableType::String,
+        );
+
+        node.add_output_pin(
+            "principal",
+            "Principal",
+            "How the caller authenticated: 'user', 'apiKey' or 'connectedApp'",
+            VariableType::String,
+        );
+
+        node.add_output_pin(
+            "origin_app_id",
+            "Origin App",
+            "The app that made the call when the principal is 'connectedApp', empty otherwise",
+            VariableType::String,
+        );
+
+        node.add_output_pin(
+            "on_behalf_of",
+            "On Behalf Of",
+            "The user the caller reported as the initiator: an API key's creator, or the user an app connection passed through. Attribution only — never authorize against it",
             VariableType::String,
         );
 
@@ -58,20 +80,39 @@ impl NodeLogic for IsTechnicalUserNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let user_context = context.user_context().cloned();
 
-        match user_context {
-            Some(uc) => {
-                context
-                    .set_pin_value("is_technical", json!(uc.is_technical()))
-                    .await?;
-                context
-                    .set_pin_value("key_id", json!(uc.get_key_id().unwrap_or("")))
-                    .await?;
-            }
-            None => {
-                context.set_pin_value("is_technical", json!(false)).await?;
-                context.set_pin_value("key_id", json!("")).await?;
-            }
-        }
+        let (is_technical, key_id, principal, origin_app_id, on_behalf_of) = match user_context {
+            Some(uc) => (
+                uc.is_technical(),
+                uc.get_key_id().unwrap_or("").to_string(),
+                match uc.principal {
+                    ExecutionPrincipal::User => "user",
+                    ExecutionPrincipal::ApiKey => "apiKey",
+                    ExecutionPrincipal::ConnectedApp => "connectedApp",
+                }
+                .to_string(),
+                uc.origin_app_id().unwrap_or("").to_string(),
+                uc.on_behalf_of().unwrap_or("").to_string(),
+            ),
+            None => (
+                false,
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+        };
+
+        context
+            .set_pin_value("is_technical", json!(is_technical))
+            .await?;
+        context.set_pin_value("key_id", json!(key_id)).await?;
+        context.set_pin_value("principal", json!(principal)).await?;
+        context
+            .set_pin_value("origin_app_id", json!(origin_app_id))
+            .await?;
+        context
+            .set_pin_value("on_behalf_of", json!(on_behalf_of))
+            .await?;
 
         Ok(())
     }

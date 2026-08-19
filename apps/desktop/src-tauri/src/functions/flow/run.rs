@@ -282,6 +282,8 @@ async fn execute_internal(
         .map(|e| (Some(e.name.clone()), Some(e.event_type.clone())))
         .unwrap_or((None, None));
 
+    let identity_token = token.clone();
+
     let mut internal_run = InternalRun::new(
         &app_id,
         board,
@@ -306,9 +308,17 @@ async fn execute_internal(
     }
     internal_run.set_execution_environment(local_execution_environment());
 
-    // Desktop runs are always admin/owner, but keep the signed-in subject so
-    // nodes and surfaces see the real user instead of the local placeholder.
-    internal_run.set_local_user_context().await;
+    // Offline apps are owner-equivalent; hosted apps must run under the role
+    // the hub grants, so the same board gates identically here and in the cloud.
+    crate::execution_identity::apply_local_run_identity(
+        &mut internal_run,
+        &app.visibility,
+        &app_id,
+        identity_token.as_deref(),
+        &profile.hub_profile.hub,
+        &flow_like_state,
+    )
+    .await;
 
     if overrides.log_flush_interval.is_some() || overrides.log_batch_size.is_some() {
         internal_run

@@ -155,7 +155,19 @@ impl EventBusEvent {
             .await;
 
         internal_run.set_execution_environment(local_execution_environment());
-        internal_run.set_local_user_context().await;
+
+        // Sink registrations authenticate with a PAT, which is not a JWT, so
+        // the subject the run derived from it is the `local` placeholder.
+        // Resolving against the hub recovers the PAT owner and their real role.
+        crate::execution_identity::apply_local_run_identity(
+            &mut internal_run,
+            &app.visibility,
+            &self.app_id,
+            self.token.as_deref(),
+            &profile.hub_profile.hub,
+            &flow_like_state,
+        )
+        .await;
 
         let run_id = internal_run.run.lock().await.id.clone();
 

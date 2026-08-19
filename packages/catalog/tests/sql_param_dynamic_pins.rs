@@ -285,3 +285,43 @@ async fn every_sql_node_exposes_the_params_object_pin() {
         );
     }
 }
+
+/// Retiring the derived pins of a now-wired query must not cut wires that were already made. The
+/// deleted pin takes its half of the edge, `Board::cleanup` prunes the producer's surviving half,
+/// and the connection is gone from both ends with nothing reported — leaving the producer stranded.
+#[flow_like_types::tokio::test]
+async fn wiring_the_query_keeps_wired_param_pins() {
+    let logic = node_logic("df_sql_query");
+    let board = empty_board();
+    let mut node = seeded_node(&logic, "SELECT * FROM t WHERE a = $a AND b = $b");
+    logic.on_update(&mut node, &board).await;
+    assert_eq!(param_pin_names(&node).len(), 2);
+
+    node.pins
+        .values_mut()
+        .find(|pin| pin.name == "param_a")
+        .expect("param_a pin")
+        .depends_on
+        .insert("source-of-a".to_string());
+    node.pins
+        .values_mut()
+        .find(|pin| pin.name == "query")
+        .expect("query pin")
+        .depends_on
+        .insert("some-upstream-pin".to_string());
+
+    logic.on_update(&mut node, &board).await;
+
+    assert_eq!(
+        param_pin_names(&node),
+        vec!["param_a".to_string()],
+        "the connected parameter pin must survive; the unconnected one is retired"
+    );
+    assert!(
+        node.error
+            .as_deref()
+            .is_some_and(|error| error.contains("param_a")),
+        "the kept pin must be reported: {:?}",
+        node.error
+    );
+}

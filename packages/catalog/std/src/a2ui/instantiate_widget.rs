@@ -10,7 +10,7 @@ use flow_like::app::App;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
-    node::{Node, NodeLogic, NodeScores, remove_pin},
+    node::{Node, NodeLogic, NodeScores, remove_unwired_pins},
     pin::PinOptions,
     variable::VariableType,
 };
@@ -195,16 +195,17 @@ fn add_dynamic_pins_for_widget(node: &mut Node, widget: &Widget) {
     }
 }
 
+/// Drop the `dyn_*` pins the selected widget no longer declares. A pin that still carries a wire
+/// is kept and reported on `node.error`: an unset or unresolvable selector is not evidence that
+/// the binding was wrong, and removing the pin silently deletes the edge on both ends.
 fn remove_stale_dynamic_pins(node: &mut Node, keep: &BTreeSet<String>) {
-    let stale: Vec<_> = node
+    let stale: Vec<String> = node
         .pins
         .values()
         .filter(|p| p.name.starts_with(DYNAMIC_PIN_PREFIX) && !keep.contains(&p.name))
-        .cloned()
+        .map(|p| p.id.clone())
         .collect();
-    for pin in stale {
-        remove_pin(node, Some(pin));
-    }
+    remove_unwired_pins(node, &stale);
 }
 
 /// Replace BoundValue path references with literal values from data_values

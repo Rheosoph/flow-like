@@ -1,4 +1,6 @@
 import type { IFileMetadata } from "../../lib";
+import type { BulkUploadProgressCallback } from "../../lib/bulk-upload";
+import type { ITemporaryUploadResult } from "../../lib/temporary-upload-batch";
 
 export interface ITemporaryFlowPath {
 	path: string;
@@ -53,4 +55,21 @@ export interface IHelperState {
 		appId?: string,
 		executionTarget?: ITemporaryUploadExecutionTarget,
 	): Promise<ITemporaryUploadedFile>;
+
+	/**
+	 * Bulk variant of {@link fileToTemporaryFile}: presigns in chunks and uploads
+	 * with bounded parallelism, so folder selections with thousands of files do not
+	 * turn into one round trip per file. Results keep the input order and report
+	 * failures per file instead of rejecting the whole batch.
+	 */
+	filesToTemporaryFiles?(
+		files: File[],
+		options?: {
+			offline?: boolean;
+			appId?: string;
+			executionTarget?: ITemporaryUploadExecutionTarget;
+			onProgress?: BulkUploadProgressCallback;
+			signal?: AbortSignal;
+		},
+	): Promise<ITemporaryUploadResult[]>;
 }

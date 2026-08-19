@@ -1,5 +1,10 @@
-import type { IStorageItem } from "../../lib";
+import type { BulkUploadProgressCallback, IStorageItem } from "../../lib";
 import type { IStorageItemActionResult } from "./types";
+
+export interface IStorageUploadOptions {
+	/** Cancels an in-flight bulk upload. Ignored by backends that cannot abort. */
+	readonly signal?: AbortSignal;
+}
 
 export interface IStorageState {
 	listStorageItems(appId: string, prefix: string): Promise<IStorageItem[]>;
@@ -18,13 +23,15 @@ export interface IStorageState {
 		appId: string,
 		prefix: string,
 		files: File[],
-		onProgress?: (progress: number) => void,
+		onProgress?: BulkUploadProgressCallback,
+		options?: IStorageUploadOptions,
 	): Promise<void>;
 	uploadStorageItemsUser(
 		appId: string,
 		prefix: string,
 		files: File[],
-		onProgress?: (progress: number) => void,
+		onProgress?: BulkUploadProgressCallback,
+		options?: IStorageUploadOptions,
 	): Promise<void>;
 	writeStorageItems?(items: IStorageItemActionResult[]): Promise<void>;
 }

@@ -668,8 +668,10 @@ export function parseBoard(
 								pushLayer(layer);
 							},
 							onLayerUpdate: async (layer: ILayer) => {
+								// These boundary nodes live *inside* the layer, so `currentLayer` is
+								// the layer itself — its own parent is the only correct value here.
 								const command = upsertLayerCommand({
-									current_layer: currentLayer,
+									current_layer: layer.parent_id ?? null,
 									layer: layer,
 									node_ids: [],
 								});
@@ -715,8 +717,10 @@ export function parseBoard(
 								pushLayer(layer);
 							},
 							onLayerUpdate: async (layer: ILayer) => {
+								// These boundary nodes live *inside* the layer, so `currentLayer` is
+								// the layer itself — its own parent is the only correct value here.
 								const command = upsertLayerCommand({
-									current_layer: currentLayer,
+									current_layer: layer.parent_id ?? null,
 									layer: layer,
 									node_ids: [],
 								});

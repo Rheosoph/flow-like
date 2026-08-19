@@ -1,5 +1,6 @@
 "use client";
 
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
 	FilesIcon,
 	FolderPlusIcon,
@@ -14,9 +15,19 @@ import {
 	UploadIcon,
 	XIcon,
 } from "lucide-react";
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { type IStorageItem, useBackend, useInvoke } from "../..";
+import {
+	BulkUploadPartialFailureError,
+	type BulkUploadProgressCallback,
+	type IBulkUploadProgress,
+	type IStorageItem,
+	type IStorageUploadOptions,
+	useBackend,
+	useInvoke,
+} from "../..";
+import { humanFileSize } from "../../lib/utils";
 import {
 	Badge,
 	Button,
@@ -47,6 +58,116 @@ interface StorageOperationResult {
 	error?: string;
 }
 
+/** Compact "time remaining" for the upload panel. */
+function formatEta(seconds?: number): string | null {
+	if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) {
+		return null;
+	}
+	if (seconds < 60) return `${Math.ceil(seconds)}s left`;
+	if (seconds < 3600) return `${Math.round(seconds / 60)}m left`;
+	return `${(seconds / 3600).toFixed(1)}h left`;
+}
+
+/** Starting row height, refined by measurement once a row has rendered. */
+const STORAGE_ROW_ESTIMATE_PX = 72;
+
+/**
+ * Columns the file grid renders, matching the Tailwind breakpoints the grid
+ * used before it was windowed. The virtualizer needs the count as a number to
+ * map items onto rows, so it cannot be left to CSS.
+ */
+function useGridColumns(viewMode: "grid" | "list"): number {
+	const [columns, setColumns] = useState(1);
+
+	useEffect(() => {
+		if (viewMode === "list") {
+			setColumns(1);
+			return;
+		}
+		if (typeof window === "undefined") return;
+
+		const large = window.matchMedia("(min-width: 1024px)");
+		const medium = window.matchMedia("(min-width: 768px)");
+		const update = () => setColumns(large.matches ? 4 : medium.matches ? 3 : 2);
+
+		update();
+		large.addEventListener("change", update);
+		medium.addEventListener("change", update);
+		return () => {
+			large.removeEventListener("change", update);
+			medium.removeEventListener("change", update);
+		};
+	}, [viewMode]);
+
+	return columns;
+}
+
+/**
+ * Windowed file list.
+ *
+ * A folder can hold tens of thousands of entries — uploading one is now
+ * possible, so browsing one has to be too. Rendering every row mounted a DOM
+ * node and a dropdown per file and locked the tab for as long as it took, so
+ * only the visible rows plus a small overscan are mounted. Row heights are
+ * measured rather than assumed, since names wrap.
+ */
+function StorageItemGrid({
+	items,
+	columns,
+	renderItem,
+}: Readonly<{
+	items: readonly IStorageItem[];
+	columns: number;
+	renderItem: (file: IStorageItem) => ReactNode;
+}>) {
+	const scrollRef = useRef<HTMLDivElement>(null);
+	const perRow = Math.max(1, columns);
+	const rowCount = Math.ceil(items.length / perRow);
+
+	const virtualizer = useVirtualizer({
+		count: rowCount,
+		getScrollElement: () => scrollRef.current,
+		estimateSize: () => STORAGE_ROW_ESTIMATE_PX,
+		overscan: 8,
+	});
+
+	return (
+		<div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
+			<div
+				className="relative w-full"
+				style={{ height: `${virtualizer.getTotalSize()}px` }}
+			>
+				{virtualizer.getVirtualItems().map((row) => {
+					const start = row.index * perRow;
+					const rowItems = items.slice(start, start + perRow);
+					return (
+						<div
+							key={row.key}
+							data-index={row.index}
+							ref={virtualizer.measureElement}
+							className="absolute left-0 top-0 w-full"
+							style={{ transform: `translateY(${row.start}px)` }}
+						>
+							<div
+								className="grid gap-2 pb-2"
+								style={{
+									gridTemplateColumns: `repeat(${perRow}, minmax(0, 1fr))`,
+								}}
+							>
+								{rowItems.map((file) => (
+									<div key={file.location} className="min-w-0">
+										{renderItem(file)}
+									</div>
+								))}
+							</div>
+						</div>
+					);
+				})}
+			</div>
+		</div>
+	);
+}
+
 interface StorageOperations {
 	listStorageItems: (appId: string, prefix: string) => Promise<IStorageItem[]>;
 	deleteStorageItems: (appId: string, prefixes: string[]) => Promise<void>;
@@ -58,7 +179,8 @@ interface StorageOperations {
 		appId: string,
 		prefix: string,
 		files: File[],
-		onProgress?: (progress: number) => void,
+		onProgress?: BulkUploadProgressCallback,
+		options?: IStorageUploadOptions,
 	) => Promise<void>;
 	writeStorageItems?: (items: StorageOperationResult[]) => Promise<void>;
 }
@@ -133,18 +255,26 @@ export function StorageSystem({
 			downloadStorageItems: (targetAppId, prefixes) =>
 				operations?.downloadStorageItems(targetAppId, prefixes) ??
 				backend.storageState.downloadStorageItems(targetAppId, prefixes),
-			uploadStorageItems: (targetAppId, targetPrefix, files, onProgress) =>
+			uploadStorageItems: (
+				targetAppId,
+				targetPrefix,
+				files,
+				onProgress,
+				uploadOptions,
+			) =>
 				operations?.uploadStorageItems(
 					targetAppId,
 					targetPrefix,
 					files,
 					onProgress,
+					uploadOptions,
 				) ??
 				backend.storageState.uploadStorageItems(
 					targetAppId,
 					targetPrefix,
 					files,
 					onProgress,
+					uploadOptions,
 				),
 			writeStorageItems:
 				operations?.writeStorageItems ??
@@ -161,12 +291,14 @@ export function StorageSystem({
 		progress: number;
 		fileCount: number;
 		currentFile: string;
+		detail?: IBulkUploadProgress;
 	}>({
 		isUploading: false,
 		progress: 0,
 		fileCount: 0,
 		currentFile: "",
 	});
+	const uploadAbort = useRef<AbortController | null>(null);
 	const files = useInvoke(
 		storageApi.listStorageItems,
 		storageApi,
@@ -288,10 +420,17 @@ export function StorageSystem({
 	const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
 	const [isPreviewMaximized, setIsPreviewMaximized] = useState(false);
 
+	const cancelUpload = useCallback(() => {
+		uploadAbort.current?.abort();
+	}, []);
+
 	const processFiles = useCallback(
 		async (inputFiles: File[]) => {
 			if (inputFiles.length === 0) return;
 			const fileList = Array.from(inputFiles);
+
+			const controller = new AbortController();
+			uploadAbort.current = controller;
 
 			setUploadProgress({
 				isUploading: true,
@@ -300,37 +439,62 @@ export function StorageSystem({
 				currentFile: fileList[0]?.name || "",
 			});
 
-			try {
-				await storageApi.uploadStorageItems(
-					appId,
-					prefix,
-					fileList,
-					(progress) => {
-						setUploadProgress((prev) => ({
-							...prev,
-							progress: progress,
-						}));
-					},
-				);
-
-				setUploadProgress({
-					isUploading: false,
-					progress: 100,
-					fileCount: 0,
-					currentFile: "",
-				});
-
-				toast.success("Files uploaded successfully");
-				files.refetch();
-			} catch (error) {
-				console.error(error);
+			const settle = () =>
 				setUploadProgress({
 					isUploading: false,
 					progress: 0,
 					fileCount: 0,
 					currentFile: "",
 				});
-				toast.error("Failed to upload files");
+
+			try {
+				await storageApi.uploadStorageItems(
+					appId,
+					prefix,
+					fileList,
+					(progress, detail) => {
+						setUploadProgress((prev) => ({
+							...prev,
+							progress,
+							detail,
+							currentFile: detail?.currentFile ?? prev.currentFile,
+						}));
+					},
+					{ signal: controller.signal },
+				);
+
+				settle();
+				if (controller.signal.aborted) {
+					toast.info("Upload cancelled");
+				} else {
+					toast.success(
+						fileList.length === 1
+							? "File uploaded successfully"
+							: `${fileList.length.toLocaleString()} files uploaded successfully`,
+					);
+				}
+			} catch (error) {
+				console.error(error);
+				settle();
+				// A run the user stopped is not a failure, even if the files it
+				// had already given up on surface as one.
+				if (controller.signal.aborted) {
+					toast.info("Upload cancelled");
+				} else if (error instanceof BulkUploadPartialFailureError) {
+					const { uploaded, failed } = error.result;
+					toast.error(
+						`${failed.length.toLocaleString()} of ${(uploaded + failed.length).toLocaleString()} files failed to upload`,
+						{ description: `${failed[0]?.path}: ${failed[0]?.error}` },
+					);
+				} else {
+					toast.error("Failed to upload files", {
+						description: error instanceof Error ? error.message : undefined,
+					});
+				}
+			} finally {
+				uploadAbort.current = null;
+				// Always refetch: a cancelled or partial run still wrote files.
+				files.refetch();
 			}
 		},
 		[prefix, storageApi, appId, files.refetch],
@@ -475,6 +639,68 @@ export function StorageSystem({
 		[filteredFiles, sortBy, sortOrder],
 	);
 
+	const gridColumns = useGridColumns(viewMode);
+
+	// One definition for both render sites. They used to carry byte-identical
+	// copies of this prop block, differing only in whether navigating into a
+	// folder also closes the open preview.
+	const renderFile = useCallback(
+		(file: IStorageItem, clearPreviewOnNavigate: boolean) => (
+			<FileOrFolder
+				highlight={preview.file === file.location}
+				file={file}
+				changePrefix={(newPrefix) => {
+					if (clearPreviewOnNavigate) setPreview({ url: "", file: "" });
+					updatePrefix(`${prefix}/${newPrefix}`);
+				}}
+				loadFile={loadFile}
+				revealInExplorer={revealInExplorer}
+				openWithApp={openWithApp}
+				listAppsForFile={listAppsForFile}
+				deleteFile={async (target) => {
+					try {
+						await storageApi.deleteStorageItems(appId, [`${prefix}/${target}`]);
+						toast.success("Deleted successfully");
+					} catch (error) {
+						console.error(error);
+						toast.error("Failed to delete");
+					} finally {
+						await files.refetch();
+					}
+				}}
+				shareFile={async (target) => {
+					const downloadLinks = await storageApi.downloadStorageItems(appId, [
+						target,
+					]);
+					const firstItem = downloadLinks[0];
+					if (!firstItem?.url) return;
+					try {
+						await navigator.clipboard.writeText(firstItem.url);
+						toast.success("Copied download link to clipboard");
+					} catch (error) {
+						console.error("Failed to copy link to clipboard:", error);
+					}
+				}}
+				downloadFile={(target) => {
+					downloadFile(target);
+				}}
+			/>
+		),
+		[
+			appId,
+			downloadFile,
+			files.refetch,
+			listAppsForFile,
+			loadFile,
+			openWithApp,
+			prefix,
+			preview.file,
+			revealInExplorer,
+			storageApi,
+			updatePrefix,
+		],
+	);
+
 	const fileCount = filesWithVirtual?.filter((f) => !f.is_dir).length ?? 0;
 	const folderCount = filesWithVirtual?.filter((f) => f.is_dir).length ?? 0;
 
@@ -514,22 +740,50 @@ export function StorageSystem({
 			{/* Upload Progress Indicator */}
 			{uploadProgress.isUploading && (
 				<div className="mx-4 mt-4 p-4 border rounded-lg bg-card shrink-0">
-					<div className="flex items-center justify-between mb-2">
-						<div className="flex items-center gap-2">
-							<UploadIcon className="h-4 w-4 text-primary animate-pulse" />
-							<span className="text-sm font-medium">
-								Uploading {uploadProgress.fileCount} file
-								{uploadProgress.fileCount !== 1 ? "s" : ""}
+					<div className="flex items-center justify-between gap-4 mb-2">
+						<div className="flex items-center gap-2 min-w-0">
+							<UploadIcon className="h-4 w-4 text-primary animate-pulse shrink-0" />
+							<span className="text-sm font-medium truncate">
+								{uploadProgress.detail
+									? `Uploading ${uploadProgress.detail.completedFiles.toLocaleString()} of ${uploadProgress.detail.totalFiles.toLocaleString()} files`
+									: `Uploading ${uploadProgress.fileCount.toLocaleString()} file${uploadProgress.fileCount !== 1 ? "s" : ""}`}
 							</span>
 						</div>
-						<span className="text-sm text-muted-foreground">
-							{uploadProgress.progress.toFixed(2)}%
-						</span>
+						<div className="flex items-center gap-2 shrink-0">
+							<span className="text-sm text-muted-foreground tabular-nums">
+								{uploadProgress.progress.toFixed(1)}%
+							</span>
+							<Button
+								variant="ghost"
+								size="sm"
+								className="h-7 px-2"
+								onClick={cancelUpload}
+							>
+								<XIcon className="h-3.5 w-3.5 mr-1" />
+								Cancel
+							</Button>
+						</div>
 					</div>
 					<Progress value={uploadProgress.progress} className="mb-2" />
-					<p className="text-xs text-muted-foreground truncate">
-						{uploadProgress.currentFile}
-					</p>
+					<div className="flex items-center justify-between gap-4 text-xs text-muted-foreground">
+						<p className="truncate">{uploadProgress.currentFile}</p>
+						{uploadProgress.detail && (
+							<p className="shrink-0 tabular-nums">
+								{[
+									`${humanFileSize(uploadProgress.detail.uploadedBytes)} / ${humanFileSize(uploadProgress.detail.totalBytes)}`,
+									uploadProgress.detail.bytesPerSecond > 0
+										? `${humanFileSize(uploadProgress.detail.bytesPerSecond)}/s`
+										: null,
+									formatEta(uploadProgress.detail.etaSeconds),
+									uploadProgress.detail.failedFiles > 0
+										? `${uploadProgress.detail.failedFiles.toLocaleString()} failed`
+										: null,
+								]
+									.filter(Boolean)
+									.join(" · ")}
+							</p>
+						)}
+					</div>
 				</div>
 			)}
 
@@ -863,67 +1117,11 @@ export function StorageSystem({
 													{folderCount} folders
 												</Badge>
 											</div>
-											<div className="flex flex-col gap-2 flex-1 min-h-0 overflow-y-auto">
-												{sortedFiles.map((file) => (
-													<FileOrFolder
-														highlight={preview.file === file.location}
-														key={file.location}
-														file={file}
-														changePrefix={(new_prefix) =>
-															updatePrefix(`${prefix}/${new_prefix}`)
-														}
-														loadFile={(file) => loadFile(file)}
-														revealInExplorer={revealInExplorer}
-														openWithApp={openWithApp}
-														listAppsForFile={listAppsForFile}
-														deleteFile={async (file) => {
-															try {
-																const filePrefix = `${prefix}/${file}`;
-																await storageApi.deleteStorageItems(appId, [
-																	filePrefix,
-																]);
-																toast.success("Deleted successfully");
-															} catch (error) {
-																console.error(error);
-																toast.error("Failed to delete");
-															} finally {
-																await files.refetch();
-															}
-														}}
-														shareFile={async (file) => {
-															const downloadLinks =
-																await storageApi.downloadStorageItems(appId, [
-																	file,
-																]);
-															if (downloadLinks.length === 0) {
-																return;
-															}
-
-															const firstItem = downloadLinks[0];
-															if (!firstItem?.url) {
-																return;
-															}
-
-															try {
-																await navigator.clipboard.writeText(
-																	firstItem.url,
-																);
-																toast.success(
-																	"Copied download link to clipboard",
-																);
-															} catch (error) {
-																console.error(
-																	"Failed to copy link to clipboard:",
-																	error,
-																);
-															}
-														}}
-														downloadFile={async (file) => {
-															downloadFile(file);
-														}}
-													/>
-												))}
-											</div>
+											<StorageItemGrid
+												items={sortedFiles}
+												columns={1}
+												renderItem={(file) => renderFile(file, false)}
+											/>
 										</div>
 									</ResizablePanel>
 									<ResizableHandle className="mx-2" />
@@ -967,64 +1165,11 @@ export function StorageSystem({
 									{folderCount} folders
 								</Badge>
 							</div>
-							<div className="flex-1 min-h-0 overflow-y-auto">
-								<div
-									className={`grid gap-2 ${viewMode === "grid" ? "grid-cols-2 md:grid-cols-3 lg:grid-cols-4" : "grid-cols-1"}`}
-								>
-									{sortedFiles.map((file) => (
-										<FileOrFolder
-											highlight={preview.file === file.location}
-											key={file.location}
-											file={file}
-											changePrefix={(new_prefix) => {
-												setPreview({ url: "", file: "" });
-												updatePrefix(`${prefix}/${new_prefix}`);
-											}}
-											loadFile={loadFile}
-											revealInExplorer={revealInExplorer}
-											openWithApp={openWithApp}
-											listAppsForFile={listAppsForFile}
-											deleteFile={async (file) => {
-												try {
-													const filePrefix = `${prefix}/${file}`;
-													await storageApi.deleteStorageItems(appId, [
-														filePrefix,
-													]);
-													toast.success("Deleted successfully");
-												} catch (error) {
-													console.error(error);
-													toast.error("Failed to delete");
-												} finally {
-													await files.refetch();
-												}
-											}}
-											shareFile={async (file) => {
-												const downloadLinks =
-													await storageApi.downloadStorageItems(appId, [file]);
-												if (downloadLinks.length === 0) {
-													return;
-												}
-												const firstItem = downloadLinks[0];
-												if (!firstItem?.url) {
-													return;
-												}
-												try {
-													await navigator.clipboard.writeText(firstItem.url);
-													toast.success("Copied download link to clipboard");
-												} catch (error) {
-													console.error(
-														"Failed to copy link to clipboard:",
-														error,
-													);
-												}
-											}}
-											downloadFile={async (file) => {
-												downloadFile(file);
-											}}
-										/>
-									))}
-								</div>
-							</div>
+							<StorageItemGrid
+								items={sortedFiles}
+								columns={gridColumns}
+								renderItem={(file) => renderFile(file, true)}
+							/>
 						</div>
 					)}
 				</div>

@@ -236,14 +236,21 @@ impl RuntimeCredentials {
             .unwrap_or_else(|_| mixed_credentials::default_provider_name().to_string())
     }
 
+    /// Whether the **content** store behind this credential is Azure Blob.
+    ///
+    /// Callers use this to decide whether a credential can mint signed URLs at
+    /// all: an Azure SAS cannot sign a new URL, so those routes fall back to
+    /// master credentials. A mixed deployment has to unwrap to its content
+    /// credential to answer that — reporting `false` for a mixed set whose
+    /// content bucket is Azure sends the caller down the scoped branch, where
+    /// every signature then fails.
     pub fn is_azure(&self) -> bool {
-        #[cfg(feature = "azure")]
-        {
-            matches!(self, RuntimeCredentials::Azure(_))
-        }
-        #[cfg(not(feature = "azure"))]
-        {
-            false
+        match self {
+            #[cfg(feature = "azure")]
+            RuntimeCredentials::Azure(_) => true,
+            RuntimeCredentials::Mixed(mixed) => mixed.content.is_azure(),
+            #[allow(unreachable_patterns)]
+            _ => false,
         }
     }
 

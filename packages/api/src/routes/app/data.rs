@@ -5,6 +5,7 @@ use axum::{
 
 use crate::state::AppState;
 
+pub mod batch;
 pub mod delete_files;
 pub mod download_files;
 pub mod list_files;

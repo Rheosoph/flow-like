@@ -973,7 +973,7 @@ mod tests {
     #[test]
     fn structures_unknown_pin_with_call_ast_path_and_catalog_search() {
         let structured = result(&[
-            "node `agentRegisterFunctionTools` has no input pin named `tools`; skipped that argument",
+            "node `agentRegisterFunctionTools` has no input pin named `tools`; no part of this revision was applied",
         ])
         .structured_diagnostics();
 

@@ -14,7 +14,7 @@
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
-    node::Node,
+    node::{Node, remove_unwired_pins},
     pin::{Pin, PinType},
     variable::VariableType,
 };
@@ -51,7 +51,22 @@ pub fn add_params_pin(node: &mut Node) {
 /// Pins are keyed by placeholder name, not by occurrence: a placeholder repeated in the
 /// statement resolves to one pin, bound once at every occurrence.
 pub fn sync_param_pins(node: &mut Node, query_pin: &str, board: &Board) {
-    let query = query_literal(node, query_pin);
+    let Some(query) = query_literal(node, query_pin) else {
+        // What runs is decided at runtime, so the stale literal declares nothing: retire the pins
+        // it left behind, since offering inputs the real query never asks for is misleading. A pin
+        // that is still wired is the exception — removing it deletes the connection on both ends,
+        // with no error anywhere, so it is kept and reported instead.
+        let derived: Vec<String> = node
+            .pins
+            .values()
+            .filter(|pin| {
+                pin.pin_type == PinType::Input && placeholder_from_pin_name(&pin.name).is_some()
+            })
+            .map(|pin| pin.id.clone())
+            .collect();
+        remove_unwired_pins(node, &derived);
+        return;
+    };
 
     let placeholders = match declared_placeholders(&query) {
         Ok(placeholders) => placeholders,
@@ -103,9 +118,7 @@ pub fn sync_param_pins(node: &mut Node, query_pin: &str, board: &Board) {
             .collect::<Vec<_>>(),
     );
 
-    for id in &stale_ids {
-        node.pins.remove(id);
-    }
+    remove_unwired_pins(node, &stale_ids);
 
     for (placeholder, pin_name) in missing {
         node.add_input_pin(
@@ -121,24 +134,22 @@ pub fn sync_param_pins(node: &mut Node, query_pin: &str, board: &Board) {
     }
 }
 
-/// The query literal the pins are derived from, or an empty string when the query is
-/// supplied over a wire.
+/// The query literal the pins are derived from, or `None` when it cannot be read.
 ///
-/// A wired query deliberately reads as "no placeholders": its literal is whatever was last
-/// typed and no longer describes what will run, so deriving pins from it would offer inputs
-/// that the real query never asks for.
-fn query_literal(node: &Node, query_pin: &str) -> String {
-    let Some(pin) = node.get_pin_by_name(query_pin) else {
-        return String::new();
-    };
+/// A wired query is `None`, not an empty query: its literal is whatever was last typed and no
+/// longer describes what will run, so no pin may be derived from it — but neither may the pins it
+/// already has be taken as refuted. `None` means "unknown", and the caller must leave the existing
+/// pins, and therefore their connections, exactly as they are.
+fn query_literal(node: &Node, query_pin: &str) -> Option<String> {
+    let pin = node.get_pin_by_name(query_pin)?;
     if !pin.depends_on.is_empty() {
-        return String::new();
+        return None;
     }
-    pin.default_value
-        .clone()
-        .and_then(|bytes| flow_like_types::json::from_slice::<Value>(&bytes).ok())
-        .and_then(|json| json.as_str().map(ToOwned::to_owned))
-        .unwrap_or_default()
+    let bytes = pin.default_value.as_ref()?;
+    flow_like_types::json::from_slice::<Value>(bytes)
+        .ok()?
+        .as_str()
+        .map(ToOwned::to_owned)
 }
 
 /// FlowScript addresses a pin by its camelCased name, so two placeholders that render to

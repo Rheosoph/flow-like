@@ -816,6 +816,9 @@ pub struct FileInputProps {
     pub accept: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multiple: Option<BoundValue>,
+    /// Offer picking a whole folder; implies `multiple`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub directory: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_size: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -1185,8 +1185,13 @@ Some nodes create their own input pins from a setting on the same node. `get_dec
 only the static pins, so these will never appear there — that is expected, not a missing node.
 - The setting that creates the pins and the values for them MUST be in the SAME call. The pins do
   not exist until that setting is applied, so a value supplied in a later call has nowhere to land.
+- That setting must be a PLAIN STRING LITERAL on that call. A value built by another node, or wired
+  in, is unknown until the flow runs, so no pin can be derived from it.
 - Never work around a dynamic pin by building its value into the surrounding string. That is the
   exact bug these pins exist to prevent.
+- If a dynamic-pin argument is rejected, the ENTIRE revision was rejected — nothing was written.
+  Fix the cause the diagnostic names. Deleting the argument does not repair anything: it leaves the
+  node that produced the value sitting in the flow with nothing consuming it.
 
 ### SQL parameters (`dfSqlQuery`, `dfSqlQueryCached`, `dfExecuteSql`, `dfWriteDelta`, `graphSqlQuery`)
 - Any value from outside the query — user input, a row field, an event payload, a variable — goes in
@@ -1203,14 +1208,32 @@ only the static pins, so these will never appear there — that is expected, not
 - When the query itself arrives over a wire, no pins can be derived from it; pass a `params` object
   keyed by placeholder name without the `$` instead.
 
-### Widget bindings (`a2uiInstantiateWidget`, `a2uiWidgetUpdateInputs`, `a2uiWidgetQuery`)
+### Widget bindings — `a2uiInstantiateWidget` ONLY
 - Pins come from the persisted widget, not from a literal: `dynPath<Field>` (bound data paths),
   `dynProp<Id>` (exposed props), `dynCust<Id>` (customization options), `dynIn<Key>` (package widget
-  contract inputs), `dynArg<Key>` (widget query args).
+  contract inputs).
 - `ui_inspect` with operation `widget` lists the exact pin names for a widget. The default `list`
   operation does NOT — it returns selectors only. Never guess a binding name.
-- `widgetSelector` must be in the same call as the `dyn*` values, and must name a widget that
-  already exists. If the widget is being created in the same request, its build has to land first.
+- `widgetSelector` must be a plain string literal in the same call as the `dyn*` values, and must
+  name a widget that already exists. If the widget is being created in the same request, its build
+  has to land first.
+- `a2uiWidgetUpdateInputs` and `a2uiWidgetQuery` derive their pins from a CONNECTED `elementRef`,
+  not from a literal, so their `dynIn<Key>` / `dynArg<Key>` pins **cannot be written in FlowScript
+  at all** — connections are applied after every pin write, so no call in any revision can see
+  them. Set the values on `a2uiInstantiateWidget` instead. Attempting them fails the whole
+  revision.
+
+### Other nodes that mint their own pins
+- `stringFormat` — one Generic pin per `{token}` in `formatString`:
+  `stringFormat({ formatString: "Hi {name}, {count} new", name: user.name, count: unread.count })`.
+  `formatString` must be a plain string literal on that call; a computed or wired one derives no
+  pins. A token may not be named `format_string`/`formatString`.
+- `stringRenderTemplate` — one pin per undeclared Jinja variable in `template`, same rules; a
+  variable may not be named `template`.
+- `a2uiPushCsvToChart` — its input pins swap with `format` (`JSON` -> `data`; `CSV` -> `csv`,
+  `table`, `chartType`, `delimiter`).
+- `controlCallFunction` / `controlCallReference` — pins mirror the target function's boundary, so
+  the function has to exist in this revision before the call can bind them.
 "#;
 
 /// FlowPath is a three-field store handle, not a file object. Without this block the model writes

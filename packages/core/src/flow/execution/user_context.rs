@@ -7,6 +7,22 @@ use std::collections::HashMap;
 /// viewer instead of looking it up.
 pub const LOCAL_USER_SUB: &str = "local";
 
+/// How the caller of a run authenticated. `is_technical_user` keeps the coarse
+/// human/machine split; this names which machine principal it was, so an app
+/// calling through an app connection is no longer indistinguishable from an
+/// API key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ExecutionPrincipal {
+    /// A human account: an OIDC session or a personal access token.
+    #[default]
+    User,
+    /// An app-scoped API key. Carries no human subject of its own.
+    ApiKey,
+    /// Another app calling through an app connection.
+    ConnectedApp,
+}
+
 /// Represents the user context during execution.
 /// Contains information about the user who triggered the execution,
 /// their role, permissions, and any custom attributes.
@@ -14,16 +30,27 @@ pub const LOCAL_USER_SUB: &str = "local";
 #[serde(rename_all = "camelCase")]
 pub struct UserExecutionContext {
     /// User subject identifier (e.g., OIDC sub claim)
-    /// Empty for technical users (API keys)
+    /// Empty for technical users (API keys, app connections)
     pub sub: String,
     /// Role information
     pub role: Option<RoleContext>,
-    /// Whether this is a technical user (API key) rather than a human user
+    /// Whether this is a technical user (API key, app connection) rather than a human user
     #[serde(default)]
     pub is_technical_user: bool,
-    /// For technical users, the API key identifier
+    /// For API keys, the key identifier. Never set for other principals.
     #[serde(default)]
     pub key_id: Option<String>,
+    /// Which kind of principal started the run.
+    #[serde(default)]
+    pub principal: ExecutionPrincipal,
+    /// For `ConnectedApp`, the app that made the call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_app_id: Option<String>,
+    /// Subject the calling principal reported as the initiator: the API key's
+    /// creator, or the user an app connection passed through. Attribution only
+    /// — the run must never treat it as an identity it may act as.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_behalf_of: Option<String>,
 }
 
 /// Role context containing role metadata and permissions
@@ -51,6 +78,9 @@ impl UserExecutionContext {
             role: None,
             is_technical_user: false,
             key_id: None,
+            principal: ExecutionPrincipal::User,
+            origin_app_id: None,
+            on_behalf_of: None,
         }
     }
 
@@ -61,12 +91,21 @@ impl UserExecutionContext {
             role: Some(RoleContext::admin()),
             is_technical_user: false,
             key_id: None,
+            principal: ExecutionPrincipal::User,
+            origin_app_id: None,
+            on_behalf_of: None,
         }
     }
 
-    /// Create a context for a trusted local run. Local execution always grants
-    /// admin privileges, but an authenticated run keeps the caller's subject so
-    /// nodes and surfaces resolve the real user instead of the placeholder.
+    /// Create a context for a run of an app that has no server-side role to
+    /// consult — an offline app, or a signed-out desktop session. Those runs
+    /// are owner-equivalent by definition: the machine owns the app. An
+    /// authenticated run keeps the caller's subject so nodes and surfaces
+    /// resolve the real user instead of the placeholder.
+    ///
+    /// A hosted app executed locally must NOT use this: its role lives on the
+    /// hub and has to be resolved there, or the same board answers
+    /// `Has Permission` differently on the desktop than in the cloud.
     pub fn local(sub: impl Into<String>) -> Self {
         let sub = sub.into();
         if sub.is_empty() || sub == LOCAL_USER_SUB {
@@ -96,7 +135,31 @@ impl UserExecutionContext {
             }),
             is_technical_user: true,
             key_id: Some(key_id.into()),
+            principal: ExecutionPrincipal::ApiKey,
+            origin_app_id: None,
+            on_behalf_of: None,
         }
+    }
+
+    /// Create a context for an app calling through an app connection. The
+    /// connection's role bounds the run; the passed-through subject is
+    /// attribution only, so it lands in `on_behalf_of` rather than `sub`.
+    pub fn connected_app(origin_app_id: impl Into<String>, role: RoleContext) -> Self {
+        Self {
+            sub: String::new(),
+            role: Some(role),
+            is_technical_user: true,
+            key_id: None,
+            principal: ExecutionPrincipal::ConnectedApp,
+            origin_app_id: Some(origin_app_id.into()),
+            on_behalf_of: None,
+        }
+    }
+
+    /// Record the subject the calling principal reported as the initiator.
+    pub fn with_on_behalf_of(mut self, sub: Option<String>) -> Self {
+        self.on_behalf_of = sub.filter(|sub| !sub.is_empty());
+        self
     }
 
     /// Set the role context
@@ -118,14 +181,30 @@ impl UserExecutionContext {
         self.sub == LOCAL_USER_SUB
     }
 
-    /// Check if this is a technical user (API key)
+    /// Check if this is a technical user (API key or app connection)
     pub fn is_technical(&self) -> bool {
         self.is_technical_user
     }
 
-    /// Get the key ID for technical users
+    /// Check if another app is calling through an app connection
+    pub fn is_connected_app(&self) -> bool {
+        self.principal == ExecutionPrincipal::ConnectedApp
+    }
+
+    /// Get the key ID for API keys
     pub fn get_key_id(&self) -> Option<&str> {
         self.key_id.as_deref()
+    }
+
+    /// The app that made the call, for app-connection principals
+    pub fn origin_app_id(&self) -> Option<&str> {
+        self.origin_app_id.as_deref()
+    }
+
+    /// The subject the calling principal reported as the initiator. Attribution
+    /// only — never authorize against this.
+    pub fn on_behalf_of(&self) -> Option<&str> {
+        self.on_behalf_of.as_deref()
     }
 
     /// Get an attribute value by key
@@ -223,6 +302,51 @@ mod tests {
         assert!(!ctx.is_offline());
         assert!(ctx.has_attribute("editor"));
         assert_eq!(ctx.get_attribute("department"), Some("engineering"));
+    }
+
+    #[test]
+    fn test_connected_app_is_not_an_api_key() {
+        let ctx = UserExecutionContext::connected_app("origin-app", RoleContext::admin())
+            .with_on_behalf_of(Some("user-123".to_string()));
+
+        assert_eq!(ctx.principal, ExecutionPrincipal::ConnectedApp);
+        assert!(ctx.is_connected_app());
+        assert!(ctx.is_technical());
+        assert_eq!(ctx.get_key_id(), None);
+        assert_eq!(ctx.origin_app_id(), Some("origin-app"));
+        // The passed-through subject is attribution, never an identity to act as.
+        assert_eq!(ctx.sub, "");
+        assert_eq!(ctx.on_behalf_of(), Some("user-123"));
+    }
+
+    #[test]
+    fn test_api_key_principal() {
+        let ctx = UserExecutionContext::technical(
+            "key-1",
+            "role-1",
+            "Runner",
+            0b1000,
+            vec![],
+            HashMap::new(),
+        );
+
+        assert_eq!(ctx.principal, ExecutionPrincipal::ApiKey);
+        assert!(!ctx.is_connected_app());
+        assert_eq!(ctx.get_key_id(), Some("key-1"));
+        assert_eq!(ctx.origin_app_id(), None);
+    }
+
+    #[test]
+    fn test_human_principals_default_to_user() {
+        for ctx in [
+            UserExecutionContext::new("user-123"),
+            UserExecutionContext::offline(),
+            UserExecutionContext::local("user-123"),
+        ] {
+            assert_eq!(ctx.principal, ExecutionPrincipal::User);
+            assert!(!ctx.is_technical());
+            assert!(ctx.on_behalf_of().is_none());
+        }
     }
 
     #[test]

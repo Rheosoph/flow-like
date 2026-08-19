@@ -3618,6 +3618,7 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "helperText",
             "accept",
             "multiple",
+            "directory",
             "maxSize",
             "maxFiles",
             "disabled",

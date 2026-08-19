@@ -676,6 +676,8 @@ export interface FileInputComponent extends ComponentBase {
 	helperText?: BoundValue;
 	accept?: BoundValue;
 	multiple?: BoundValue;
+	/** Offer picking a whole folder; implies `multiple`. */
+	directory?: BoundValue;
 	maxSize?: BoundValue;
 	maxFiles?: BoundValue;
 	disabled?: BoundValue;

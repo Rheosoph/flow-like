@@ -227,13 +227,13 @@ fn reconcile_inner(
                     // selector, or a page/widget build that has not landed). Saying only "no pin
                     // named X; skipped" reads like a typo and silently drops the data binding.
                     result.diagnostics.push(format!(
-                        "node {anchor} has no input pin named {:?} (occurrence {}); skipped. This is a widget data binding, and those pins only exist once the widget is persisted — check that the widget selector names an existing widget and that its page/widget build has completed, then re-check.",
+                        "node {anchor} has no input pin named {:?} (occurrence {}). This is a widget data binding, and those pins only exist once the widget is persisted — check that the widget selector names an existing widget and that its page/widget build has completed, then re-check. No part of this revision was applied.",
                         arg.name,
                         occurrence + 1
                     ));
                 } else {
                     result.diagnostics.push(format!(
-                        "node {anchor} has no input pin named {:?} (occurrence {}); skipped",
+                        "node {anchor} has no input pin named {:?} (occurrence {}). No part of this revision was applied.",
                         arg.name,
                         occurrence + 1
                     ));
@@ -1965,7 +1965,7 @@ fn find_input_pin_by_ref<'a>(node: &'a Node, pin_ref: &str) -> Option<&'a Pin> {
             .values()
             .filter(|pin| pin.pin_type == PinType::Input && node_pin_name_matches(pin, name))
             .collect::<Vec<_>>();
-        matching.sort_by_key(|pin| (pin.index, pin.id.clone()));
+        matching.sort_by_key(|pin| (node_pin_match_rank(pin, name), pin.index, pin.id.clone()));
         return matching.get(occurrence).copied();
     }
     find_input_pin(node, pin_ref)
@@ -1984,7 +1984,7 @@ fn find_boundary_pin_by_ref<'a>(
         .values()
         .filter(|pin| pin.pin_type == expected && node_pin_name_matches(pin, name))
         .collect::<Vec<_>>();
-    matching.sort_by_key(|pin| (pin.index, pin.id.clone()));
+    matching.sort_by_key(|pin| (node_pin_match_rank(pin, name), pin.index, pin.id.clone()));
     matching.get(occurrence).copied()
 }
 
@@ -2022,7 +2022,12 @@ fn matching_input_pins<'a>(node: &'a Node, name: &str) -> Vec<&'a Pin> {
         .collect();
     matching.sort_by_key(|p| {
         let populated = !p.depends_on.is_empty() || p.default_value.is_some();
-        (!populated, p.index, p.id.clone())
+        (
+            node_pin_match_rank(p, name),
+            !populated,
+            p.index,
+            p.id.clone(),
+        )
     });
     matching
 }
@@ -2038,7 +2043,13 @@ fn node_input_occurrence_ref(node: &Node, pin: &Pin) -> String {
             candidate.pin_type == PinType::Input && node_pin_name_matches(candidate, &pin.name)
         })
         .collect::<Vec<_>>();
-    matching.sort_by_key(|candidate| (candidate.index, candidate.id.clone()));
+    matching.sort_by_key(|candidate| {
+        (
+            node_pin_match_rank(candidate, &pin.name),
+            candidate.index,
+            candidate.id.clone(),
+        )
+    });
     if matching.len() <= 1 {
         return pin.name.clone();
     }
@@ -2055,7 +2066,7 @@ fn find_output_pin<'a>(node: &'a Node, name: &str) -> Option<&'a Pin> {
         .values()
         .filter(|p| p.pin_type == PinType::Output && node_pin_name_matches(p, name))
         .collect();
-    matching.sort_by_key(|p| (p.index, p.id.clone()));
+    matching.sort_by_key(|p| (node_pin_match_rank(p, name), p.index, p.id.clone()));
     matching.first().copied()
 }
 
@@ -2073,12 +2084,32 @@ pub(crate) fn pin_name_matches(raw: &str, requested: &str) -> bool {
     raw == requested || to_camel_case(raw) == requested
 }
 
+/// How closely a pin answers to `requested`: `0` when its own name matches, `1` when only its
+/// friendly name does, `None` when neither. A pin's own name must outrank another pin's friendly
+/// name — `string_format`'s config pin is named `format_string` but presented as "Input", so a
+/// `{input}` placeholder resolves to the format string itself, and its value overwrites the
+/// template, unless the real name wins.
+fn pin_name_match_rank(name: &str, friendly_name: &str, requested: &str) -> Option<u8> {
+    if pin_name_matches(name, requested) {
+        return Some(0);
+    }
+    pin_name_matches(friendly_name, requested).then_some(1)
+}
+
+fn node_pin_match_rank(pin: &Pin, requested: &str) -> u8 {
+    pin_name_match_rank(&pin.name, &pin.friendly_name, requested).unwrap_or(u8::MAX)
+}
+
+fn metadata_pin_match_rank(pin: &PinMetadata, requested: &str) -> u8 {
+    pin_name_match_rank(&pin.name, &pin.friendly_name, requested).unwrap_or(u8::MAX)
+}
+
 fn node_pin_name_matches(pin: &Pin, requested: &str) -> bool {
-    pin_name_matches(&pin.name, requested) || pin_name_matches(&pin.friendly_name, requested)
+    pin_name_match_rank(&pin.name, &pin.friendly_name, requested).is_some()
 }
 
 fn metadata_pin_name_matches(pin: &PinMetadata, requested: &str) -> bool {
-    pin_name_matches(&pin.name, requested) || pin_name_matches(&pin.friendly_name, requested)
+    pin_name_match_rank(&pin.name, &pin.friendly_name, requested).is_some()
 }
 
 fn authored_arg_name_matches(raw: &str, canonical: &str) -> bool {
@@ -2206,10 +2237,14 @@ fn metadata_input_pin_at<'a>(
     name: &str,
     occurrence: usize,
 ) -> Option<&'a PinMetadata> {
-    meta.inputs
+    let mut matching: Vec<&PinMetadata> = meta
+        .inputs
         .iter()
         .filter(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
-        .nth(occurrence)
+        .collect();
+    // Stable, so pins of equal rank keep their catalog order (`node_to_metadata` sorts by index).
+    matching.sort_by_key(|p| metadata_pin_match_rank(p, name));
+    matching.get(occurrence).copied()
 }
 
 /// Encode an occurrence of a same-named pin in a board-command pin reference. Catalog nodes can
@@ -2275,6 +2310,78 @@ pub(crate) fn sql_param_node(node_type: &str) -> bool {
             | "df_write_delta"
             | "graph_sql_query"
     )
+}
+
+/// Why an argument did not resolve to an input pin, and what has to change for it to.
+///
+/// Every diagnostic aborts the whole revision (`reconcile_is_safe_to_apply`), so the wording must
+/// never imply the rest of the call went through. The old "skipped that argument" said exactly
+/// that, and the cheapest repair it invited — delete the argument and re-commit — leaves the value
+/// producer on the canvas as a statement of its own, wired to nothing, next to a dynamic input pin
+/// that stayed empty. Naming the config value that declares these pins is what lets the author fix
+/// the cause instead.
+fn missing_input_pin_diagnostic(meta: &NodeMetadata, call: &Call, arg: &Arg) -> String {
+    let head = format!(
+        "node `{}` has no input pin named `{}`",
+        call.display, arg.name
+    );
+    let Some(config_pin) = dynamic_placeholder_config_pin(&meta.name) else {
+        return format!("{head}; no part of this revision was applied");
+    };
+
+    let config = to_camel_case(config_pin);
+    let declares = if sql_param_node(&meta.name) {
+        format!("Each `$placeholder` in `{config}` becomes one `param<Name>` pin")
+    } else {
+        format!("Each placeholder in `{config}` becomes one pin")
+    };
+    let alternative = if sql_param_node(&meta.name) {
+        ", so bind values through the `params` object instead"
+    } else {
+        ""
+    };
+
+    let config_value = call.args.iter().find_map(|candidate| {
+        metadata_input_pin(meta, &candidate.name)
+            .is_some_and(|pin| pin.name == config_pin)
+            .then_some(&candidate.value)
+    });
+    match config_value {
+        Some(Expr::Literal(Literal::String(_))) => format!(
+            "{head}. {declares}, and `{config}` on this call does not declare `{}`. Add it there, or drop the argument. No part of this revision was applied.",
+            arg.name
+        ),
+        Some(_) => format!(
+            "{head}. {declares}, and only when `{config}` is a plain string literal on this same call — a computed or wired `{config}` declares nothing{alternative}. No part of this revision was applied."
+        ),
+        None => format!(
+            "{head}. {declares}, and this call does not set `{config}`. Set it to a plain string literal on this same call. No part of this revision was applied."
+        ),
+    }
+}
+
+/// Whether `pin_name` on `node_type` is a pin that node's `on_update` both mints AND then re-types
+/// from its source via [`Node::match_type`].
+///
+/// `match_type` copies the data type, value type and schema of whatever is wired into the pin ONTO
+/// the pin, so a minted pin's stored shape describes its current source rather than its own
+/// contract — the pin is always minted `Generic`. Deliberately decided from the node type and pin
+/// name alone: a catalog lookup would make the rule depend on the catalog carrying this node type,
+/// and silently stop applying wherever it does not.
+///
+/// The widget nodes are NOT here. Their `dyn_*` pins are typed once from the widget's contract and
+/// never re-derived from the wire, so their type IS a contract and rejecting a mismatch is right.
+fn minted_wire_typed_pin(node_type: &str, pin_name: &str) -> bool {
+    if sql_param_node(node_type) {
+        // `param_<placeholder>`. The static `params` object pin does not match this prefix.
+        return pin_name.starts_with("param_");
+    }
+    // Every input except the template itself is a minted placeholder pin.
+    match node_type {
+        "string_format" => !pin_name_matches("format_string", pin_name),
+        "string_render_template" => !pin_name_matches("template", pin_name),
+        _ => false,
+    }
 }
 
 /// Placeholder tokens in a template string, matching `string_format`'s `\{([a-zA-Z0-9_]+)\}`.
@@ -2580,9 +2687,13 @@ fn synthetic_fn_ref_targets(arg: &Arg) -> Vec<String> {
 }
 
 fn metadata_output_pin<'a>(meta: &'a NodeMetadata, name: &str) -> Option<&'a PinMetadata> {
-    meta.outputs
+    let mut matching: Vec<&PinMetadata> = meta
+        .outputs
         .iter()
-        .find(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
+        .filter(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
+        .collect();
+    matching.sort_by_key(|p| metadata_pin_match_rank(p, name));
+    matching.first().copied()
 }
 
 fn canonical_schema_value(value: &flow_like_types::Value) -> String {
@@ -6542,16 +6653,15 @@ impl<'a> StructuralPlanner<'a> {
                                 // actual cause is that these pins only exist once the
                                 // widget is persisted and the instance is wired up.
                                 self.result.diagnostics.push(format!(
-                                        "node `{}` has no input pin named `{}`. Widget binding pins come from the persisted widget, and on this node they appear only once its `elementRef` input is connected to a live instance. Set the inputs on `a2uiInstantiateWidget` itself, or split the update into a later call once the instance exists. `ui_inspect` with operation `widget` lists a widget's exact pin names.",
+                                        "node `{}` has no input pin named `{}`. Widget binding pins come from the persisted widget, and on this node they appear only once its `elementRef` input is connected to a live instance. Set the inputs on `a2uiInstantiateWidget` itself — every connection in a revision is applied after every pin write, so a later call in the same revision cannot see them either. `ui_inspect` with operation `widget` lists a widget's exact pin names. No part of this revision was applied.",
                                         call.display, arg.name
                                     ));
                                 continue;
                             }
                             None => {
-                                self.result.diagnostics.push(format!(
-                                    "node `{}` has no input pin named `{}`; skipped that argument",
-                                    call.display, arg.name
-                                ));
+                                self.result
+                                    .diagnostics
+                                    .push(missing_input_pin_diagnostic(meta, call, arg));
                                 continue;
                             }
                         }
@@ -6632,7 +6742,14 @@ impl<'a> StructuralPlanner<'a> {
                     source
                 }
             };
-            let Some(output_pin) = self.resolve_source_output_pin_for_input(&source, input) else {
+            // Same reason as in `queue_validated_data_connection`: selecting the source's output
+            // by the dynamic pin's CURRENT specialization hides every output of a differently
+            // typed replacement, and reports it as a node with no usable output.
+            let rewirable_target = self.rewirable_dynamic_input(entity, input);
+            let selector_input = rewirable_target.as_ref().unwrap_or(input);
+            let Some(output_pin) =
+                self.resolve_source_output_pin_for_input(&source, selector_input)
+            else {
                 self.result.diagnostics.push(format!(
                     "could not choose an output pin for argument `{}` on `{}`",
                     arg.name, call.display
@@ -6855,6 +6972,30 @@ impl<'a> StructuralPlanner<'a> {
     /// Queue one newly authored DATA edge only after resolving both endpoints to concrete live or
     /// planned contracts. Exact pre-existing endpoints are retained without re-validating legacy
     /// wiring; every changed endpoint must pass type, container, and schema checks.
+    /// The `Generic` shape a wire-typed dynamic pin is actually minted with, when `input` is one.
+    ///
+    /// A pin minted by [`respecializes_dynamic_pins_from_their_source`] stores the contract of the
+    /// source currently feeding it, because `on_update` re-runs `match_type` on every board pass.
+    /// Validating a REPLACEMENT source against that stored shape rejects every rewire — and makes
+    /// the output-pin picker report that the new source node has no usable output at all — even
+    /// though the pin re-specializes to the new source the moment the edge lands.
+    fn rewirable_dynamic_input(
+        &self,
+        target_entity: &NodeEntity,
+        input: &PinMetadata,
+    ) -> Option<PinMetadata> {
+        if input.is_generic || input.data_type == "Generic" {
+            return None;
+        }
+        let node_type = match target_entity {
+            NodeEntity::Existing(node_id) => find_board_node(self.existing, node_id)?.name.as_str(),
+            NodeEntity::New { meta, .. } => meta.name.as_str(),
+            NodeEntity::Layer { .. } => return None,
+        };
+        minted_wire_typed_pin(node_type, &input.name)
+            .then(|| generic_input_pin_metadata(&input.name))
+    }
+
     fn queue_validated_data_connection(
         &mut self,
         source: &ValueSource,
@@ -6895,6 +7036,12 @@ impl<'a> StructuralPlanner<'a> {
         if already_planned {
             return true;
         }
+
+        // Past the already-wired guards, `input` is only used to validate a NEW edge. A dynamic
+        // pin's stored type is a copy of the source it holds today, so check the replacement
+        // against the `Generic` pin the node really mints instead.
+        let rewirable = self.rewirable_dynamic_input(target_entity, input);
+        let input = rewirable.as_ref().unwrap_or(input);
 
         let resolved_source = ValueSource {
             node: source.node.clone(),
