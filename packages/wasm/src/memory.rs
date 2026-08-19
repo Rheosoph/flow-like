@@ -156,6 +156,7 @@ impl StringMarshaller {
 /// otherwise uses a simple bump allocator for temporary data.
 pub struct WasmAllocator {
     /// Function to call for allocation (if module exports one)
+    #[allow(dead_code)] // records whether the module exports its own alloc; bump path is selected by instance.rs::allocate today
     has_alloc: bool,
     /// Simple bump pointer for modules without allocator
     bump_ptr: u32,

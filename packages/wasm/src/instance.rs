@@ -18,6 +18,7 @@ pub struct WasmInstance {
     /// The store containing instance state
     store: Store<StoreData>,
     /// The wasmtime instance
+    #[allow(dead_code)] // wasmtime Instance handle retained for export lookups (Instance is Copy; Store owns the state)
     instance: Instance,
     /// Reference to the module
     module: Arc<WasmModule>,

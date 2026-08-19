@@ -240,12 +240,18 @@ fn collect_execution_providers() -> (
         }
     }
 
-    #[cfg(any(
-        feature = "xnnpack",
-        target_arch = "aarch64",
-        target_arch = "x86_64",
-        all(target_arch = "arm", any(target_os = "linux", target_os = "android"))
-    ))]
+    // XNNPACK is opt-in rather than automatic, because its Softmax kernel corrupts memory on a
+    // graph with a dynamic axis exported at opset 12 or below. ORT's support check
+    // (`core/providers/xnnpack/math/softmax.cc`) is meant to reject those, but on the opset<=12
+    // branch the guard `break`s out of its own `for` loop instead of the check, so the node is
+    // claimed anyway and the kernel bakes the symbolic dimension in as `channel_dim_ = -1`.
+    // `Compute` never re-reads the runtime shape, so the first inference asks the microkernel for
+    // SIZE_MAX bytes per row and walks off the heap: an XLM-RoBERTa NER graph (opset 11, dynamic
+    // sequence) segfaulted the desktop app that way, and the defect is unfixed as of ORT 1.29.
+    // Every transformer exported by an older `optimum`/`torch.onnx` lands on that branch, so the
+    // provider stays off unless a build opts in with `--features xnnpack` for models it knows are
+    // opset 13 or later.
+    #[cfg(feature = "xnnpack")]
     {
         // XNNPACK spins up its own pthreadpool from the session's intra-op thread count rather
         // than using ORT's shared pool, so the mobile clamp below has to be repeated here or the
@@ -490,6 +496,26 @@ mod tests {
     // the runtime smoke test hermetic on desktop and mobile CI targets.
     const SMOKE_MODEL_BASE64: &str = "CAgSDmZsb3ctbGlrZS10ZXN0OlgKGQoFaW5wdXQSBm91dHB1dCIISWRlbnRpdHkSCGlkZW50aXR5WhcKBWlucHV0Eg4KDAgBEggKAggBCgIIAWIYCgZvdXRwdXQSDgoMCAESCAoCCAEKAggBQgIQDQ==";
 
+    // Softmax(axis=1) over a rank-2 tensor with two symbolic dimensions, encoded as ONNX IR
+    // 7/opset 11 — the graph shape ORT's XNNPACK EP wrongly claims. With that provider
+    // registered the first inference reads past the end of the tensor, so a regression here
+    // takes the test process down with a segfault rather than failing an assertion.
+    const DYNAMIC_SOFTMAX_MODEL_BASE64: &str = "CAcSDmZsb3ctbGlrZS10ZXN0Oo4BCi4KBWlucHV0EgZvdXRwdXQaB3NvZnRtYXgiB1NvZnRtYXgqCwoEYXhpcxgBoAECEg9keW5hbWljLXNvZnRtYXhaJAoFaW5wdXQSGwoZCAESFQoHEgViYXRjaAoKEghmZWF0dXJlc2IlCgZvdXRwdXQSGwoZCAESFQoHEgViYXRjaAoKEghmZWF0dXJlc0IECgAQCw==";
+
+    #[test]
+    fn xnnpack_stays_off_unless_a_build_opts_in() {
+        let info = initialize_ort();
+        if info.configured {
+            assert_eq!(
+                info.active_providers
+                    .iter()
+                    .any(|provider| provider == "XNNPACK"),
+                cfg!(feature = "xnnpack"),
+                "XNNPACK corrupts memory on dynamic axes below opset 13, so it may only be registered by a build that opts in"
+            );
+        }
+    }
+
     #[test]
     fn initialize_is_idempotent() {
         let first = initialize_ort();
@@ -506,6 +532,43 @@ mod tests {
                 info.active_providers
                     .iter()
                     .any(|provider| provider == "CPU")
+            );
+        }
+    }
+
+    // A CPU-only session runs this graph correctly; XNNPACK's Softmax kernel does not survive it.
+    #[cfg(all(feature = "local-ml", not(feature = "xnnpack")))]
+    #[test]
+    fn dynamic_shapes_below_opset_13_infer_correctly() {
+        use base64::Engine;
+
+        let model = base64::engine::general_purpose::STANDARD
+            .decode(DYNAMIC_SOFTMAX_MODEL_BASE64)
+            .expect("embedded dynamic-softmax model must be valid base64");
+        let mut session = configured_session_builder()
+            .expect("shared ORT policy must initialize")
+            .commit_from_memory(&model)
+            .expect("configured ORT session must load the dynamic-softmax model");
+
+        let (rows, columns) = (4usize, 16usize);
+        let values: Vec<f32> = (0..rows * columns)
+            .map(|index| (index % 7) as f32)
+            .collect();
+        let input = ort::value::Value::from_array(([rows, columns], values))
+            .expect("dynamic-shape input tensor must build");
+        let outputs = session
+            .run(ort::inputs!["input" => input])
+            .expect("dynamic-shape inference must succeed");
+        let (_, data) = outputs["output"]
+            .try_extract_tensor::<f32>()
+            .expect("softmax output must be a float32 tensor");
+
+        assert_eq!(data.len(), rows * columns);
+        for row in data.chunks(columns) {
+            let sum: f32 = row.iter().sum();
+            assert!(
+                (sum - 1.0).abs() < 1e-4,
+                "every softmax row must sum to 1, got {sum}"
             );
         }
     }

@@ -2258,6 +2258,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                         #[serde(default)]
                         output_schema: Option<serde_json::Value>,
                         #[serde(default)]
+                        #[allow(dead_code)] // wire contract: SDK sends additional_params (libs/wasm-sdk/wasm-sdk-rust/src/rig_provider.rs:413); parsed for parity with llm_prompt, not yet forwarded to History
                         additional_params: Option<serde_json::Value>,
                     }
 
