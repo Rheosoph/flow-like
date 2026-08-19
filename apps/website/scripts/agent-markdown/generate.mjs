@@ -1,6 +1,7 @@
 /**
  * Emits a Markdown twin next to every built HTML page so agents can request
- * `Accept: text/markdown` (or append `.md`) and skip the marketing markup.
+ * `Accept: text/markdown` (or append `.md`) and skip the marketing markup, plus
+ * the /llms.txt index that points them at those twins.
  *
  * Runs after `astro build`; see scripts/agent-markdown/markdown-negotiation.mjs
  * for the request-time half.
@@ -15,6 +16,7 @@ import {
 	frontmatter,
 	htmlToMarkdown,
 } from "./html-to-markdown.mjs";
+import { buildWebsiteLlmsTxt, extractPublished } from "./llms-index.mjs";
 
 const SITE_ORIGIN = "https://flow-like.com";
 const CLIENT_DIR = resolve(
@@ -47,6 +49,8 @@ function pageUrl(htmlFile) {
 	return new URL(route, SITE_ORIGIN).toString();
 }
 
+const pages = new Map();
+
 async function convert(htmlFile) {
 	const html = await readFile(htmlFile, "utf8");
 	const meta = extractPageMeta(html);
@@ -60,21 +64,39 @@ async function convert(htmlFile) {
 		language: meta.lang,
 	})}${body}\n`;
 
+	pages.set(new URL(url).pathname, {
+		...meta,
+		url,
+		published: extractPublished(html),
+	});
+
 	await writeFile(htmlFile.replace(/\.html$/, ".md"), markdown, "utf8");
 	return markdown.length;
 }
 
 const started = Date.now();
-let pages = 0;
+let pageCount = 0;
 let bytes = 0;
 
 for await (const htmlFile of walk(CLIENT_DIR)) {
 	bytes += await convert(htmlFile);
-	pages += 1;
+	pageCount += 1;
 }
 
 console.log(
-	`agent markdown: ${pages} pages, ${(bytes / 1024 / 1024).toFixed(1)} MB in ${(
+	`agent markdown: ${pageCount} pages, ${(bytes / 1024 / 1024).toFixed(1)} MB in ${(
 		(Date.now() - started) / 1000
 	).toFixed(1)}s`,
 );
+
+const llms = buildWebsiteLlmsTxt({
+	pages,
+	origin: SITE_ORIGIN,
+	onUnclaimed: (routes) =>
+		console.warn(
+			`llms.txt: ${routes.length} route(s) match no section and are missing from the index:\n  ${routes.join("\n  ")}`,
+		),
+});
+await writeFile(join(CLIENT_DIR, "llms.txt"), llms, "utf8");
+
+console.log(`llms.txt: ${(llms.length / 1024).toFixed(1)} KB`);
