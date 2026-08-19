@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { AnimatePresence, motion } from "framer-motion";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -134,6 +135,7 @@ function NotificationIcon({
 }
 
 export function NotificationsPageScreen() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const auth = useAuth();
 	const invalidate = useInvalidateInvoke();
@@ -192,10 +194,10 @@ export function NotificationsPageScreen() {
 		(notification) => !notification.read,
 	).length;
 	const subtitle = isSummaryLoading
-		? "Pulling together workflow activity and team invites..."
+		? t('pullingTogetherWorkflowActivityAndTeamInvites', 'Pulling together workflow activity and team invites...')
 		: totalCount > 0
-			? `${invitations.length} invitation${invitations.length !== 1 ? "s" : ""}, ${notifications.length} workflow notification${notifications.length !== 1 ? "s" : ""}`
-			: "You are caught up. New workflow activity and team invites will land here.";
+			? t('lengthInvitationvalLength2WorkflowNotificationval2', '{{length}} invitation{{val}}, {{length2}} workflow notification{{val2}}', { length: invitations.length, val: invitations.length !== 1 ? "s" : "", length2: notifications.length, val2: notifications.length !== 1 ? "s" : "" })
+			: t('youAreCaughtUpNewWorkflowActivityAndTeamInvitesWillLandHere', 'You are caught up. New workflow activity and team invites will land here.');
 
 	const handleRefresh = useCallback(async () => {
 		await Promise.allSettled([
@@ -234,7 +236,7 @@ export function NotificationsPageScreen() {
 				toast.error(
 					apiErrorMessage(
 						error,
-						`Failed to ${action} invite. Please try again later.`,
+						t('failedToActionInvitePleaseTryAgainLater', 'Failed to {{action}} invite. Please try again later.', { action }),
 					),
 				);
 				// Re-sync so an invite that is already gone (revoked, app deleted,
@@ -290,7 +292,7 @@ export function NotificationsPageScreen() {
 			const count = await backend.userState.markAllNotificationsRead();
 			await Promise.all([notificationsQuery.refetch(), syncOverview()]);
 			toast.success(
-				`Marked ${count} notification${count !== 1 ? "s" : ""} as read`,
+				t('markedCountNotificationvalAsRead', 'Marked {{count}} notification{{val}} as read', { count, val: count !== 1 ? "s" : "" }),
 			);
 		} catch (error) {
 			console.error("Failed to mark all as read:", error);
@@ -334,7 +336,7 @@ export function NotificationsPageScreen() {
 							<div>
 								<div className="flex items-center gap-2">
 									<h1 className="text-xl font-semibold tracking-tight text-foreground">
-										Notifications
+										{t('notifications', 'Notifications')}
 									</h1>
 									{isRefreshing && (
 										<LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
@@ -353,7 +355,7 @@ export function NotificationsPageScreen() {
 								className="gap-1.5 text-muted-foreground"
 							>
 								<RefreshCcw className="size-3.5" />
-								Refresh
+								{t('refresh', 'Refresh')}
 							</Button>
 
 							{unreadCount > 0 && (
@@ -364,7 +366,7 @@ export function NotificationsPageScreen() {
 									className="gap-1.5"
 								>
 									<CheckCheck className="size-3.5" />
-									Mark all read
+									{t('markAllRead', 'Mark all read')}
 								</Button>
 							)}
 						</div>
@@ -404,7 +406,7 @@ export function NotificationsPageScreen() {
 						<TabsList className="h-auto w-full flex-wrap justify-start gap-2 rounded-2xl bg-muted/60 p-1 md:w-fit">
 							<TabsTrigger value="all" className="gap-2 rounded-xl px-4 py-2">
 								<Bell className="size-4" />
-								All Activity
+								{t('allActivity', 'All Activity')}
 								{totalCount > 0 && (
 									<Badge variant="secondary">{totalCount}</Badge>
 								)}
@@ -414,7 +416,7 @@ export function NotificationsPageScreen() {
 								className="gap-2 rounded-xl px-4 py-2"
 							>
 								<UserPlus className="size-4" />
-								Invitations
+								{t('invitations', 'Invitations')}
 								{invitations.length > 0 && (
 									<Badge variant="secondary">{invitations.length}</Badge>
 								)}
@@ -424,7 +426,7 @@ export function NotificationsPageScreen() {
 								className="gap-2 rounded-xl px-4 py-2"
 							>
 								<Workflow className="size-4" />
-								Workflows
+								{t('workflows', 'Workflows')}
 								{notifications.length > 0 && (
 									<Badge variant="secondary">{notifications.length}</Badge>
 								)}
@@ -438,15 +440,15 @@ export function NotificationsPageScreen() {
 									className="gap-1.5 border-border/60 bg-background/80"
 								>
 									<LoaderCircle className="size-3.5 animate-spin" />
-									Loading more
+									{t('loadingMore', 'Loading more')}
 								</Badge>
 							)}
 							<span className="hidden md:inline">
 								{activeTab === "all"
-									? "Everything in one stream"
+									? t('everythingInOneStream', 'Everything in one stream')
 									: activeTab === "invitations"
-										? "Team access requests and invites"
-										: "Workflow and system updates"}
+										? t('teamAccessRequestsAndInvites', 'Team access requests and invites')
+										: t('workflowAndSystemUpdates', 'Workflow and system updates')}
 							</span>
 						</div>
 					</div>
@@ -466,8 +468,8 @@ export function NotificationsPageScreen() {
 									/>
 								) : totalCount === 0 ? (
 									<NotificationsEmptyState
-										title="No activity just yet"
-										description="When teammates invite you or workflows finish, fail, or need input, they will appear here."
+										title={t('noActivityJustYet', 'No activity just yet')}
+										description={t('whenTeammatesInviteYouOrWorkflowsFinishFailOrNeedInputTheyWillAppearHere', 'When teammates invite you or workflows finish, fail, or need input, they will appear here.')}
 										icon={MailOpen}
 									/>
 								) : (
@@ -519,8 +521,8 @@ export function NotificationsPageScreen() {
 									<NotificationsListSkeleton variant="invitations" />
 								) : invitations.length === 0 ? (
 									<NotificationsEmptyState
-										title="No pending invitations"
-										description="When someone invites you into a workspace or project, it will show up here first."
+										title={t('noPendingInvitations', 'No pending invitations')}
+										description={t('whenSomeoneInvitesYouIntoAWorkspaceOrProjectItWillShowUpHereFirst', 'When someone invites you into a workspace or project, it will show up here first.')}
 										icon={UserPlus}
 									/>
 								) : (
@@ -560,8 +562,8 @@ export function NotificationsPageScreen() {
 									/>
 								) : notifications.length === 0 ? (
 									<NotificationsEmptyState
-										title="No workflow updates"
-										description="Workflow runs, system notices, and other runtime updates will appear here as they happen."
+										title={t('noWorkflowUpdates', 'No workflow updates')}
+										description={t('workflowRunsSystemNoticesAndOtherRuntimeUpdatesWillAppearHereAsTheyHappen', 'Workflow runs, system notices, and other runtime updates will appear here as they happen.')}
 										icon={Workflow}
 									/>
 								) : (
@@ -665,6 +667,7 @@ function NotificationsErrorState({
 	onRetry: () => void;
 	retrying: boolean;
 }) {
+	const { t } = useTranslation("common");
 	return (
 		<motion.div
 			initial={{ opacity: 0, scale: 0.98 }}
@@ -679,11 +682,10 @@ function NotificationsErrorState({
 				</div>
 				<div className="space-y-1">
 					<h3 className="text-sm font-medium text-foreground">
-						Couldn't load your notifications
+						{t('couldntLoadYourNotifications', 'Couldn\'t load your notifications')}
 					</h3>
 					<p className="text-xs text-muted-foreground">
-						Something went wrong reaching the server. Check your connection and
-						try again.
+						{t('somethingWentWrongReachingTheServerCheckYourConnectionAndTryAgain', "Something went wrong reaching the server. Check your connection and try again.")}
 					</p>
 				</div>
 				<Button
@@ -694,7 +696,7 @@ function NotificationsErrorState({
 					className="gap-1.5"
 				>
 					<RefreshCcw className={cn("size-3.5", retrying && "animate-spin")} />
-					Retry
+					{t('retry', 'Retry')}
 				</Button>
 			</div>
 		</motion.div>
@@ -766,6 +768,7 @@ function InvitationCard({
 	index,
 	onAction,
 }: Readonly<InvitationCardProps>) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const userLookup = useInvoke(
 		backend.userState.lookupUser,
@@ -806,7 +809,7 @@ function InvitationCard({
 								variant="outline"
 								className="border-amber-500/20 bg-amber-500/5 px-1.5 py-0 text-[10px] text-amber-700"
 							>
-								Invitation
+								{t('invitation', 'Invitation')}
 							</Badge>
 							<span>from</span>
 							{inviterLabel ? (
@@ -817,7 +820,7 @@ function InvitationCard({
 								<Skeleton className="h-3 w-16" />
 							) : (
 								<span className="font-medium text-foreground/80">
-									a teammate
+									{t('aTeammate', 'a teammate')}
 								</span>
 							)}
 						</div>
@@ -835,7 +838,7 @@ function InvitationCard({
 								className="h-9 gap-1.5 px-3 text-xs md:h-7"
 							>
 								<Check className="size-3" />
-								Accept
+								{t('accept', 'Accept')}
 							</Button>
 							<Button
 								onClick={() => onAction(invite.id, "decline")}
@@ -844,7 +847,7 @@ function InvitationCard({
 								className="h-9 gap-1.5 px-3 text-xs md:h-7"
 							>
 								<X className="size-3" />
-								Decline
+								{t('decline', 'Decline')}
 							</Button>
 						</div>
 					</div>
@@ -867,6 +870,7 @@ function NotificationCard({
 	onMarkRead,
 	onDelete,
 }: Readonly<NotificationCardProps>) {
+	const { t } = useTranslation("common");
 	const router = useRouter();
 
 	const handleLinkClick = useCallback(() => {
@@ -987,7 +991,7 @@ function NotificationCard({
 									className="h-9 gap-1.5 px-3 text-xs md:h-7"
 								>
 									<ExternalLink className="size-3" />
-									View
+									{t('view', 'View')}
 								</Button>
 							)}
 
@@ -1002,7 +1006,7 @@ function NotificationCard({
 									className="h-9 gap-1.5 px-3 text-xs md:h-7"
 								>
 									<Check className="size-3" />
-									Read
+									{t('read', 'Read')}
 								</Button>
 							)}
 
@@ -1016,7 +1020,7 @@ function NotificationCard({
 								className="ml-auto h-9 gap-1.5 px-3 text-xs text-destructive hover:text-destructive md:h-7"
 							>
 								<Trash2 className="size-3" />
-								Delete
+								{t('delete', 'Delete')}
 							</Button>
 						</div>
 					</div>

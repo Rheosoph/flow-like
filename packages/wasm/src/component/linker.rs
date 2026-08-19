@@ -17,6 +17,67 @@ pub struct ComponentStoreData {
     pub wasi_ctx: WasiCtx,
     pub http_ctx: WasiHttpCtx,
     pub resource_table: wasmtime::component::ResourceTable,
+    /// The node's own execution budget; outbound requests are bounded by it
+    /// rather than by a fixed per-request timeout.
+    pub node_timeout: std::time::Duration,
+    /// Where the enclosing flow runs, stamped from the `WasmSecurityConfig` the
+    /// node built for this execution.
+    ///
+    /// This is the *only* source the guest network paths key off. The same value
+    /// also reaches the guest through `HostState::metadata`, but that struct
+    /// derives `Default` — and the default is the permissive `Local` — so a path
+    /// that read it before the node populated it would have disabled the egress
+    /// policy by omission rather than failing closed.
+    pub environment: flow_like::flow::execution::ExecutionEnvironment,
+    http_hooks: EgressHttpHooks,
+}
+
+/// `wasi:http` hooks that apply the server-side egress policy to the
+/// standard `outgoing-handler` path (exposed to packages with `HTTP_ALL`),
+/// which otherwise bypasses the `flow-like:node/http` host function entirely.
+///
+/// The name and every resolved address are vetted before delegating to
+/// wasmtime's default handler, which then re-resolves for the actual connect —
+/// a narrower guarantee than the reqwest path (whose resolver result *is* the
+/// connect target), but sufficient against the fixed metadata / loopback
+/// destinations this policy exists for.
+#[derive(Default)]
+struct EgressHttpHooks {
+    environment: flow_like::flow::execution::ExecutionEnvironment,
+}
+
+impl wasmtime_wasi_http::p2::WasiHttpHooks for EgressHttpHooks {
+    fn send_request(
+        &mut self,
+        request: hyper::Request<wasmtime_wasi_http::p2::body::HyperOutgoingBody>,
+        config: wasmtime_wasi_http::p2::types::OutgoingRequestConfig,
+    ) -> wasmtime_wasi_http::p2::HttpResult<wasmtime_wasi_http::p2::types::HostFutureIncomingResponse>
+    {
+        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
+
+        let environment = self.environment;
+        let handle = wasmtime_wasi::runtime::spawn(async move {
+            let Some(authority) = request.uri().authority().cloned() else {
+                return Ok(Err(ErrorCode::HttpRequestUriInvalid));
+            };
+            let host = authority
+                .host()
+                .trim_matches(|c| c == '[' || c == ']')
+                .to_string();
+            let port = authority
+                .port_u16()
+                .unwrap_or(if config.use_tls { 443 } else { 80 });
+            if let Err(e) =
+                flow_like::flow::execution::egress::resolve_socket_addrs(environment, &host, port)
+                    .await
+            {
+                tracing::warn!("WASI HTTP request to {} refused: {}", authority, e);
+                return Ok(Err(ErrorCode::HttpRequestDenied));
+            }
+            Ok(wasmtime_wasi_http::p2::default_send_request_handler(request, config).await)
+        });
+        Ok(wasmtime_wasi_http::p2::types::HostFutureIncomingResponse::pending(handle))
+    }
 }
 
 pub(super) fn configure_guest_network(
@@ -28,17 +89,25 @@ pub(super) fn configure_guest_network(
         caps.intersects(WasmCapabilities::TCP | WasmCapabilities::UDP | WasmCapabilities::DNS);
 
     if security.allow_wasi_network || has_socket_caps {
-        if let Some(ref hosts) = security.allowed_hosts {
-            let allowed: std::collections::HashSet<String> = hosts.iter().cloned().collect();
-            builder.socket_addr_check(move |addr, _use| {
-                let ip = addr.ip().to_string();
-                let allowed = allowed.clone();
-                Box::pin(async move { allowed.contains(&ip) })
-                    as Pin<Box<dyn std::future::Future<Output = bool> + Send + Sync>>
-            });
-        } else {
-            builder.inherit_network();
-        }
+        // Server-side, raw wasi:sockets must not reach the host plane either
+        // (a guest can speak HTTP to 169.254.169.254 over a plain TCP socket);
+        // the same address predicate as every other outbound path applies on
+        // top of the package's own host allowlist.
+        let guarded = security.execution_environment
+            == flow_like::flow::execution::ExecutionEnvironment::Server;
+        let allowed: Option<std::collections::HashSet<String>> = security
+            .allowed_hosts
+            .as_ref()
+            .map(|hosts| hosts.iter().cloned().collect());
+        builder.socket_addr_check(move |addr, _use| {
+            let ip = addr.ip();
+            let permitted = allowed
+                .as_ref()
+                .is_none_or(|allowed| allowed.contains(&ip.to_string()))
+                && !(guarded && flow_like::flow::execution::egress::is_blocked_ip(ip));
+            Box::pin(async move { permitted })
+                as Pin<Box<dyn std::future::Future<Output = bool> + Send + Sync>>
+        });
     }
 
     // Wasmtime enables TCP and UDP protocol use by default (while denying all
@@ -61,11 +130,30 @@ impl ComponentStoreData {
         configure_guest_network(&mut builder, security);
         builder.args(&["flow-like-wasm-node"]);
 
+        Self::with_host_state(
+            HostState::new(security.capabilities),
+            builder.build(),
+            security,
+        )
+    }
+
+    /// Store data around an already-populated host state (child stores such
+    /// as CLI subprocesses), sharing the node's budget and egress policy.
+    pub fn with_host_state(
+        host_state: HostState,
+        wasi_ctx: WasiCtx,
+        security: &WasmSecurityConfig,
+    ) -> Self {
         Self {
-            host_state: HostState::new(security.capabilities),
-            wasi_ctx: builder.build(),
+            host_state,
+            wasi_ctx,
             http_ctx: WasiHttpCtx::new(),
             resource_table: wasmtime::component::ResourceTable::new(),
+            node_timeout: security.limits.timeout,
+            environment: security.execution_environment,
+            http_hooks: EgressHttpHooks {
+                environment: security.execution_environment,
+            },
         }
     }
 }
@@ -81,10 +169,13 @@ impl WasiView for ComponentStoreData {
 
 impl WasiHttpView for ComponentStoreData {
     fn http(&mut self) -> WasiHttpCtxView<'_> {
+        // The hooks were stamped from the security config at construction and
+        // are never re-derived here: reading `host_state.metadata` would take a
+        // `Default`-derived field whose default is the permissive `Local`.
         WasiHttpCtxView {
             ctx: &mut self.http_ctx,
             table: &mut self.resource_table,
-            hooks: Default::default(),
+            hooks: &mut self.http_hooks,
         }
     }
 }
@@ -1750,15 +1841,29 @@ fn register_http(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     _ => return Ok((None,)),
                 };
 
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build();
+                // Same egress policy as native HTTP nodes: server-side, the
+                // URL, its resolution and every redirect are checked against
+                // the host-plane block list.
+                // A request cannot usefully outlive its node, so the node's own
+                // execution budget is the request timeout — nothing tighter.
+                let environment = store.data().environment;
+                let node_timeout = store.data().node_timeout;
+                let client = flow_like::flow::execution::egress::GuardedHttpClient::configured(
+                    environment,
+                    |builder| builder.timeout(node_timeout),
+                );
                 let client = match client {
                     Ok(c) => c,
                     Err(_) => return Ok((None,)),
                 };
 
-                let mut req = client.request(method_str, &url);
+                let mut req = match client.request(method_str, &url) {
+                    Ok(req) => req,
+                    Err(e) => {
+                        tracing::warn!("WASM HTTP request to {} refused: {}", url, e);
+                        return Ok((None,));
+                    }
+                };
 
                 if let Ok(hdrs) =
                     serde_json::from_str::<std::collections::HashMap<String, String>>(&headers_json)
@@ -1843,7 +1948,41 @@ fn register_websocket(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()>
                     return Ok((None::<String>,));
                 }
 
-                let connect_result = tokio_tungstenite::connect_async(&url).await;
+                // Resolve and connect through the egress policy so the socket
+                // goes to a vetted address; the request keeps the hostname
+                // for Host / SNI.
+                let environment = store.data().environment;
+                let request = match tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(url.as_str()) {
+                    Ok(request) => request,
+                    Err(_) => return Ok((None,)),
+                };
+                let uri = request.uri().clone();
+                let Some(host) = uri.host().map(str::to_string) else {
+                    return Ok((None,));
+                };
+                let port = uri.port_u16().unwrap_or(match uri.scheme_str() {
+                    Some("wss") => 443,
+                    _ => 80,
+                });
+                let addrs = match flow_like::flow::execution::egress::resolve_socket_addrs(
+                    environment,
+                    &host,
+                    port,
+                )
+                .await
+                {
+                    Ok(addrs) => addrs,
+                    Err(e) => {
+                        tracing::warn!("WASM WebSocket connect to {} refused: {}", url, e);
+                        return Ok((None,));
+                    }
+                };
+                let tcp = match tokio::net::TcpStream::connect(addrs.as_slice()).await {
+                    Ok(tcp) => tcp,
+                    Err(_) => return Ok((None,)),
+                };
+                let connect_result =
+                    tokio_tungstenite::client_async_tls_with_config(request, tcp, None, None).await;
                 let (ws_stream, _response) = match connect_result {
                     Ok(r) => r,
                     Err(_) => return Ok((None,)),

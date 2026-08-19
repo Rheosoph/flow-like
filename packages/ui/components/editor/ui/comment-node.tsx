@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { TCommentText } from "platejs";
 import type { PlateLeafProps } from "platejs/react";
 
@@ -10,6 +11,7 @@ import { cn } from "../../../lib/utils";
 import { commentPlugin } from "../plugins/comment-kit";
 
 export function CommentLeaf(props: PlateLeafProps<TCommentText>) {
+	const { t } = useTranslation("common");
 	const { children, leaf } = props;
 
 	const { api, setOption } = useEditorPlugin(commentPlugin);
@@ -34,7 +36,7 @@ export function CommentLeaf(props: PlateLeafProps<TCommentText>) {
 			)}
 			attributes={{
 				...props.attributes,
-				onClick: () => setOption("activeId", currentId ?? null),
+				onClick: () => setOption(`activeId`, currentId ?? null),
 				onMouseEnter: () => setOption("hoverId", currentId ?? null),
 				onMouseLeave: () => setOption("hoverId", null),
 			}}

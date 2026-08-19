@@ -55,6 +55,10 @@ Full step-by-step documentation: **[docs.flow-like.com/self-hosting/docker-compo
 - Cron sinks are handled by the singleton `sink-services` process. It syncs active cron schedules from `/api/v1/sink/schedules` and triggers them through `/api/v1/sink/trigger/async`.
 - Realtime collaboration uses the API only for JWT/room-key issuance; browser peers use the `signaling` service from the hub config (`ws://localhost:4444` in the template). The compose signaling image builds the Redis-backed implementation in `apps/backend/signaling`.
 
+### Signaling Upgrade Note
+
+**Upgrading an existing stack:** the `signaling` container now **requires** `BACKEND_PUB` and `REALTIME_ALLOWED_ORIGINS` in `.env` and crashloops at boot when either is empty (`BACKEND_PUB` was previously documented as optional). Set `REALTIME_ALLOWED_ORIGINS` to the web origin (`http://localhost:3001` in the template) and append `tauri://localhost,http://tauri.localhost,https://tauri.localhost` when Tauri desktop clients connect. For a deliberately unauthenticated local test only, set `SIGNALING_NODE_ENV=development` plus `REALTIME_ALLOW_INSECURE_LOCAL_DEV=true`. See the "Realtime Collaboration" block in `.env.example`.
+
 ## Scaling And Swarm
 
 The default compose configuration declares `API_REPLICAS=2` and `RUNTIME_REPLICAS=3`. API replicas are not directly published to the host; `api-gateway` owns the host API port and forwards to the internal API service. Runtime replicas are internal and are reached through Docker DNS at `runtime:9000`.

@@ -232,10 +232,16 @@
 		"OpenIdConfig": {
 			"type": "object",
 			"properties": {
+				"issuer": {
+					"type": ["string", "null"]
+				},
 				"authority": {
 					"type": ["string", "null"]
 				},
 				"client_id": {
+					"type": ["string", "null"]
+				},
+				"audience": {
 					"type": ["string", "null"]
 				},
 				"redirect_uri": {
@@ -415,7 +421,7 @@
 		},
 		"MailProviderType": {
 			"type": "string",
-			"enum": ["ses", "sendgrid", "smtp"]
+			"enum": ["ses", "sendgrid", "smtp", "azure_communication_services"]
 		},
 		"SmtpSettings": {
 			"type": "object",

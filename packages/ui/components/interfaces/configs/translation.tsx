@@ -1,4 +1,5 @@
 "use client";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	type IBoard,
 	type IEvent,
@@ -63,19 +64,19 @@ function computeSinkAvailability(
 		if (supportsRemote && supportsLocal) {
 			return {
 				availability: "both",
-				description: "Can run locally or on remote server",
+				description: i18next.t('canRunLocallyOrOnRemoteServer', 'Can run locally or on remote server'),
 			};
 		}
 		if (supportsRemote) {
 			return {
 				availability: "remote",
-				description: "Runs on remote server only",
+				description: i18next.t('runsOnRemoteServerOnly', 'Runs on remote server only'),
 			};
 		}
 		if (supportsLocal) {
 			return {
 				availability: "local",
-				description: "Runs locally only (desktop app)",
+				description: i18next.t('runsLocallyOnlyDesktopApp', 'Runs locally only (desktop app)'),
 			};
 		}
 		return null;
@@ -87,7 +88,7 @@ function computeSinkAvailability(
 	if (supportsLocal) {
 		return {
 			availability: "local",
-			description: "Runs locally only (desktop app)",
+			description: i18next.t('runsLocallyOnlyDesktopApp', 'Runs locally only (desktop app)'),
 		};
 	}
 
@@ -119,6 +120,7 @@ export function EventTypeConfiguration({
 	/** Render label and select on one compact row. */
 	compact?: boolean;
 }>) {
+	const { t } = useTranslation("interfaces");
 	const foundConfig = eventConfig[node?.name];
 
 	useEffect(() => {
@@ -190,7 +192,7 @@ export function EventTypeConfiguration({
 					size={compact ? "sm" : "default"}
 					className={compact ? "w-32 text-xs" : "w-full"}
 				>
-					<SelectValue placeholder="Select event type" />
+					<SelectValue placeholder={t('selectEventType', 'Select event type')} />
 				</SelectTrigger>
 				<SelectContent>
 					{availableEventTypes?.map((type) => (
@@ -234,6 +236,7 @@ export function EventTranslation({
 	/** Slice of the config to render — see IConfigInterfaceProps.section. */
 	section?: string;
 }>) {
+	const { t } = useTranslation("interfaces");
 	// Fully controlled by `config`. Holding a local copy meant a parent reset —
 	// Discard, or reloading the saved event — never reached the fields, so the
 	// form kept showing edits the event no longer had.
@@ -282,14 +285,14 @@ export function EventTranslation({
 	);
 
 	if (!node) {
-		return <p className="text-red-500">Node not found.</p>;
+		return <p className="text-red-500">{t('nodeNotFound', 'Node not found.')}</p>;
 	}
 
 	if (!foundEventConfig || !ConfigInterface) {
 		return (
 			<div className="w-full space-y-4">
 				<p className="text-sm text-muted-foreground">
-					No specific configuration available for this event type.
+					{t('noSpecificConfigurationAvailableForThisEventType', 'No specific configuration available for this event type.')}
 				</p>
 			</div>
 		);

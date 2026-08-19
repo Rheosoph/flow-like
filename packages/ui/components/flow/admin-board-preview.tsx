@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Background,
 	BackgroundVariant,
@@ -26,6 +27,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { resolveLayerChain } from "../../hooks/use-layer-navigation";
 import {
 	type IBoard,
 	type INode,
@@ -113,7 +115,7 @@ function scoreTone(value: number) {
 	if (value >= 7) {
 		return {
 			bg: "bg-green-500",
-			text: "text-green-600 dark:text-green-400",
+			text: `text-green-600 dark:text-green-400`,
 			border: "border-green-500/40",
 			soft: "bg-green-500/10",
 		};
@@ -121,14 +123,14 @@ function scoreTone(value: number) {
 	if (value >= 4) {
 		return {
 			bg: "bg-yellow-500",
-			text: "text-yellow-600 dark:text-yellow-400",
+			text: `text-yellow-600 dark:text-yellow-400`,
 			border: "border-yellow-500/40",
 			soft: "bg-yellow-500/10",
 		};
 	}
 	return {
 		bg: "bg-red-500",
-		text: "text-red-600 dark:text-red-400",
+		text: `text-red-600 dark:text-red-400`,
 		border: "border-red-500/40",
 		soft: "bg-red-500/10",
 	};
@@ -262,10 +264,11 @@ function formatDataType(dt: string, vt?: string) {
 function VariablesPanel({
 	variables,
 }: { variables: Record<string, IVariable> }) {
+	const { t } = useTranslation("flow");
 	const vars = Object.values(variables);
 	if (vars.length === 0) {
 		return (
-			<p className="text-xs text-muted-foreground p-2">No variables defined.</p>
+			<p className="text-xs text-muted-foreground p-2">{t('noVariablesDefined', 'No variables defined.')}</p>
 		);
 	}
 
@@ -330,6 +333,7 @@ function ScorePill({
 	value: number;
 	compact?: boolean;
 }) {
+	const { t } = useTranslation("flow");
 	const Icon = SCORE_ICONS[category];
 	const tone = scoreTone(value);
 	return (
@@ -357,6 +361,7 @@ function ScoreBarRow({
 	category: ScoreCategory;
 	value: number;
 }) {
+	const { t } = useTranslation("flow");
 	const Icon = SCORE_ICONS[category];
 	const tone = scoreTone(value);
 	return (
@@ -366,9 +371,7 @@ function ScoreBarRow({
 				<span className="flex-1 text-muted-foreground">
 					{SCORE_LABELS[category]}
 				</span>
-				<span className={cn("font-semibold tabular-nums", tone.text)}>
-					{value}/10
-				</span>
+				<span className={cn("font-semibold tabular-nums", tone.text)}>{`${value}/10`}</span>
 			</div>
 			<div className="h-1.5 overflow-hidden rounded-full bg-muted">
 				<div
@@ -385,10 +388,11 @@ function ScoreSummaryStrip({
 }: {
 	aggregate?: ScoreAggregate;
 }) {
+	const { t } = useTranslation("flow");
 	if (!aggregate) {
 		return (
 			<Badge variant="outline" className="shrink-0 text-[11px]">
-				No scores
+				{t('noScores', 'No scores')}
 			</Badge>
 		);
 	}
@@ -420,12 +424,13 @@ function SelectedNodeInspector({
 	node?: INode;
 	onFocusNode: (nodeId: string) => void;
 }) {
+	const { t } = useTranslation("flow");
 	if (!node) {
 		return (
 			<div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
 				<div className="flex items-start gap-2">
 					<Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-					<span>No node selected.</span>
+					<span>{t('noNodeSelected', 'No node selected.')}</span>
 				</div>
 			</div>
 		);
@@ -448,7 +453,7 @@ function SelectedNodeInspector({
 					type="button"
 					className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
 					onClick={() => onFocusNode(node.id)}
-					title="Focus node"
+					title={t('focusNode', 'Focus node')}
 				>
 					<Crosshair className="h-3.5 w-3.5" />
 				</button>
@@ -471,7 +476,7 @@ function SelectedNodeInspector({
 				</div>
 			) : (
 				<p className="text-xs text-muted-foreground">
-					This node does not define governance scores.
+					{t('thisNodeDoesNotDefineGovernanceScores', 'This node does not define governance scores.')}
 				</p>
 			)}
 		</div>
@@ -489,12 +494,13 @@ function ScoresPanel({
 	selectedNode?: INode;
 	onFocusNode: (nodeId: string) => void;
 }) {
+	const { t } = useTranslation("flow");
 	if (!aggregate) {
 		return (
 			<div className="space-y-3 p-3">
 				<SelectedNodeInspector node={selectedNode} onFocusNode={onFocusNode} />
 				<p className="text-xs text-muted-foreground">
-					No scored nodes were found in this board.
+					{t('noScoredNodesWereFoundInThisBoard', 'No scored nodes were found in this board.')}
 				</p>
 			</div>
 		);
@@ -505,9 +511,9 @@ function ScoresPanel({
 			<div className="space-y-3 rounded-md border bg-card/60 p-3">
 				<div className="flex items-center justify-between gap-3">
 					<div>
-						<p className="text-xs font-semibold">Board score</p>
+						<p className="text-xs font-semibold">{t('boardScore', 'Board score')}</p>
 						<p className="text-[10px] text-muted-foreground">
-							Minimum score across scored nodes
+							{t('minimumScoreAcrossScoredNodes', 'Minimum score across scored nodes')}
 						</p>
 					</div>
 					<ScorePill
@@ -524,20 +530,18 @@ function ScoresPanel({
 						/>
 					))}
 				</div>
-				<p className="text-[10px] text-muted-foreground">
-					{aggregate.scoredNodeCount}/{aggregate.nodeCount} nodes scored
-				</p>
+				<p className="text-[10px] text-muted-foreground">{`${aggregate.scoredNodeCount}/${aggregate.nodeCount} nodes scored`}</p>
 			</div>
 
 			<SelectedNodeInspector node={selectedNode} onFocusNode={onFocusNode} />
 
 			<div className="space-y-2">
 				<h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-					Worst nodes
+					{t('worstNodes', 'Worst nodes')}
 				</h4>
 				{worstNodes.length === 0 ? (
 					<p className="text-xs text-muted-foreground">
-						No scored nodes found.
+						{t('noScoredNodesFound', 'No scored nodes found.')}
 					</p>
 				) : (
 					<div className="space-y-1.5">
@@ -591,10 +595,11 @@ function LayersPanel({
 	layerScores: Record<string, ScoreAggregate | undefined>;
 	onNavigate: (layerId: string) => void;
 }) {
+	const { t } = useTranslation("flow");
 	const layerList = Object.values(layers);
 	if (layerList.length === 0) {
 		return (
-			<p className="text-xs text-muted-foreground p-2">No layers defined.</p>
+			<p className="text-xs text-muted-foreground p-2">{t('noLayersDefined', 'No layers defined.')}</p>
 		);
 	}
 
@@ -609,9 +614,7 @@ function LayersPanel({
 		if (items.length === 0) return null;
 		return (
 			<div className="space-y-1">
-				<h4 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-2 pt-2">
-					{title} ({items.length})
-				</h4>
+				<h4 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-2 pt-2">{`${title} (${items.length})`}</h4>
 				{items.map((layer) => (
 					<button
 						key={layer.id}
@@ -629,7 +632,7 @@ function LayersPanel({
 									"inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-[10px] font-semibold tabular-nums text-white",
 									scoreTone(layerScores[layer.id]?.worstScore ?? 0).bg,
 								)}
-								title={`Worst layer score: ${layerScores[layer.id]?.worstScore}/10`}
+								title={t('worstLayerScoreVal10', 'Worst layer score: {{val}}/10', { val: layerScores[layer.id]?.worstScore })}
 							>
 								{layerScores[layer.id]?.worstScore}
 							</span>
@@ -668,12 +671,11 @@ function SidebarSection({
 	count: number;
 	children: React.ReactNode;
 }) {
+	const { t } = useTranslation("flow");
 	return (
 		<div>
 			<div className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium text-muted-foreground">
-				<Icon className="h-3.5 w-3.5" />
-				{title} ({count})
-			</div>
+				<Icon className="h-3.5 w-3.5" />{`${title} (${count})`}</div>
 			<Separator />
 			{children}
 		</div>
@@ -681,6 +683,7 @@ function SidebarSection({
 }
 
 function BoardPreviewInner({ board }: { board: IBoard }) {
+	const { t } = useTranslation("flow");
 	const { resolvedTheme } = useTheme();
 	const instanceRef = useRef<ReactFlowInstance | null>(null);
 	const boardRef = useRef<IBoard | undefined>(board);
@@ -769,11 +772,22 @@ function BoardPreviewInner({ board }: { board: IBoard }) {
 		[],
 	);
 
-	const pushLayer = useCallback((layer: ILayer) => {
-		setSelectedNodeId(undefined);
-		setCurrentLayer(layer.id);
-		setLayerPath((prev) => (prev ? `${prev}/${layer.id}` : layer.id));
-	}, []);
+	const pushLayer = useCallback(
+		(layer: ILayer) => {
+			setSelectedNodeId(undefined);
+			setCurrentLayer(layer.id);
+
+			// Resolved from the layer's own ancestry: a function body is opened from wherever
+			// its Call Function node sits, which is rarely the layer currently on screen.
+			const chain = resolveLayerChain(board.layers, layer.id);
+			if (chain.length > 0) {
+				setLayerPath(chain.join("/"));
+				return;
+			}
+			setLayerPath((prev) => (prev ? `${prev}/${layer.id}` : layer.id));
+		},
+		[board.layers],
+	);
 
 	const handleBreadcrumbNav = useCallback((path?: string) => {
 		setSelectedNodeId(undefined);
@@ -818,20 +832,14 @@ function BoardPreviewInner({ board }: { board: IBoard }) {
 			setSelectedNodeId(nodeId);
 			pendingFocusNodeIdRef.current = nodeId;
 
-			const layerTree: string[] = [];
-			let parentLayer = normalizedLayerId(node.layer);
-			let iteration = 0;
-			while (parentLayer && iteration < 40) {
-				iteration++;
-				const layer = board.layers[parentLayer];
-				if (!layer) break;
-				layerTree.push(layer.id);
-				parentLayer = normalizedLayerId(layer.parent_id);
-			}
+			const chain = resolveLayerChain(
+				board.layers,
+				normalizedLayerId(node.layer),
+			);
 
-			if (layerTree.length > 0) {
-				setCurrentLayer(layerTree[0]);
-				setLayerPath(layerTree.slice().reverse().join("/"));
+			if (chain.length > 0) {
+				setCurrentLayer(chain[chain.length - 1]);
+				setLayerPath(chain.join("/"));
 			} else {
 				setCurrentLayer(undefined);
 				setLayerPath(undefined);
@@ -845,14 +853,8 @@ function BoardPreviewInner({ board }: { board: IBoard }) {
 	const navigateToLayer = useCallback(
 		(layerId: string) => {
 			setSelectedNodeId(undefined);
-			// Build path through parent chain
-			const buildPath = (id: string): string => {
-				const layer = board.layers[id];
-				if (!layer?.parent_id || !board.layers[layer.parent_id]) return id;
-				return `${buildPath(layer.parent_id)}/${id}`;
-			};
-			const path = buildPath(layerId);
-			setLayerPath(path);
+			const chain = resolveLayerChain(board.layers, layerId);
+			setLayerPath(chain.length > 0 ? chain.join("/") : layerId);
 			setCurrentLayer(layerId);
 		},
 		[board.layers],
@@ -941,11 +943,8 @@ function BoardPreviewInner({ board }: { board: IBoard }) {
 							<p className="truncate text-sm font-semibold">{currentTitle}</p>
 							<p className="mt-0.5 text-xs text-muted-foreground">
 								{currentLayer
-									? `${currentNodeCount} nodes in layer`
-									: `${Object.keys(board.nodes).length} nodes`}{" "}
-								· {Object.keys(board.layers).length} layers ·{" "}
-								{Object.keys(currentVariables).length} variables
-							</p>
+									? t('countNodesInLayer', { defaultValue_one: '{{count}} Node in Layer', defaultValue_other: '{{count}} Nodes in Layer', count: currentNodeCount })
+									: t('countNodes', { defaultValue_one: '{{count}} Node', defaultValue_other: '{{count}} Nodes', count: Object.keys(board.nodes).length })}{" · "}{t('countLayers', { defaultValue_one: '{{count}} Layer', defaultValue_other: '{{count}} Layers', count: Object.keys(board.layers).length })}{" · "}{t('countVariables', { defaultValue_one: '{{count}} variable', defaultValue_other: '{{count}} variables', count: Object.keys(currentVariables).length })}</p>
 						</div>
 						<ScoreSummaryStrip aggregate={activeScoreAggregate} />
 					</div>
@@ -987,8 +986,8 @@ function BoardPreviewInner({ board }: { board: IBoard }) {
 							}
 							color={
 								currentLayer
-									? "color-mix(in oklch, var(--foreground) 5%, transparent)"
-									: "color-mix(in oklch, var(--foreground) 20%, transparent)"
+									? `color-mix(in oklch, var(--foreground) 5%, transparent)`
+									: `color-mix(in oklch, var(--foreground) 20%, transparent)`
 							}
 							bgColor="color-mix(in oklch, var(--background) 80%, transparent)"
 							gap={12}
@@ -1004,15 +1003,15 @@ function BoardPreviewInner({ board }: { board: IBoard }) {
 					<TabsList className="grid w-full grid-cols-3 shrink-0 rounded-none border-b">
 						<TabsTrigger value="layers" className="text-xs">
 							<Layers className="h-3 w-3 mr-1" />
-							Layers
+							{t('layers', 'Layers')}
 						</TabsTrigger>
 						<TabsTrigger value="scores" className="text-xs">
 							<ShieldIcon className="h-3 w-3 mr-1" />
-							Scores
+							{t('scores', 'Scores')}
 						</TabsTrigger>
 						<TabsTrigger value="variables" className="text-xs">
 							<Variable className="h-3 w-3 mr-1" />
-							Variables
+							{t('variables', 'Variables')}
 						</TabsTrigger>
 					</TabsList>
 					<ScrollArea className="min-h-0 flex-1">
@@ -1053,12 +1052,13 @@ export interface AdminBoardPreviewProps {
 }
 
 export function AdminBoardPreview({ board }: AdminBoardPreviewProps) {
+	const { t } = useTranslation("flow");
 	const hasNodes = Object.keys(board.nodes).length > 0;
 
 	if (!hasNodes && Object.keys(board.layers).length === 0) {
 		return (
 			<div className="flex items-center justify-center h-full">
-				<p className="text-sm text-muted-foreground">This board is empty.</p>
+				<p className="text-sm text-muted-foreground">{t('thisBoardIsEmpty', 'This board is empty.')}</p>
 			</div>
 		);
 	}

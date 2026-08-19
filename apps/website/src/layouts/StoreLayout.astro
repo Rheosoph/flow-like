@@ -24,7 +24,11 @@ const {
 } = Astro.props;
 
 const site = Astro.site ?? import.meta.env.SITE ?? "https://flow-like.com";
-const canonical = new URL(canonicalPath ?? Astro.url.pathname, site).toString();
+const canonicalSource = canonicalPath ?? Astro.url.pathname;
+const canonical = new URL(
+	canonicalSource.endsWith("/") ? canonicalSource : `${canonicalSource}/`,
+	site,
+).toString();
 const fullImage = image.startsWith("http") ? image : new URL(image, site).toString();
 ---
 

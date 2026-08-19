@@ -596,8 +596,9 @@ export function validateComponents(
 				}
 				// Widget-instance props are raw wiring data (ids, the inline widget definition,
 				// per-instance param/action values) — NOT BoundValue-wrapped component props, so
-				// keep them verbatim instead of coercing.
-				if (type === "widgetInstance") {
+				// keep them verbatim instead of coercing. The same holds for a package widget,
+				// whose contract/props/bundleHash must survive byte-for-byte to render.
+				if (type === "widgetInstance" || type === "microWidgetInstance") {
 					cleaned[key] = value;
 					continue;
 				}
@@ -725,11 +726,19 @@ export function validateComponents(
 }
 
 /**
+ * Hard ceiling on a surface stylesheet, mirrored by the emit_ui validator in
+ * `copilot_sdk_tools.rs`. Sized well above a complete design system so it only
+ * catches runaway output.
+ */
+export const MAX_CUSTOM_CSS_CHARS = 40_000;
+
+/**
  * Validate canvas settings from AI output.
  * Strips unknown keys and ensures values are sensible.
  */
 export function validateCanvasSettings(
 	raw: unknown,
+	warnings?: string[],
 ): CanvasSettings | undefined {
 	if (!raw || typeof raw !== "object") return undefined;
 	const obj = raw as Record<string, unknown>;
@@ -743,10 +752,17 @@ export function validateCanvasSettings(
 		result.padding = obj.padding;
 	}
 	if (typeof obj.customCss === "string") {
-		// CSS cannot be truncated safely at an arbitrary character boundary: a
-		// cut inside a declaration, string, or nested at-rule invalidates the
-		// stylesheet. Large stylesheets are parsed off-thread by ScopedCustomCss.
-		result.customCss = obj.customCss;
+		// An oversized sheet is dropped whole rather than cut: CSS cannot be
+		// truncated safely at an arbitrary character boundary, and omitting the
+		// field keeps the surface's previous stylesheet. Everything under the cap
+		// is parsed off-thread by ScopedCustomCss.
+		if (obj.customCss.length > MAX_CUSTOM_CSS_CHARS) {
+			warnings?.push(
+				`canvasSettings.customCss was not applied: ${obj.customCss.length} characters exceeds the ${MAX_CUSTOM_CSS_CHARS} character limit. The previous stylesheet is unchanged — consolidate the rules and send a complete sheet under the limit.`,
+			);
+		} else {
+			result.customCss = obj.customCss;
+		}
 	}
 	if (typeof obj.backgroundImage === "string") {
 		const image = obj.backgroundImage.trim();

@@ -26,9 +26,9 @@ mod validation;
 
 pub use assistant::{
     AttachmentManifestEntry, GlobalDataStudioContext, GlobalOpenBoardContext, PlatformContextInput,
-    WebResearchCapability, build_platform_context, data_studio_section,
+    PlatformSpecialist, WebResearchCapability, build_platform_context, data_studio_section,
     global_assistant_system_prompt, global_assistant_system_prompt_for, open_board_section,
-    run_platform_chat,
+    run_platform_chat, run_specialist_chat,
 };
 pub use context::{
     EdgeContext, GraphContext, LayerCacheContext, LayerContext, NodeContext, PinContext,
@@ -338,7 +338,11 @@ pub fn workflow_authoring_tool_allowed(tool_name: &str) -> bool {
 pub fn workflow_authoring_defers_runtime_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "execute_event" | "execute_node" | "query_execution_logs"
+        "execute_event"
+            | "execute_node"
+            | "query_execution_logs"
+            | "interact_app_page"
+            | "call_app_chat"
     )
 }
 

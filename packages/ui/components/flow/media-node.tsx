@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type Node,
 	type NodeProps,
@@ -35,6 +36,7 @@ export type MediaNode = Node<
 >;
 
 export function MediaNode(props: NodeProps<MediaNode>) {
+	const { t } = useTranslation("flow");
 	const { getNodes, setNodes } = useReactFlow();
 	const [isHovered, setIsHovered] = useState(false);
 	const [isLoading, setIsLoading] = useState(true);
@@ -116,7 +118,7 @@ export function MediaNode(props: NodeProps<MediaNode>) {
 					) : (
 						<VideoIcon className="w-8 h-8" />
 					)}
-					<span className="text-xs">Media not available</span>
+					<span className="text-xs">{t('mediaNotAvailable', 'Media not available')}</span>
 				</div>
 			);
 		}
@@ -125,7 +127,7 @@ export function MediaNode(props: NodeProps<MediaNode>) {
 			return (
 				<div className="flex flex-col items-center justify-center h-full text-destructive gap-2">
 					<AlertCircleIcon className="w-8 h-8" />
-					<span className="text-xs">Failed to load media</span>
+					<span className="text-xs">{t('failedToLoadMedia', 'Failed to load media')}</span>
 				</div>
 			);
 		}

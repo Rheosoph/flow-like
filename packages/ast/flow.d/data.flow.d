@@ -870,20 +870,22 @@ declare function dfRegisterExcel({ session: Struct, file: Struct, sheet?: string
 declare function dfRegisterLance({ session: Struct, database: Struct, tableName?: string }): void;
 
 /**
- * Execute a SQL query against a DataFusion session. Returns results as both a CSVTable (for analytics) and array of row objects (for iteration).
+ * Execute a SQL query against a DataFusion session. Returns results as both a CSVTable (for analytics) and array of row objects (for iteration). Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.
  * @param session — DataFusion session with registered tables
- * @param query (optional) — SQL query to execute (e.g., SELECT * FROM mytable WHERE column > 10)
+ * @param query (optional) — SQL query to execute (e.g., SELECT * FROM mytable WHERE column > 10). Use $placeholders for values that come from the flow (SELECT * FROM users WHERE id = $user_id) — each one adds an input pin to wire the value into. Placeholders stand for values only; table and column names cannot be parameterized.
+ * @param params (optional) — Values for the query's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the query itself comes from a wire — a literal query derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
  * @returns table — Query results as a CSVTable (columnar format, good for analytics)
  * @returns rows — Query results as array of row structs with Flow-Like-compatible values
  * @returns rowCount — Number of rows in the result
  * @impure has side effects / drives control flow
  */
-declare function dfSqlQuery({ session: Struct, query?: string }): { table: Struct, rows: Struct[], rowCount: int };
+declare function dfSqlQuery({ session: Struct, query?: string, params?: Struct }): { table: Struct, rows: Struct[], rowCount: int };
 
 /**
- * Execute a SQL query against a DataFusion session, remembering the result in the app's cache. While a live cached result exists for this node's session and query, the query — and any deferred table mounting — is skipped entirely and the cached rows are returned. Cached results do not notice changes to the underlying data; pick a lifetime that matches how fresh the data must be.
+ * Execute a SQL query against a DataFusion session, remembering the result in the app's cache. While a live cached result exists for this node's session, query and parameter values, the query — and any deferred table mounting — is skipped entirely and the cached rows are returned. Cached results do not notice changes to the underlying data; pick a lifetime that matches how fresh the data must be. Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.
  * @param session — DataFusion session with registered tables
- * @param query (optional) — SQL query to execute (e.g., SELECT * FROM mytable WHERE column > 10)
+ * @param query (optional) — SQL query to execute (e.g., SELECT * FROM mytable WHERE column > 10). Use $placeholders for values that come from the flow (SELECT * FROM users WHERE id = $user_id) — each one adds an input pin to wire the value into, and each distinct value is cached separately. Placeholders stand for values only; table and column names cannot be parameterized.
+ * @param params (optional) — Values for the query's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the query itself comes from a wire — a literal query derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
  * @param scope (optional) — App shares cached results with everyone who can run this app. User keeps them private to whoever triggered the run.
  * @param namespace (optional) — Group name for the cached results. Invalidating this namespace (Invalidate Cache Namespace node) clears them in one call; it also keeps results from unrelated flows apart.
  * @param ttlSeconds (optional) — Seconds until a cached result expires and the query runs again. 0 keeps it until it is deleted.
@@ -893,7 +895,7 @@ declare function dfSqlQuery({ session: Struct, query?: string }): { table: Struc
  * @returns fromCache — True when the result was served from the cache and the query never ran
  * @impure has side effects / drives control flow
  */
-declare function dfSqlQueryCached({ session: Struct, query?: string, scope?: string, namespace?: string, ttlSeconds?: int }): { table: Struct, rows: Struct[], rowCount: int, fromCache: bool };
+declare function dfSqlQueryCached({ session: Struct, query?: string, params?: Struct, scope?: string, namespace?: string, ttlSeconds?: int }): { table: Struct, rows: Struct[], rowCount: int, fromCache: bool };
 
 
 // === Data/DataFusion/Aggregation ===
@@ -1228,7 +1230,8 @@ declare function dfRegisterPartitionedJson({ session: Struct, path: Struct, tabl
 /**
  * Write query results to a new or existing Delta Lake table using FlowPath. Supports append, overwrite modes.
  * @param session — DataFusion session
- * @param query — SQL query to execute
+ * @param query — SQL query to execute. Use $placeholders for values that come from the flow (SELECT * FROM events WHERE day = $day) — each one adds an input pin to wire the value into. Placeholders stand for values only; table and column names cannot be parameterized.
+ * @param params (optional) — Values for the query's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the query itself comes from a wire — a literal query derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
  * @param path — FlowPath for the Delta table directory
  * @param mode (optional) — Write mode: append, overwrite, error, ignore
  * @param partitionBy (optional) — Columns to partition by (comma-separated)
@@ -1237,7 +1240,7 @@ declare function dfRegisterPartitionedJson({ session: Struct, path: Struct, tabl
  * @returns newVersion — Version number after write
  * @impure has side effects / drives control flow
  */
-declare function dfWriteDelta({ session: Struct, query: string, path: Struct, mode?: string, partitionBy?: string }): { sessionOut: Struct, rowsWritten: int, newVersion: int };
+declare function dfWriteDelta({ session: Struct, query: string, params?: Struct, path: Struct, mode?: string, partitionBy?: string }): { sessionOut: Struct, rowsWritten: int, newVersion: int };
 
 
 // === Data/DataFusion/Time ===
@@ -1276,13 +1279,14 @@ declare function dfDescribeTable({ session: Struct, tableName?: string }): strin
 /**
  * Execute a SQL query and return results as formatted text. Ideal for agent-driven data exploration.
  * @param session — DataFusion session to query
- * @param query (optional) — SQL query to execute
+ * @param query (optional) — SQL query to execute. Use $placeholders for values that come from the flow (SELECT * FROM users WHERE id = $user_id) — each one adds an input pin to wire the value into. Placeholders stand for values only; table and column names cannot be parameterized.
+ * @param params (optional) — Values for the query's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the query itself comes from a wire — a literal query derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
  * @returns result — Query results formatted as markdown table
  * @returns table — Query results as CSVTable for further processing
  * @returns rowCount — Number of rows returned
  * @impure has side effects / drives control flow
  */
-declare function dfExecuteSql({ session: Struct, query?: string }): { result: string, table: Struct, rowCount: int };
+declare function dfExecuteSql({ session: Struct, query?: string, params?: Struct }): { result: string, table: Struct, rowCount: int };
 
 /**
  * List all tables registered in a DataFusion session. Returns array of table names.
@@ -1477,15 +1481,16 @@ declare function graphSample({ graph: Struct, label: string, count?: int }): { e
 declare function graphSearch({ graph: Struct, query: string, limit?: int }): { errorMessage: string, resultNodes: Struct[] };
 
 /**
- * Executes a SQL query against graph overlay tables via DataFusion
+ * Executes a read-only SQL query against graph overlay tables via DataFusion. Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.
  * @param graph — Graph connection reference
- * @param query — SQL query string
+ * @param query — SQL query string. Use $placeholders for values that come from the flow (SELECT * FROM person WHERE id = $person_id) — each one adds an input pin to wire the value into. Placeholders stand for values only; table and column names cannot be parameterized.
+ * @param params (optional) — Values for the query's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the query itself comes from a wire — a literal query derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
  * @param limit (optional) — Maximum number of results
  * @returns errorMessage — Error details
  * @returns results — Query results as JSON array
  * @impure has side effects / drives control flow
  */
-declare function graphSqlQuery({ graph: Struct, query: string, limit?: int }): { errorMessage: string, results: Struct[] };
+declare function graphSqlQuery({ graph: Struct, query: string, params?: Struct, limit?: int }): { errorMessage: string, results: Struct[] };
 
 /**
  * Extracts a subgraph around seed nodes for visualization

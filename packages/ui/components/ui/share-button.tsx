@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Check, Copy, Link2, Monitor, Share2 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
@@ -57,6 +58,7 @@ export function ShareButton({
 	size,
 	inviteToken,
 }: ShareButtonProps) {
+	const { t } = useTranslation("common");
 	const [copied, setCopied] = useState<string | null>(null);
 
 	const copyToClipboard = useCallback(async (text: string, type: string) => {
@@ -73,8 +75,8 @@ export function ShareButton({
 	const handleShare = useCallback(async () => {
 		const webUrl = generateWebUrl(webBaseUrl, appId);
 		const shareData = {
-			title: appName || "Flow Like App",
-			text: `Check out ${appName || "this app"} on Flow Like!`,
+			title: appName || t('flowLikeApp', 'Flow Like App'),
+			text: t('checkOutValOnFlowLike', 'Check out {{val}} on Flow Like!', { val: appName || "this app" }),
 			url: webUrl,
 		};
 
@@ -113,7 +115,7 @@ export function ShareButton({
 						)}
 					</Button>
 				</TooltipTrigger>
-				<TooltipContent>Share App</TooltipContent>
+				<TooltipContent>{t('shareApp', 'Share App')}</TooltipContent>
 			</Tooltip>
 		);
 	}
@@ -127,7 +129,7 @@ export function ShareButton({
 					className={cn("gap-2", className)}
 				>
 					<Share2 className="h-4 w-4" />
-					Share
+					{t('share', 'Share')}
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-56">
@@ -135,14 +137,14 @@ export function ShareButton({
 					<>
 						<DropdownMenuItem onClick={openInDesktopApp}>
 							<Monitor className="h-4 w-4 mr-2" />
-							Open in Desktop App
+							{t('openInDesktopApp', 'Open in Desktop App')}
 						</DropdownMenuItem>
 						<DropdownMenuSeparator />
 					</>
 				)}
 				<DropdownMenuItem onClick={handleShare}>
 					<Share2 className="h-4 w-4 mr-2" />
-					Share via System
+					{t('shareViaSystem', 'Share via System')}
 				</DropdownMenuItem>
 				<DropdownMenuSeparator />
 				<DropdownMenuItem
@@ -155,7 +157,7 @@ export function ShareButton({
 					) : (
 						<Link2 className="h-4 w-4 mr-2" />
 					)}
-					Copy Web Link
+					{t('copyWebLink', 'Copy Web Link')}
 				</DropdownMenuItem>
 				<DropdownMenuItem
 					onClick={() => copyToClipboard(generateDeepLink(appId), "deep")}
@@ -165,7 +167,7 @@ export function ShareButton({
 					) : (
 						<Copy className="h-4 w-4 mr-2" />
 					)}
-					Copy Desktop Link
+					{t('copyDesktopLink', 'Copy Desktop Link')}
 				</DropdownMenuItem>
 				{inviteToken && (
 					<>
@@ -183,7 +185,7 @@ export function ShareButton({
 							) : (
 								<Link2 className="h-4 w-4 mr-2" />
 							)}
-							Copy Invite Link (Web)
+							{t('copyInviteLinkWeb', 'Copy Invite Link (Web)')}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onClick={() =>
@@ -198,7 +200,7 @@ export function ShareButton({
 							) : (
 								<Copy className="h-4 w-4 mr-2" />
 							)}
-							Copy Invite Link (Desktop)
+							{t('copyInviteLinkDesktop', 'Copy Invite Link (Desktop)')}
 						</DropdownMenuItem>
 					</>
 				)}
@@ -216,6 +218,7 @@ export function QuickShareButton({
 	title?: string;
 	className?: string;
 }) {
+	const { t } = useTranslation("common");
 	const [copied, setCopied] = useState(false);
 
 	const handleCopy = useCallback(async () => {
@@ -246,7 +249,7 @@ export function QuickShareButton({
 					{title}
 				</Button>
 			</TooltipTrigger>
-			<TooltipContent>{copied ? "Copied!" : `Copy ${title}`}</TooltipContent>
+			<TooltipContent>{copied ? "Copied!" : t('copyTitle', 'Copy {{title}}', { title })}</TooltipContent>
 		</Tooltip>
 	);
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { contractDefaults } from "@flow-like/widget-sdk";
 import {
 	Blocks,
@@ -159,10 +160,11 @@ function KeywordChips({ keywords }: { keywords: string[] }) {
 }
 
 function PausedHint({ reason }: { reason: PausedReason }) {
+	const { t } = useTranslation("store");
 	if (!reason) return null;
 	const label =
 		reason === "error"
-			? "Preview unavailable — showing static card"
+			? t('previewUnavailableShowingStaticCard', 'Preview unavailable — showing static card')
 			: "Preview paused";
 	const Icon = reason === "error" ? TriangleAlert : MonitorPause;
 	return (
@@ -241,6 +243,7 @@ export function WidgetCard({
 	bundleHash,
 	className,
 }: WidgetCardProps) {
+	const { t } = useTranslation("store");
 	const [live, setLive] = useState(false);
 	const [pausedReason, setPausedReason] = useState<PausedReason>(null);
 
@@ -334,12 +337,12 @@ export function WidgetCard({
 							{live ? (
 								<>
 									<Square className="h-3 w-3" />
-									Stop
+									{t('stop', 'Stop')}
 								</>
 							) : (
 								<>
 									<Play className="h-3 w-3" />
-									Preview
+									{t('preview', 'Preview')}
 								</>
 							)}
 						</Button>

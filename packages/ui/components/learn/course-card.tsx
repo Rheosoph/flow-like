@@ -1,10 +1,11 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import { motion } from "framer-motion";
 import {
 	Atom,
-	BookOpen,
 	Boxes,
 	Brain,
+	Check,
 	Clock,
 	Compass,
 	Database,
@@ -16,7 +17,7 @@ import {
 	Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type {
 	CourseCategory,
 	CourseDifficulty,
@@ -24,77 +25,28 @@ import type {
 } from "../../lib/learn/types";
 import { cn } from "../../lib/utils";
 import { Badge } from "../ui/badge";
+import { CourseBoardGlyph } from "./course-board-glyph";
 
 interface CourseCardProps {
 	readonly course: CourseListItem;
 	readonly progressPct?: number;
 	readonly onSelect?: (course: CourseListItem) => void;
 	readonly index?: number;
+	readonly recommended?: boolean;
 }
 
-const categoryStyles: Record<
-	CourseCategory,
-	{
-		readonly gradient: string;
-		readonly icon: LucideIcon;
-		readonly label: string;
-	}
-> = {
-	GENERAL: {
-		gradient: "from-slate-500/40 via-slate-500/20 to-slate-700/30",
-		icon: Sparkles,
-		label: "General",
-	},
-	GETTING_STARTED: {
-		gradient: "from-emerald-500/50 via-teal-400/30 to-cyan-500/40",
-		icon: Compass,
-		label: "Getting started",
-	},
-	FLOWS: {
-		gradient: "from-violet-500/50 via-fuchsia-500/30 to-pink-500/40",
-		icon: Workflow,
-		label: "Flows",
-	},
-	PAGES: {
-		gradient: "from-sky-500/50 via-blue-500/30 to-indigo-500/40",
-		icon: Layers,
-		label: "Pages",
-	},
-	EVENTS: {
-		gradient: "from-amber-500/50 via-orange-500/30 to-rose-500/40",
-		icon: Zap,
-		label: "Events",
-	},
-	DATA: {
-		gradient: "from-emerald-600/40 via-teal-500/30 to-cyan-600/40",
-		icon: Database,
-		label: "Data",
-	},
-	AI: {
-		gradient: "from-fuchsia-500/50 via-violet-500/40 to-indigo-500/40",
-		icon: Brain,
-		label: "AI",
-	},
-	INTEGRATIONS: {
-		gradient: "from-orange-500/40 via-amber-500/30 to-yellow-500/30",
-		icon: Plug,
-		label: "Integrations",
-	},
-	DEPLOYMENT: {
-		gradient: "from-blue-600/50 via-indigo-500/30 to-violet-600/40",
-		icon: Rocket,
-		label: "Deployment",
-	},
-	ADVANCED: {
-		gradient: "from-rose-500/50 via-red-500/30 to-orange-600/40",
-		icon: Boxes,
-		label: "Advanced",
-	},
-	EXPERT: {
-		gradient: "from-zinc-700/60 via-zinc-800/40 to-zinc-900/50",
-		icon: Atom,
-		label: "Expert",
-	},
+const categoryIcons: Record<CourseCategory, LucideIcon> = {
+	GENERAL: Sparkles,
+	GETTING_STARTED: Compass,
+	FLOWS: Workflow,
+	PAGES: Layers,
+	EVENTS: Zap,
+	DATA: Database,
+	AI: Brain,
+	INTEGRATIONS: Plug,
+	DEPLOYMENT: Rocket,
+	ADVANCED: Boxes,
+	EXPERT: Atom,
 };
 
 const difficultyDots: Record<CourseDifficulty, number> = {
@@ -109,146 +61,185 @@ export function CourseCard({
 	progressPct,
 	onSelect,
 	index = 0,
+	recommended = false,
 }: CourseCardProps) {
-	const style =
-		categoryStyles[course.category as CourseCategory] ?? categoryStyles.GENERAL;
-	const Icon = style.icon;
+	const { t } = useTranslation();
+	const Icon =
+		categoryIcons[course.category as CourseCategory] ?? categoryIcons.GENERAL;
 	const tags = useMemo(() => (course.tags ?? []).slice(0, 3), [course.tags]);
-	const isEnrolled = progressPct !== undefined && progressPct > 0;
-	const progressPercent = Math.round((progressPct ?? 0) * 100);
+	const started = progressPct !== undefined && progressPct > 0;
+	const completed = (progressPct ?? 0) >= 1;
 	const dots = difficultyDots[course.difficulty as CourseDifficulty] ?? 1;
+	const [failedBannerUrl, setFailedBannerUrl] = useState<string | null>(null);
+	const [failedIconUrl, setFailedIconUrl] = useState<string | null>(null);
+	const showBanner =
+		Boolean(course.banner_url) && failedBannerUrl !== course.banner_url;
+	const showIcon =
+		Boolean(course.icon_url) && failedIconUrl !== course.icon_url;
+
+	const categoryLabel = useMemo(() => {
+		const raw = (course.category ?? "GENERAL").replace(/_/g, " ").toLowerCase();
+		return raw.charAt(0).toUpperCase() + raw.slice(1);
+	}, [course.category]);
+	const difficultyLabel = useMemo(() => {
+		const raw = course.difficulty.toLowerCase();
+		return raw.charAt(0).toUpperCase() + raw.slice(1);
+	}, [course.difficulty]);
 
 	return (
 		<motion.button
 			type="button"
 			onClick={() => onSelect?.(course)}
-			initial={{ opacity: 0, y: 12 }}
+			initial={{ opacity: 0, y: 10 }}
 			animate={{ opacity: 1, y: 0 }}
-			transition={{ duration: 0.35, delay: index * 0.04, ease: "easeOut" }}
-			whileHover={{ y: -4 }}
-			whileTap={{ scale: 0.985 }}
-			className="group text-left w-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-2xl"
+			transition={{ duration: 0.3, delay: Math.min(index, 8) * 0.03 }}
+			whileHover={{ y: -3 }}
+			whileTap={{ scale: 0.99 }}
+			className="group h-full w-full rounded-xl text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 		>
-			<article className="relative h-full overflow-hidden rounded-2xl border border-border/50 bg-card/80 backdrop-blur-sm shadow-sm transition-all duration-300 group-hover:shadow-xl group-hover:border-primary/30">
-				{/* banner */}
-				<div className="relative h-36 overflow-hidden">
-					{course.banner_url ? (
-						<div
-							className="h-full bg-cover bg-center transition-transform duration-500 group-hover:scale-105"
-							style={{ backgroundImage: `url(${course.banner_url})` }}
+			<article
+				className={cn(
+					"relative flex h-full flex-col overflow-hidden rounded-xl border bg-card transition-colors duration-200",
+					recommended
+						? "border-primary/60"
+						: "border-border/70 group-hover:border-border",
+				)}
+			>
+				<div className="relative aspect-video w-full shrink-0 overflow-hidden border-b border-border/60">
+					{showBanner ? (
+						<img
+							src={course.banner_url ?? undefined}
+							alt=""
+							loading="lazy"
+							decoding="async"
+							draggable={false}
+							onError={() => setFailedBannerUrl(course.banner_url)}
+							className="size-full object-cover object-center transition-transform duration-500 group-hover:scale-[1.02]"
 						/>
 					) : (
-						<div
-							className={cn(
-								"h-full bg-linear-to-br transition-all duration-500 group-hover:scale-105",
-								style.gradient,
-							)}
-						/>
+						<CourseBoardGlyph seed={course.id} accent={started} />
 					)}
-					{/* dotted texture overlay */}
-					<div
-						className="absolute inset-0 opacity-30 mix-blend-overlay pointer-events-none"
-						style={{
-							backgroundImage:
-								"radial-gradient(circle at 1px 1px, rgba(255,255,255,0.5) 1px, transparent 0)",
-							backgroundSize: "16px 16px",
-						}}
-					/>
-					{/* floating icon */}
-					<div className="absolute top-3 left-3 size-11 rounded-xl bg-background/80 backdrop-blur-md grid place-items-center shadow-lg ring-1 ring-border/50 group-hover:ring-primary/30 transition">
-						{course.icon_url ? (
+
+					<div className="absolute left-3 top-3 grid size-9 place-items-center rounded-lg border border-border/60 bg-background/85 backdrop-blur-md">
+						{showIcon ? (
 							<img
-								src={course.icon_url}
+								src={course.icon_url ?? undefined}
 								alt=""
-								className="size-8 rounded-lg object-cover"
+								loading="lazy"
+								decoding="async"
+								draggable={false}
+								onError={() => setFailedIconUrl(course.icon_url)}
+								className="size-7 rounded-md object-contain"
 							/>
 						) : (
-							<Icon className="size-5 text-foreground" />
+							<Icon className="size-4 text-muted-foreground" />
 						)}
 					</div>
-					<Badge
-						variant="outline"
-						className={cn(
-							"absolute top-3 right-3 bg-background/80 backdrop-blur-md",
-							course.is_published
-								? "border-emerald-500/40 text-emerald-700 dark:text-emerald-400"
-								: "border-yellow-500/40 text-yellow-700 dark:text-yellow-400",
-						)}
-					>
-						{course.is_published ? "Public" : "Draft"}
-					</Badge>
-					{/* difficulty dots */}
-					<div className="absolute bottom-3 right-3 flex gap-1 items-center bg-background/70 backdrop-blur-md rounded-full px-2 py-1 ring-1 ring-border/50">
-						{[1, 2, 3, 4].map((i) => (
-							<span
-								key={i}
-								className={cn(
-									"block size-1.5 rounded-full transition-colors",
-									i <= dots ? "bg-foreground" : "bg-foreground/15",
-								)}
-							/>
-						))}
-						<span className="ml-1 text-[10px] uppercase tracking-wide text-foreground/80 font-medium">
-							{course.difficulty.toLowerCase()}
+
+					{recommended && (
+						<span className="absolute right-3 top-3 rounded-md bg-primary px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-primary-foreground">
+							{t("startHere", "Start here")}
 						</span>
-					</div>
+					)}
+					{!course.is_published && !recommended && (
+						<Badge
+							variant="outline"
+							className="absolute right-3 top-3 border-border/60 bg-background/85 backdrop-blur-md"
+						>
+							{t("draft", "Draft")}
+						</Badge>
+					)}
 				</div>
 
-				{/* body */}
-				<div className="px-5 pt-4 pb-5 space-y-3">
-					<div className="flex items-center gap-2 text-xs text-muted-foreground">
-						<span className="font-medium text-foreground/70">
-							{style.label}
-						</span>
+				<div className="flex flex-1 flex-col gap-2.5 px-4 pb-3 pt-3.5">
+					<div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+						<span
+							className={cn(
+								"h-3 w-0.75 rounded-full",
+								started ? "bg-primary" : "bg-muted-foreground/40",
+							)}
+						/>
+						<span className="truncate text-foreground/70">{categoryLabel}</span>
 						{course.estimated_minutes > 0 && (
 							<>
 								<span aria-hidden>·</span>
-								<span className="inline-flex items-center gap-1">
+								<span className="inline-flex items-center gap-1 tabular-nums">
 									<Clock className="size-3" />
-									{course.estimated_minutes} min
-								</span>
-							</>
-						)}
-						{isEnrolled && (
-							<>
-								<span aria-hidden>·</span>
-								<span className="inline-flex items-center gap-1 text-primary font-medium">
-									<BookOpen className="size-3" />
-									{progressPercent}%
+									{t("valMin", "{{val}} min", {
+										val: course.estimated_minutes,
+									})}
 								</span>
 							</>
 						)}
 					</div>
-					<h3 className="text-lg font-semibold leading-snug line-clamp-2 group-hover:text-primary transition-colors">
+
+					<h3 className="line-clamp-2 text-[17px] font-semibold leading-tight tracking-tight transition-colors group-hover:text-primary">
 						{course.name ?? course.id}
 					</h3>
+
 					{course.description && (
-						<p className="text-sm text-muted-foreground line-clamp-2">
+						<p className="line-clamp-3 font-serif text-[14.5px] leading-[1.55] text-muted-foreground">
 							{course.description}
 						</p>
 					)}
+
 					{tags.length > 0 && (
-						<div className="flex flex-wrap gap-1.5 pt-1">
-							{tags.map((t) => (
+						<div className="mt-auto flex flex-wrap gap-1.5 pt-1">
+							{tags.map((tag) => (
 								<span
-									key={t}
-									className="text-[10px] uppercase tracking-wide font-medium text-muted-foreground bg-muted/60 rounded-md px-1.5 py-0.5"
+									key={tag}
+									className="rounded border border-border/60 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
 								>
-									{t}
+									{tag}
 								</span>
 							))}
 						</div>
 					)}
 				</div>
 
-				{/* progress bar */}
-				{isEnrolled && (
-					<div className="absolute bottom-0 left-0 right-0 h-1 bg-muted/40">
-						<div
-							className="h-full bg-linear-to-r from-primary via-primary to-primary/70 transition-all duration-700"
-							style={{ width: `${progressPercent}%` }}
-						/>
-					</div>
+				<div className="flex items-center gap-2.5 border-t border-border/60 px-4 py-2.5 text-xs text-muted-foreground">
+					<span
+						className="flex items-center gap-1"
+						aria-label={`${difficultyLabel} difficulty`}
+					>
+						{[1, 2, 3, 4].map((i) => (
+							<span
+								key={i}
+								className={cn(
+									"block size-1.25 rounded-full",
+									i <= dots ? "bg-foreground/70" : "bg-foreground/15",
+								)}
+							/>
+						))}
+					</span>
+					<span className="font-mono text-[10px] uppercase tracking-wider">
+						{difficultyLabel}
+					</span>
+					<span className="ml-auto font-mono text-[10px] uppercase tracking-wider">
+						{completed ? (
+							<span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+								<Check className="size-3" />
+								{t("built", "Built")}
+							</span>
+						) : started ? (
+							<span className="text-primary">
+								{t("inProgress", "In progress")}
+							</span>
+						) : (
+							<span>{t("notStarted", "Not started")}</span>
+						)}
+					</span>
+				</div>
+
+				{started && (
+					<div
+						className={cn(
+							"absolute inset-x-0 bottom-0 h-0.75",
+							completed
+								? "bg-primary"
+								: "bg-[repeating-linear-gradient(90deg,var(--primary)_0_6px,transparent_6px_12px)]",
+						)}
+					/>
 				)}
 			</article>
 		</motion.button>

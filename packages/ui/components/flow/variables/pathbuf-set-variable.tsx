@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { FileIcon, FolderIcon, XIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Button } from "../../../components/ui/button";
@@ -21,6 +22,7 @@ export function PathbufSetVariable({
 	variable: IVariable;
 	onChange: (variable: IVariable) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 
 	// parse once from default_value
@@ -79,7 +81,7 @@ export function PathbufSetVariable({
 						id="is_folder"
 					/>
 					<Label htmlFor="is_folder" className="cursor-pointer">
-						Folder
+						{t('folder', 'Folder')}
 					</Label>
 				</div>
 
@@ -98,7 +100,7 @@ export function PathbufSetVariable({
 						<FileIcon className="mr-2 h-4 w-4 shrink-0" />
 					)}
 					<span className="truncate">
-						{isFolder ? "Add Folder" : "Add File"}
+						{isFolder ? t('addFolder', 'Add Folder') : t('addFile', 'Add File')}
 					</span>
 				</Button>
 			</div>

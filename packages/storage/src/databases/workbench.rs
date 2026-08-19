@@ -10,12 +10,15 @@ use crate::databases::graph::lancegraph::{
     CypherSafetyConfig, GraphOverlayDef, global_query_semaphore, open_table_adapter,
     validate_readonly_sql,
 };
-use datafusion::common::{ParamValues, ScalarValue};
 use datafusion::prelude::SessionContext;
 use flow_like_types::{Result, Value, anyhow};
 use lancedb::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+
+/// Parameter binding is shared with the DataFusion catalog nodes and the graph SQL
+/// surface; see [`crate::databases::sql_params`] for the placeholder/binding contract.
+pub use crate::databases::sql_params::bind_params;
 
 /// Fallback row cap when the caller does not supply a limit. Kept well below the
 /// hard ceiling in [`CypherSafetyConfig`] so an unbounded workbench query cannot
@@ -73,47 +76,6 @@ fn is_reserved_table(name: &str) -> bool {
 /// callers (e.g. the API) can reject writes before persisting a saved query.
 pub fn validate_workbench_sql(sql: &str) -> Result<()> {
     validate_readonly_sql(sql)
-}
-
-/// Coerces a JSON parameter map into DataFusion named parameter values. Types are
-/// inferred from the supplied values, so binding never interpolates text into the
-/// SQL — placeholders are resolved by the planner via `$name`.
-pub fn bind_params(params: &Value) -> Result<ParamValues> {
-    let map = match params {
-        Value::Object(map) => map,
-        Value::Null => return Ok(ParamValues::Map(HashMap::new())),
-        _ => return Err(anyhow!("Query parameters must be a JSON object")),
-    };
-
-    let mut values = HashMap::with_capacity(map.len());
-    for (name, value) in map {
-        let scalar =
-            json_to_scalar(value).map_err(|error| anyhow!("Parameter '{}': {}", name, error))?;
-        values.insert(name.clone(), scalar.into());
-    }
-    Ok(ParamValues::Map(values))
-}
-
-fn json_to_scalar(value: &Value) -> Result<ScalarValue> {
-    Ok(match value {
-        Value::Null => ScalarValue::Null,
-        Value::Bool(value) => ScalarValue::Boolean(Some(*value)),
-        Value::String(value) => ScalarValue::Utf8(Some(value.clone())),
-        Value::Number(number) => {
-            if let Some(int) = number.as_i64() {
-                ScalarValue::Int64(Some(int))
-            } else if let Some(uint) = number.as_u64() {
-                ScalarValue::UInt64(Some(uint))
-            } else if let Some(float) = number.as_f64() {
-                ScalarValue::Float64(Some(float))
-            } else {
-                return Err(anyhow!("unsupported numeric parameter"));
-            }
-        }
-        Value::Array(_) | Value::Object(_) => {
-            return Err(anyhow!("array and object parameters are not supported"));
-        }
-    })
 }
 
 async fn build_context(
@@ -376,31 +338,10 @@ mod tests {
         let params = serde_json::json!({ "a": "x", "b": 3, "c": true, "d": 1.5 });
         assert!(bind_params(&params).is_ok());
         assert!(bind_params(&serde_json::json!("nope")).is_err());
-        assert!(bind_params(&serde_json::json!({ "a": [1, 2] })).is_err());
-    }
-
-    #[test]
-    fn json_to_scalar_infers_types() {
-        assert!(matches!(
-            json_to_scalar(&Value::Bool(true)).unwrap(),
-            ScalarValue::Boolean(Some(true))
-        ));
-        assert!(matches!(
-            json_to_scalar(&serde_json::json!(7)).unwrap(),
-            ScalarValue::Int64(Some(7))
-        ));
-        assert!(matches!(
-            json_to_scalar(&serde_json::json!(2.5)).unwrap(),
-            ScalarValue::Float64(Some(_))
-        ));
-        assert!(matches!(
-            json_to_scalar(&serde_json::json!(u64::MAX)).unwrap(),
-            ScalarValue::UInt64(Some(u64::MAX))
-        ));
-        assert!(matches!(
-            json_to_scalar(&Value::String("hi".into())).unwrap(),
-            ScalarValue::Utf8(Some(_))
-        ));
+        // A list parameter binds as an Arrow list, so a set filter can be expressed as
+        // `array_has($ids, id)` instead of an assembled `IN (…)`.
+        assert!(bind_params(&serde_json::json!({ "a": [1, 2] })).is_ok());
+        assert!(bind_params(&serde_json::json!({ "a": { "b": 1 } })).is_err());
     }
 
     #[test]
@@ -644,6 +585,75 @@ mod tests {
         assert_eq!(
             local.rows[0].get("secret").and_then(Value::as_str),
             Some("internal-only")
+        );
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_sql_aggregates_over_tables_with_vector_columns() -> Result<()> {
+        use arrow::array::{FixedSizeListArray, Float32Array, RecordBatch, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use std::sync::Arc;
+
+        let test_path = format!("./tmp/{}", flow_like_types::create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let connection = lancedb::connect(&test_path).execute().await?;
+
+        let item = Arc::new(Field::new("item", DataType::Float32, true));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("vector", DataType::FixedSizeList(item.clone(), 2), true),
+        ]));
+        let vectors = FixedSizeListArray::try_new(
+            item,
+            2,
+            Arc::new(Float32Array::from(vec![0.1, 0.2, 0.3, 0.4])),
+            None,
+        )?;
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec!["1", "2"])),
+                Arc::new(vectors),
+            ],
+        )?;
+        connection
+            .create_table("points", vec![batch])
+            .execute()
+            .await?;
+
+        let counted = execute_readonly_sql(
+            &connection,
+            WorkbenchSurface::Native,
+            Vec::new(),
+            "SELECT COUNT(*) AS cnt FROM points",
+            &Value::Null,
+            Some(10),
+        )
+        .await?;
+        assert_eq!(
+            counted.rows[0].get("cnt").and_then(Value::as_i64),
+            Some(2),
+            "rows: {:?}",
+            counted.rows
+        );
+
+        let filtered = execute_readonly_sql(
+            &connection,
+            WorkbenchSurface::Native,
+            Vec::new(),
+            "SELECT COUNT(*) AS cnt FROM points WHERE id = '1'",
+            &Value::Null,
+            Some(10),
+        )
+        .await?;
+        assert_eq!(
+            filtered.rows[0].get("cnt").and_then(Value::as_i64),
+            Some(1),
+            "rows: {:?}",
+            filtered.rows
         );
 
         std::fs::remove_dir_all(&test_path).ok();

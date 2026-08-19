@@ -11,6 +11,7 @@ repository = "https://github.com/Rheosoph/flow-like"
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
+hyper = { workspace = true }
 
 # Flow-Like dependencies
 flow-like-types.workspace = true

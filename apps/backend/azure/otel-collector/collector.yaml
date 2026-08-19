@@ -1,0 +1,70 @@
+extensions:
+  azure_auth:
+    managed_identity:
+      client_id: ${env:AZURE_CLIENT_ID}
+    scopes:
+      - https://monitor.azure.com/.default
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        max_recv_msg_size_mib: 16
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 15
+  cumulativetodelta: {}
+  resource:
+    attributes:
+      - key: deployment.environment.name
+        value: ${env:DEPLOYMENT_ENVIRONMENT}
+        action: upsert
+  batch:
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+    timeout: 5s
+
+exporters:
+  otlphttp/azuremonitor:
+    traces_endpoint: ${env:AZURE_MONITOR_TRACES_ENDPOINT}
+    metrics_endpoint: ${env:AZURE_MONITOR_METRICS_ENDPOINT}
+    logs_endpoint: ${env:AZURE_MONITOR_LOGS_ENDPOINT}
+    auth:
+      authenticator: azure_auth
+    compression: gzip
+    timeout: 30s
+    sending_queue:
+      enabled: true
+      num_consumers: 10
+      queue_size: 5000
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+service:
+  extensions: [azure_auth, health_check]
+  telemetry:
+    logs:
+      level: info
+      encoding: json
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlphttp/azuremonitor]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, cumulativetodelta, resource, batch]
+      exporters: [otlphttp/azuremonitor]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlphttp/azuremonitor]

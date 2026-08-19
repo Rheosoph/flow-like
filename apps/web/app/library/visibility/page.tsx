@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	AppCard,
 	Button,
@@ -17,6 +18,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 export default function Page() {
+	const { t } = useTranslation("common");
 	const router = useRouter();
 	const backend = useBackend();
 	const currentProfile = useInvoke(
@@ -53,10 +55,10 @@ export default function Page() {
 					</div>
 					<div>
 						<h1 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text">
-							Manage App Visibility
+							{t('manageAppVisibility', 'Manage App Visibility')}
 						</h1>
 						<p className="text-muted-foreground mt-1">
-							Manage which Apps you want to see in this Profile!
+							{t('manageWhichAppsYouWantToSeeInThisProfile', 'Manage which Apps you want to see in this Profile!')}
 						</p>
 					</div>
 				</div>
@@ -110,7 +112,7 @@ export default function Page() {
 						await apps.refetch();
 					}}
 				>
-					Save
+					{t('save', 'Save')}
 				</Button>
 			</div>
 			<Separator className="mb-4 mt-8" />
@@ -128,8 +130,8 @@ export default function Page() {
 						]}
 						icons={[Sparkles, LayoutGridIcon, FilesIcon]}
 						className="min-w-full min-h-full flex-grow h-full border-2 border-dashed border-border/50 rounded-xl bg-muted/20"
-						title="Welcome to Your Library"
-						description="Create powerful custom applications based on your data. Get started with your first app today - it's free and secure."
+						title={t('welcomeToYourLibrary', 'Welcome to Your Library')}
+						description={t('createPowerfulCustomApplicationsBasedOnYourDataGetStartedWithYourFirstAppTodayItsFreeAndSecure', 'Create powerful custom applications based on your data. Get started with your first app today - it\'s free and secure.')}
 					/>
 				)}
 

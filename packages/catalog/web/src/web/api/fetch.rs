@@ -4,9 +4,9 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json, reqwest};
+use flow_like_types::{async_trait, json::json};
 
-use super::{HttpRequest, HttpResponse};
+use super::{GuardedHttpClient, HttpRequest, HttpResponse};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -73,7 +73,7 @@ impl NodeLogic for HttpFetchNode {
         context.activate_exec_pin("exec_error").await?;
 
         let request: HttpRequest = context.evaluate_pin("request").await?;
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = request.trigger(&client).await?;
 
         context.set_pin_value("response", json!(response)).await?;

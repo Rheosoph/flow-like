@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebounce } from "@uidotdev/usehooks";
 import {
@@ -163,11 +164,12 @@ function StatHero({
 }
 
 function ChangePill({ change }: { change: number | null | undefined }) {
+	const { t } = useTranslation("admin");
 	if (change == null) {
 		return (
 			<span className="inline-flex items-center gap-1 text-muted-foreground">
 				<ArrowRight className="h-3 w-3" />
-				No prior data
+				{t('noPriorData', 'No prior data')}
 			</span>
 		);
 	}
@@ -183,7 +185,7 @@ function ChangePill({ change }: { change: number | null | undefined }) {
 		<span className={`inline-flex items-center gap-1 ${tone}`}>
 			<Icon className="h-3 w-3" />
 			{change >= 0 ? "+" : ""}
-			{change.toFixed(1)}% vs prior window
+			{change.toFixed(1)}{t('vsPriorWindow', '% vs prior window')}
 		</span>
 	);
 }
@@ -197,13 +199,14 @@ function ActiveFilterChip({
 	value: string;
 	onClear: () => void;
 }) {
+	const { t } = useTranslation("admin");
 	return (
 		<Badge
 			variant="secondary"
 			className="cursor-pointer gap-1 pr-1 hover:bg-secondary/80"
 			onClick={onClear}
 		>
-			<span className="text-[11px] text-muted-foreground">{label}:</span>
+			<span className="text-[11px] text-muted-foreground">{`${label}:`}</span>
 			<span className="max-w-[140px] truncate font-mono">{value}</span>
 			<X className="h-3 w-3" />
 		</Badge>
@@ -217,6 +220,7 @@ interface AdminLogsPageProps {
 export function AdminLogsPage({
 	basePath = "/admin/logs",
 }: Readonly<AdminLogsPageProps>) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const auth = useAuth();
 	const router = useRouter();
@@ -389,11 +393,9 @@ export function AdminLogsPage({
 					<CardHeader>
 						<CardTitle className="flex items-center justify-center gap-2 text-base">
 							<Lock className="h-4 w-4" />
-							Insufficient permissions
+							{t('insufficientPermissions', 'Insufficient permissions')}
 						</CardTitle>
-						<CardDescription>
-							You need the <b>ReadLogs</b> permission to view the control tower.
-						</CardDescription>
+						<CardDescription><Trans i18nKey="youNeedTheBreadlogsbPermissionToViewTheControlTower">You need the <b>ReadLogs</b> permission to view the control tower.</Trans></CardDescription>
 					</CardHeader>
 				</Card>
 			</main>
@@ -450,11 +452,10 @@ export function AdminLogsPage({
 						<div>
 							<h1 className="flex items-center gap-2 text-3xl font-bold">
 								<Activity className="h-7 w-7 text-destructive" />
-								Control Tower
+								{t('controlTower', 'Control Tower')}
 							</h1>
 							<p className="text-muted-foreground">
-								Live observability for API errors and the cryptographic audit
-								chain.
+								{t('liveObservabilityForApiErrorsAndTheCryptographicAuditChain', "Live observability for API errors and the cryptographic audit chain.")}
 							</p>
 						</div>
 						<div className="flex items-center gap-2">
@@ -477,7 +478,7 @@ export function AdminLogsPage({
 							</Select>
 							<Button variant="outline" size="sm" onClick={refresh}>
 								<RefreshCw className="mr-1 h-3.5 w-3.5" />
-								Refresh
+								{t('refresh', 'Refresh')}
 							</Button>
 						</div>
 					</div>
@@ -485,17 +486,17 @@ export function AdminLogsPage({
 					<Tabs value={tab} onValueChange={setTab}>
 						<TabsList>
 							<TabsTrigger value="errors" className="gap-1.5">
-								<Bug className="h-3.5 w-3.5" /> Errors
+								<Bug className="h-3.5 w-3.5" /> {t('errors', 'Errors')}
 							</TabsTrigger>
 							<TabsTrigger value="audit" className="gap-1.5">
-								<Activity className="h-3.5 w-3.5" /> Audit chain
+								<Activity className="h-3.5 w-3.5" /> {t('auditChain', 'Audit chain')}
 							</TabsTrigger>
 						</TabsList>
 
 						<TabsContent value="errors" className="space-y-6">
 							<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
 								<StatHero
-									label="Total errors"
+									label={t('totalErrors', 'Total errors')}
 									value={
 										stats.isLoading
 											? "…"
@@ -506,7 +507,7 @@ export function AdminLogsPage({
 									hint={<ChangePill change={stats.data?.change_percent} />}
 								/>
 								<StatHero
-									label="Server errors"
+									label={t('serverErrors', 'Server errors')}
 									value={
 										stats.isLoading
 											? "…"
@@ -517,12 +518,12 @@ export function AdminLogsPage({
 									hint={
 										<span className="inline-flex items-center gap-1 text-destructive">
 											<AlertTriangle className="h-3 w-3" />
-											5xx responses
+											{t('5xxResponses', '5xx responses')}
 										</span>
 									}
 								/>
 								<StatHero
-									label="Client errors"
+									label={t('clientErrors', 'Client errors')}
 									value={
 										stats.isLoading
 											? "…"
@@ -533,7 +534,7 @@ export function AdminLogsPage({
 									hint="4xx responses"
 								/>
 								<StatHero
-									label="Users affected"
+									label={t('usersAffected', 'Users affected')}
 									value={
 										stats.isLoading
 											? "…"
@@ -542,7 +543,7 @@ export function AdminLogsPage({
 												).toLocaleString()
 									}
 									icon={<UsersRound className="h-4 w-4" />}
-									hint={`${stats.data?.unique_paths ?? 0} paths`}
+									hint={t('valPaths', '{{val}} paths', { val: stats.data?.unique_paths ?? 0 })}
 								/>
 							</div>
 
@@ -550,14 +551,14 @@ export function AdminLogsPage({
 								<CardHeader className="pb-3">
 									<CardTitle className="flex items-center gap-2 text-base">
 										<Activity className="h-4 w-4" />
-										Errors over time
+										{t('errorsOverTime', 'Errors over time')}
 									</CardTitle>
 									<CardDescription>
-										Bucketed by{" "}
+										{t('bucketedBy2', 'Bucketed by')}{" "}
 										<span className="font-mono">
 											{series.data?.bucket ?? "auto"}
 										</span>{" "}
-										over the selected window.
+										{t('overTheSelectedWindow2', 'over the selected window.')}
 									</CardDescription>
 								</CardHeader>
 								<CardContent>
@@ -574,14 +575,14 @@ export function AdminLogsPage({
 
 							<div className="grid gap-4 lg:grid-cols-3">
 								<DistributionCard
-									title="Top error codes"
+									title={t('topErrorCodes', 'Top error codes')}
 									buckets={stats.data?.top_codes ?? []}
 									loading={stats.isLoading}
 									onPick={(b) => setFilterValue("public_code", b.key)}
 									tone="destructive"
 								/>
 								<DistributionCard
-									title="Most failing paths"
+									title={t('mostFailingPaths', 'Most failing paths')}
 									buckets={stats.data?.top_paths ?? []}
 									loading={stats.isLoading}
 									onPick={(b) => setFilterValue("path", b.key)}
@@ -597,16 +598,16 @@ export function AdminLogsPage({
 							<Card>
 								<CardHeader className="space-y-3 pb-3">
 									<div className="flex flex-wrap items-center justify-between gap-2">
-										<CardTitle className="text-base">Error log</CardTitle>
+										<CardTitle className="text-base">{t('errorLog', 'Error log')}</CardTitle>
 										<CardDescription>
-											{errorsQuery.data?.total ?? 0} matching reports
+											{errorsQuery.data?.total ?? 0} {t('matchingReports', 'matching reports')}
 										</CardDescription>
 									</div>
 									<div className="flex flex-wrap items-center gap-2">
 										<div className="relative flex-1 min-w-[260px] max-w-md">
 											<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
 											<Input
-												placeholder="Free-text search summary, code, path, user…"
+												placeholder={t('freetextSearchSummaryCodePathUser', 'Free-text search summary, code, path, user…')}
 												value={filters.query}
 												onChange={(e) =>
 													setFilterValue("query", e.target.value)
@@ -615,7 +616,7 @@ export function AdminLogsPage({
 											/>
 										</div>
 										<Input
-											placeholder="Error reference id (paste from user)"
+											placeholder={`Error reference id (paste from user)`}
 											value={filters.error_id}
 											onChange={(e) =>
 												setFilterValue("error_id", e.target.value)
@@ -632,9 +633,9 @@ export function AdminLogsPage({
 												<SelectValue />
 											</SelectTrigger>
 											<SelectContent>
-												<SelectItem value="all">All severities</SelectItem>
-												<SelectItem value="server">Server (5xx)</SelectItem>
-												<SelectItem value="client">Client (4xx)</SelectItem>
+												<SelectItem value="all">{t('allSeverities', 'All severities')}</SelectItem>
+												<SelectItem value="server">{t('server5xx', 'Server (5xx)')}</SelectItem>
+												<SelectItem value="client">{t('client4xx', 'Client (4xx)')}</SelectItem>
 											</SelectContent>
 										</Select>
 										<Select
@@ -647,12 +648,12 @@ export function AdminLogsPage({
 												<SelectValue placeholder="Method" />
 											</SelectTrigger>
 											<SelectContent>
-												<SelectItem value="ALL">All methods</SelectItem>
+												<SelectItem value="ALL">{t('allMethods', 'All methods')}</SelectItem>
 												<SelectItem value="GET">GET</SelectItem>
-												<SelectItem value="POST">POST</SelectItem>
+												<SelectItem value="POST">{`POST`}</SelectItem>
 												<SelectItem value="PUT">PUT</SelectItem>
-												<SelectItem value="PATCH">PATCH</SelectItem>
-												<SelectItem value="DELETE">DELETE</SelectItem>
+												<SelectItem value="PATCH">{`PATCH`}</SelectItem>
+												<SelectItem value="DELETE">{`DELETE`}</SelectItem>
 											</SelectContent>
 										</Select>
 									</div>
@@ -679,7 +680,7 @@ export function AdminLogsPage({
 												onClick={handleClearAll}
 												className="h-6 px-2 text-xs"
 											>
-												Clear all
+												{t('clearAll', 'Clear all')}
 											</Button>
 										</div>
 									)}
@@ -693,7 +694,7 @@ export function AdminLogsPage({
 										</div>
 									) : (errorsQuery.data?.errors.length ?? 0) === 0 ? (
 										<div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
-											No errors match the current filters.
+											{t('noErrorsMatchTheCurrentFilters', 'No errors match the current filters.')}
 										</div>
 									) : (
 										<ul className="divide-y divide-border">
@@ -739,7 +740,7 @@ export function AdminLogsPage({
 																			variant="outline"
 																			className="text-[10px]"
 																		>
-																			Anonymous
+																			{t('anonymous', 'Anonymous')}
 																		</Badge>
 																	)}
 																	<RelativeTime
@@ -756,7 +757,7 @@ export function AdminLogsPage({
 																			toast.success("Reference id copied");
 																		}}
 																		className="opacity-0 transition-opacity group-hover:opacity-100"
-																		title="Copy reference id"
+																		title={t('copyReferenceId', 'Copy reference id')}
 																	>
 																		<Copy className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
 																	</button>
@@ -776,9 +777,7 @@ export function AdminLogsPage({
 
 							{totalPages > 1 && (
 								<div className="flex items-center justify-between">
-									<div className="text-sm text-muted-foreground">
-										Page {page} of {totalPages}
-									</div>
+									<div className="text-sm text-muted-foreground">{t('pagePageOfTotalpages', 'Page {{page}} of {{totalPages}}', { page, totalPages })}</div>
 									<div className="flex gap-2">
 										<Button
 											variant="outline"
@@ -786,7 +785,7 @@ export function AdminLogsPage({
 											onClick={() => setPage((p) => Math.max(1, p - 1))}
 											disabled={page === 1}
 										>
-											Previous
+											{t('previous', 'Previous')}
 										</Button>
 										<Button
 											variant="outline"
@@ -796,7 +795,7 @@ export function AdminLogsPage({
 											}
 											disabled={page >= totalPages}
 										>
-											Next
+											{t('next', 'Next')}
 										</Button>
 									</div>
 								</div>
@@ -834,6 +833,7 @@ function DistributionCard({
 	onPick: (b: { key: string; label: string; count: number }) => void;
 	tone: "destructive" | "warn";
 }) {
+	const { t } = useTranslation("admin");
 	const max = Math.max(1, ...buckets.map((b) => b.count));
 	const barColor =
 		tone === "destructive" ? "bg-destructive/60" : "bg-amber-500/60";
@@ -850,7 +850,7 @@ function DistributionCard({
 						<Skeleton className="h-4 w-full" />
 					</div>
 				) : buckets.length === 0 ? (
-					<div className="text-xs text-muted-foreground">No data</div>
+					<div className="text-xs text-muted-foreground">{t('noData', 'No data')}</div>
 				) : (
 					<ul className="space-y-1.5">
 						{buckets.map((b) => (
@@ -891,12 +891,13 @@ function TopUsersCard({
 	loading: boolean;
 	onPick: (b: { key: string; label: string; count: number }) => void;
 }) {
+	const { t } = useTranslation("admin");
 	const max = Math.max(1, ...buckets.map((b) => b.count));
 	return (
 		<Card>
 			<CardHeader className="pb-2">
 				<CardTitle className="flex items-center gap-1.5 text-sm">
-					<UsersRound className="h-3.5 w-3.5" /> Most affected users
+					<UsersRound className="h-3.5 w-3.5" /> {t('mostAffectedUsers', 'Most affected users')}
 				</CardTitle>
 			</CardHeader>
 			<CardContent>
@@ -908,7 +909,7 @@ function TopUsersCard({
 					</div>
 				) : buckets.length === 0 ? (
 					<div className="text-xs text-muted-foreground">
-						No identified users in the window.
+						{t('noIdentifiedUsersInTheWindow', 'No identified users in the window.')}
 					</div>
 				) : (
 					<ul className="space-y-1.5">
@@ -928,7 +929,7 @@ function TopUsersCard({
 									type="button"
 									onClick={() => onPick(b)}
 									className="w-10 text-right text-[11px] tabular-nums text-muted-foreground hover:text-foreground"
-									title="Filter by this user"
+									title={t('filterByThisUser', 'Filter by this user')}
 								>
 									{b.count}
 								</button>

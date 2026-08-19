@@ -69,7 +69,7 @@ run = "bun run --cwd ./apps/desktop dev:win:x64"
 
 [tasks."dev:desktop:linux:arm"]
 description = "Desktop dev for Linux ARM"
-run = "bun run --cwd ./apps/desktop tauri dev & bun run --cwd ./apps/desktop --watch ./scripts/translation-server.ts"
+run = "bun run --cwd ./apps/desktop tauri dev"
 
 [tasks."dev:desktop:linux:x64"]
 description = "Desktop dev for Linux x64"
@@ -403,6 +403,30 @@ run = "cargo bench -p flow-like-catalog --bench flow_bench"
 [tasks.bloat]
 description = "Show binary size breakdown"
 run = "cargo bloat --release -n 10"
+
+# ── Translations ─────────────────────────────
+# All locale data lives in packages/locales/locales. The CLI is installed in
+# tools/i18n so the root dependency overrides cannot break it.
+
+[tasks."i18n:studio"]
+description = "Open the translation studio (edits packages/locales JSON in place)"
+run = "bun run --cwd ./apps/translation dev"
+
+[tasks."i18n:extract"]
+description = "Scan the apps and packages/ui for t() calls, writing new keys into every locale"
+run = "./tools/i18n/i18n.sh extract"
+
+[tasks."i18n:status"]
+description = "Report translation coverage per locale"
+run = "./tools/i18n/i18n.sh status"
+
+[tasks."i18n:sync"]
+description = "Align every secondary locale with the source language's key set"
+run = "./tools/i18n/i18n.sh sync"
+
+[tasks."i18n:lint"]
+description = "Find hardcoded user-facing strings that should go through t()"
+run = "./tools/i18n/i18n.sh lint"
 
 # ── Codegen / Tooling ───────────────────────
 

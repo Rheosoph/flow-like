@@ -1,16 +1,21 @@
 use crate::data::db::vector::NodeDBConnection;
 use flow_like::flow::{
-    execution::context::ExecutionContext,
+    execution::{ExecutionEnvironment, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     variable::VariableType,
 };
 use flow_like_storage::datafusion::common::TableReference;
+use flow_like_storage::datafusion::execution::object_store::{
+    DefaultObjectStoreRegistry, ObjectStoreRegistry,
+};
+use flow_like_storage::datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 #[cfg(feature = "federation")]
 use flow_like_storage::datafusion::execution::session_state::SessionStateBuilder;
 use flow_like_storage::datafusion::prelude::{SessionConfig, SessionContext};
 #[cfg(feature = "federation")]
 use flow_like_storage::datafusion_federation::{FederatedQueryPlanner, default_optimizer_rules};
 use flow_like_storage::num_cpus;
+use flow_like_types::reqwest::Url;
 use flow_like_types::{Cacheable, JsonSchema, async_trait, json::json, sync::Mutex};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -180,7 +185,7 @@ impl CachedDataFusionSession {
             self.ctx
                 .deregister_table(TableReference::bare(table_name.clone()))?;
             self.ctx
-                .register_table(TableReference::bare(table_name.clone()), Arc::new(adapter))?;
+                .register_table(TableReference::bare(table_name.clone()), adapter)?;
             registration.generation = generation;
         }
         Ok(())
@@ -218,10 +223,36 @@ fn build_session_config(
         .with_parquet_page_index_pruning(parquet_pruning)
 }
 
+/// DataFusion's default object-store registry maps `file://` to the host
+/// filesystem, so tenant- or model-authored SQL such as
+/// `CREATE EXTERNAL TABLE … LOCATION 'file:///proc/self/environ'` or
+/// `COPY … TO 'file:///…'` would read or write wherever the executor process
+/// can. Server-side, only explicitly registered stores (`flowlike://`, mounted
+/// object stores) exist; a `file://` URL then fails with DataFusion's own
+/// "No suitable object store found" error.
+fn create_runtime_env(environment: ExecutionEnvironment) -> Arc<RuntimeEnv> {
+    let registry = DefaultObjectStoreRegistry::new();
+    if environment == ExecutionEnvironment::Server {
+        if let Ok(file_scheme) = Url::parse("file:///") {
+            let _ = registry.deregister_store(&file_scheme);
+        }
+    }
+    RuntimeEnvBuilder::new()
+        .with_object_store_registry(Arc::new(registry))
+        .build_arc()
+        .expect("RuntimeEnv without disk spill or memory limits cannot fail to build")
+}
+
+/// Every DataFusion session in this crate must be built through here so the
+/// server-side `file://` restriction applies to all SQL entry points.
 #[cfg(feature = "federation")]
-fn create_session_context(config: SessionConfig) -> SessionContext {
+pub fn create_session_context(
+    config: SessionConfig,
+    environment: ExecutionEnvironment,
+) -> SessionContext {
     let state = SessionStateBuilder::new()
         .with_config(config)
+        .with_runtime_env(create_runtime_env(environment))
         .with_optimizer_rules(default_optimizer_rules())
         .with_query_planner(Arc::new(FederatedQueryPlanner::new()))
         .with_default_features()
@@ -230,9 +261,14 @@ fn create_session_context(config: SessionConfig) -> SessionContext {
     SessionContext::new_with_state(state)
 }
 
+/// Every DataFusion session in this crate must be built through here so the
+/// server-side `file://` restriction applies to all SQL entry points.
 #[cfg(not(feature = "federation"))]
-fn create_session_context(config: SessionConfig) -> SessionContext {
-    SessionContext::new_with_config(config)
+pub fn create_session_context(
+    config: SessionConfig,
+    environment: ExecutionEnvironment,
+) -> SessionContext {
+    SessionContext::new_with_config_rt(config, create_runtime_env(environment))
 }
 
 #[crate::register_node]
@@ -391,7 +427,7 @@ impl NodeLogic for CreateDataFusionSessionNode {
                 collect_statistics,
             );
 
-            let ctx = create_session_context(config);
+            let ctx = create_session_context(config, context.execution_environment());
 
             let cached = CachedDataFusionSession {
                 ctx: Arc::new(ctx),
@@ -545,7 +581,7 @@ mod tests {
     #[cfg(feature = "federation")]
     #[test]
     fn test_create_session_context_uses_federated_query_planner() {
-        let ctx = create_session_context(SessionConfig::new());
+        let ctx = create_session_context(SessionConfig::new(), ExecutionEnvironment::Local);
         let planner = format!("{:?}", ctx.state().query_planner());
 
         assert!(
@@ -592,7 +628,7 @@ mod tests {
         );
         let table_provider = table.create_federated_table_provider().unwrap();
 
-        let ctx = create_session_context(SessionConfig::new());
+        let ctx = create_session_context(SessionConfig::new(), ExecutionEnvironment::Local);
         ctx.register_table("customers", Arc::new(table_provider))
             .unwrap();
 

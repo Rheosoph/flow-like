@@ -1,6 +1,6 @@
 "use client";
 
-import { format } from "date-fns";
+import { useTranslation } from "@flow-like/locales";
 import {
 	CalendarIcon,
 	CheckIcon,
@@ -49,36 +49,40 @@ interface PAT {
 	permission: number;
 }
 
-const PERMISSION_LEVELS = [
-	{ value: 1, label: "Read Only", description: "View access only" },
-	{ value: 2, label: "Read & Write", description: "View and modify access" },
-	{ value: 4, label: "Admin", description: "Full administrative access" },
-] as const;
-
-function getPermissionLabel(permission: number): string {
-	return (
-		PERMISSION_LEVELS.find((p) => p.value === permission)?.label ?? "Unknown"
-	);
-}
-
 function isExpired(validUntil: string | null): boolean {
 	if (!validUntil) return false;
 	return new Date(validUntil) < new Date();
+}
+
+function formatDate(value: Date | string, language: string): string {
+	return new Intl.DateTimeFormat(language, { dateStyle: "medium" }).format(
+		new Date(value),
+	);
 }
 
 function TokenRow({
 	pat,
 	onDelete,
 }: Readonly<{ pat: PAT; onDelete: (id: string, name: string) => void }>) {
+	const { t, i18n } = useTranslation("common");
+	const language = i18n.resolvedLanguage ?? i18n.language;
+	const getPermissionLabel = (permission: number) =>
+		permission === 1
+			? t("readOnly", "Read Only")
+			: permission === 2
+				? t("readWrite", "Read & Write")
+				: permission === 4
+					? t("admin", "Admin")
+					: t("unknown", "Unknown");
 	const [copied, setCopied] = useState(false);
 	const expired = isExpired(pat.valid_until);
 
 	const copyId = useCallback(() => {
 		navigator.clipboard.writeText(pat.id);
 		setCopied(true);
-		toast.success("Token ID copied");
+		toast.success(t("tokenIdCopied", "Token ID copied"));
 		setTimeout(() => setCopied(false), 2000);
-	}, [pat.id]);
+	}, [pat.id, t]);
 
 	return (
 		<div
@@ -99,7 +103,7 @@ function TokenRow({
 						<span className="font-medium truncate text-sm">{pat.name}</span>
 						{expired && (
 							<Badge variant="destructive" className="text-[10px] px-1.5 py-0">
-								Expired
+								{t("expired", "Expired")}
 							</Badge>
 						)}
 					</div>
@@ -107,20 +111,24 @@ function TokenRow({
 						<span>{getPermissionLabel(pat.permission)}</span>
 						<span className="text-border">|</span>
 						<span>
-							Created {format(new Date(pat.created_at), "MMM d, yyyy")}
+							{t("createdOnDate", "Created {{date}}", {
+								date: formatDate(pat.created_at, language),
+							})}
 						</span>
 						{pat.valid_until && (
 							<>
 								<span className="text-border">|</span>
 								<span>
-									Expires {format(new Date(pat.valid_until), "MMM d, yyyy")}
+									{t("expiresOnDate", "Expires {{date}}", {
+										date: formatDate(pat.valid_until, language),
+									})}
 								</span>
 							</>
 						)}
 						{!pat.valid_until && (
 							<>
 								<span className="text-border">|</span>
-								<span>No expiry</span>
+								<span>{t("noExpiry", "No expiry")}</span>
 							</>
 						)}
 					</div>
@@ -164,14 +172,23 @@ function TokenRevealDialog({
 	permission: number;
 	onClose: () => void;
 }>) {
+	const { t } = useTranslation("common");
+	const getPermissionLabel = (permission: number) =>
+		permission === 1
+			? t("readOnly", "Read Only")
+			: permission === 2
+				? t("readWrite", "Read & Write")
+				: permission === 4
+					? t("admin", "Admin")
+					: t("unknown", "Unknown");
 	const [copied, setCopied] = useState(false);
 
 	const copyToken = useCallback(() => {
 		navigator.clipboard.writeText(token);
 		setCopied(true);
-		toast.success("Token copied to clipboard");
+		toast.success(t("tokenCopiedToClipboard", "Token copied to clipboard"));
 		setTimeout(() => setCopied(false), 2000);
-	}, [token]);
+	}, [token, t]);
 
 	return (
 		<Dialog open={open} onOpenChange={() => onClose()}>
@@ -179,10 +196,13 @@ function TokenRevealDialog({
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
 						<CheckIcon className="h-5 w-5 text-green-500" />
-						Token Created
+						{t("tokenCreated", "Token created")}
 					</DialogTitle>
 					<DialogDescription>
-						Copy this token now — it won&apos;t be shown again.
+						{t(
+							"copyThisTokenNowItWonapostBeShownAgain",
+							"Copy this token now — it won't be shown again.",
+						)}
 					</DialogDescription>
 				</DialogHeader>
 
@@ -202,21 +222,24 @@ function TokenRevealDialog({
 							) : (
 								<CopyIcon className="h-3.5 w-3.5" />
 							)}
-							{copied ? "Copied!" : "Copy Token"}
+							{copied ? t("copied", "Copied!") : t("copyToken", "Copy Token")}
 						</Button>
 					</div>
 
 					<div className="flex items-start gap-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 p-3">
 						<ShieldAlertIcon className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
 						<p className="text-xs text-muted-foreground leading-relaxed">
-							This token has <strong>{getPermissionLabel(permission)}</strong>{" "}
-							access. Store it securely and never share it in public.
+							{t(
+								"tokenPermissionAccessWarning",
+								"This token has {{permission}} access. Store it securely and never share it in public.",
+								{ permission: getPermissionLabel(permission) },
+							)}
 						</p>
 					</div>
 				</div>
 
 				<DialogFooter>
-					<Button onClick={onClose}>Done</Button>
+					<Button onClick={onClose}>{t("done", "Done")}</Button>
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>
@@ -232,6 +255,25 @@ function CreateTokenDialog({
 	onOpenChange: (open: boolean) => void;
 	onCreated: (token: string, permission: number) => void;
 }>) {
+	const { t, i18n } = useTranslation("common");
+	const language = i18n.resolvedLanguage ?? i18n.language;
+	const permissionLevels = [
+		{
+			value: 1,
+			label: t("readOnly", "Read Only"),
+			description: t("viewAccessOnly", "View access only"),
+		},
+		{
+			value: 2,
+			label: t("readWrite", "Read & Write"),
+			description: t("viewAndModifyAccess", "View and modify access"),
+		},
+		{
+			value: 4,
+			label: t("admin", "Admin"),
+			description: t("fullAdministrativeAccess", "Full administrative access"),
+		},
+	];
 	const backend = useBackend();
 	const [name, setName] = useState("");
 	const [expiration, setExpiration] = useState<Date | undefined>(undefined);
@@ -257,7 +299,7 @@ function CreateTokenDialog({
 			onOpenChange(false);
 			onCreated(result.pat, result.permission);
 		} catch {
-			toast.error("Failed to create token");
+			toast.error(t("failedToCreateToken", "Failed to create token"));
 		} finally {
 			setCreating(false);
 		}
@@ -269,6 +311,7 @@ function CreateTokenDialog({
 		reset,
 		onOpenChange,
 		onCreated,
+		t,
 	]);
 
 	return (
@@ -281,20 +324,23 @@ function CreateTokenDialog({
 		>
 			<DialogContent className="max-w-md">
 				<DialogHeader>
-					<DialogTitle>Create Token</DialogTitle>
+					<DialogTitle>{t("createToken", "Create Token")}</DialogTitle>
 					<DialogDescription>
-						Generate a new personal access token.
+						{t(
+							"generateANewPersonalAccessToken",
+							"Generate a new personal access token.",
+						)}
 					</DialogDescription>
 				</DialogHeader>
 
 				<DialogBody className="space-y-4">
 					<div className="space-y-1.5">
 						<Label htmlFor="pat-name" className="text-sm">
-							Name
+							{t("tokenName", "Token Name *")}
 						</Label>
 						<Input
 							id="pat-name"
-							placeholder="e.g. CI/CD Pipeline"
+							placeholder={t("egCicdPipeline", "e.g. CI/CD Pipeline")}
 							value={name}
 							onChange={(e) => setName(e.target.value)}
 							autoFocus
@@ -302,7 +348,7 @@ function CreateTokenDialog({
 					</div>
 
 					<div className="space-y-1.5">
-						<Label className="text-sm">Permission</Label>
+						<Label className="text-sm">{t("permission", "Permission")}</Label>
 						<Select
 							value={permission.toString()}
 							onValueChange={(v) => setPermission(Number.parseInt(v))}
@@ -311,7 +357,7 @@ function CreateTokenDialog({
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								{PERMISSION_LEVELS.map((level) => (
+								{permissionLevels.map((level) => (
 									<SelectItem key={level.value} value={level.value.toString()}>
 										<div className="flex flex-col">
 											<span className="font-medium">{level.label}</span>
@@ -326,7 +372,7 @@ function CreateTokenDialog({
 					</div>
 
 					<div className="space-y-1.5">
-						<Label className="text-sm">Expiration</Label>
+						<Label className="text-sm">{t("expiration", "Expiration")}</Label>
 						<Popover>
 							<PopoverTrigger asChild>
 								<Button
@@ -337,7 +383,9 @@ function CreateTokenDialog({
 									)}
 								>
 									<CalendarIcon className="mr-2 h-4 w-4" />
-									{expiration ? format(expiration, "PPP") : "No expiration"}
+									{expiration
+										? formatDate(expiration, language)
+										: t("noExpiration", "No expiration")}
 								</Button>
 							</PopoverTrigger>
 							<PopoverContent className="w-auto p-0" align="start">
@@ -356,7 +404,7 @@ function CreateTokenDialog({
 											onClick={() => setExpiration(undefined)}
 											className="w-full text-xs"
 										>
-											Clear
+											{t("clear", "Clear")}
 										</Button>
 									</div>
 								)}
@@ -374,10 +422,10 @@ function CreateTokenDialog({
 						}}
 						disabled={creating}
 					>
-						Cancel
+						{t("cancel", "Cancel")}
 					</Button>
 					<Button onClick={handleCreate} disabled={creating || !name.trim()}>
-						{creating ? "Creating..." : "Create"}
+						{creating ? t("creating", "Creating...") : t("create", "Create")}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
@@ -386,6 +434,7 @@ function CreateTokenDialog({
 }
 
 export function PatManagement() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const pats = useInvoke(backend.userState.getPATs, backend.userState, []);
 
@@ -398,25 +447,33 @@ export function PatManagement() {
 			setRevealToken(token);
 			setRevealPermission(permission);
 			await pats.refetch();
-			toast.success("Token created");
+			toast.success(t("tokenCreated", "Token created"));
 		},
-		[pats],
+		[pats, t],
 	);
 
 	const handleDelete = useCallback(
 		async (id: string, name: string) => {
-			if (!confirm(`Delete "${name}"? This cannot be undone.`)) {
+			if (
+				!confirm(
+					t(
+						"deleteNameThisCannotBeUndone",
+						'Delete "{{name}}"? This cannot be undone.',
+						{ name },
+					),
+				)
+			) {
 				return;
 			}
 			try {
 				await backend.userState.deletePAT(id);
 				await pats.refetch();
-				toast.success("Token deleted");
+				toast.success(t("tokenDeleted", "Token deleted"));
 			} catch {
-				toast.error("Failed to delete token");
+				toast.error(t("failedToDeleteToken", "Failed to delete token"));
 			}
 		},
-		[backend.userState, pats],
+		[backend.userState, pats, t],
 	);
 
 	const sortedPats = useMemo(() => {
@@ -437,11 +494,13 @@ export function PatManagement() {
 				{/* Header */}
 				<div className="space-y-1">
 					<h1 className="text-2xl font-semibold tracking-tight">
-						Access Tokens
+						{t("accessTokens", "Access Tokens")}
 					</h1>
 					<p className="text-sm text-muted-foreground">
-						Manage personal access tokens for API integrations and external
-						services.
+						{t(
+							"managePersonalAccessTokensForApiIntegrationsAndExternalServices",
+							"Manage personal access tokens for API integrations and external services.",
+						)}
 					</p>
 				</div>
 
@@ -450,8 +509,9 @@ export function PatManagement() {
 				{/* Actions */}
 				<div className="flex items-center justify-between">
 					<p className="text-sm text-muted-foreground">
-						{pats.data?.length ?? 0}{" "}
-						{pats.data?.length === 1 ? "token" : "tokens"}
+						{t("countTokens", "{{count}} token", {
+							count: pats.data?.length ?? 0,
+						})}
 					</p>
 					<Button
 						size="sm"
@@ -459,7 +519,7 @@ export function PatManagement() {
 						className="gap-1.5"
 					>
 						<PlusIcon className="h-4 w-4" />
-						New Token
+						{t("newToken", "New Token")}
 					</Button>
 				</div>
 
@@ -478,10 +538,14 @@ export function PatManagement() {
 						<div className="rounded-full bg-muted p-3 mb-4">
 							<KeyRoundIcon className="h-6 w-6 text-muted-foreground" />
 						</div>
-						<h3 className="font-medium mb-1">No tokens yet</h3>
+						<h3 className="font-medium mb-1">
+							{t("noTokensYet", "No tokens yet")}
+						</h3>
 						<p className="text-sm text-muted-foreground mb-4 max-w-xs">
-							Create your first access token to integrate with external
-							services.
+							{t(
+								"createYourFirstAccessTokenToIntegrateWithExternalServices",
+								"Create your first access token to integrate with external services.",
+							)}
 						</p>
 						<Button
 							variant="outline"
@@ -490,7 +554,7 @@ export function PatManagement() {
 							className="gap-1.5"
 						>
 							<PlusIcon className="h-4 w-4" />
-							Create Token
+							{t("createToken", "Create Token")}
 						</Button>
 					</Card>
 				) : (
@@ -506,8 +570,10 @@ export function PatManagement() {
 					<div className="flex items-start gap-2.5 rounded-lg border p-3">
 						<ShieldCheckIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
 						<p className="text-xs text-muted-foreground leading-relaxed">
-							Tokens grant access to your account. Regularly review and revoke
-							tokens you no longer use. Delete compromised tokens immediately.
+							{t(
+								"tokensGrantAccessToYourAccountRegularlyReviewAndRevokeTokensYouNoLongerUseDeleteCompromisedTokensImmediately",
+								"Tokens grant access to your account. Regularly review and revoke tokens you no longer use. Delete compromised tokens immediately.",
+							)}
 						</p>
 					</div>
 				)}

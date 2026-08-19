@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Loader2, Play, Workflow } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
@@ -134,6 +135,7 @@ export const OntologyActionDialog: React.FC<OntologyActionDialogProps> = ({
 	onClose,
 	onInvoke,
 }) => {
+	const { t } = useTranslation("common");
 	const action = target?.action ?? null;
 	const node = target?.node ?? null;
 	const [parameters, setParameters] = useState<Record<string, unknown>>({});
@@ -193,7 +195,7 @@ export const OntologyActionDialog: React.FC<OntologyActionDialogProps> = ({
 			if (!actionSucceeded(result.status)) {
 				setError(
 					result.error_message ??
-						`The action ended with status ${result.status.toLowerCase()}.`,
+						t('theActionEndedWithStatusVal', 'The action ended with status {{val}}.', { val: result.status.toLowerCase() }),
 				);
 			}
 		} catch (invokeError) {
@@ -214,17 +216,17 @@ export const OntologyActionDialog: React.FC<OntologyActionDialogProps> = ({
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
 						<Workflow className="h-4 w-4 text-primary" />
-						{action?.name ?? "Apply action"}
+						{action?.name ?? t('applyAction', 'Apply action')}
 					</DialogTitle>
 					<DialogDescription>
 						{action?.description ??
-							"Run this governed operation through its saved workflow binding."}
+							t('runThisGovernedOperationThroughItsSavedWorkflowBinding', 'Run this governed operation through its saved workflow binding.')}
 					</DialogDescription>
 				</DialogHeader>
 				<div className="space-y-4 py-1" aria-busy={submitting}>
 					<div className="rounded-lg border bg-muted/30 p-3">
 						<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-							Target {node?.label ?? "object"}
+							{t('target', 'Target')} {node?.label ?? "object"}
 						</p>
 						<p className="mt-1 font-medium">
 							{String(targetTitle ?? "Object")}
@@ -235,7 +237,7 @@ export const OntologyActionDialog: React.FC<OntologyActionDialogProps> = ({
 					</div>
 					{Object.keys(properties).length > 0 && (
 						<div className="space-y-3 rounded-lg border p-3">
-							<Label>Parameters</Label>
+							<Label>{t('parameters', 'Parameters')}</Label>
 							{Object.entries(properties).map(([name, property]) => {
 								const type = parameterType(property);
 								const fieldId = `graph-action-${name}`;
@@ -267,7 +269,7 @@ export const OntologyActionDialog: React.FC<OntologyActionDialogProps> = ({
 											>
 												<SelectTrigger id={fieldId}>
 													<SelectValue
-														placeholder={`Choose ${fieldLabel.toLowerCase()}`}
+														placeholder={t('chooseVal', 'Choose {{val}}', { val: fieldLabel.toLowerCase() })}
 													/>
 												</SelectTrigger>
 												<SelectContent>
@@ -372,11 +374,9 @@ export const OntologyActionDialog: React.FC<OntologyActionDialogProps> = ({
 					<div aria-live="polite">
 						{run && succeeded && (
 							<div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm">
-								Action applied
+								{t('actionApplied', 'Action applied')}
 								{run.run_id && (
-									<span className="ml-1 font-mono text-[10px] text-muted-foreground">
-										Run {run.run_id}
-									</span>
+									<span className="ml-1 font-mono text-[10px] text-muted-foreground">{t('runRun_id', 'Run {{run_id}}', { run_id: run.run_id })}</span>
 								)}
 							</div>
 						)}
@@ -404,7 +404,7 @@ export const OntologyActionDialog: React.FC<OntologyActionDialogProps> = ({
 							) : (
 								<Play className="h-4 w-4" />
 							)}
-							Confirm {action?.name ?? "action"}
+							{t('confirm', 'Confirm')} {action?.name ?? "action"}
 						</Button>
 					)}
 				</DialogFooter>

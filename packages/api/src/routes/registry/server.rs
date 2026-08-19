@@ -19,7 +19,9 @@ use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::PutPayload;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::create_id;
-use flow_like_wasm::manifest::{PackageManifest, PackageNodeEntry, PackageWidgetEntry};
+use flow_like_wasm::manifest::{
+    PackageManifest, PackageNodeEntry, PackagePermissions, PackageWidgetEntry,
+};
 use flow_like_wasm::widget_bundle::{WidgetBundleReader, sha256_hex};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
@@ -999,6 +1001,7 @@ impl ServerRegistry {
                     avg_rating: pkg.avg_rating,
                     rating_count: pkg.rating_count,
                     metadata: None,
+                    capabilities: capability_tags_from_json(pkg.permissions),
                 }
             })
             .collect();
@@ -1553,6 +1556,7 @@ impl ServerRegistry {
                     avg_rating: pkg.avg_rating,
                     rating_count: pkg.rating_count,
                     metadata: resolved_meta,
+                    capabilities: capability_tags_from_json(pkg.permissions),
                 }
             })
             .collect();
@@ -1764,6 +1768,7 @@ impl ServerRegistry {
                     avg_rating: pkg.avg_rating,
                     rating_count: pkg.rating_count,
                     metadata: resolved_meta,
+                    capabilities: capability_tags_from_json(pkg.permissions),
                 }
             })
             .collect();
@@ -2876,10 +2881,22 @@ impl ServerRegistry {
                     avg_rating: pkg.avg_rating,
                     rating_count: pkg.rating_count,
                     metadata: None,
+                    capabilities: capability_tags_from_json(pkg.permissions),
                 }
             })
             .collect())
     }
+}
+
+/// Derive the listing capability tags from a stored `permissions` blob.
+///
+/// The permissions column is written by the publish flow, so a row that predates
+/// a manifest change (or carries anything unparseable) simply lists no
+/// capabilities rather than failing the whole listing.
+fn capability_tags_from_json(raw: serde_json::Value) -> Vec<String> {
+    serde_json::from_value::<PackagePermissions>(raw)
+        .map(|permissions| permissions.capability_tags())
+        .unwrap_or_default()
 }
 
 #[derive(Deserialize)]

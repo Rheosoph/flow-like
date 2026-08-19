@@ -172,6 +172,7 @@ const WORKING_TOOLS = new Set([
 	"modify_component",
 	"execute_event",
 	"execute_node",
+	"interact_app_page",
 ]);
 
 /** Tools that hand control back to the user rather than continuing to work. */

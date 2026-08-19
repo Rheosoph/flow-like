@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -71,6 +72,7 @@ function PackageItem({
 		| "error"
 		| "stale";
 }) {
+	const { t } = useTranslation("common");
 	return (
 		<div
 			className={`rounded-xl border p-4 transition-all cursor-pointer ${
@@ -92,21 +94,19 @@ function PackageItem({
 						<Badge
 							variant="outline"
 							className="text-[10px] px-1.5 py-0 h-5 rounded-full font-normal"
-						>
-							v{pkg.version}
-						</Badge>
+						>{`v${pkg.version}`}</Badge>
 						{isLocal && (
 							<Badge
 								variant="secondary"
 								className="text-[10px] px-1.5 py-0 h-5 rounded-full font-normal gap-1"
 							>
 								<FolderOpen className="h-2.5 w-2.5" />
-								Local
+								{t('local', 'Local')}
 							</Badge>
 						)}
 						{hasUpdate && (
 							<Badge className="text-[10px] px-1.5 py-0 h-5 rounded-full font-normal gap-1 bg-amber-500/10 text-amber-600 border-amber-500/20 hover:bg-amber-500/20">
-								Update
+								{t('update', 'Update')}
 							</Badge>
 						)}
 						{compileStatus && compileStatus !== "idle" && (
@@ -152,7 +152,7 @@ function PackageItem({
 									)}
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent>Update to v{latestVersion}</TooltipContent>
+							<TooltipContent>{t('updateToVlatestversion', 'Update to v{{latestVersion}}', { latestVersion })}</TooltipContent>
 						</Tooltip>
 					)}
 					<Tooltip>
@@ -218,6 +218,7 @@ function OwnedRegistryItem({
 		| "error"
 		| "stale";
 }) {
+	const { t } = useTranslation("common");
 	return (
 		<div
 			className={`rounded-xl border border-border/20 bg-card/50 hover:bg-muted/10 p-4 transition-all cursor-pointer ${pkg.status === PackageStatus.Disabled ? "opacity-60" : ""}`}
@@ -233,9 +234,7 @@ function OwnedRegistryItem({
 						<Badge
 							variant="outline"
 							className="text-[10px] px-1.5 py-0 h-5 rounded-full font-normal"
-						>
-							v{pkg.latestVersion}
-						</Badge>
+						>{`v${pkg.latestVersion}`}</Badge>
 						{pkg.verified && (
 							<Shield className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
 						)}
@@ -244,7 +243,7 @@ function OwnedRegistryItem({
 								variant="destructive"
 								className="text-[10px] px-1.5 py-0 h-5 rounded-full font-normal"
 							>
-								Disabled
+								{t('disabled', 'Disabled')}
 							</Badge>
 						)}
 						{pkg.visibility && pkg.visibility !== "public" && (
@@ -295,12 +294,12 @@ function OwnedRegistryItem({
 								) : (
 									<>
 										<Download className="h-3.5 w-3.5" />
-										Install
+										{t('install', 'Install')}
 									</>
 								)}
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>Install v{pkg.latestVersion}</TooltipContent>
+						<TooltipContent>{t('installVlatestversion', 'Install v{{latestVersion}}', { latestVersion: pkg.latestVersion })}</TooltipContent>
 					</Tooltip>
 				</div>
 			</div>
@@ -309,6 +308,7 @@ function OwnedRegistryItem({
 }
 
 export default function InstalledPackagesPage() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const auth = useAuth();
 	const [isInitialized, setIsInitialized] = useState(false);
@@ -385,7 +385,7 @@ export default function InstalledPackagesPage() {
 		try {
 			const selected = await open({
 				multiple: false,
-				filters: [{ name: "WASM Files", extensions: ["wasm"] }],
+				filters: [{ name: t('wasmFiles', 'WASM Files'), extensions: ["wasm"] }],
 			});
 
 			if (!selected) return;
@@ -395,8 +395,8 @@ export default function InstalledPackagesPage() {
 
 			const baseName =
 				selected.split(/[/\\]/).pop()?.replace(".wasm", "") ?? "package";
-			toast.success(`Loaded ${baseName}`, {
-				description: "Package loaded for development testing",
+			toast.success(t('loadedBasename', 'Loaded {{baseName}}', { baseName }), {
+				description: t('packageLoadedForDevelopmentTesting', 'Package loaded for development testing'),
 			});
 			await fetchInstalled();
 		} catch (err) {
@@ -487,7 +487,7 @@ export default function InstalledPackagesPage() {
 				<div className="text-center space-y-3">
 					<Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground/40" />
 					<p className="text-sm text-muted-foreground/60">
-						Initializing registry…
+						{t('initializingRegistry', 'Initializing registry…')}
 					</p>
 				</div>
 			</div>
@@ -536,7 +536,7 @@ export default function InstalledPackagesPage() {
 				<div className="relative flex-1 max-w-lg">
 					<Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40 pointer-events-none" />
 					<Input
-						placeholder="Search installed…"
+						placeholder={t('searchInstalled', 'Search installed…')}
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						className="pl-11 h-10 rounded-full bg-muted/30 border-transparent focus:border-border/40 focus:bg-muted/50 transition-all text-sm"
@@ -589,7 +589,7 @@ export default function InstalledPackagesPage() {
 								)}
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>Load local .wasm</TooltipContent>
+						<TooltipContent>{t('loadLocalWasm', 'Load local .wasm')}</TooltipContent>
 					</Tooltip>
 
 					<Tooltip>
@@ -606,7 +606,7 @@ export default function InstalledPackagesPage() {
 								/>
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>Refresh</TooltipContent>
+						<TooltipContent>{t('refresh', 'Refresh')}</TooltipContent>
 					</Tooltip>
 				</div>
 			</div>
@@ -615,8 +615,7 @@ export default function InstalledPackagesPage() {
 			{updates.length > 0 && (
 				<div className="rounded-xl bg-amber-500/5 border border-amber-500/15 p-3 mb-4 flex items-center gap-2">
 					<AlertTriangle className="h-3.5 w-3.5 text-amber-500/70 shrink-0" />
-					<span className="text-sm text-muted-foreground/80">
-						{updates.length} update{updates.length > 1 ? "s" : ""} available
+					<span className="text-sm text-muted-foreground/80">{t('lengthUpdate', '{{length}} update', { length: updates.length })}{updates.length > 1 ? "s" : ""} available
 					</span>
 				</div>
 			)}
@@ -639,12 +638,12 @@ export default function InstalledPackagesPage() {
 						<div className="rounded-2xl border border-dashed border-border/30 p-8 space-y-3 max-w-sm">
 							<Package className="h-8 w-8 text-muted-foreground/30 mx-auto" />
 							<p className="text-sm font-medium text-muted-foreground/60">
-								{searchQuery ? "No matching packages" : "No packages installed"}
+								{searchQuery ? t('noMatchingPackages', 'No matching packages') : t('noPackagesInstalled', 'No packages installed')}
 							</p>
 							<p className="text-xs text-muted-foreground/40">
 								{searchQuery
-									? "Try a different search term"
-									: "Browse the registry to install custom nodes, or load a local .wasm file"}
+									? t('tryADifferentSearchTerm', 'Try a different search term')
+									: t('browseTheRegistryToInstallCustomNodesOrLoadALocalWasmFile', 'Browse the registry to install custom nodes, or load a local .wasm file')}
 							</p>
 							{!searchQuery && (
 								<div className="flex items-center justify-center gap-2 pt-2">
@@ -654,7 +653,7 @@ export default function InstalledPackagesPage() {
 											size="sm"
 											className="h-8 rounded-full text-xs text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
 										>
-											Browse Registry
+											{t('browseRegistry', 'Browse Registry')}
 										</Button>
 									</Link>
 									<Button
@@ -664,7 +663,7 @@ export default function InstalledPackagesPage() {
 										onClick={handleLoadLocal}
 									>
 										<Upload className="h-3 w-3 mr-1.5" />
-										Load Local
+										{t('loadLocal', 'Load Local')}
 									</Button>
 								</div>
 							)}
@@ -676,7 +675,7 @@ export default function InstalledPackagesPage() {
 						{filteredLocalPackages.length > 0 && (
 							<div className="space-y-3">
 								<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-									Local Development
+									{t('localDevelopment', 'Local Development')}
 								</span>
 								<div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3">
 									{filteredLocalPackages.map((pkg) => (
@@ -699,7 +698,7 @@ export default function InstalledPackagesPage() {
 						{filteredPackages.length > 0 && (
 							<div className="space-y-3">
 								<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-									Installed
+									{t('installed', 'Installed')}
 								</span>
 								<div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3">
 									{filteredPackages.map((pkg) => (
@@ -724,7 +723,7 @@ export default function InstalledPackagesPage() {
 						{filteredOwnedPackages.length > 0 && (
 							<div className="space-y-3">
 								<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-									Not Installed
+									{t('notInstalled', 'Not Installed')}
 								</span>
 								<div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3">
 									{filteredOwnedPackages.map((pkg) => (

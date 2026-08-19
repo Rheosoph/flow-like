@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { ChevronDown } from "lucide-react";
 import {
 	Select,
@@ -23,6 +24,7 @@ export function EnumVariable({
 	value: number[] | undefined | null;
 	setValue: (value: unknown) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	return (
 		<div
 			className="flex flex-row items-center justify-start ml-1 min-w-0 max-w-full"

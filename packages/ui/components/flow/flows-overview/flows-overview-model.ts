@@ -8,34 +8,41 @@ import {
 	type IVariableCounts,
 	SCORE_CATEGORIES,
 	boardVersionLabel,
-	connectionCount,
-	entryPointNodes,
-	flaggedPatterns,
-	layerCounts,
-	minScores,
-	scoreCoverage,
-	totalBoardNodeCount,
-	variableCounts,
-	wasmPackages,
 	worstDimension,
 	worstScore,
 } from "../../../lib/board-metrics";
-import type { IBoard, INode } from "../../../lib/schema/flow/board";
+import { ILayerType } from "../../../lib/schema/flow/board";
+import type {
+	IBoardEntryNode,
+	IBoardSummary,
+} from "../../../lib/schema/flow/board-summary";
 import type { IEvent } from "../../../lib/schema/flow/event";
 import type { PageListItem } from "../../../state/backend-state/page-state";
 import type { ProjectRun } from "../../settings/dashboard/use-project-runs";
 import { type IScoreBand, bandOf } from "./flows-overview-tokens";
 
-/** One board, plus everything the overview needs to render it. */
+/** An entry node as the overview lists it: id plus a display name. */
+export interface IFlowEntryPoint {
+	id: string;
+	name: string;
+	friendly_name: string;
+}
+
+/**
+ * One board, plus everything the overview needs to render it. Built from a board *summary*
+ * (`getBoardSummaries(appId, ["metrics", "node_types"])`) — every metric here is computed
+ * server-side by `scoring.rs` / `Board::summary_metrics`, so the overview never transfers a
+ * board's graph.
+ */
 export interface IFlowRow {
-	board: IBoard;
+	board: IBoardSummary;
 	scores: IBoardScores | undefined;
 	worst: number | undefined;
 	worstDimension: IScoreCategory | undefined;
 	band: IScoreBand;
 	coverage: IScoreCoverage;
 	causes: IFlaggedPattern[];
-	entryPoints: INode[];
+	entryPoints: IFlowEntryPoint[];
 	connections: number;
 	wasm: IBoardWasmUsage;
 	variables: IVariableCounts;
@@ -47,6 +54,12 @@ export interface IFlowRow {
 	pages: PageListItem[];
 	versionLabel: string;
 }
+
+const entryPointOf = (node: IBoardEntryNode): IFlowEntryPoint => ({
+	id: node.nodeId,
+	name: node.nodeType,
+	friendly_name: node.friendlyName || node.nodeType,
+});
 
 /**
  * Events point at boards, never the other way round, so this join is the only
@@ -97,26 +110,51 @@ export function buildRouteByPage(
 }
 
 export function buildFlowRow(
-	board: IBoard,
+	board: IBoardSummary,
 	events: IEvent[],
 	pagesByBoard: Map<string, PageListItem[]>,
 ): IFlowRow {
-	const scores = minScores(board);
+	const scores = board.scores;
 	const worst = worstScore(scores);
+	const metrics = board.metrics;
+	const scoredNodeCount = board.scoredNodeCount ?? 0;
 	return {
 		board,
 		scores,
 		worst,
 		worstDimension: worstDimension(scores),
 		band: bandOf(worst),
-		coverage: scoreCoverage(board),
-		causes: flaggedPatterns(board),
-		entryPoints: entryPointNodes(board),
-		connections: connectionCount(board),
-		wasm: wasmPackages(board),
-		variables: variableCounts(board),
-		layers: layerCounts(board),
-		nodeTotal: totalBoardNodeCount(board),
+		coverage: {
+			nodeCount: board.nodeCount,
+			scoredNodeCount,
+			ratio: board.nodeCount === 0 ? 0 : scoredNodeCount / board.nodeCount,
+		},
+		causes: (board.flaggedPatterns ?? []).map((pattern) => ({
+			node: pattern.node,
+			friendlyName: pattern.friendlyName || pattern.node,
+			category: pattern.category as IScoreCategory,
+			score: pattern.score,
+			count: pattern.count,
+		})),
+		entryPoints: (board.entryNodes ?? []).map(entryPointOf),
+		connections: board.connectionCount,
+		wasm: {
+			packageIds: metrics?.wasmPackages ?? [],
+			permissions: (metrics?.wasmPermissions ??
+				[]) as IBoardWasmUsage["permissions"],
+		},
+		variables: {
+			total: metrics?.variableCounts.total ?? board.variableCount,
+			secret: metrics?.variableCounts.secret ?? 0,
+			promptedAtRuntime: metrics?.variableCounts.promptedAtRuntime ?? 0,
+		},
+		layers: {
+			[ILayerType.Collapsed]: metrics?.layerCounts.collapsed ?? 0,
+			[ILayerType.Function]: metrics?.layerCounts.function ?? 0,
+			[ILayerType.Macro]: metrics?.layerCounts.macro ?? 0,
+			total: metrics?.layerCounts.total ?? board.layerCount,
+		} as ILayerCounts,
+		nodeTotal: metrics?.totalNodeCount ?? board.nodeCount,
 		bindings: eventsForBoard(events, board.id),
 		pages: pagesByBoard.get(board.id) ?? [],
 		versionLabel: boardVersionLabel(board),
@@ -124,7 +162,7 @@ export function buildFlowRow(
 }
 
 export function buildFlowRows(
-	boards: IBoard[],
+	boards: IBoardSummary[],
 	events: IEvent[],
 	pagesByBoard: Map<string, PageListItem[]>,
 ): IFlowRow[] {

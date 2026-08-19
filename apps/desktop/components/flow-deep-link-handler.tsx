@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import {
 	type INode,
 	addNodeCommand,
@@ -24,6 +25,7 @@ export function FlowDeepLinkHandler({
 	appId,
 	boardId,
 }: FlowDeepLinkHandlerProps) {
+	const { t } = useTranslation("common");
 	const params = useSearchParams();
 	const backend = useBackend();
 	const queryClient = useQueryClient();
@@ -78,7 +80,7 @@ export function FlowDeepLinkHandler({
 					queryKey: ["getBoard", appId, boardId],
 				});
 				toast.success(
-					`Added "${prototype.friendly_name ?? prototype.name}" to the board`,
+					t('addedValToTheBoard', 'Added "{{val}}" to the board', { val: prototype.friendly_name ?? prototype.name }),
 				);
 			} catch (err) {
 				console.error("addNode deep link failed", err);

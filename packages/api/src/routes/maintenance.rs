@@ -3,12 +3,7 @@
 //! The caller can select only an allowlisted job. It never receives database
 //! credentials; all privileged work stays behind this API boundary.
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::{HeaderMap, header},
-    routing::post,
-};
+use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
 use flow_like_types::{
     cache::CacheCleanupResult,
     maintenance::{
@@ -116,7 +111,7 @@ fn authorize(headers: &HeaderMap, expected_token: Option<&str>) -> Result<(), Ap
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
-    let authorization = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let authorization = crate::middleware::jwt::viewer_authorization(headers)?;
     let (scheme, token) = authorization.split_once(' ')?;
     let token = token.trim();
 
@@ -144,7 +139,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::response::IntoResponse;
+    use axum::{http::header, response::IntoResponse};
 
     const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 

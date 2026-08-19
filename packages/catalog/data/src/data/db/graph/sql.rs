@@ -1,4 +1,6 @@
+use crate::data::datafusion::params;
 use flow_like::flow::{
+    board::Board,
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
@@ -25,10 +27,11 @@ impl NodeLogic for GraphSqlQueryNode {
         let mut node = Node::new(
             "graph_sql_query",
             "SQL Query (Graph)",
-            "Executes a SQL query against graph overlay tables via DataFusion",
+            "Executes a read-only SQL query against graph overlay tables via DataFusion. Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
             "Data/Database/Graph/Query",
         );
         node.add_icon("/flow/icons/database.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -39,7 +42,13 @@ impl NodeLogic for GraphSqlQueryNode {
         )
         .set_schema::<NodeGraphConnection>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin("query", "Query", "SQL query string", VariableType::String);
+        node.add_input_pin(
+            "query",
+            "Query",
+            "SQL query string. Use $placeholders for values that come from the flow (SELECT * FROM person WHERE id = $person_id) — each one adds an input pin to wire the value into. Placeholders stand for values only; table and column names cannot be parameterized.",
+            VariableType::String,
+        );
+        params::add_params_pin(&mut node);
         node.add_input_pin(
             "limit",
             "Limit",
@@ -81,6 +90,7 @@ impl NodeLogic for GraphSqlQueryNode {
 
         let conn: NodeGraphConnection = context.evaluate_pin("graph").await?;
         let query: String = context.evaluate_pin("query").await?;
+        let query_params = params::resolve_params(context, &query).await?;
         let limit: i64 = context.evaluate_pin("limit").await.unwrap_or(1000);
         let limit = if limit > 0 {
             Some(limit as usize)
@@ -90,7 +100,10 @@ impl NodeLogic for GraphSqlQueryNode {
 
         let store = super::load_graph_store(context, &conn.cache_key).await?;
 
-        match store.sql(&query, limit).await {
+        match store
+            .sql(&query, params::to_object(&query_params), limit)
+            .await
+        {
             Ok(results) => {
                 context.set_pin_value("results", json!(results)).await?;
                 context.activate_exec_pin("exec_out").await?;
@@ -111,5 +124,10 @@ impl NodeLogic for GraphSqlQueryNode {
         Err(flow_like_types::anyhow!(
             "Node execution is not enabled. Rebuild with the 'execute' feature flag."
         ))
+    }
+
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        node.error = None;
+        params::sync_param_pins(node, "query", board);
     }
 }

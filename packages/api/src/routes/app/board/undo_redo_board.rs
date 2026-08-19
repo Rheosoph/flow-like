@@ -3,8 +3,11 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::wasm_catalog::{
-        app_wasm_nodes, hydrate_board_wasm_metadata, sanitize_wasm_command_metadata,
+    routes::app::{
+        board::{scoring::save_board_and_refresh_summary, sync_board::seed_board_revision},
+        wasm_catalog::{
+            app_wasm_nodes, hydrate_board_wasm_metadata, sanitize_wasm_command_metadata,
+        },
     },
     state::AppState,
 };
@@ -71,7 +74,9 @@ pub async fn undo_board(
     sanitize_wasm_command_metadata(&mut params.commands, &wasm_nodes, &builtin_nodes)?;
 
     board.undo(params.commands, flow_state.clone()).await?;
-    board.save(None).await?;
+    let put = save_board_and_refresh_summary(&state, &app_id, &board).await?;
+    drop(_mutation_guard);
+    seed_board_revision(&state, &app_id, &board_id, board, &put).await;
 
     Ok(Json(()))
 }
@@ -124,7 +129,9 @@ pub async fn redo_board(
     sanitize_wasm_command_metadata(&mut params.commands, &wasm_nodes, &builtin_nodes)?;
 
     board.redo(params.commands, flow_state.clone()).await?;
-    board.save(None).await?;
+    let put = save_board_and_refresh_summary(&state, &app_id, &board).await?;
+    drop(_mutation_guard);
+    seed_board_revision(&state, &app_id, &board_id, board, &put).await;
 
     Ok(Json(()))
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { ArrowRightIcon, GlobeIcon } from "lucide-react";
 import Link from "next/link";
 import { useMemo } from "react";
@@ -92,6 +93,7 @@ export function SurfacesTable({
 	surfaces,
 	limit,
 }: Readonly<{ appId: string; surfaces: ProjectSurface[]; limit?: number }>) {
+	const { t } = useTranslation("settings");
 	const shown = limit ? surfaces.slice(0, limit) : surfaces;
 	const manageHref = `/library/config/pages?id=${appId}`;
 
@@ -112,9 +114,9 @@ export function SurfacesTable({
 		>
 			{surfaces.length === 0 ? (
 				<EmptyHint>
-					No triggers yet.{" "}
+					{t('noTriggersYet', 'No triggers yet.')}{" "}
 					<Link href={manageHref} className="text-primary hover:underline">
-						Set up an event
+						{t('setUpAnEvent', 'Set up an event')}
 					</Link>
 				</EmptyHint>
 			) : (
@@ -123,14 +125,14 @@ export function SurfacesTable({
 						<thead>
 							<tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
 								<th className="px-4 py-2 text-left font-medium">Name</th>
-								<th className="px-2 py-2 text-left font-medium">Kind</th>
+								<th className="px-2 py-2 text-left font-medium">{t('kind', 'Kind')}</th>
 								<th className="hidden px-2 py-2 text-left font-medium md:table-cell">
-									Entry
+									{t('entry', 'Entry')}
 								</th>
 								<th className="hidden px-2 py-2 text-left font-medium lg:table-cell">
-									Last fired
+									{t('lastFired', 'Last fired')}
 								</th>
-								<th className="px-4 py-2 text-right font-medium">Runs 24h</th>
+								<th className="px-4 py-2 text-right font-medium">{t('runs24h', 'Runs 24h')}</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -155,7 +157,7 @@ export function SurfacesTable({
 											</span>
 											{!surface.active && (
 												<Badge variant="outline" className="text-[10px]">
-													Paused
+													{t('paused', 'Paused')}
 												</Badge>
 											)}
 										</span>
@@ -178,9 +180,7 @@ export function SurfacesTable({
 									</td>
 									<td className="px-4 py-2 text-right text-xs tabular-nums">
 										{surface.failed > 0 ? (
-											<span className="text-destructive">
-												{surface.failed} failed
-											</span>
+											<span className="text-destructive">{t('failedFailed', '{{failed}} failed', { failed: surface.failed })}</span>
 										) : null}{" "}
 										<span className="text-muted-foreground">
 											{surface.runs}

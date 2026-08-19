@@ -1,14 +1,16 @@
 use crate::data::cache::{CacheScope, FlowCache, cache_get, cache_set};
+use crate::data::datafusion::params;
 use crate::data::datafusion::query::{QueryRow, batches_to_csv_table};
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::excel::CSVTable;
 use flow_like::flow::{
+    board::Board,
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::{Value, async_trait, json::json};
 
 const SCOPE_APP: &str = "App";
 const SCOPE_USER: &str = "User";
@@ -28,20 +30,40 @@ impl CachedSqlQueryNode {
 }
 
 /// Key under which a query's result lands in the flow cache: one hash over this node's
-/// board identity, the session identity and the SQL text.
+/// board identity, the session identity, the SQL text and the bound parameter values.
 ///
 /// The node id is the load-bearing part: session names ("default") and queries repeat
 /// across boards, but a node id is minted once when the node is placed — so a result can
 /// only ever be replayed at the exact node that cached it, never leak into another board
 /// that happens to mount different data under the same names. Hashing keeps arbitrarily
 /// long SQL inside the backend's key length limit.
-fn result_cache_key(node_id: &str, session: &DataFusionSession, query: &str) -> String {
+///
+/// The parameters belong in the key for the same reason the SQL text does: with them
+/// omitted, one placeholder value's result would be served for every other value, which is
+/// the whole point of the parameter. They arrive ordered by first appearance in the
+/// statement, so the key does not depend on how the values were assembled.
+fn result_cache_key(
+    node_id: &str,
+    session: &DataFusionSession,
+    query: &str,
+    query_params: &[(String, Value)],
+) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(node_id.as_bytes());
     hasher.update(b"\n");
     hasher.update(session.cache_key.as_bytes());
     hasher.update(b"\n");
     hasher.update(query.as_bytes());
+    for (name, value) in query_params {
+        hasher.update(b"\n");
+        hasher.update(name.as_bytes());
+        hasher.update(b"=");
+        hasher.update(
+            flow_like_types::json::to_string(value)
+                .unwrap_or_default()
+                .as_bytes(),
+        );
+    }
     format!("dfq_{}", hasher.finalize().to_hex())
 }
 
@@ -62,11 +84,11 @@ impl NodeLogic for CachedSqlQueryNode {
         let mut node = Node::new(
             "df_sql_query_cached",
             "Cached SQL Query",
-            "Execute a SQL query against a DataFusion session, remembering the result in the app's cache. While a live cached result exists for this node's session and query, the query — and any deferred table mounting — is skipped entirely and the cached rows are returned. Cached results do not notice changes to the underlying data; pick a lifetime that matches how fresh the data must be.",
+            "Execute a SQL query against a DataFusion session, remembering the result in the app's cache. While a live cached result exists for this node's session, query and parameter values, the query — and any deferred table mounting — is skipped entirely and the cached rows are returned. Cached results do not notice changes to the underlying data; pick a lifetime that matches how fresh the data must be. Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
             "Data/DataFusion",
         );
         node.add_icon("/flow/icons/database.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.add_input_pin(
             "exec_in",
@@ -86,10 +108,12 @@ impl NodeLogic for CachedSqlQueryNode {
         node.add_input_pin(
             "query",
             "Query",
-            "SQL query to execute (e.g., SELECT * FROM mytable WHERE column > 10)",
+            "SQL query to execute (e.g., SELECT * FROM mytable WHERE column > 10). Use $placeholders for values that come from the flow (SELECT * FROM users WHERE id = $user_id) — each one adds an input pin to wire the value into, and each distinct value is cached separately. Placeholders stand for values only; table and column names cannot be parameterized.",
             VariableType::String,
         )
         .set_default_value(Some(json!("SELECT * FROM data LIMIT 100")));
+
+        params::add_params_pin(&mut node);
 
         node.add_input_pin(
             "scope",
@@ -169,11 +193,17 @@ impl NodeLogic for CachedSqlQueryNode {
         node
     }
 
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        node.error = None;
+        params::sync_param_pins(node, "query", board);
+    }
+
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: DataFusionSession = context.evaluate_pin("session").await?;
         let query: String = context.evaluate_pin("query").await?;
+        let query_params = params::resolve_params(context, &query).await?;
         let scope: String = context.evaluate_pin("scope").await?;
         let namespace: String = context.evaluate_pin("namespace").await?;
         let ttl_seconds: i64 = context.evaluate_pin("ttl_seconds").await?;
@@ -189,7 +219,7 @@ impl NodeLogic for CachedSqlQueryNode {
             namespace: namespace.trim().to_string(),
         };
         let node_id = context.node.meta.id.clone();
-        let key = result_cache_key(&node_id, &session, &query);
+        let key = result_cache_key(&node_id, &session, &query, &query_params);
 
         // The session is deliberately not loaded before this lookup: on a hit the
         // engine — and whatever mounting produced it — is bypassed entirely.
@@ -229,6 +259,7 @@ impl NodeLogic for CachedSqlQueryNode {
 
                 context.log_message(&format!("Executing SQL: {}", query), LogLevel::Debug);
                 let df = cached_session.ctx.sql(&query).await?;
+                let df = params::bind(df, &query_params)?;
                 let batches = df.collect().await?;
                 let table = batches_to_csv_table(&batches)?;
 
@@ -279,23 +310,53 @@ mod tests {
         };
 
         let same_query = "SELECT * FROM data";
+        let none: &[(String, Value)] = &[];
         assert_ne!(
-            result_cache_key("node1", &session_a, same_query),
-            result_cache_key("node1", &session_b, same_query),
+            result_cache_key("node1", &session_a, same_query, none),
+            result_cache_key("node1", &session_b, same_query, none),
             "the same SQL against differently mounted sessions must not share a result"
         );
         assert_ne!(
-            result_cache_key("node1", &session_a, same_query),
-            result_cache_key("node2", &session_a, same_query),
+            result_cache_key("node1", &session_a, same_query, none),
+            result_cache_key("node2", &session_a, same_query, none),
             "two node placements with identical defaults must not share a result"
         );
         assert_ne!(
-            result_cache_key("node1", &session_a, "SELECT 1"),
-            result_cache_key("node1", &session_a, "SELECT 2")
+            result_cache_key("node1", &session_a, "SELECT 1", none),
+            result_cache_key("node1", &session_a, "SELECT 2", none)
         );
         assert_eq!(
-            result_cache_key("node1", &session_a, same_query),
-            result_cache_key("node1", &session_a, same_query)
+            result_cache_key("node1", &session_a, same_query, none),
+            result_cache_key("node1", &session_a, same_query, none)
+        );
+    }
+
+    #[test]
+    fn cache_keys_separate_parameter_values() {
+        let session = DataFusionSession {
+            cache_key: "df_session_a".to_string(),
+        };
+        let query = "SELECT * FROM users WHERE id = $id";
+        let key =
+            |value: Value| result_cache_key("node1", &session, query, &[("id".to_string(), value)]);
+
+        assert_ne!(
+            key(json!(1)),
+            key(json!(2)),
+            "a cached result for one parameter value must never be served for another"
+        );
+        assert_eq!(key(json!(1)), key(json!(1)));
+        // A string "1" and the number 1 select different rows, so they cannot share a key.
+        assert_ne!(key(json!(1)), key(json!("1")));
+        assert_ne!(
+            key(json!(1)),
+            result_cache_key("node1", &session, query, &[]),
+            "an unbound run must not collide with a bound one"
+        );
+        // Same values, different placeholder names: still distinct statements.
+        assert_ne!(
+            result_cache_key("node1", &session, query, &[("a".to_string(), json!(1))]),
+            result_cache_key("node1", &session, query, &[("b".to_string(), json!(1))])
         );
     }
 
@@ -331,7 +392,7 @@ mod tests {
         let node = CachedSqlQueryNode::new().get_node();
 
         assert_eq!(node.name, "df_sql_query_cached");
-        assert_eq!(node.version, Some(1));
+        assert_eq!(node.version, Some(2));
 
         let inputs: Vec<_> = node
             .pins

@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	AlertCircle,
 	Check,
@@ -68,7 +69,7 @@ const METHOD_VARIANT: Record<
 
 function authLabel(config: Record<string, any> | undefined) {
 	const type = normalizeAuthType(config?.type);
-	if (type === "api_key") return "API key";
+	if (type === "api_key") return i18next.t('apiKey', 'API key');
 	if (type === "bearer_token") return "Bearer token";
 	if (type === "basic_auth") return "Basic auth";
 	if (type === "hmac_sha256") return "HMAC SHA-256";
@@ -107,16 +108,16 @@ function formatConfigValue(value: unknown, key?: string): string {
 function routeKindLabel(kind: string): string {
 	if (kind === "rest_fn") return "Function";
 	if (kind === "rest_file") return "File";
-	if (kind === "rest_openapi") return "OpenAPI spec";
-	if (kind === "rest_openapi_ui") return "OpenAPI UI";
+	if (kind === "rest_openapi") return i18next.t('openapiSpec', 'OpenAPI spec');
+	if (kind === "rest_openapi_ui") return i18next.t('openapiUi', 'OpenAPI UI');
 	return kind.replace(/^rest_/, "").replaceAll("_", " ");
 }
 
 function routeGroupLabel(kind: string): string {
 	if (kind === "rest_fn") return "Function Routes";
 	if (kind === "rest_file") return "File Routes";
-	if (kind === "rest_openapi") return "OpenAPI Spec";
-	if (kind === "rest_openapi_ui") return "OpenAPI UI";
+	if (kind === "rest_openapi") return i18next.t('openapiSpec2', 'OpenAPI Spec');
+	if (kind === "rest_openapi_ui") return i18next.t('openapiUi', 'OpenAPI UI');
 	return routeKindLabel(kind);
 }
 
@@ -207,13 +208,12 @@ function AuthBadge({
 	authText: string;
 	active?: boolean;
 }) {
+	const { t } = useTranslation("interfaces");
 	return (
 		<Badge
 			variant={active ? "secondary" : "outline"}
 			className="max-w-full whitespace-normal text-left font-normal leading-tight"
-		>
-			auth: {authText}
-		</Badge>
+		>{t('authAuthtext', 'auth: {{authText}}', { authText })}</Badge>
 	);
 }
 
@@ -224,6 +224,7 @@ export function RestConfig({
 	appId,
 	section,
 }: IConfigInterfaceProps) {
+	const { t } = useTranslation("interfaces");
 	useEffect(() => {
 		if (!(config as RestSink)?.sink_type) {
 			onConfigUpdate?.({
@@ -313,13 +314,13 @@ export function RestConfig({
 					true,
 				);
 				toast.success(
-					`Setup refreshed (${response.registrations_written} registrations)`,
+					t('setupRefreshedRegistrations_writtenRegistrations', 'Setup refreshed ({{registrations_written}} registrations)', { registrations_written: response.registrations_written }),
 				);
 			}
 			await Promise.all([registrations.refetch(), aliases.refetch()]);
 		} catch (error) {
 			const message =
-				error instanceof Error ? error.message : "Failed to refresh setup";
+				error instanceof Error ? error.message : t('failedToRefreshSetup', 'Failed to refresh setup');
 			toast.error(message);
 			await Promise.allSettled([registrations.refetch(), aliases.refetch()]);
 		} finally {
@@ -364,7 +365,7 @@ export function RestConfig({
 			await aliases.refetch();
 		} catch (error) {
 			const message =
-				error instanceof Error ? error.message : "Failed to save alias";
+				error instanceof Error ? error.message : t('failedToSaveAlias', 'Failed to save alias');
 			setAliasError(message);
 			toast.error(message);
 		} finally {
@@ -388,7 +389,7 @@ export function RestConfig({
 			await aliases.refetch();
 		} catch (error) {
 			const message =
-				error instanceof Error ? error.message : "Failed to remove alias";
+				error instanceof Error ? error.message : t('failedToRemoveAlias', 'Failed to remove alias');
 			setAliasError(message);
 			toast.error(message);
 		} finally {
@@ -407,15 +408,13 @@ export function RestConfig({
 					<Alert>
 						<Globe className="h-4 w-4" />
 						<AlertTitle className="flex items-center gap-2">
-							REST API Server
+							{t('restApiServer', 'REST API Server')}
 							<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs">
-								<Cloud className="h-3 w-3" /> Remote only
+								<Cloud className="h-3 w-3" /> {t('remoteOnly', 'Remote only')}
 							</span>
 						</AlertTitle>
 						<AlertDescription>
-							Spins up a remote REST API server. Endpoints, methods,
-							authentication and request schemas are declared inside the
-							workflow board. The server is mounted at{" "}
+							{t('spinsUpARemoteRestApiServerEndpointsMethodsAuthenticationAndRequestSchemasAreDeclaredInsideTheWorkflowBoardTheServerIsMountedAt', "Spins up a remote REST API server. Endpoints, methods, authentication and request schemas are declared inside the workflow board. The server is mounted at")}{" "}
 							<code>/r/&#123;event_id&#125;</code>.
 						</AlertDescription>
 					</Alert>
@@ -424,7 +423,7 @@ export function RestConfig({
 						<div className="space-y-3 rounded-md border bg-muted/30 p-3">
 							<div className="space-y-1.5">
 								<Label className="text-xs uppercase tracking-wide text-muted-foreground">
-									Base URL
+									{t('baseUrl', 'Base URL')}
 								</Label>
 								<div className="flex items-center gap-2">
 									<Input
@@ -449,7 +448,7 @@ export function RestConfig({
 							</div>
 							<div className="space-y-1.5">
 								<Label className="text-xs uppercase tracking-wide text-muted-foreground">
-									OpenAPI Spec
+									{t('openapiSpec2', 'OpenAPI Spec')}
 								</Label>
 								<div className="flex items-center gap-2">
 									<Input
@@ -475,7 +474,7 @@ export function RestConfig({
 							{openApiUiUrl && (
 								<div className="space-y-1.5">
 									<Label className="text-xs uppercase tracking-wide text-muted-foreground">
-										OpenAPI UI
+										{t('openapiUi', 'OpenAPI UI')}
 									</Label>
 									<div className="flex items-center gap-2">
 										<Input
@@ -502,7 +501,7 @@ export function RestConfig({
 						</div>
 					) : (
 						<p className="text-xs text-muted-foreground rounded-md border border-dashed p-3">
-							Save the event to see its endpoint URL.
+							{t('saveTheEventToSeeItsEndpointUrl', 'Save the event to see its endpoint URL.')}
 						</p>
 					)}
 
@@ -510,12 +509,10 @@ export function RestConfig({
 						<div className="space-y-3 rounded-md border bg-card p-3">
 							<div className="space-y-1">
 								<Label className="text-xs uppercase tracking-wide text-muted-foreground">
-									Public Alias
+									{t('publicAlias', 'Public Alias')}
 								</Label>
 								<div className="flex items-center gap-2">
-									<div className="shrink-0 rounded-md border bg-muted px-2 py-2 font-mono text-xs text-muted-foreground">
-										{baseUrl}/r/
-									</div>
+									<div className="shrink-0 rounded-md border bg-muted px-2 py-2 font-mono text-xs text-muted-foreground">{`${baseUrl}/r/`}</div>
 									<Input
 										value={aliasInput}
 										onChange={(event) => {
@@ -542,7 +539,7 @@ export function RestConfig({
 										) : (
 											<Check className="h-4 w-4" />
 										)}
-										Save
+										{t('save', 'Save')}
 									</Button>
 									<Button
 										type="button"
@@ -554,7 +551,7 @@ export function RestConfig({
 											!currentAlias ||
 											!backend.eventState.deleteEventAlias
 										}
-										title="Remove alias"
+										title={t('removeAlias', 'Remove alias')}
 									>
 										<Trash2 className="h-4 w-4" />
 									</Button>
@@ -607,7 +604,7 @@ export function RestConfig({
 
 			{shows("routes") && eventId && appId && (
 				<RegistrationsPanel
-					title="Registered Routes"
+					title={t('registeredRoutes', 'Registered Routes')}
 					emptyHint="Setup runs automatically when you save this event. Routes will appear here once the workflow has declared its endpoints."
 					loading={registrations.isLoading}
 					fetching={registrations.isFetching || setupBusy}
@@ -625,8 +622,7 @@ export function RestConfig({
 
 			<p className="text-xs text-muted-foreground flex items-center gap-1">
 				<Info className="h-3 w-3" />
-				Save the event to trigger a remote setup that registers all declared
-				routes.
+				{t('saveTheEventToTriggerARemoteSetupThatRegistersAllDeclaredRoutes', "Save the event to trigger a remote setup that registers all declared routes.")}
 			</p>
 		</div>
 	);
@@ -651,6 +647,7 @@ function SetupConfigPanel({
 	fetching,
 	onRefresh,
 }: SetupConfigPanelProps) {
+	const { t } = useTranslation("interfaces");
 	const authById = new Map(auths.map((auth) => [auth.id, auth]));
 	const routeGroups = [
 		"rest_fn",
@@ -672,7 +669,7 @@ function SetupConfigPanel({
 		<div className="space-y-3 rounded-md border bg-card p-3">
 			<div className="flex items-center justify-between">
 				<Label className="text-xs uppercase tracking-wide text-muted-foreground">
-					Current Setup
+					{t('currentSetup', 'Current Setup')}
 				</Label>
 				<Button
 					type="button"
@@ -686,20 +683,20 @@ function SetupConfigPanel({
 					) : (
 						<RefreshCw className="h-3 w-3" />
 					)}
-					<span className="ml-1 text-xs">Refresh</span>
+					<span className="ml-1 text-xs">{t('refresh', 'Refresh')}</span>
 				</Button>
 			</div>
 
 			<div className="grid gap-2 lg:grid-cols-3">
 				<div className="space-y-1 rounded-md border bg-background p-2">
 					<div className="text-[10px] uppercase text-muted-foreground">
-						Version
+						{t('version', 'Version')}
 					</div>
-					<div className="font-mono text-xs">{version ?? "not registered"}</div>
+					<div className="font-mono text-xs">{version ?? t('notRegistered', 'not registered')}</div>
 				</div>
 				<div className="space-y-1 rounded-md border bg-background p-2">
 					<div className="text-[10px] uppercase text-muted-foreground">
-						Authentication
+						{t('authentication', 'Authentication')}
 					</div>
 					{authCount === 0 ? (
 						<div className="text-xs text-muted-foreground">none</div>
@@ -728,17 +725,17 @@ function SetupConfigPanel({
 				</div>
 				<div className="space-y-1 rounded-md border bg-background p-2">
 					<div className="text-[10px] uppercase text-muted-foreground">
-						Routes
+						{t('routes', 'Routes')}
 					</div>
 					<div className="text-xs">
-						{loading ? "loading" : `${registrations.length} registered`}
+						{loading ? "loading" : t('lengthRegistered', '{{length}} registered', { length: registrations.length })}
 					</div>
 				</div>
 			</div>
 
 			{authCount > 0 && (
 				<div className="space-y-2">
-					<div className="text-xs font-medium">Authentication</div>
+					<div className="text-xs font-medium">{t('authentication', 'Authentication')}</div>
 					{auths.map((auth) => (
 						<div
 							key={auth.id}
@@ -771,7 +768,7 @@ function SetupConfigPanel({
 							className="flex items-center justify-between gap-2 rounded-md border bg-background p-2 text-xs"
 						>
 							<span className="text-muted-foreground">
-								Auth is linked to routes, but details are not available.
+								{t('authIsLinkedToRoutesButDetailsAreNotAvailable', 'Auth is linked to routes, but details are not available.')}
 							</span>
 							<code className="truncate">{authId}</code>
 						</div>
@@ -780,15 +777,15 @@ function SetupConfigPanel({
 			)}
 
 			<div className="space-y-2">
-				<div className="text-xs font-medium">Routes</div>
+				<div className="text-xs font-medium">{t('routes', 'Routes')}</div>
 				{loading ? (
 					<div className="flex items-center gap-2 rounded-md border bg-background p-2 text-xs text-muted-foreground">
 						<Loader2 className="h-3 w-3 animate-spin" />
-						Loading setup…
+						{t('loadingSetup', 'Loading setup…')}
 					</div>
 				) : routeGroups.length === 0 ? (
 					<div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">
-						No REST routes registered yet.
+						{t('noRestRoutesRegisteredYet', 'No REST routes registered yet.')}
 					</div>
 				) : (
 					<div className="space-y-2">
@@ -886,15 +883,14 @@ export function RegistrationsPanel({
 	onRefresh,
 	showMethod = true,
 }: RegistrationsPanelProps) {
+	const { t } = useTranslation("interfaces");
 	return (
 		<div className="space-y-2 rounded-md border bg-card p-3">
 			<div className="flex items-center justify-between">
 				<Label className="text-xs uppercase tracking-wide text-muted-foreground">
 					{title}
 					{regs.length > 0 && (
-						<span className="ml-1 text-muted-foreground/70">
-							({regs.length})
-						</span>
+						<span className="ml-1 text-muted-foreground/70">{`(${regs.length})`}</span>
 					)}
 				</Label>
 				<Button
@@ -909,7 +905,7 @@ export function RegistrationsPanel({
 					) : (
 						<RefreshCw className="h-3 w-3" />
 					)}
-					<span className="ml-1 text-xs">Refresh</span>
+					<span className="ml-1 text-xs">{t('refresh', 'Refresh')}</span>
 				</Button>
 			</div>
 
@@ -922,7 +918,7 @@ export function RegistrationsPanel({
 
 			{loading ? (
 				<div className="flex items-center gap-2 p-2 text-xs text-muted-foreground">
-					<Loader2 className="h-3 w-3 animate-spin" /> Loading…
+					<Loader2 className="h-3 w-3 animate-spin" /> {t('loading', 'Loading…')}
 				</div>
 			) : regs.length === 0 ? (
 				<div className="flex items-start gap-2 rounded-md border border-dashed p-2 text-xs text-muted-foreground">

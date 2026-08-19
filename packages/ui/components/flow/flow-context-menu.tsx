@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import {
 	MessageCircleDashedIcon,
@@ -14,7 +15,7 @@ import {
 	ContextMenuTrigger,
 } from "../../components/ui/context-menu";
 import { type IBoard, doPinsMatch } from "../../lib";
-import { ILayerType } from "../../lib/schema/flow/board";
+import { type ILayer, ILayerType } from "../../lib/schema/flow/board";
 import type { INode } from "../../lib/schema/flow/node";
 import type { IPin } from "../../lib/schema/flow/pin";
 import type { IVariable } from "../../lib/schema/flow/variable";
@@ -39,6 +40,60 @@ type SearchableNode = INode & {
 	pin_in_names: string[];
 	pin_out_names: string[];
 };
+
+interface MenuInputs {
+	startNodes: INode[];
+	variables: IVariable[];
+	functionLayers: ILayer[];
+}
+
+function collectMenuInputs(
+	board: IBoard | undefined,
+	currentLayerId: string | undefined,
+): MenuInputs {
+	if (!board) return { startNodes: [], variables: [], functionLayers: [] };
+	const variables = Object.values(board.variables);
+	if (currentLayerId) {
+		const layer = board.layers[currentLayerId];
+		if (layer?.type === ILayerType.Function) {
+			variables.push(...Object.values(layer.variables));
+		}
+	}
+	return {
+		startNodes: Object.values(board.nodes)
+			.filter((node) => node.start)
+			.sort(
+				(a, b) =>
+					a.friendly_name.localeCompare(b.friendly_name) ||
+					a.id.localeCompare(b.id),
+			),
+		variables: variables.sort(compareByNameThenId),
+		functionLayers: Object.values(board.layers)
+			.filter((layer) => layer.type === ILayerType.Function)
+			.sort(compareByNameThenId),
+	};
+}
+
+function menuInputsKey(inputs: MenuInputs): string {
+	return JSON.stringify([
+		inputs.startNodes.map((node) => [node.id, node.friendly_name]),
+		inputs.variables.map((variable) => [
+			variable.id,
+			variable.name,
+			variable.data_type,
+			variable.value_type,
+			variable.schema ?? null,
+		]),
+		inputs.functionLayers.map((layer) => [layer.id, layer.name]),
+	]);
+}
+
+function useStableByKey<T>(value: T, keyOf: (value: T) => string): T {
+	const key = keyOf(value);
+	const ref = useRef({ key, value });
+	if (ref.current.key !== key) ref.current = { key, value };
+	return ref.current.value;
+}
 
 export function FlowContextMenu({
 	nodes,
@@ -65,6 +120,7 @@ export function FlowContextMenu({
 	onCreateVariable?: (variable: IVariable) => void;
 	onClose: () => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const inputRef = useRef<HTMLInputElement>(null);
 	const placeholderInputRef = useRef<HTMLInputElement>(null);
 	const menuBlockedRef = useRef(false);
@@ -107,8 +163,8 @@ export function FlowContextMenu({
 
 			const friendlyName =
 				nodeName === "variable_get"
-					? `Get ${variable.name}`
-					: `Set ${variable.name}`;
+					? t("getName", "Get {{name}}", { name: variable.name })
+					: t("setName", "Set {{name}}", { name: variable.name });
 
 			return {
 				...baseNode,
@@ -139,17 +195,14 @@ export function FlowContextMenu({
 		setPlaceholderName("Placeholder");
 	};
 
-	const allVariables = useMemo(() => {
-		if (!board) return [];
-		const vars = Object.values(board.variables);
-		if (currentLayerId) {
-			const layer = board.layers[currentLayerId];
-			if (layer?.type === ILayerType.Function) {
-				vars.push(...Object.values(layer.variables));
-			}
-		}
-		return vars;
-	}, [board, currentLayerId]);
+	// The board object is replaced on every edit; only these slices feed the
+	// menu, so keying on their content keeps the catalog sort + search index
+	// from being rebuilt after every mutation while the menu is closed.
+	const rawMenuInputs = useMemo(
+		() => collectMenuInputs(board, currentLayerId),
+		[board, currentLayerId],
+	);
+	const menuInputs = useStableByKey(rawMenuInputs, menuInputsKey);
 
 	const handleNodePlace = useCallback(
 		async (node: INode) => {
@@ -195,39 +248,34 @@ export function FlowContextMenu({
 					return a.friendly_name.localeCompare(b.friendly_name);
 				}) ?? [];
 
-		if (board && callRefNode) {
-			Object.values(board.nodes)
-				.filter((node) => node.start)
-				.sort(
-					(a, b) =>
-						a.friendly_name.localeCompare(b.friendly_name) ||
-						a.id.localeCompare(b.id),
-				)
-				.forEach((node) => {
-					const pins = Object.values(callRefNode?.pins ?? {}).map((pin) =>
-						pin.name === "fn_ref"
-							? { ...pin, default_value: convertJsonToUint8Array(node.id) }
-							: pin,
-					);
-					const newPins = Object.fromEntries(pins.map((pin) => [pin.id, pin]));
+		if (callRefNode) {
+			menuInputs.startNodes.forEach((node) => {
+				const pins = Object.values(callRefNode?.pins ?? {}).map((pin) =>
+					pin.name === "fn_ref"
+						? { ...pin, default_value: convertJsonToUint8Array(node.id) }
+						: pin,
+				);
+				const newPins = Object.fromEntries(pins.map((pin) => [pin.id, pin]));
 
-					normalNodes.push({
-						...(callRefNode as INode),
-						pin_in_names: Object.values(newPins)
-							.filter((pin) => pin.pin_type === "Input")
-							.map((pin) => pin.friendly_name),
-						pin_out_names: Object.values(newPins)
-							.filter((pin) => pin.pin_type === "Output")
-							.map((pin) => pin.friendly_name),
-						friendly_name: `Call ${node.friendly_name}`,
-						category: "Events/Call",
-						pins: newPins,
-					});
+				normalNodes.push({
+					...(callRefNode as INode),
+					pin_in_names: Object.values(newPins)
+						.filter((pin) => pin.pin_type === "Input")
+						.map((pin) => pin.friendly_name),
+					pin_out_names: Object.values(newPins)
+						.filter((pin) => pin.pin_type === "Output")
+						.map((pin) => pin.friendly_name),
+					friendly_name: t("callFriendly_name", "Call {{friendly_name}}", {
+						friendly_name: node.friendly_name,
+					}),
+					category: "Events/Call",
+					pins: newPins,
 				});
+			});
 		}
 
-		if (board && variableGetNode && variableSetNode) {
-			[...allVariables].sort(compareByNameThenId).forEach((variable) => {
+		if (variableGetNode && variableSetNode) {
+			menuInputs.variables.forEach((variable) => {
 				const getPins = Object.values(variableGetNode?.pins ?? {}).map(
 					(pin) => {
 						if (pin.name === "var_ref") {
@@ -282,7 +330,7 @@ export function FlowContextMenu({
 					pin_out_names: Object.values(newGetPins)
 						.filter((pin) => pin.pin_type === "Output")
 						.map((pin) => pin.friendly_name),
-					friendly_name: `Get ${variable.name}`,
+					friendly_name: t("getName", "Get {{name}}", { name: variable.name }),
 					category: "Variables/Get",
 					pins: newGetPins,
 				});
@@ -296,43 +344,40 @@ export function FlowContextMenu({
 					pin_out_names: Object.values(newSetPins)
 						.filter((pin) => pin.pin_type === "Output")
 						.map((pin) => pin.friendly_name),
-					friendly_name: `Set ${variable.name}`,
+					friendly_name: t("setName", "Set {{name}}", { name: variable.name }),
 					category: "Variables/Set",
 					pins: newSetPins,
 				});
 			});
 		}
 
-		if (board && callFunctionNode) {
-			Object.values(board.layers)
-				.filter((layer) => layer.type === ILayerType.Function)
-				.sort(compareByNameThenId)
-				.forEach((layer) => {
-					const pins = Object.values(callFunctionNode?.pins ?? {}).map((pin) =>
-						pin.name === "function_layer_id"
-							? { ...pin, default_value: convertJsonToUint8Array(layer.id) }
-							: pin,
-					);
-					const newPins = Object.fromEntries(pins.map((pin) => [pin.id, pin]));
+		if (callFunctionNode) {
+			menuInputs.functionLayers.forEach((layer) => {
+				const pins = Object.values(callFunctionNode?.pins ?? {}).map((pin) =>
+					pin.name === "function_layer_id"
+						? { ...pin, default_value: convertJsonToUint8Array(layer.id) }
+						: pin,
+				);
+				const newPins = Object.fromEntries(pins.map((pin) => [pin.id, pin]));
 
-					normalNodes.push({
-						...(callFunctionNode as INode),
-						id: `fn-call-${layer.id}`,
-						pin_in_names: Object.values(newPins)
-							.filter((pin) => pin.pin_type === "Input")
-							.map((pin) => pin.friendly_name),
-						pin_out_names: Object.values(newPins)
-							.filter((pin) => pin.pin_type === "Output")
-							.map((pin) => pin.friendly_name),
-						friendly_name: `Call ${layer.name}`,
-						category: "Functions/Call",
-						pins: newPins,
-					});
+				normalNodes.push({
+					...(callFunctionNode as INode),
+					id: `fn-call-${layer.id}`,
+					pin_in_names: Object.values(newPins)
+						.filter((pin) => pin.pin_type === "Input")
+						.map((pin) => pin.friendly_name),
+					pin_out_names: Object.values(newPins)
+						.filter((pin) => pin.pin_type === "Output")
+						.map((pin) => pin.friendly_name),
+					friendly_name: t("callName", "Call {{name}}", { name: layer.name }),
+					category: "Functions/Call",
+					pins: newPins,
 				});
+			});
 		}
 
 		return normalNodes;
-	}, [nodes, board, allVariables]);
+	}, [nodes, menuInputs]);
 
 	const searchableNodes = useMemo(() => {
 		const dedupedNodes = new Map<string, SearchableNode>();
@@ -446,11 +491,11 @@ export function FlowContextMenu({
 				<ContextMenuContent className="w-80 max-h-120 h-120 overflow-y-hidden overflow-x-hidden flex flex-col">
 					<div className="sticky">
 						<div className="flex flex-row w-full items-center justify-between bg-accent text-accent-foreground p-1 mb-1">
-							<small className="font-bold">Actions</small>
+							<small className="font-bold">{t("actions", "Actions")}</small>
 							{droppedPin && (
 								<div className="flex flex-row items-center gap-2">
 									<div className="grid gap-1.5 leading-none">
-										<small>Context Sensitive</small>
+										<small>{t("contextSensitive", "Context Sensitive")}</small>
 									</div>
 									<Checkbox
 										id="context-sensitive"
@@ -473,7 +518,7 @@ export function FlowContextMenu({
 							}}
 						>
 							<MessageCircleDashedIcon className="w-4 h-4" />
-							Comment
+							{t("comment", "Comment")}
 						</ContextMenuItem>
 						<ContextMenuItem
 							className="flex flex-row gap-1 items-center"
@@ -489,7 +534,7 @@ export function FlowContextMenu({
 							}}
 						>
 							<PlayCircleIcon className="w-4 h-4" />
-							Event
+							{t("event", "Event")}
 						</ContextMenuItem>
 						<ContextMenuItem
 							className="flex flex-row gap-1 items-center"
@@ -502,7 +547,7 @@ export function FlowContextMenu({
 							}}
 						>
 							<ZapIcon className="w-4 h-4" />
-							Placeholder
+							{t("placeholder", "Placeholder")}
 						</ContextMenuItem>
 						{/* TODO: create the get node if input, set node if output! */}
 						{droppedPin &&
@@ -544,7 +589,7 @@ export function FlowContextMenu({
 									}}
 								>
 									<VariableIcon className="w-4 h-4" />
-									Create Variable from Pin
+									{`Create Variable from Pin`}
 								</ContextMenuItem>
 							)}
 						<Separator className="my-1" />
@@ -599,14 +644,16 @@ export function FlowContextMenu({
 					onOpenAutoFocus={(e) => e.preventDefault()} // we'll focus manually
 				>
 					<DialogHeader>
-						<DialogTitle>Name Your Placeholder</DialogTitle>
+						<DialogTitle>
+							{t("nameYourPlaceholder", "Name Your Placeholder")}
+						</DialogTitle>
 					</DialogHeader>
 					<div className="grid gap-2">
 						<Label htmlFor="placeholder-name">Name</Label>
 						<Input
 							id="placeholder-name"
 							ref={placeholderInputRef}
-							placeholder="e.g. Temporary Result"
+							placeholder={t("egTemporaryResult", "e.g. Temporary Result")}
 							value={placeholderName}
 							onChange={(e) => setPlaceholderName(e.target.value)}
 							onKeyDown={(e) => {
@@ -626,13 +673,13 @@ export function FlowContextMenu({
 							variant="outline"
 							onClick={() => setIsPlaceholderOpen(false)}
 						>
-							Cancel
+							{t("cancel", "Cancel")}
 						</Button>
 						<Button
 							onClick={confirmPlaceholder}
 							disabled={!placeholderName.trim()}
 						>
-							Create
+							{t("create", "Create")}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

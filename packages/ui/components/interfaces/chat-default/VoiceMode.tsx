@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Phone, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../../ui/button";
@@ -45,6 +46,7 @@ export function VoiceMode({
 	speakingAnalyser = null,
 	onInterrupt,
 }: VoiceModeProps) {
+	const { t } = useTranslation("chat");
 	const [sent, setSent] = useState(false);
 	const [hover, setHover] = useState(false);
 	const [voiceError, setVoiceError] = useState<string | null>(null);
@@ -77,7 +79,7 @@ export function VoiceMode({
 			console.error("Error transcribing speech:", error);
 			setSpeechFailed(true);
 			setVoiceError(
-				"Speech recognition is unavailable. Tap the orb to record audio instead.",
+				t('speechRecognitionIsUnavailableTapTheOrbToRecordAudioInstead', 'Speech recognition is unavailable. Tap the orb to record audio instead.'),
 			);
 		},
 	});
@@ -228,10 +230,10 @@ export function VoiceMode({
 			: null;
 	const orbHint =
 		capturing || arming
-			? "Tap to send"
+			? t('tapToSend', 'Tap to send')
 			: speaking
-				? "Tap to interrupt"
-				: "Tap to talk";
+				? t('tapToInterrupt', 'Tap to interrupt')
+				: t('tapToTalk', 'Tap to talk');
 
 	return (
 		<div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-xl animate-in fade-in duration-300">
@@ -293,22 +295,22 @@ export function VoiceMode({
 							)}
 							<p className="mt-2 text-xs text-muted-foreground/60">
 								{effectiveMode === "stt"
-									? "Sends when you finish speaking"
-									: "Will auto-send when you stop talking"}
+									? t('sendsWhenYouFinishSpeaking', 'Sends when you finish speaking')
+									: t('willAutosendWhenYouStopTalking', 'Will auto-send when you stop talking')}
 							</p>
 						</>
 					) : speaking ? (
-						<p className="text-lg font-medium text-foreground">Speaking…</p>
+						<p className="text-lg font-medium text-foreground">{t('speaking', 'Speaking…')}</p>
 					) : sent ? (
 						<p className="animate-pulse text-lg font-medium text-foreground">
-							Thinking…
+							{t('thinking', 'Thinking…')}
 						</p>
 					) : arming ? (
 						<p className="text-sm text-muted-foreground">
-							Initializing microphone…
+							{t('initializingMicrophone', 'Initializing microphone…')}
 						</p>
 					) : (
-						<p className="text-sm text-muted-foreground">Tap the orb to talk</p>
+						<p className="text-sm text-muted-foreground">{t('tapTheOrbToTalk', 'Tap the orb to talk')}</p>
 					)}
 				</div>
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { cn } from "../../../lib/utils";
 import type { ComponentProps, RenderChildFn } from "../ComponentRegistry";
 import { useData } from "../DataContext";
@@ -37,6 +38,7 @@ export function A2UIOverlay({
 	style,
 	renderChild,
 }: ComponentProps<OverlayComponent> & { renderChild: RenderChildFn }) {
+	const { t } = useTranslation("common");
 	const { resolve } = useData();
 
 	return (

@@ -24,6 +24,7 @@ import {
 	cleanupLegacyQueryCacheBlob,
 	createSmartQueryPersister,
 } from "@flow-like/flow-like-ui/lib/query-persister";
+import { I18nProvider } from "@flow-like/locales";
 import { useEffect } from "react";
 import { AppSidebar } from "../components/app-sidebar";
 import { DesktopAuthProvider } from "../components/auth-provider";
@@ -121,48 +122,50 @@ export function Providers({
 						<UpdateProvider />
 						<TrayProvider />
 						<GlobalAnchorHandler />
-						<ThemeProvider
-							attribute="class"
-							defaultTheme="system"
-							enableSystem
-							storageKey="theme"
-							disableTransitionOnChange
-						>
-							<TooltipProvider>
-								<Toaster />
-								<ToastProvider />
-								<TauriProvider>
-									<DownloadNotificationProvider />
-									<RpaPermissionProvider />
-									<DeeplinkNavigationHandler>
-										<OAuthCallbackHandler>
-											<OAuthExecutionProvider>
-												<DesktopAuthProvider>
-													<PendingInviteRedeemer />
-													<NotificationProvider />
-													<RuntimeVariablesProviderComponent>
-														<ExecutionServiceProvider>
-															<ExecutionEngineProviderComponent>
-																<SpotlightWrapper>
-																	<TelemetryProvider>
-																		<ThemeLoader />
-																		<AppSidebar>{children}</AppSidebar>
-																		<GlobalToolBridge />
-																		<GlobalChatOverlay />
-																		<FlowPilotBubbleButton />
-																		<GlobalUpgradeDialog />
-																	</TelemetryProvider>
-																</SpotlightWrapper>
-															</ExecutionEngineProviderComponent>
-														</ExecutionServiceProvider>
-													</RuntimeVariablesProviderComponent>
-												</DesktopAuthProvider>
-											</OAuthExecutionProvider>
-										</OAuthCallbackHandler>
-									</DeeplinkNavigationHandler>
-								</TauriProvider>
-							</TooltipProvider>
-						</ThemeProvider>
+						<I18nProvider>
+							<ThemeProvider
+								attribute="class"
+								defaultTheme="system"
+								enableSystem
+								storageKey="theme"
+								disableTransitionOnChange
+							>
+								<TooltipProvider>
+									<Toaster />
+									<ToastProvider />
+									<TauriProvider>
+										<DownloadNotificationProvider />
+										<RpaPermissionProvider />
+										<DeeplinkNavigationHandler>
+											<OAuthCallbackHandler>
+												<OAuthExecutionProvider>
+													<DesktopAuthProvider>
+														<PendingInviteRedeemer />
+														<NotificationProvider />
+														<RuntimeVariablesProviderComponent>
+															<ExecutionServiceProvider>
+																<ExecutionEngineProviderComponent>
+																	<SpotlightWrapper>
+																		<TelemetryProvider>
+																			<ThemeLoader />
+																			<AppSidebar>{children}</AppSidebar>
+																			<GlobalToolBridge />
+																			<GlobalChatOverlay />
+																			<FlowPilotBubbleButton />
+																			<GlobalUpgradeDialog />
+																		</TelemetryProvider>
+																	</SpotlightWrapper>
+																</ExecutionEngineProviderComponent>
+															</ExecutionServiceProvider>
+														</RuntimeVariablesProviderComponent>
+													</DesktopAuthProvider>
+												</OAuthExecutionProvider>
+											</OAuthCallbackHandler>
+										</DeeplinkNavigationHandler>
+									</TauriProvider>
+								</TooltipProvider>
+							</ThemeProvider>
+						</I18nProvider>
 					</NetworkAwareProvider>
 				</QueryClientProvider>
 			</ReactFlowProvider>

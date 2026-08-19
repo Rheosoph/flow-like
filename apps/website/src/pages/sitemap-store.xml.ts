@@ -29,7 +29,7 @@ export const GET: APIRoute = async () => {
 
 		for (const pkg of pkgRes.packages) {
 			urls.push({
-				loc: `${site}/store/packages/${pkg.id}`,
+				loc: `${site}/store/packages/${pkg.id}/`,
 				lastmod: now,
 				priority: pkg.verified ? "0.8" : "0.6",
 				changefreq: "weekly",
@@ -38,7 +38,7 @@ export const GET: APIRoute = async () => {
 
 		for (const [app] of apps) {
 			urls.push({
-				loc: `${site}/store/apps/${app.id}`,
+				loc: `${site}/store/apps/${app.id}/`,
 				lastmod: app.updated_at || now,
 				priority: "0.8",
 				changefreq: "weekly",

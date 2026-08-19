@@ -1,10 +1,12 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { GaugeIcon, RouteIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks";
 import { detectAppType } from "../../../lib/app-type";
+import { boardListing } from "../../../lib/schema/flow/board-summary";
 import { useBackend } from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import { Skeleton } from "../../ui/skeleton";
@@ -49,6 +51,7 @@ function ModeToggle({
 	mode,
 	onSelect,
 }: Readonly<{ mode: DashboardMode; onSelect: (mode: DashboardMode) => void }>) {
+	const { t } = useTranslation("settings");
 	return (
 		<div className="flex items-center gap-1 rounded-full border bg-muted/50 p-0.5">
 			<Tooltip>
@@ -60,11 +63,11 @@ function ModeToggle({
 						onClick={() => onSelect("launch")}
 					>
 						<RouteIcon className="mr-1 h-3 w-3" />
-						Launch
+						{t('launch', 'Launch')}
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent side="bottom">
-					Step-by-step view — what to do next
+					{t('stepbystepViewWhatToDoNext', 'Step-by-step view — what to do next')}
 				</TooltipContent>
 			</Tooltip>
 			<Tooltip>
@@ -76,11 +79,11 @@ function ModeToggle({
 						onClick={() => onSelect("control")}
 					>
 						<GaugeIcon className="mr-1 h-3 w-3" />
-						Operate
+						{t('operate', 'Operate')}
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent side="bottom">
-					Operations view — health, surfaces and activity
+					{t('operationsViewHealthSurfacesAndActivity', 'Operations view — health, surfaces and activity')}
 				</TooltipContent>
 			</Tooltip>
 		</div>
@@ -133,11 +136,20 @@ export function ProjectDashboard({
 		[appId],
 		enabled,
 	);
-	const boards = useInvoke(
-		backend.boardState.getBoards,
+	const boardSummaries = useInvoke(
+		backend.boardState.getBoardSummaries,
 		backend.boardState,
 		[appId],
 		enabled,
+	);
+	// The dashboard only ever needs names and node counts, so it reads summaries — served from
+	// the database — instead of every board's full graph.
+	const boards = useMemo(
+		() => ({
+			data: boardSummaries.data?.map(boardListing),
+			isLoading: boardSummaries.isLoading,
+		}),
+		[boardSummaries.data, boardSummaries.isLoading],
 	);
 	const events = useInvoke(
 		backend.eventState.getEvents,

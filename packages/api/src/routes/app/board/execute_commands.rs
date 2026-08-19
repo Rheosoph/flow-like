@@ -8,8 +8,14 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::wasm_catalog::{
-        app_wasm_nodes, hydrate_board_wasm_metadata, sanitize_wasm_command_metadata,
+    routes::app::{
+        board::{
+            scoring::save_board_and_refresh_summary,
+            sync_board::{board_sync_tail, seed_board_revision},
+        },
+        wasm_catalog::{
+            app_wasm_nodes, hydrate_board_wasm_metadata, sanitize_wasm_command_metadata,
+        },
     },
     state::AppState,
 };
@@ -18,14 +24,46 @@ use axum::{
     extract::{Path, State},
     http::HeaderMap,
 };
-use flow_like::flow::board::commands::{GenericCommand, canonical_commands_digest};
+use flow_like::flow::board::{
+    commands::{GenericCommand, canonical_commands_digest},
+    sync::{BoardSyncRequest, BoardSyncResponse},
+};
 use serde::{Deserialize, Serialize};
+use tracing::Instrument;
 use utoipa::ToSchema;
 
 #[derive(Clone, Deserialize, ToSchema)]
 pub struct ExecuteCommandsBody {
     #[schema(value_type = Vec<Object>)]
     pub commands: Vec<GenericCommand>,
+    /// The client's board sync manifest. When present the response also carries the sync diff
+    /// against the revision this batch produced, saving the follow-up `/sync` round trip. Absent
+    /// for clients that predate it, which get the bare command list back as before.
+    #[serde(default)]
+    #[schema(value_type = Option<Object>)]
+    pub sync: Option<BoardSyncRequest>,
+}
+
+/// `Commands` when the request carried no `sync`, `WithSync` when it did. `sync: null` inside
+/// `WithSync` means the tail could not be built (never an error — the write is committed) and the
+/// client should sync separately.
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum ExecuteCommandsResponse {
+    Commands(Vec<GenericCommand>),
+    WithSync {
+        commands: Vec<GenericCommand>,
+        sync: Option<BoardSyncResponse>,
+    },
+}
+
+impl ExecuteCommandsResponse {
+    fn new(commands: Vec<GenericCommand>, sync: Option<Option<BoardSyncResponse>>) -> Self {
+        match sync {
+            Some(sync) => Self::WithSync { commands, sync },
+            None => Self::Commands(commands),
+        }
+    }
 }
 
 const COMMAND_RECEIPT_REF_PREFIX: &str = "__flow_like_internal_v1/command-receipt/";
@@ -191,7 +229,7 @@ fn prune_command_receipts(
     ),
     request_body = ExecuteCommandsBody,
     responses(
-        (status = 200, description = "Commands executed, returns resulting commands", body = Vec<Object>),
+        (status = 200, description = "Commands executed. Returns the resulting commands, or `{commands, sync}` when the request carried a sync manifest", body = Object),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     )
@@ -206,11 +244,12 @@ pub async fn execute_commands(
     Path((app_id, board_id)): Path<(String, String)>,
     headers: HeaderMap,
     Json(mut params): Json<ExecuteCommandsBody>,
-) -> Result<Json<Vec<GenericCommand>>, ApiError> {
+) -> Result<Json<ExecuteCommandsResponse>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
 
     let sub = permission.sub()?;
-    let _mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
+    let sync_request = params.sync.take();
+    let mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
     let idempotency_key = command_idempotency_key(&headers, &sub, &app_id, &board_id)?;
     let receipt_ack_key = command_receipt_ack_key(&headers, &sub, &app_id, &board_id)?;
     if idempotency_key.is_some() && receipt_ack_key.is_some() {
@@ -250,7 +289,12 @@ pub async fn execute_commands(
         if removed || pruned_receipts {
             board.save(None).await?;
         }
-        return Ok(Json(Vec::new()));
+        drop(mutation_guard);
+        let sync = match &sync_request {
+            Some(request) => Some(board_sync_tail(&state, &app_id, &board_id, None, request).await),
+            None => None,
+        };
+        return Ok(Json(ExecuteCommandsResponse::new(Vec::new(), sync)));
     }
     if let (Some(key), Some(digest), Some(original_receipt)) = (
         idempotency_key.as_ref(),
@@ -269,7 +313,14 @@ pub async fn execute_commands(
                     "The Idempotency-Key was already used for a different command payload.",
                 ));
             }
-            return Ok(Json(params.commands));
+            drop(mutation_guard);
+            let sync = match &sync_request {
+                Some(request) => {
+                    Some(board_sync_tail(&state, &app_id, &board_id, None, request).await)
+                }
+                None => None,
+            };
+            return Ok(Json(ExecuteCommandsResponse::new(params.commands, sync)));
         }
 
         // Restore the exact opaque value removed by pruning. Only an explicit receipt ACK may
@@ -319,8 +370,10 @@ pub async fn execute_commands(
     // the identical bytes forever. Falling through the generic `Error` conversion would answer 500
     // "Internal Server Error" with the real reason stripped, leaving the client unable to tell a
     // permanently unapplicable batch from an outage.
+    let batch = params.commands.len();
     let commands = board
         .execute_commands(params.commands, flow_state)
+        .instrument(tracing::debug_span!("execute_commands.apply", batch))
         .await
         .map_err(|error| {
             ApiError::unprocessable(format!(
@@ -353,9 +406,28 @@ pub async fn execute_commands(
             })?;
     }
 
-    board.save(None).await?;
+    let put = save_board_and_refresh_summary(&state, &app_id, &board)
+        .instrument(tracing::debug_span!("execute_commands.save"))
+        .await?;
+    // The write is committed; everything below is read-only bookkeeping, so concurrent writers
+    // may proceed while the snapshot and the sync tail are built.
+    drop(mutation_guard);
+    let cached = seed_board_revision(&state, &app_id, &board_id, board, &put)
+        .instrument(tracing::debug_span!("execute_commands.snapshot"))
+        .await;
+    let sync = match &sync_request {
+        Some(request) => Some(
+            board_sync_tail(&state, &app_id, &board_id, cached, request)
+                .instrument(tracing::debug_span!("execute_commands.sync_tail"))
+                .await,
+        ),
+        None => None,
+    };
 
-    Ok(Json(idempotent_response.unwrap_or(commands)))
+    Ok(Json(ExecuteCommandsResponse::new(
+        idempotent_response.unwrap_or(commands),
+        sync,
+    )))
 }
 
 #[cfg(test)]

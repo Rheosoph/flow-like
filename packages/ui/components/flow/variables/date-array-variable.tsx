@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { format } from "date-fns";
 import { CalendarIcon, PlusCircleIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -27,6 +28,7 @@ export function DateArrayVariable({
 	variable: IVariable;
 	onChange: (v: IVariable) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const parsedTimes = useMemo<Date[]>(() => {
 		const p = parseUint8ArrayToJson(variable.default_value);
 		if (!Array.isArray(p)) return [];
@@ -104,7 +106,7 @@ export function DateArrayVariable({
 								{newDate ? (
 									`${format(newDate, "PPP")} - ${newTime}`
 								) : (
-									<span>Pick a date</span>
+									<span>{t('pickADate', 'Pick a date')}</span>
 								)}
 							</span>
 						</Button>
@@ -112,7 +114,7 @@ export function DateArrayVariable({
 					<PopoverContent className="w-auto p-2">
 						<div className="flex flex-col items-center gap-2">
 							<div className="flex items-center gap-2 w-full">
-								<p className="text-nowrap text-sm font-medium">Time:</p>
+								<p className="text-nowrap text-sm font-medium">{t('time', 'Time:')}</p>
 								<Input
 									disabled={disabled}
 									type="time"

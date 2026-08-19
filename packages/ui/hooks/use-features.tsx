@@ -30,6 +30,7 @@ export function useFeatures() {
 			return backend.apiState.get<IFeatures>(hubProfile, "info/features");
 		},
 		enabled: !!hubProfile,
+		meta: { persist: false },
 		staleTime: 5 * 60 * 1000,
 	});
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Lightbulb, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../../lib/utils";
@@ -48,6 +49,7 @@ export function SaveQueryDialog({
 		kind: SavedQueryKind;
 	}) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const recommendation = useMemo(
 		() => recommendQueryKind(sql, params),
 		[sql, params],
@@ -91,10 +93,9 @@ export function SaveQueryDialog({
 		>
 			<DialogContent className="sm:max-w-md">
 				<DialogHeader>
-					<DialogTitle>Save query</DialogTitle>
+					<DialogTitle>{t('saveQuery', 'Save query')}</DialogTitle>
 					<DialogDescription>
-						Store this query to rerun it, or save it as a view other queries can
-						read from.
+						{t('storeThisQueryToRerunItOrSaveItAsAViewOtherQueriesCanReadFrom', "Store this query to rerun it, or save it as a view other queries can read from.")}
 					</DialogDescription>
 				</DialogHeader>
 				<div className="space-y-4 py-1">
@@ -112,23 +113,23 @@ export function SaveQueryDialog({
 									submit();
 								}
 							}}
-							placeholder="Active customers"
+							placeholder={t('activeCustomers', 'Active customers')}
 						/>
 					</div>
 					<div className="grid gap-1.5">
-						<Label htmlFor="saved-query-description">Description</Label>
+						<Label htmlFor="saved-query-description">{t('description', 'Description')}</Label>
 						<Textarea
 							id="saved-query-description"
 							value={description}
 							disabled={busy}
 							className="min-h-16"
 							onChange={(event) => setDescription(event.target.value)}
-							placeholder="Optional notes about what this query returns"
+							placeholder={t('optionalNotesAboutWhatThisQueryReturns', 'Optional notes about what this query returns')}
 						/>
 					</div>
 
 					<div className="grid gap-1.5">
-						<Label id="save-as-label">Save as</Label>
+						<Label id="save-as-label">{t('saveAs', 'Save as')}</Label>
 						<div className="grid grid-cols-2 gap-2">
 							<button
 								type="button"
@@ -142,9 +143,9 @@ export function SaveQueryDialog({
 										: "hover:bg-muted/50",
 								)}
 							>
-								<p className="text-sm font-medium">Stored query</p>
+								<p className="text-sm font-medium">{t('storedQuery', 'Stored query')}</p>
 								<p className="mt-0.5 text-xs text-muted-foreground">
-									Rerun it any time, with parameters.
+									{t('rerunItAnyTimeWithParameters', 'Rerun it any time, with parameters.')}
 								</p>
 							</button>
 							<button
@@ -160,9 +161,9 @@ export function SaveQueryDialog({
 										: "hover:bg-muted/50",
 								)}
 							>
-								<p className="text-sm font-medium">View</p>
+								<p className="text-sm font-medium">{t('view', 'View')}</p>
 								<p className="mt-0.5 text-xs text-muted-foreground">
-									A named table other queries can FROM.
+									{t('aNamedTableOtherQueriesCanFrom', 'A named table other queries can FROM.')}
 								</p>
 							</button>
 						</div>
@@ -172,7 +173,7 @@ export function SaveQueryDialog({
 						>
 							<Lightbulb className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
 							{paramsPresent
-								? "Queries with parameters can't be views — saved as a stored query."
+								? t('queriesWithParametersCantBeViewsSavedAsAStoredQuery', 'Queries with parameters can\'t be views — saved as a stored query.')
 								: recommendation.reason}
 						</p>
 					</div>
@@ -180,7 +181,7 @@ export function SaveQueryDialog({
 					{paramsPresent && (
 						<div className="grid gap-1.5">
 							<Label className="text-xs text-muted-foreground">
-								Parameters
+								{t('parameters', 'Parameters')}
 							</Label>
 							<div className="flex flex-wrap gap-1.5">
 								{params.map((param) => (
@@ -188,9 +189,7 @@ export function SaveQueryDialog({
 										key={param}
 										variant="secondary"
 										className="font-mono text-[11px]"
-									>
-										${param}
-									</Badge>
+									>{`$${param}`}</Badge>
 								))}
 							</div>
 						</div>
@@ -215,11 +214,11 @@ export function SaveQueryDialog({
 						disabled={busy}
 						onClick={() => onOpenChange(false)}
 					>
-						Cancel
+						{t('cancel', 'Cancel')}
 					</Button>
 					<Button disabled={!canSave} onClick={submit}>
 						{busy && <Loader2 className="h-4 w-4 animate-spin" />}
-						Save
+						{t('save', 'Save')}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

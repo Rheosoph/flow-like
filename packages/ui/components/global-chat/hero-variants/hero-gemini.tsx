@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	ChevronDownIcon,
 	LayoutGridIcon,
@@ -348,6 +349,7 @@ button.hero-v3-chip {
 `;
 
 export function HeroSearchBarGemini() {
+	const { t } = useTranslation("chat");
 	const {
 		value,
 		setValue,
@@ -379,14 +381,12 @@ export function HeroSearchBarGemini() {
 			<style>{HERO_V3_CSS}</style>
 			<div className="flex flex-col items-center gap-2 text-center">
 				<h1 className="text-3xl md:text-4xl font-bold tracking-tight">
-					What do you want to{" "}
-					<span className="bg-linear-[92deg,#ff6d3d,#c084fc_55%,#f472b6] bg-clip-text text-transparent">
+					{t('whatDoYouWantTo', 'What do you want to')}{" "}<Trans i18nKey="spanClassnamebglinear92degff6d3dc084fc_55f472b6BgcliptextTexttransparentBuildSpan"><span className="bg-linear-[92deg,#ff6d3d,#c084fc_55%,#f472b6] bg-clip-text text-transparent">
 						build
 					</span>
-					?
-				</h1>
+					?</Trans></h1>
 				<p className="text-sm md:text-base text-muted-foreground">
-					Ask FlowPilot to create apps, find packages, or navigate Flow-Like.
+					{t('askFlowpilotToCreateAppsFindPackagesOrNavigateFlowlike', 'Ask FlowPilot to create apps, find packages, or navigate Flow-Like.')}
 				</p>
 			</div>
 			<div className="hero-v3-outer">
@@ -410,29 +410,29 @@ export function HeroSearchBarGemini() {
 							value={value}
 							onChange={(e) => setValue(e.target.value)}
 							onKeyDown={handleKeyDown}
-							placeholder="Ask FlowPilot anything, or describe what you want to build…"
+							placeholder={t('askFlowpilotAnythingOrDescribeWhatYouWantToBuild', 'Ask FlowPilot anything, or describe what you want to build…')}
 							rows={1}
-							aria-label="Ask FlowPilot"
+							aria-label={t('askFlowpilot', 'Ask FlowPilot')}
 							className="min-h-9 max-h-40 resize-none border-0 bg-transparent dark:bg-transparent shadow-none focus-visible:ring-0 py-1.5 px-2 text-[17px]"
 						/>
 						<div className="hero-v3-chips">
 							<span className="hero-v3-chip" aria-hidden="true">
 								<SparklesIcon className="size-3.5 text-[#7c3aed] dark:text-[#c9b8ff]" />
-								Smart
+								{t('smart', 'Smart')}
 								<ChevronDownIcon className="size-3.25" />
 							</span>
 							<button
 								type="button"
 								className="hero-v3-chip"
 								onClick={openFilePicker}
-								aria-label="Attach images"
+								aria-label={t('attachImages', 'Attach images')}
 							>
 								<PaperclipIcon className="size-3.5" />
-								Attach
+								{t('attach', 'Attach')}
 							</button>
 							<span className="hero-v3-chip" aria-hidden="true">
 								<LayoutGridIcon className="size-3.5" />
-								Templates
+								{t('templates', 'Templates')}
 							</span>
 						</div>
 					</div>
@@ -442,7 +442,7 @@ export function HeroSearchBarGemini() {
 						className="hero-v3-send"
 						onClick={handleSend}
 						disabled={!canSend}
-						aria-label="Send"
+						aria-label={t('send', 'Send')}
 					>
 						<SendIcon
 							className="size-5.5"

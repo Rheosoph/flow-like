@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
@@ -25,6 +26,7 @@ export function PackageUsersContainer({
 	auth,
 	currentUserPermission,
 }: PackageUsersContainerProps) {
+	const { t } = useTranslation("store");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
@@ -59,10 +61,11 @@ export function PackageUsersContainer({
 				auth,
 			),
 		onSuccess: () => {
-			toast.success("Invitation sent");
+			toast.success(t("invitationSent", "Invitation sent"));
 			queryClient.invalidateQueries({ queryKey });
 		},
-		onError: () => toast.error("Failed to send invitation"),
+		onError: () =>
+			toast.error(t("failedToSendInvitation", "Failed to send invitation")),
 	});
 
 	const updatePermission = useMutation({
@@ -81,10 +84,11 @@ export function PackageUsersContainer({
 				auth,
 			),
 		onSuccess: () => {
-			toast.success("Permission updated");
+			toast.success(t("permissionUpdated", "Permission updated"));
 			queryClient.invalidateQueries({ queryKey });
 		},
-		onError: () => toast.error("Failed to update permission"),
+		onError: () =>
+			toast.error(t("failedToUpdatePermission", "Failed to update permission")),
 	});
 
 	const removeUser = useMutation({
@@ -96,10 +100,11 @@ export function PackageUsersContainer({
 				auth,
 			),
 		onSuccess: () => {
-			toast.success("User removed");
+			toast.success(t("userRemoved", "User removed"));
 			queryClient.invalidateQueries({ queryKey });
 		},
-		onError: () => toast.error("Failed to remove user"),
+		onError: () =>
+			toast.error(t("failedToRemoveUser", "Failed to remove user")),
 	});
 
 	const isMutating =

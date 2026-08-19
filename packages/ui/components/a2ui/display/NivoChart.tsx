@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Component,
 	type ErrorInfo,
@@ -92,6 +93,7 @@ function ChartErrorFallback({
 	chartType,
 	error,
 }: { chartType: string; error: string }) {
+	const { t } = useTranslation("common");
 	return (
 		<div className="w-full h-full flex flex-col items-center justify-center bg-muted/30 rounded-lg border border-dashed border-muted-foreground/30 p-4 gap-3">
 			{/* Chart silhouette based on type */}
@@ -99,14 +101,12 @@ function ChartErrorFallback({
 				<ChartSilhouette type={chartType} />
 			</div>
 			<div className="text-center space-y-1">
-				<p className="text-sm font-medium text-muted-foreground">
-					Failed to render {chartType} chart
-				</p>
+				<p className="text-sm font-medium text-muted-foreground">{t('failedToRenderCharttypeChart', 'Failed to render {{chartType}} chart', { chartType })}</p>
 				<p className="text-xs text-muted-foreground/70 max-w-[280px]">
 					{error.length > 100 ? `${error.slice(0, 100)}...` : error}
 				</p>
 				<p className="text-xs text-muted-foreground/50 mt-2">
-					Check data format matches chart requirements
+					{t('checkDataFormatMatchesChartRequirements', 'Check data format matches chart requirements')}
 				</p>
 			</div>
 		</div>
@@ -115,6 +115,7 @@ function ChartErrorFallback({
 
 // SVG silhouettes for different chart types
 function ChartSilhouette({ type }: { type: string }) {
+	const { t } = useTranslation("common");
 	const fill = "currentColor";
 	const stroke = "currentColor";
 
@@ -164,7 +165,7 @@ function ChartSilhouette({ type }: { type: string }) {
 				</svg>
 			);
 		case "line":
-		case "areaBump":
+		case `areaBump`:
 		case "bump":
 			return (
 				<svg
@@ -653,6 +654,7 @@ export function A2UINivoChart({
 	style,
 	componentId,
 }: ComponentProps<NivoChartComponent>) {
+	const { t } = useTranslation("common");
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [chartModule, setChartModule] = useState<ChartModule | null>(null);
@@ -769,7 +771,7 @@ export function A2UINivoChart({
 
 				case "line":
 				case "bump":
-				case "areaBump":
+				case `areaBump`:
 				case "radialBar":
 					// Expects array of { id, data: [{ x, y }] }
 					return (
@@ -1181,7 +1183,7 @@ export function A2UINivoChart({
 				};
 			}
 			case "bump":
-			case "areaBump":
+			case `areaBump`:
 				return {
 					...baseProps,
 					xPadding: 0.5,
@@ -1428,7 +1430,7 @@ export function A2UINivoChart({
 				)}
 				style={{ ...resolveInlineStyle(style), height }}
 			>
-				Loading chart...
+				{t('loadingChart', 'Loading chart...')}
 			</div>
 		);
 	}
@@ -1445,7 +1447,7 @@ export function A2UINivoChart({
 			>
 				<div className="text-sm">{error}</div>
 				<div className="text-xs text-muted-foreground mt-2">
-					Available: {Object.keys(CHART_PACKAGES).join(", ")}
+					{t('available', 'Available:')} {Object.keys(CHART_PACKAGES).join(", ")}
 				</div>
 			</div>
 		);

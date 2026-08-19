@@ -4,6 +4,11 @@ use std::{
     time::Duration,
 };
 
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::{
+    ExecutionEnvironment,
+    egress::{GuardedHttpClient, ensure_url_allowed},
+};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -100,8 +105,19 @@ impl NodeLogic for ExtractLinksNode {
         let max_depth = std::cmp::min(depth_input.max(0), 40) as usize;
 
         let start_url = Url::parse(&starting_page)?;
+        // The crawl follows flow-supplied URLs and then every link it finds, so
+        // the entry point is checked here and every hop again inside the loop.
+        let environment = context.execution_environment();
+        ensure_url_allowed(environment, &start_url)?;
 
-        let found_links = crawl_links(start_url.clone(), max_depth, same_domain, offset_ms).await;
+        let found_links = crawl_links(
+            start_url.clone(),
+            max_depth,
+            same_domain,
+            offset_ms,
+            environment,
+        )
+        .await;
 
         context.set_pin_value("links", json!(found_links)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -122,16 +138,22 @@ async fn crawl_links(
     max_depth: usize,
     same_domain: bool,
     offset_ms: u64,
+    environment: ExecutionEnvironment,
 ) -> HashSet<String> {
     let mut visited = HashSet::new();
     let mut links = HashSet::new();
     let mut queue = VecDeque::new();
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .user_agent("FlowLike/0.1")
-        .build()
-        .unwrap_or_default();
+    // Server-side this refuses the host plane at the request URL, at DNS
+    // resolution and on every redirect. Without it the crawler was the one
+    // flow-supplied-URL path left that could reach the metadata server.
+    let Ok(client) = GuardedHttpClient::configured(environment, |builder| {
+        builder
+            .timeout(Duration::from_secs(10))
+            .user_agent("FlowLike/0.1")
+    }) else {
+        return HashSet::new();
+    };
 
     visited.insert(start_url.to_string());
     queue.push_back((start_url, max_depth));
@@ -145,8 +167,13 @@ async fn crawl_links(
 
         tokio::time::sleep(Duration::from_millis(offset_ms)).await;
 
-        let resp = match client.get(url.clone()).send().await {
-            Ok(r) => r,
+        // Every hop is checked, not just the entry point: a page reached over a
+        // redirect can link straight at 169.254.169.254.
+        let resp = match client.get(url.as_str()) {
+            Ok(request) => match request.send().await {
+                Ok(r) => r,
+                Err(_) => continue,
+            },
             Err(_) => continue,
         };
 

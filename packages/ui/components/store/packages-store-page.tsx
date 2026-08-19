@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { useDebounce } from "@uidotdev/usehooks";
 import {
@@ -26,6 +27,7 @@ import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
 import { getErrorMessage } from "../../lib/error-message";
+import { usePackageCapabilities } from "../../lib/package-capabilities";
 import type { PackageSummary, SearchResults } from "../../lib/schema/wasm";
 import { useBackend } from "../../state/backend-state";
 import {
@@ -102,7 +104,10 @@ function prettyCategory(category: string): string {
 		.join(" ");
 }
 
+const MAX_VISIBLE_CAPABILITIES = 3;
+
 export function PackageCard({ pkg }: { pkg: PackageSummary }) {
+	const { t } = useTranslation("store");
 	const { primaryHue, isDark } = useThemeInfo();
 	const gradient = useMemo(
 		() => hashToGradient(pkg.id, primaryHue, isDark),
@@ -112,17 +117,25 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 	const displayDesc = pkg.metadata?.description ?? pkg.description;
 	const icon = pkg.metadata?.icon;
 	const thumbnail = pkg.metadata?.thumbnail;
-	const cover = icon ?? thumbnail;
 	const rated = (pkg.ratingCount ?? 0) > 0;
 	const category = pkg.primaryCategory ?? pkg.secondaryCategory;
+	const capabilities = usePackageCapabilities(pkg.capabilities);
+	const visibleCapabilities = capabilities.slice(0, MAX_VISIBLE_CAPABILITIES);
+	const hiddenCapabilityCount =
+		capabilities.length - visibleCapabilities.length;
 
 	return (
 		<Link
 			href={`/store/packages?id=${pkg.id}`}
-			className="group relative flex h-56 w-full flex-col overflow-hidden rounded-2xl border border-border/50 shadow-sm transition-all hover:-translate-y-1 hover:border-primary/40 hover:shadow-xl"
+			className="group relative flex h-full w-full flex-col overflow-hidden rounded-xl border border-border/60 bg-card p-2.5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg"
 		>
-			{/* cover image (or the deterministic aurora when there's none) */}
-			<div className="absolute inset-0 transition-transform duration-500 ease-out group-hover:scale-105">
+			<div
+				aria-hidden="true"
+				className="pointer-events-none absolute inset-0 bg-[radial-gradient(var(--border)_0.5px,transparent_0.5px)] bg-size-[7px_7px] opacity-50"
+			/>
+
+			{/* the cover as a framed specimen — never bled behind the copy */}
+			<div className="relative aspect-video w-full shrink-0 overflow-hidden rounded-lg border border-border/60 bg-muted">
 				{thumbnail ? (
 					<img
 						src={thumbnail}
@@ -137,55 +150,46 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 								background: `linear-gradient(${gradient.angle}deg, ${gradient.from}, ${gradient.to})`,
 							}}
 						/>
-						{icon && (
+						{icon ? (
 							<img
 								src={icon}
 								alt=""
 								aria-hidden="true"
-								className="absolute left-1/2 top-1/3 h-[160%] w-[160%] -translate-x-1/2 -translate-y-1/2 object-contain opacity-40 blur-2xl saturate-150"
+								className="absolute left-1/2 top-1/2 h-[150%] w-[150%] -translate-x-1/2 -translate-y-1/2 object-contain opacity-40 blur-2xl saturate-150"
 							/>
+						) : (
+							<span className="absolute inset-0 flex items-center justify-center font-mono text-2xl font-bold text-white/50">
+								{getPackageInitials(displayName)}
+							</span>
 						)}
 					</>
 				)}
+				<span className="absolute bottom-1.5 left-1.5 rounded-md border border-white/20 bg-black/50 px-1.5 py-0.5 font-mono text-[10px] leading-none text-white/90 backdrop-blur-sm">
+					{`v${pkg.latestVersion}`}
+				</span>
 			</div>
 
-			{/* frosted glass for legibility — kept dark in both themes so any cover reads */}
-			<div className="absolute inset-0 bg-linear-to-b from-black/25 via-black/55 to-black/85 backdrop-blur-[2px]" />
-			<div
-				className="pointer-events-none absolute inset-0 rounded-2xl opacity-0 transition-opacity duration-300 group-hover:opacity-100"
-				style={{ boxShadow: `inset 0 0 0 1px ${gradient.from}66` }}
-			/>
-
-			<div className="relative z-10 flex h-full flex-col p-4">
-				<div className="flex items-center gap-3">
-					<div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-xl border border-white/20 bg-white/10 shadow-lg backdrop-blur-md">
-						{cover ? (
-							<img src={cover} alt="" className="h-full w-full object-cover" />
-						) : (
-							<div className="flex h-full w-full items-center justify-center font-mono text-xs font-semibold text-white">
-								{getPackageInitials(displayName)}
-							</div>
-						)}
-					</div>
-					<div className="min-w-0 flex-1">
-						{category && (
-							<div className="truncate text-[10px] font-semibold uppercase tracking-wider text-white/60">
-								{prettyCategory(category)}
-							</div>
-						)}
-						<div className="flex items-center gap-1.5">
-							<h3 className="truncate font-mono text-sm font-semibold text-white">
-								{displayName}
-							</h3>
-							{pkg.verified && (
-								<Shield className="h-3.5 w-3.5 shrink-0 text-sky-400" />
-							)}
+			<div className="relative mt-2.5 flex items-center gap-2">
+				<div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-border/60 bg-muted">
+					{icon ? (
+						<img src={icon} alt="" className="h-full w-full object-cover" />
+					) : (
+						<div className="flex h-full w-full items-center justify-center font-mono text-[10px] font-semibold text-muted-foreground">
+							{getPackageInitials(displayName)}
 						</div>
-					</div>
-					<div className="flex shrink-0 items-center gap-1.5 self-start">
+					)}
+				</div>
+				<div className="min-w-0 flex-1">
+					<div className="flex items-center gap-1.5">
+						<h3 className="truncate font-mono text-[13px] font-semibold">
+							{displayName}
+						</h3>
+						{pkg.verified && (
+							<Shield className="h-3.5 w-3.5 shrink-0 text-sky-500 dark:text-sky-400" />
+						)}
 						{pkg.visibility !== "public" && (
 							<span
-								className="rounded-md border border-white/20 bg-white/12 p-1 text-white/80"
+								className="shrink-0 rounded-md border border-border/60 p-1 text-muted-foreground"
 								title={pkg.visibility}
 							>
 								{pkg.visibility === "private" ? (
@@ -195,47 +199,85 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 								)}
 							</span>
 						)}
-						<span className="rounded-md border border-white/20 bg-white/12 px-2 py-0.5 font-mono text-[10px] text-white/85">
-							v{pkg.latestVersion}
+					</div>
+					{category && (
+						<div className="truncate font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+							{prettyCategory(category)}
+						</div>
+					)}
+				</div>
+			</div>
+
+			<p className="relative mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+				{displayDesc}
+			</p>
+
+			{/* what this package is allowed to do, straight from the manifest */}
+			{pkg.capabilities && (
+				<div className="relative mb-2.5 mt-2.5 flex flex-wrap gap-1">
+					{visibleCapabilities.map((capability) => (
+						<span
+							key={capability.key}
+							title={capability.label}
+							className={
+								capability.severity === "elevated"
+									? "rounded border border-primary/35 bg-primary/10 px-1.5 py-1 font-mono text-[10px] leading-none text-primary"
+									: "rounded border border-border/60 bg-muted/40 px-1.5 py-1 font-mono text-[10px] leading-none text-muted-foreground"
+							}
+						>
+							{capability.key}
 						</span>
+					))}
+					{hiddenCapabilityCount > 0 && (
+						<span
+							title={capabilities.map((c) => c.label).join("\n")}
+							className="rounded border border-border/60 bg-muted/40 px-1.5 py-1 font-mono text-[10px] leading-none text-muted-foreground"
+						>
+							{`+${hiddenCapabilityCount}`}
+						</span>
+					)}
+					{capabilities.length === 0 && (
+						<span className="rounded border border-dashed border-border/60 px-1.5 py-1 font-mono text-[10px] leading-none text-muted-foreground">
+							{t("noPermissionsRequested", "no permissions requested")}
+						</span>
+					)}
+				</div>
+			)}
+
+			<div className="relative mt-auto grid grid-cols-3 divide-x divide-border/60 border-t border-border/60 pt-2.5">
+				<div className="pr-2.5">
+					<div className="font-mono text-[13px] font-semibold tabular-nums">
+						{formatCompact(pkg.downloadCount)}
+					</div>
+					<div className="mt-0.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
+						{t("installs", "Installs")}
 					</div>
 				</div>
-
-				<p className="mt-3 line-clamp-2 text-xs leading-relaxed text-white/70">
-					{displayDesc}
-				</p>
-
-				<div className="mt-auto grid grid-cols-3 gap-2">
-					<div className="rounded-xl border border-white/12 bg-white/8 px-2 py-2 text-center backdrop-blur-sm">
-						<div className="font-mono text-sm font-bold tabular-nums text-white">
-							{formatCompact(pkg.downloadCount)}
-						</div>
-						<div className="mt-0.5 text-[9px] uppercase tracking-wider text-white/55">
-							Installs
-						</div>
+				<div className="px-2.5">
+					<div className="flex items-center gap-1 font-mono text-[13px] font-semibold tabular-nums">
+						{rated ? (
+							<>
+								<Star className="h-3 w-3 fill-yellow-500 text-yellow-500 dark:fill-yellow-400 dark:text-yellow-400" />
+								{(pkg.avgRating ?? 0).toFixed(1)}
+							</>
+						) : (
+							t("new", "New")
+						)}
 					</div>
-					<div className="rounded-xl border border-white/12 bg-white/8 px-2 py-2 text-center backdrop-blur-sm">
-						<div className="flex items-center justify-center gap-1 font-mono text-sm font-bold tabular-nums text-white">
-							{rated ? (
-								<>
-									<Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
-									{(pkg.avgRating ?? 0).toFixed(1)}
-								</>
-							) : (
-								"New"
-							)}
-						</div>
-						<div className="mt-0.5 text-[9px] uppercase tracking-wider text-white/55">
-							Rating
-						</div>
+					<div className="mt-0.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
+						{t("rating", "Rating")}
 					</div>
-					<div className="rounded-xl border border-white/12 bg-white/8 px-2 py-2 text-center backdrop-blur-sm">
-						<div className="font-mono text-sm font-bold text-white">
-							{pkg.price > 0 ? `€${(pkg.price / 100).toFixed(2)}` : "Free"}
-						</div>
-						<div className="mt-0.5 text-[9px] uppercase tracking-wider text-white/55">
-							Price
-						</div>
+				</div>
+				<div className="pl-2.5">
+					<div
+						className={`font-mono text-[13px] font-semibold ${pkg.price > 0 ? "text-primary" : ""}`}
+					>
+						{pkg.price > 0
+							? `€${(pkg.price / 100).toFixed(2)}`
+							: t("free", "Free")}
+					</div>
+					<div className="mt-0.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
+						{t("price", "Price")}
 					</div>
 				</div>
 			</div>
@@ -245,21 +287,27 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 
 function PackageCardSkeleton() {
 	return (
-		<div className="flex h-56 flex-col rounded-2xl border border-border/40 bg-card/60 p-4">
-			<div className="flex items-start gap-3">
-				<Skeleton className="h-11 w-11 shrink-0 rounded-md" />
-				<div className="min-w-0 flex-1 space-y-2">
-					<div className="flex items-center gap-2">
-						<Skeleton className="h-4 w-28 rounded" />
-						<Skeleton className="h-3 w-10 rounded" />
-					</div>
-					<Skeleton className="h-3 w-full rounded" />
-					<Skeleton className="h-3 w-3/4 rounded" />
+		<div className="flex flex-col rounded-xl border border-border/60 bg-card/60 p-2.5">
+			<Skeleton className="aspect-video w-full rounded-lg" />
+			<div className="mt-2.5 flex items-center gap-2">
+				<Skeleton className="h-9 w-9 shrink-0 rounded-lg" />
+				<div className="min-w-0 flex-1 space-y-1.5">
+					<Skeleton className="h-3.5 w-28 rounded" />
+					<Skeleton className="h-2.5 w-16 rounded" />
 				</div>
 			</div>
-			<div className="mt-auto flex gap-2 border-t border-border/20 pt-3">
-				<Skeleton className="h-3.5 w-10 rounded" />
-				<Skeleton className="h-3.5 w-16 rounded" />
+			<div className="mt-2 space-y-1.5">
+				<Skeleton className="h-3 w-full rounded" />
+				<Skeleton className="h-3 w-3/4 rounded" />
+			</div>
+			<div className="mb-2.5 mt-2.5 flex gap-1">
+				<Skeleton className="h-5 w-16 rounded" />
+				<Skeleton className="h-5 w-20 rounded" />
+			</div>
+			<div className="grid grid-cols-3 gap-2.5 border-t border-border/60 pt-2.5">
+				<Skeleton className="h-7 rounded" />
+				<Skeleton className="h-7 rounded" />
+				<Skeleton className="h-7 rounded" />
 			</div>
 		</div>
 	);
@@ -274,6 +322,7 @@ export function PackageDetailWrapper({
 	auth: PackagesStoreAuth;
 	getPackageStatus?: (packageId: string) => CompileStatus | undefined;
 }) {
+	const { t } = useTranslation("store");
 	const searchParams = useSearchParams();
 	const router = useRouter();
 	const packageId = searchParams.get("id") ?? "";
@@ -283,16 +332,24 @@ export function PackageDetailWrapper({
 		if (!purchaseStatus) return;
 		if (purchaseStatus === "success") {
 			toast.success(
-				"Purchase successful! You now have access to this package.",
+				t(
+					"purchaseSuccessfulYouNowHaveAccessToThisPackage",
+					"Purchase successful! You now have access to this package.",
+				),
 				{ duration: 5000 },
 			);
 		} else if (purchaseStatus === "canceled") {
-			toast.info("Purchase was canceled. You can try again anytime.");
+			toast.info(
+				t(
+					"purchaseCanceledTryAgainAnytime",
+					"Purchase was canceled. You can try again anytime.",
+				),
+			);
 		}
 		const url = new URL(window.location.href);
 		url.searchParams.delete("purchase");
 		router.replace(url.pathname + url.search, { scroll: false });
-	}, [purchaseStatus, router]);
+	}, [purchaseStatus, router, t]);
 
 	const handleBack = useCallback(() => {
 		router.replace(getPackageOverviewHref(searchParams), {
@@ -305,15 +362,36 @@ export function PackageDetailWrapper({
 		<StorePackageDetail
 			packageId={packageId}
 			onBack={handleBack}
-			onInstallSuccess={() => toast.success("Package installed successfully")}
+			onInstallSuccess={() =>
+				toast.success(
+					t("packageInstalledSuccessfully", "Package installed successfully"),
+				)
+			}
 			onUninstallSuccess={() =>
-				toast.success("Package uninstalled successfully")
+				toast.success(
+					t(
+						"packageUninstalledSuccessfully",
+						"Package uninstalled successfully",
+					),
+				)
 			}
 			onInstallError={(error) =>
-				toast.error(`Failed to install package: ${getErrorMessage(error)}`)
+				toast.error(
+					t(
+						"failedToInstallPackageMessage",
+						"Failed to install package: {{message}}",
+						{ message: getErrorMessage(error) },
+					),
+				)
 			}
 			onUninstallError={(error) =>
-				toast.error(`Failed to uninstall package: ${getErrorMessage(error)}`)
+				toast.error(
+					t(
+						"failedToUninstallPackageMessage",
+						"Failed to uninstall package: {{message}}",
+						{ message: getErrorMessage(error) },
+					),
+				)
 			}
 			onDeleteSuccess={handleBack}
 			fetcher={fetcher}
@@ -414,7 +492,10 @@ function Swimlane({
 					className="flex snap-x snap-mandatory gap-3 overflow-x-auto scrollbar-none pb-1"
 				>
 					{packages.map((pkg) => (
-						<div key={pkg.id} className="w-[85vw] max-w-72 shrink-0 snap-start">
+						<div
+							key={pkg.id}
+							className="flex w-[85vw] max-w-72 shrink-0 snap-start"
+						>
 							<PackageCard pkg={pkg} />
 						</div>
 					))}
@@ -437,6 +518,7 @@ export function PackageListContent({
 	fetcher,
 	auth,
 }: { fetcher: GenericFetcher; auth: PackagesStoreAuth }) {
+	const { t } = useTranslation("store");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
@@ -499,7 +581,7 @@ export function PackageListContent({
 				<div className="relative flex-1">
 					<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
 					<Input
-						placeholder="Search packages..."
+						placeholder={t("searchPackages", "Search packages...")}
 						value={searchQuery}
 						onChange={(e) => {
 							setSearchQuery(e.target.value);
@@ -519,14 +601,22 @@ export function PackageListContent({
 					>
 						<SelectTrigger className="w-37.5">
 							<SlidersHorizontal className="mr-2 h-4 w-4" />
-							<SelectValue placeholder="Sort by" />
+							<SelectValue placeholder={t("sortBy", "Sort by")} />
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="downloads">Most Downloads</SelectItem>
-							<SelectItem value="relevance">Relevance</SelectItem>
-							<SelectItem value="name">Name</SelectItem>
-							<SelectItem value="updated_at">Recently Updated</SelectItem>
-							<SelectItem value="created_at">Newest</SelectItem>
+							<SelectItem value="downloads">
+								{t("mostDownloads", "Most Downloads")}
+							</SelectItem>
+							<SelectItem value="relevance">
+								{t("relevance", "Relevance")}
+							</SelectItem>
+							<SelectItem value="name">{t("name", "Name")}</SelectItem>
+							<SelectItem value="updated_at">
+								{t("recentlyUpdated", "Recently Updated")}
+							</SelectItem>
+							<SelectItem value="created_at">
+								{t("newest", "Newest")}
+							</SelectItem>
 						</SelectContent>
 					</Select>
 
@@ -543,14 +633,15 @@ export function PackageListContent({
 						}`}
 					>
 						<Shield className="h-4 w-4" />
-						Verified
+						{t("verified", "Verified")}
 					</button>
 				</div>
 			</div>
 
 			{searchResults.data && (
 				<p className="text-xs text-muted-foreground/60">
-					{searchResults.data.totalCount.toLocaleString()} packages found
+					{searchResults.data.totalCount.toLocaleString()}{" "}
+					{t("packagesFound", "packages found")}
 				</p>
 			)}
 
@@ -563,9 +654,14 @@ export function PackageListContent({
 			) : searchResults.data?.packages.length === 0 ? (
 				<div className="flex flex-col items-center justify-center py-20 text-center">
 					<Package className="w-12 h-12 text-muted-foreground/30 mb-3" />
-					<h3 className="text-lg font-semibold">No packages found</h3>
+					<h3 className="text-lg font-semibold">
+						{t("noPackagesFound", "No packages found")}
+					</h3>
 					<p className="text-sm text-muted-foreground mt-1">
-						Try adjusting your search or filters
+						{t(
+							"tryAdjustingYourSearchOrFilters",
+							"Try adjusting your search or filters",
+						)}
 					</p>
 				</div>
 			) : swimlaneGroups && swimlaneGroups.size > 1 ? (
@@ -590,18 +686,16 @@ export function PackageListContent({
 						disabled={offset === 0}
 						className="rounded-full text-sm text-muted-foreground/60 border border-border/30 hover:bg-muted/30 px-5 py-2 transition-colors disabled:opacity-40"
 					>
-						Previous
+						{t("previous", "Previous")}
 					</button>
-					<span className="text-xs text-muted-foreground/60">
-						{currentPage} / {totalPages}
-					</span>
+					<span className="text-xs text-muted-foreground/60">{`${currentPage} / ${totalPages}`}</span>
 					<button
 						type="button"
 						onClick={() => setOffset(offset + limit)}
 						disabled={currentPage >= totalPages}
 						className="rounded-full text-sm text-muted-foreground/60 border border-border/30 hover:bg-muted/30 px-5 py-2 transition-colors disabled:opacity-40"
 					>
-						Next
+						{t("next", "Next")}
 					</button>
 				</div>
 			)}
@@ -614,6 +708,7 @@ function PageContent({
 	auth,
 	getPackageStatus,
 }: PackagesStorePageProps) {
+	const { t } = useTranslation("store");
 	const searchParams = useSearchParams();
 	const packageId = searchParams.get("id");
 
@@ -634,7 +729,10 @@ function PageContent({
 			<div className="mx-auto w-full max-w-7xl space-y-8">
 				<ExploreHubHeader
 					active="packages"
-					subtitle="Discover and install WASM node packages."
+					subtitle={t(
+						"discoverAndInstallWasmNodePackages",
+						"Discover and install WASM node packages.",
+					)}
 				/>
 				<PackageListContent fetcher={fetcher} auth={auth} />
 			</div>

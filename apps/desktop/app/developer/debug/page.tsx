@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	Accordion,
 	AccordionContent,
@@ -218,109 +219,109 @@ function getPermissionMeta(permission: string): {
 	switch (permission) {
 		case "network:http":
 			return {
-				label: "HTTP",
-				description: "Allows outbound HTTP requests during debug execution.",
+				label: `HTTP`,
+				description: i18next.t('allowsOutboundHttpRequestsDuringDebugExecution', 'Allows outbound HTTP requests during debug execution.'),
 				className: "text-amber-600 border-amber-500/30",
 				icon: Globe,
 			};
 		case "network:websocket":
 			return {
-				label: "WebSocket",
-				description: "Allows WebSocket connections from the node sandbox.",
+				label: i18next.t('websocket', 'WebSocket'),
+				description: `Allows WebSocket connections from the node sandbox.`,
 				className: "text-amber-600 border-amber-500/30",
 				icon: Globe,
 			};
 		case "network:tcp":
 			return {
 				label: "TCP",
-				description: "Allows outbound TCP sockets for this node.",
+				description: i18next.t('allowsOutboundTcpSocketsForThisNode', 'Allows outbound TCP sockets for this node.'),
 				className: "text-amber-600 border-amber-500/30",
 				icon: Globe,
 			};
 		case "network:udp":
 			return {
 				label: "UDP",
-				description: "Allows outbound UDP sockets for this node.",
+				description: i18next.t('allowsOutboundUdpSocketsForThisNode', 'Allows outbound UDP sockets for this node.'),
 				className: "text-amber-600 border-amber-500/30",
 				icon: Globe,
 			};
 		case "network:dns":
 			return {
 				label: "DNS",
-				description: "Allows hostname resolution during execution.",
+				description: i18next.t('allowsHostnameResolutionDuringExecution', 'Allows hostname resolution during execution.'),
 				className: "text-amber-600 border-amber-500/30",
 				icon: Globe,
 			};
 		case "storage:read":
 			return {
-				label: "Storage Read",
+				label: i18next.t('storageRead', 'Storage Read'),
 				description:
-					"Allows reading node or user storage through Flow-Like APIs.",
+					i18next.t('allowsReadingNodeOrUserStorageThroughFlowlikeApis', 'Allows reading node or user storage through Flow-Like APIs.'),
 				className: "text-blue-600 border-blue-500/30",
 				icon: HardDrive,
 			};
 		case "storage:write":
 			return {
-				label: "Storage Write",
+				label: i18next.t('storageWrite', 'Storage Write'),
 				description:
-					"Allows writing node or user storage through Flow-Like APIs.",
+					i18next.t('allowsWritingNodeOrUserStorageThroughFlowlikeApis', 'Allows writing node or user storage through Flow-Like APIs.'),
 				className: "text-blue-600 border-blue-500/30",
 				icon: HardDrive,
 			};
 		case "variables":
 			return {
-				label: "Variables",
-				description: "Allows reading and writing flow variables.",
+				label: i18next.t('variables', 'Variables'),
+				description: i18next.t('allowsReadingAndWritingFlowVariables', 'Allows reading and writing flow variables.'),
 				className: "text-slate-600 border-slate-500/30",
 				icon: HardDrive,
 			};
 		case "cache":
 			return {
-				label: "Cache",
-				description: "Allows access to execution cache entries.",
+				label: i18next.t('cache', 'Cache'),
+				description: i18next.t('allowsAccessToExecutionCacheEntries', 'Allows access to execution cache entries.'),
 				className: "text-slate-600 border-slate-500/30",
 				icon: HardDrive,
 			};
 		case "streaming":
 			return {
-				label: "Streaming",
-				description: "Allows incremental output streaming while the node runs.",
+				label: i18next.t('streaming', 'Streaming'),
+				description: i18next.t('allowsIncrementalOutputStreamingWhileTheNodeRuns', 'Allows incremental output streaming while the node runs.'),
 				className: "text-emerald-600 border-emerald-500/30",
 				icon: Zap,
 			};
 		case "models":
 			return {
-				label: "Models",
+				label: i18next.t('models', 'Models'),
 				description:
-					"Allows invoking LLM or VLM model providers from the host.",
+					`Allows invoking LLM or VLM model providers from the host.`,
 				className: "text-fuchsia-600 border-fuchsia-500/30",
 				icon: Sparkles,
 			};
 		case "a2ui":
 			return {
-				label: "A2UI",
-				description: "Allows agent-to-UI rendering features.",
+				label: `A2UI`,
+				description: i18next.t('allowsAgenttouiRenderingFeatures', 'Allows agent-to-UI rendering features.'),
 				className: "text-sky-600 border-sky-500/30",
 				icon: Shield,
 			};
 		case "oauth":
 			return {
-				label: "OAuth",
-				description: "Allows access to OAuth-backed credentials.",
+				label: i18next.t('oauth', 'OAuth'),
+				description: i18next.t('allowsAccessToOauthbackedCredentials', 'Allows access to OAuth-backed credentials.'),
 				className: "text-orange-600 border-orange-500/30",
 				icon: Lock,
 			};
 		case "functions":
 			return {
-				label: "Functions",
-				description: "Allows invoking other functions or sub-flows.",
+				label: i18next.t('functions', 'Functions'),
+				description: i18next.t('allowsInvokingOtherFunctionsOrSubflows', 'Allows invoking other functions or sub-flows.'),
 				className: "text-violet-600 border-violet-500/30",
 				icon: Code2,
 			};
 		default:
 			return {
 				label: permission,
-				description: "Custom node capability declared by the WASM node.",
+				description: i18next.t('customNodeCapabilityDeclaredByTheWasmNode', 'Custom node capability declared by the WASM node.'),
 				className: "text-muted-foreground border-border/30",
 				icon: Shield,
 			};
@@ -418,11 +419,12 @@ function NodePermissionBadges({
 	permissions: string[];
 	showEmpty?: boolean;
 }) {
+	const { t } = useTranslation("common");
 	if (permissions.length === 0) {
 		if (!showEmpty) return null;
 		return (
 			<Badge variant="outline" className="text-xs text-muted-foreground/70">
-				No extra permissions
+				{t('noExtraPermissions', 'No extra permissions')}
 			</Badge>
 		);
 	}
@@ -456,6 +458,7 @@ function ModelBitInput({
 	value: unknown;
 	onChange: (val: unknown) => void;
 }) {
+	const { t } = useTranslation("common");
 	const selectedKey = isSelectedBitValue(value) ? getBitKey(value) : undefined;
 	const selectedBit = bits.find((bit) => getBitKey(bit) === selectedKey);
 
@@ -470,7 +473,7 @@ function ModelBitInput({
 				disabled={bits.length === 0}
 			>
 				<SelectTrigger className="h-9">
-					<SelectValue placeholder="Select LLM/VLM bit..." />
+					<SelectValue placeholder={t('selectLlmvlmBit', 'Select LLM/VLM bit...')} />
 				</SelectTrigger>
 				<SelectContent>
 					{bits.map((bit) => (
@@ -498,7 +501,7 @@ function ModelBitInput({
 				</div>
 			) : (
 				<p className="text-xs text-amber-600">
-					No LLM or VLM bits are available in the current profile.
+					{t('noLlmOrVlmBitsAreAvailableInTheCurrentProfile', 'No LLM or VLM bits are available in the current profile.')}
 				</p>
 			)}
 		</div>
@@ -520,6 +523,7 @@ function SchemaField({
 	label?: string;
 	required?: boolean;
 }) {
+	const { t } = useTranslation("common");
 	const resolved = resolveSchema(schema, rootSchema);
 
 	if (resolved.oneOf || resolved.anyOf) {
@@ -654,7 +658,7 @@ function SchemaField({
 					value={String(value ?? "")}
 					onChange={(e) => onChange(e.target.value)}
 					className="h-9"
-					placeholder={resolved.description ?? `Enter ${label ?? "value"}...`}
+					placeholder={resolved.description ?? t('enterVal', 'Enter {{val}}...', { val: label ?? "value" })}
 				/>
 			);
 
@@ -664,7 +668,7 @@ function SchemaField({
 					value={String(value ?? "")}
 					onChange={(e) => onChange(e.target.value)}
 					className="h-9"
-					placeholder={`Enter ${label ?? "value"}...`}
+					placeholder={t('enterVal', 'Enter {{val}}...', { val: label ?? "value" })}
 				/>
 			);
 	}
@@ -741,6 +745,7 @@ function SchemaArrayField({
 	value: unknown;
 	onChange: (val: unknown) => void;
 }) {
+	const { t } = useTranslation("common");
 	const items = Array.isArray(value) ? (value as unknown[]) : [];
 
 	const addItem = useCallback(() => {
@@ -784,9 +789,7 @@ function SchemaArrayField({
 						>
 							<div className="flex items-center">
 								<AccordionTrigger className="flex-1 px-3 py-2 text-xs hover:no-underline">
-									<span className="font-mono text-muted-foreground/70">
-										[{i}]
-									</span>
+									<span className="font-mono text-muted-foreground/70">{`[${i}]`}</span>
 								</AccordionTrigger>
 								<Button
 									variant="ghost"
@@ -825,7 +828,7 @@ function SchemaArrayField({
 				className="w-full h-8 text-xs gap-1.5 border-dashed"
 			>
 				<Plus className="h-3 w-3" />
-				Add Item
+				{t('addItem', 'Add Item')}
 			</Button>
 		</div>
 	);
@@ -840,6 +843,7 @@ function StructInput({
 	value: unknown;
 	onChange: (val: unknown) => void;
 }) {
+	const { t } = useTranslation("common");
 	const [rawMode, setRawMode] = useState(false);
 	const schema = useMemo(() => parseSchema(pin.schema), [pin.schema]);
 	const isArray = pin.value_type === "Array";
@@ -857,7 +861,7 @@ function StructInput({
 							className="h-6 text-[10px] gap-1 px-2"
 						>
 							<ChevronRight className="h-3 w-3" />
-							Form
+							{t('form', 'Form')}
 						</Button>
 					</div>
 				)}
@@ -897,7 +901,7 @@ function StructInput({
 						className="h-6 text-[10px] gap-1 px-2"
 					>
 						<Code2 className="h-3 w-3" />
-						JSON
+						{`JSON`}
 					</Button>
 				</div>
 				<SchemaArrayField
@@ -920,7 +924,7 @@ function StructInput({
 					className="h-6 text-[10px] gap-1 px-2"
 				>
 					<Code2 className="h-3 w-3" />
-					JSON
+					{`JSON`}
 				</Button>
 			</div>
 			<SchemaField
@@ -944,6 +948,7 @@ function PinInput({
 	onChange: (val: unknown) => void;
 	availableModelBits: IBit[];
 }) {
+	const { t } = useTranslation("common");
 	if (isModelBitPin(pin)) {
 		return (
 			<ModelBitInput
@@ -1016,24 +1021,25 @@ function PinInput({
 					value={String(value ?? "")}
 					onChange={(e) => onChange(e.target.value)}
 					className="h-9"
-					placeholder={`Enter ${pin.data_type.toLowerCase()} value...`}
+					placeholder={t('enterValValue', 'Enter {{val}} value...', { val: pin.data_type.toLowerCase() })}
 				/>
 			);
 	}
 }
 
 function DataTypeBadge({ dataType }: { dataType: string }) {
+	const { t } = useTranslation("common");
 	const colorMap: Record<string, string> = {
-		String: "bg-green-500/10 text-green-700 dark:text-green-400",
-		Integer: "bg-blue-500/10 text-blue-700 dark:text-blue-400",
-		Float: "bg-cyan-500/10 text-cyan-700 dark:text-cyan-400",
-		Boolean: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
-		Struct: "bg-purple-500/10 text-purple-700 dark:text-purple-400",
-		Execution: "bg-red-500/10 text-red-700 dark:text-red-400",
-		Date: "bg-orange-500/10 text-orange-700 dark:text-orange-400",
-		PathBuf: "bg-slate-500/10 text-slate-700 dark:text-slate-400",
-		Byte: "bg-gray-500/10 text-gray-700 dark:text-gray-400",
-		Generic: "bg-pink-500/10 text-pink-700 dark:text-pink-400",
+		String: `bg-green-500/10 text-green-700 dark:text-green-400`,
+		Integer: `bg-blue-500/10 text-blue-700 dark:text-blue-400`,
+		Float: `bg-cyan-500/10 text-cyan-700 dark:text-cyan-400`,
+		Boolean: `bg-amber-500/10 text-amber-700 dark:text-amber-400`,
+		Struct: `bg-purple-500/10 text-purple-700 dark:text-purple-400`,
+		Execution: `bg-red-500/10 text-red-700 dark:text-red-400`,
+		Date: `bg-orange-500/10 text-orange-700 dark:text-orange-400`,
+		PathBuf: `bg-slate-500/10 text-slate-700 dark:text-slate-400`,
+		Byte: `bg-gray-500/10 text-gray-700 dark:text-gray-400`,
+		Generic: `bg-pink-500/10 text-pink-700 dark:text-pink-400`,
 	};
 
 	return (
@@ -1082,6 +1088,7 @@ function getDefaultValue(pin: WasmPinDefinition): unknown {
 }
 
 function PermissionsBadges({ manifest }: { manifest: PackageManifest }) {
+	const { t } = useTranslation("common");
 	const p = manifest.permissions;
 	return (
 		<div className="flex flex-wrap gap-1.5">
@@ -1092,7 +1099,7 @@ function PermissionsBadges({ manifest }: { manifest: PackageManifest }) {
 						{p.memory}
 					</Badge>
 				</TooltipTrigger>
-				<TooltipContent>Memory tier</TooltipContent>
+				<TooltipContent>{t('memoryTier2', 'Memory tier')}</TooltipContent>
 			</Tooltip>
 			<Tooltip>
 				<TooltipTrigger>
@@ -1101,7 +1108,7 @@ function PermissionsBadges({ manifest }: { manifest: PackageManifest }) {
 						{p.timeout}
 					</Badge>
 				</TooltipTrigger>
-				<TooltipContent>Timeout tier</TooltipContent>
+				<TooltipContent>{t('timeoutTier2', 'Timeout tier')}</TooltipContent>
 			</Tooltip>
 			{p.network?.httpEnabled && (
 				<Badge
@@ -1109,7 +1116,7 @@ function PermissionsBadges({ manifest }: { manifest: PackageManifest }) {
 					className="gap-1 text-xs text-amber-600 border-amber-500/30"
 				>
 					<Globe className="h-3 w-3" />
-					HTTP
+					{`HTTP`}
 				</Badge>
 			)}
 			{(p.filesystem?.nodeStorage || p.filesystem?.userStorage) && (
@@ -1118,13 +1125,13 @@ function PermissionsBadges({ manifest }: { manifest: PackageManifest }) {
 					className="gap-1 text-xs text-blue-600 border-blue-500/30"
 				>
 					<HardDrive className="h-3 w-3" />
-					Storage
+					{t('storage', 'Storage')}
 				</Badge>
 			)}
 			{p.streaming && (
 				<Badge variant="outline" className="gap-1 text-xs">
 					<Zap className="h-3 w-3" />
-					Streaming
+					{t('streaming', 'Streaming')}
 				</Badge>
 			)}
 			{p.models && (
@@ -1133,22 +1140,22 @@ function PermissionsBadges({ manifest }: { manifest: PackageManifest }) {
 					className="gap-1 text-xs text-purple-600 border-purple-500/30"
 				>
 					<Sparkles className="h-3 w-3" />
-					Models
+					{t('models', 'Models')}
 				</Badge>
 			)}
 			{p.variables && (
 				<Badge variant="outline" className="gap-1 text-xs">
-					Variables
+					{t('variables', 'Variables')}
 				</Badge>
 			)}
 			{p.cache && (
 				<Badge variant="outline" className="gap-1 text-xs">
-					Cache
+					{t('cache', 'Cache')}
 				</Badge>
 			)}
 			{p.a2ui && (
 				<Badge variant="outline" className="gap-1 text-xs">
-					A2UI
+					{`A2UI`}
 				</Badge>
 			)}
 			{p.oauthScopes?.length > 0 && (
@@ -1158,9 +1165,7 @@ function PermissionsBadges({ manifest }: { manifest: PackageManifest }) {
 							variant="outline"
 							className="gap-1 text-xs text-orange-600 border-orange-500/30"
 						>
-							<Lock className="h-3 w-3" />
-							OAuth ({p.oauthScopes.length})
-						</Badge>
+							<Lock className="h-3 w-3" />{t('oauthLength', 'OAuth ({{length}})', { length: p.oauthScopes.length })}</Badge>
 					</TooltipTrigger>
 					<TooltipContent>
 						{p.oauthScopes
@@ -1174,36 +1179,37 @@ function PermissionsBadges({ manifest }: { manifest: PackageManifest }) {
 }
 
 function PermissionsDetail({ manifest }: { manifest: PackageManifest }) {
+	const { t } = useTranslation("common");
 	const p = manifest.permissions;
 	return (
 		<div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
 			<div className="space-y-2">
 				<h4 className="font-medium flex items-center gap-1.5">
-					<HardDrive className="h-3.5 w-3.5" /> Resources
+					<HardDrive className="h-3.5 w-3.5" /> {t('resources', 'Resources')}
 				</h4>
 				<div className="space-y-1 text-muted-foreground/70">
 					<div className="flex justify-between">
-						<span>Memory</span>
+						<span>{t('memory', 'Memory')}</span>
 						<span className="font-mono">{p.memory}</span>
 					</div>
 					<div className="flex justify-between">
-						<span>Timeout</span>
+						<span>{t('timeout', 'Timeout')}</span>
 						<span className="font-mono">{p.timeout}</span>
 					</div>
 				</div>
 			</div>
 			<div className="space-y-2">
 				<h4 className="font-medium flex items-center gap-1.5">
-					<Globe className="h-3.5 w-3.5" /> Network
+					<Globe className="h-3.5 w-3.5" /> {t('network', 'Network')}
 				</h4>
 				<div className="space-y-1 text-muted-foreground/70">
 					<div className="flex justify-between">
-						<span>HTTP</span>
+						<span>{`HTTP`}</span>
 						<span>{p.network?.httpEnabled ? "Yes" : "No"}</span>
 					</div>
 					{p.network?.allowedHosts?.length > 0 && (
 						<div>
-							<span className="text-xs">Allowed hosts:</span>
+							<span className="text-xs">{t('allowedHosts', 'Allowed hosts:')}</span>
 							<div className="flex flex-wrap gap-1 mt-0.5">
 								{p.network.allowedHosts.map((h) => (
 									<Badge key={h} variant="outline" className="text-[10px]">
@@ -1217,14 +1223,14 @@ function PermissionsDetail({ manifest }: { manifest: PackageManifest }) {
 			</div>
 			<div className="space-y-2">
 				<h4 className="font-medium flex items-center gap-1.5">
-					<HardDrive className="h-3.5 w-3.5" /> Filesystem
+					<HardDrive className="h-3.5 w-3.5" /> {t('filesystem', 'Filesystem')}
 				</h4>
 				<div className="space-y-1 text-muted-foreground/70">
 					{(
 						[
-							["Node Storage", p.filesystem?.nodeStorage],
+							[t('nodeStorage', 'Node Storage'), p.filesystem?.nodeStorage],
 							["User Storage", p.filesystem?.userStorage],
-							["Upload Dir", p.filesystem?.uploadDir],
+							[t('uploadDir', 'Upload Dir'), p.filesystem?.uploadDir],
 							["Cache Dir", p.filesystem?.cacheDir],
 						] as const
 					).map(([label, enabled]) => (
@@ -1237,7 +1243,7 @@ function PermissionsDetail({ manifest }: { manifest: PackageManifest }) {
 			</div>
 			<div className="space-y-2">
 				<h4 className="font-medium flex items-center gap-1.5">
-					<Zap className="h-3.5 w-3.5" /> Capabilities
+					<Zap className="h-3.5 w-3.5" /> {t('capabilities', 'Capabilities')}
 				</h4>
 				<div className="space-y-1 text-muted-foreground/70">
 					{(
@@ -1245,7 +1251,7 @@ function PermissionsDetail({ manifest }: { manifest: PackageManifest }) {
 							["Variables", p.variables],
 							["Cache", p.cache],
 							["Streaming", p.streaming],
-							["A2UI", p.a2ui],
+							[`A2UI`, p.a2ui],
 							["Models/LLM", p.models],
 						] as const
 					).map(([label, enabled]) => (
@@ -1261,12 +1267,12 @@ function PermissionsDetail({ manifest }: { manifest: PackageManifest }) {
 }
 
 function NodePermissionsDetail({ permissions }: { permissions: string[] }) {
+	const { t } = useTranslation("common");
 	if (permissions.length === 0) {
 		return (
 			<div className="rounded-xl border border-border/20 bg-muted/5 p-4">
 				<p className="text-sm text-muted-foreground/70">
-					This node does pure computation in the debug sandbox and does not
-					request any extra host capabilities.
+					{t('thisNodeDoesPureComputationInTheDebugSandboxAndDoesNotRequestAnyExtraHostCapabilities', "This node does pure computation in the debug sandbox and does not request any extra host capabilities.")}
 				</p>
 			</div>
 		);
@@ -1350,6 +1356,7 @@ function NodeCard({
 	isSelected: boolean;
 	onSelect: () => void;
 }) {
+	const { t } = useTranslation("common");
 	const inputCount = node.pins.filter(
 		(p) => p.pin_type === "Input" && p.data_type !== "Execution",
 	).length;
@@ -1387,12 +1394,10 @@ function NodeCard({
 				</Badge>
 			</div>
 			<div className="flex items-center gap-2 mt-2">
-				<span className="text-[10px] text-muted-foreground/60">
-					{inputCount} in / {outputCount} out
-				</span>
+				<span className="text-[10px] text-muted-foreground/60">{t('inputcountInOutputcountOut', '{{inputCount}} in / {{outputCount}} out', { inputCount, outputCount })}</span>
 				{node.long_running && (
 					<Badge variant="outline" className="text-[10px]">
-						Long Running
+						{t('longRunning', 'Long Running')}
 					</Badge>
 				)}
 			</div>
@@ -1400,7 +1405,7 @@ function NodeCard({
 				<NodePermissionsSummary
 					permissions={node.permissions}
 					title="Requires"
-					description="Sandbox capabilities this node asks for during execution."
+					description={t('sandboxCapabilitiesThisNodeAsksForDuringExecution', 'Sandbox capabilities this node asks for during execution.')}
 					className={cn(
 						"transition-colors",
 						isSelected ? "border-primary/20 bg-primary/5" : "bg-background/50",
@@ -1441,6 +1446,7 @@ function LintPanel({
 	counts: { errors: number; warnings: number; infos: number };
 	onJumpToNode: (nodeIndex: number) => void;
 }) {
+	const { t } = useTranslation("common");
 	const [filter, setFilter] = useState<LintSeverity | "all">("all");
 
 	const filtered = useMemo(
@@ -1457,7 +1463,7 @@ function LintPanel({
 				<div className="flex items-center gap-2">
 					<ShieldCheck className="h-3.5 w-3.5 text-muted-foreground/60" />
 					<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-						Node Lint
+						{t('nodeLint', 'Node Lint')}
 					</span>
 				</div>
 				<div className="flex items-center gap-1.5">
@@ -1467,8 +1473,7 @@ function LintPanel({
 							className="text-[10px] cursor-pointer gap-1"
 							onClick={() => setFilter(filter === "error" ? "all" : "error")}
 						>
-							<AlertCircle className="h-3 w-3" />
-							{counts.errors} error{counts.errors !== 1 ? "s" : ""}
+							<AlertCircle className="h-3 w-3" />{t('errorsError', '{{errors}} error', { errors: counts.errors })}{counts.errors !== 1 ? "s" : ""}
 						</Badge>
 					)}
 					{counts.warnings > 0 && (
@@ -1485,7 +1490,11 @@ function LintPanel({
 							}
 						>
 							<AlertTriangle className="h-3 w-3" />
-							{counts.warnings} warning{counts.warnings !== 1 ? "s" : ""}
+							{t('countWarnings', {
+								defaultValue_one: '{{count}} warning',
+								defaultValue_other: '{{count}} warnings',
+								count: counts.warnings,
+							})}
 						</Badge>
 					)}
 					{counts.infos > 0 && (
@@ -1499,8 +1508,7 @@ function LintPanel({
 							)}
 							onClick={() => setFilter(filter === "info" ? "all" : "info")}
 						>
-							<Info className="h-3 w-3" />
-							{counts.infos} info{counts.infos !== 1 ? "s" : ""}
+							<Info className="h-3 w-3" />{t('infosInfo', '{{infos}} info', { infos: counts.infos })}{counts.infos !== 1 ? "s" : ""}
 						</Badge>
 					)}
 					{total === 0 && (
@@ -1509,7 +1517,7 @@ function LintPanel({
 							className="text-[10px] gap-1 text-green-600 border-green-500/20"
 						>
 							<CheckCircle2 className="h-3 w-3" />
-							All clear
+							{t('allClear', 'All clear')}
 						</Badge>
 					)}
 				</div>
@@ -1519,7 +1527,7 @@ function LintPanel({
 				<div className="text-center py-8">
 					<CheckCircle2 className="h-8 w-8 text-green-500/30 mx-auto mb-2" />
 					<p className="text-sm text-muted-foreground/60">
-						{total === 0 ? "No issues found" : "No issues matching filter"}
+						{t('noIssuesMatchingFilter', { defaultValue_zero: 'No issues found', defaultValue_other: 'No issues matching filter', count: total })}
 					</p>
 				</div>
 			) : (
@@ -1570,6 +1578,7 @@ function LintPanel({
 }
 
 function DebugPageContent() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const router = useRouter();
 	const searchParams = useSearchParams();
@@ -1630,7 +1639,7 @@ function DebugPageContent() {
 	const selectWasm = useCallback(async () => {
 		const selected = await open({
 			multiple: false,
-			filters: [{ name: "WASM Files", extensions: ["wasm"] }],
+			filters: [{ name: t('wasmFiles', 'WASM Files'), extensions: ["wasm"] }],
 		});
 		if (selected) setWasmPath(selected);
 	}, []);
@@ -1724,7 +1733,7 @@ function DebugPageContent() {
 			});
 			setResult(res);
 			toast[res.error ? "error" : "success"](
-				res.error ? `Node error: ${res.error}` : "Node executed successfully",
+				res.error ? t('nodeErrorError', 'Node error: {{error}}', { error: res.error }) : t('nodeExecutedSuccessfully', 'Node executed successfully'),
 			);
 		} catch (err) {
 			toast.error(`Execution failed: ${err}`);
@@ -1752,11 +1761,11 @@ function DebugPageContent() {
 					<div className="flex items-center gap-2">
 						<Bug className="h-4 w-4 text-muted-foreground/60" />
 						<h1 className="text-2xl font-semibold tracking-tight">
-							Debug Node
+							{t('debugNode', 'Debug Node')}
 						</h1>
 					</div>
 					<p className="text-sm text-muted-foreground/70">
-						Inspect package nodes, permissions, and test execution
+						{t('inspectPackageNodesPermissionsAndTestExecution', 'Inspect package nodes, permissions, and test execution')}
 					</p>
 				</div>
 			</div>
@@ -1768,7 +1777,7 @@ function DebugPageContent() {
 						<Input
 							value={wasmPath}
 							onChange={(e) => setWasmPath(e.target.value)}
-							placeholder="Path to .wasm file..."
+							placeholder={t('pathToWasmFile', 'Path to .wasm file...')}
 							className="flex-1 h-9 rounded-full bg-muted/30 border-transparent focus:border-border/40 focus:bg-muted/50"
 						/>
 						<Button
@@ -1778,7 +1787,7 @@ function DebugPageContent() {
 							className="h-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30 gap-1.5 px-3"
 						>
 							<FolderOpen className="h-3.5 w-3.5" />
-							WASM
+							{`WASM`}
 						</Button>
 						<Button
 							variant="ghost"
@@ -1787,7 +1796,7 @@ function DebugPageContent() {
 							className="h-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30 gap-1.5 px-3"
 						>
 							<Package className="h-3.5 w-3.5" />
-							Project
+							{t('project', 'Project')}
 						</Button>
 						<Button
 							size="sm"
@@ -1800,7 +1809,7 @@ function DebugPageContent() {
 							) : (
 								<>
 									<Search className="h-3.5 w-3.5" />
-									Inspect
+									{t('inspect', 'Inspect')}
 								</>
 							)}
 						</Button>
@@ -1823,15 +1832,13 @@ function DebugPageContent() {
 								<TabsList>
 									<TabsTrigger value="debug" className="gap-1.5">
 										<Play className="h-3.5 w-3.5" />
-										Debug
+										{t('debug', 'Debug')}
 									</TabsTrigger>
 									<TabsTrigger value="nodes" className="gap-1.5">
-										<Package className="h-3.5 w-3.5" />
-										Nodes ({nodes.length})
-									</TabsTrigger>
+										<Package className="h-3.5 w-3.5" />{t('nodesLength', 'Nodes ({{length}})', { length: nodes.length })}</TabsTrigger>
 									<TabsTrigger value="lint" className="gap-1.5">
 										<ShieldCheck className="h-3.5 w-3.5" />
-										Lint
+										{t('lint', 'Lint')}
 										{lintCounts.errors > 0 ? (
 											<Badge
 												variant="destructive"
@@ -1855,7 +1862,7 @@ function DebugPageContent() {
 									{selectedNode && (
 										<TabsTrigger value="permissions" className="gap-1.5">
 											<Shield className="h-3.5 w-3.5" />
-											Permissions
+											{t('permissions', 'Permissions')}
 										</TabsTrigger>
 									)}
 								</TabsList>
@@ -1864,11 +1871,11 @@ function DebugPageContent() {
 									<div className="rounded-xl border border-border/20 bg-card/50 p-4">
 										<div className="flex items-center gap-2 mb-3">
 											<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-												Package Nodes
+												{t('packageNodes', 'Package Nodes')}
 											</span>
 											{isPackage && (
 												<Badge variant="secondary" className="text-[10px]">
-													Multi-node
+													{t('multinode', 'Multi-node')}
 												</Badge>
 											)}
 										</div>
@@ -1905,15 +1912,14 @@ function DebugPageContent() {
 											<div className="flex items-center gap-2">
 												<Shield className="h-3.5 w-3.5 text-muted-foreground/60" />
 												<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-													Node Permissions
+													{t('nodePermissions', 'Node Permissions')}
 												</span>
 												<Badge variant="outline" className="text-[10px]">
-													Runtime-enforced
+													{t('runtimeenforced', 'Runtime-enforced')}
 												</Badge>
 											</div>
 											<p className="text-sm text-muted-foreground/70">
-												These capabilities come from the selected node
-												definition and are applied during debug execution.
+												{`These capabilities come from the selected node definition and are applied during debug execution.`}
 											</p>
 											<NodePermissionBadges
 												permissions={selectedNode.permissions}
@@ -1929,7 +1935,7 @@ function DebugPageContent() {
 												<div className="flex items-center gap-2">
 													<Shield className="h-3.5 w-3.5 text-muted-foreground/60" />
 													<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-														Package Resource Tiers
+														{t('packageResourceTiers', 'Package Resource Tiers')}
 													</span>
 												</div>
 												<PermissionsBadges manifest={manifest} />
@@ -1973,8 +1979,8 @@ function DebugPageContent() {
 											<div className="mt-3 flex flex-wrap items-center gap-2">
 												<NodePermissionsSummary
 													permissions={selectedNode.permissions}
-													title="Runtime Permissions"
-													description="These capabilities are granted to this node for debug execution."
+													title={t('runtimePermissions', 'Runtime Permissions')}
+													description={t('theseCapabilitiesAreGrantedToThisNodeForDebugExecution', 'These capabilities are granted to this node for debug execution.')}
 													className="w-full"
 												/>
 											</div>
@@ -1986,15 +1992,14 @@ function DebugPageContent() {
 											<div className="flex items-center gap-2">
 												<Shield className="h-3.5 w-3.5 text-muted-foreground/60" />
 												<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-													Execution Permissions
+													{t('executionPermissions', 'Execution Permissions')}
 												</span>
 												<Badge variant="outline" className="text-[10px]">
-													Applied on Run
+													{t('appliedOnRun', 'Applied on Run')}
 												</Badge>
 											</div>
 											<p className="text-sm text-muted-foreground/70">
-												The debug runner uses these node-declared capabilities
-												when instantiating the WASM sandbox.
+												{t('theDebugRunnerUsesTheseNodedeclaredCapabilitiesWhenInstantiatingTheWasmSandbox', "The debug runner uses these node-declared capabilities when instantiating the WASM sandbox.")}
 											</p>
 											<NodePermissionsDetail
 												permissions={selectedNode.permissions}
@@ -2007,7 +2012,7 @@ function DebugPageContent() {
 											<div className="flex items-center justify-between mb-3">
 												<div className="flex items-center gap-2">
 													<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-														Input Pins
+														{t('inputPins', 'Input Pins')}
 													</span>
 													<Badge variant="outline" className="text-[10px]">
 														{inputPins.length}
@@ -2024,12 +2029,12 @@ function DebugPageContent() {
 													) : (
 														<Play className="h-3.5 w-3.5" />
 													)}
-													Run
+													{t('run', 'Run')}
 												</Button>
 											</div>
 											{inputPins.length === 0 ? (
 												<p className="text-sm text-muted-foreground/60 text-center py-4">
-													No input pins
+													{t('noInputPins', 'No input pins')}
 												</p>
 											) : (
 												<ScrollArea className="max-h-125">
@@ -2037,8 +2042,7 @@ function DebugPageContent() {
 														{selectedNodeRequiresModels &&
 															missingModelInput && (
 																<div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-700">
-																	Select an LLM or VLM bit for this node before
-																	running it.
+																	{t('selectAnLlmOrVlmBitForThisNodeBeforeRunningIt', "Select an LLM or VLM bit for this node before running it.")}
 																</div>
 															)}
 														{inputPins.map((pin) => (
@@ -2075,7 +2079,7 @@ function DebugPageContent() {
 											>
 												<div className="flex items-center gap-2">
 													<span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-														Output
+														{t('output', 'Output')}
 													</span>
 													{result && (
 														<>
@@ -2099,12 +2103,12 @@ function DebugPageContent() {
 														<div className="text-center py-8">
 															<Play className="h-8 w-8 text-muted-foreground/20 mx-auto mb-2" />
 															<p className="text-sm text-muted-foreground/60">
-																Run the node to see output values
+																{t('runTheNodeToSeeOutputValues', 'Run the node to see output values')}
 															</p>
 														</div>
 													) : result.error ? (
 														<div className="bg-destructive/10 text-destructive rounded-lg p-3 text-sm">
-															<p className="font-medium mb-1">Error</p>
+															<p className="font-medium mb-1">{t('error', 'Error')}</p>
 															<pre className="text-xs whitespace-pre-wrap font-mono">
 																{result.error}
 															</pre>
@@ -2123,14 +2127,14 @@ function DebugPageContent() {
 																))}
 																{Object.keys(result.outputs).length === 0 && (
 																	<p className="text-sm text-muted-foreground/60 text-center py-4">
-																		No output values
+																		{t('noOutputValues', 'No output values')}
 																	</p>
 																)}
 																{result.activate_exec.length > 0 && (
 																	<div className="pt-2">
 																		<div className="border-t border-border/10 mb-3" />
 																		<Label className="text-xs text-muted-foreground/60">
-																			Activated Execution Pins
+																			{t('activatedExecutionPins', 'Activated Execution Pins')}
 																		</Label>
 																		<div className="flex gap-1 mt-1">
 																			{result.activate_exec.map((e) => (

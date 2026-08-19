@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { ArrowLeft, Home, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
@@ -92,10 +93,11 @@ export function NotFoundPage({
 	onGoBack,
 	onGoHome,
 	homeHref = "/",
-	title = "Page Not Found",
-	subtitle = "The page you're looking for doesn't exist or has been moved.",
+	title = i18next.t('pageNotFound', 'Page Not Found'),
+	subtitle = i18next.t('thePageYoureLookingForDoesntExistOrHasBeenMoved', 'The page you\'re looking for doesn\'t exist or has been moved.'),
 	showRefresh = true,
 }: NotFoundPageProps) {
+	const { t } = useTranslation("common");
 	const [mounted, setMounted] = useState(false);
 	const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
 	const [time, setTime] = useState(0);
@@ -143,21 +145,21 @@ export function NotFoundPage({
 			delay: 0,
 			duration: 20,
 			size: 300,
-			color: "hsl(var(--primary) / 0.15)",
+			color: `hsl(var(--primary) / 0.15)`,
 			startAngle: 0,
 		},
 		{
 			delay: 5,
 			duration: 25,
 			size: 200,
-			color: "hsl(var(--secondary) / 0.1)",
+			color: `hsl(var(--secondary) / 0.1)`,
 			startAngle: 120,
 		},
 		{
 			delay: 10,
 			duration: 30,
 			size: 250,
-			color: "hsl(var(--primary) / 0.1)",
+			color: `hsl(var(--primary) / 0.1)`,
 			startAngle: 240,
 		},
 	];
@@ -293,7 +295,7 @@ export function NotFoundPage({
 					>
 						<span className="absolute inset-0 bg-white/10 -translate-x-full group-hover:translate-x-full transition-transform duration-500" />
 						<ArrowLeft className="w-4 h-4 transition-transform group-hover:-translate-x-1" />
-						Go Back
+						{t('goBack', 'Go Back')}
 					</Button>
 
 					<Button
@@ -304,7 +306,7 @@ export function NotFoundPage({
 					>
 						<span className="absolute inset-0 bg-primary/5 -translate-x-full group-hover:translate-x-full transition-transform duration-500" />
 						<Home className="w-4 h-4 transition-transform group-hover:scale-110" />
-						Home
+						{t('home', 'Home')}
 					</Button>
 
 					{showRefresh && (
@@ -315,7 +317,7 @@ export function NotFoundPage({
 							className="group min-w-40 gap-2"
 						>
 							<RefreshCw className="w-4 h-4 transition-transform group-hover:rotate-180 duration-500" />
-							Refresh
+							{t('refresh', 'Refresh')}
 						</Button>
 					)}
 				</div>
@@ -327,81 +329,12 @@ export function NotFoundPage({
 						mounted ? "opacity-100" : "opacity-0",
 					)}
 				>
-					Lost in the flow? Don't worry, even the best workflows take unexpected
-					turns sometimes.
+					{t('lostInTheFlowDontWorryEvenTheBestWorkflowsTakeUnexpectedTurnsSometimes', "Lost in the flow? Don't worry, even the best workflows take unexpected turns sometimes.")}
 				</p>
 			</div>
 
 			{/* CSS for animations */}
-			<style>{`
-				@keyframes orbit {
-					0% {
-						transform: rotate(var(--start-angle, 0deg)) translateX(200px) rotate(calc(-1 * var(--start-angle, 0deg)));
-					}
-					100% {
-						transform: rotate(calc(var(--start-angle, 0deg) + 360deg)) translateX(200px) rotate(calc(-1 * (var(--start-angle, 0deg) + 360deg)));
-					}
-				}
-
-				@keyframes float-digit {
-					0%, 100% {
-						transform: translateY(0);
-					}
-					50% {
-						transform: translateY(-8px);
-					}
-				}
-
-				@keyframes gradient-text {
-					0% {
-						background-position: 0% 50%;
-					}
-					50% {
-						background-position: 100% 50%;
-					}
-					100% {
-						background-position: 0% 50%;
-					}
-				}
-
-				@keyframes bounce-slow {
-					0%, 100% {
-						transform: translateY(0) scale(1);
-					}
-					50% {
-						transform: translateY(-10px) scale(1.1);
-					}
-				}
-
-				@keyframes spin-slow {
-					from {
-						transform: rotate(0deg);
-					}
-					to {
-						transform: rotate(360deg);
-					}
-				}
-
-				.animate-orbit {
-					animation: orbit linear infinite;
-				}
-
-				.animate-float-digit {
-					animation: float-digit 3s ease-in-out infinite;
-				}
-
-				.animate-gradient-text {
-					animation: gradient-text 4s ease-in-out infinite;
-				}
-
-				.animate-bounce-slow {
-					animation: bounce-slow 2s ease-in-out infinite;
-				}
-
-				.animate-spin-slow {
-					animation: spin-slow linear infinite;
-				}
-			`}</style>
+			<style>{`@keyframes orbit { 0% { transform: rotate(var(--start-angle, 0deg)) translateX(200px) rotate(calc(-1 * var(--start-angle, 0deg))); } 100% { transform: rotate(calc(var(--start-angle, 0deg) + 360deg)) translateX(200px) rotate(calc(-1 * (var(--start-angle, 0deg) + 360deg))); } } @keyframes float-digit { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } } @keyframes gradient-text { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } } @keyframes bounce-slow { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-10px) scale(1.1); } } @keyframes spin-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } } .animate-orbit { animation: orbit linear infinite; } .animate-float-digit { animation: float-digit 3s ease-in-out infinite; } .animate-gradient-text { animation: gradient-text 4s ease-in-out infinite; } .animate-bounce-slow { animation: bounce-slow 2s ease-in-out infinite; } .animate-spin-slow { animation: spin-slow linear infinite; }`}</style>
 		</main>
 	);
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import NextLink from "next/link";
 import { useRef } from "react";
 import { cn } from "../../../lib/utils";
@@ -40,6 +41,7 @@ export function A2UILink({
 	surfaceId,
 	onAction,
 }: ComponentProps<LinkComponent>) {
+	const { t } = useTranslation("common");
 	const pointerActivationAtRef = useRef(0);
 	const keyboardActivationAtRef = useRef(0);
 	const label = useResolved<string>(component.label) ?? "";
@@ -137,7 +139,7 @@ export function A2UILink({
 	}
 
 	const baseClasses = cn(
-		"inline-flex items-center transition-colors cursor-pointer",
+		`inline-flex items-center transition-colors cursor-pointer`,
 		variantStyles[variant],
 		underlineStyles[underline],
 		disabled && "pointer-events-none opacity-50",

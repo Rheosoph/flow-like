@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-label="Abstract banner: a recipe card rack with mail, clock, and chat triggers wired into a finished flow">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#141a15"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <radialGradient id="glowGreen" cx=".5" cy=".5" r=".5"><stop stop-color="#34d399" stop-opacity=".4"/><stop offset="1" stop-color="#34d399" stop-opacity="0"/></radialGradient>
+    <radialGradient id="glowAmber" cx=".5" cy=".5" r=".5"><stop stop-color="#f59e0b" stop-opacity=".38"/><stop offset="1" stop-color="#f59e0b" stop-opacity="0"/></radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="6"/></filter>
+  </defs>
+  <rect width="1440" height="720" fill="url(#bg)"/><rect width="1440" height="720" fill="url(#grid)"/>
+  <circle cx="400" cy="360" r="310" fill="url(#glowAmber)"/>
+  <circle cx="1080" cy="360" r="310" fill="url(#glowGreen)"/>
+
+  <g>
+    <rect x="180" y="200" width="200" height="120" rx="20" fill="#22252c" stroke="#ff7656" stroke-width="2.5"/>
+    <rect x="214" y="234" width="132" height="72" rx="10" fill="none" stroke="#ff8a68" stroke-width="4"/>
+    <path d="M214 244 l66 44 66-44" fill="none" stroke="#ff8a68" stroke-width="4" stroke-linejoin="round"/>
+
+    <rect x="180" y="360" width="200" height="120" rx="20" fill="#22252c" stroke="#f59e0b" stroke-width="2.5"/>
+    <circle cx="280" cy="420" r="36" fill="none" stroke="#fbbf77" stroke-width="4"/>
+    <path d="M280 398 v22 l16 10" fill="none" stroke="#fbbf77" stroke-width="4" stroke-linecap="round"/>
+
+    <rect x="180" y="520" width="200" height="120" rx="20" fill="#22252c" stroke="#60a5fa" stroke-width="2.5"/>
+    <rect x="222" y="550" width="116" height="52" rx="20" fill="none" stroke="#93c5fd" stroke-width="4"/>
+    <path d="M250 602 l-6 20 30-16" fill="#93c5fd"/>
+  </g>
+
+  <path d="M380 260 C480 260 500 330 560 340" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" stroke-dasharray="2 12"/>
+  <path d="M380 420 C460 420 480 380 560 372" fill="none" stroke="#f59e0b" stroke-width="5" stroke-linecap="round" stroke-dasharray="2 12"/>
+  <path d="M380 580 C480 580 500 420 560 404" fill="none" stroke="#60a5fa" stroke-width="5" stroke-linecap="round" stroke-dasharray="2 12"/>
+
+  <g>
+    <rect x="560" y="300" width="330" height="160" rx="24" fill="#191c22" stroke="#464c57" stroke-width="2.5"/>
+    <rect x="588" y="330" width="120" height="44" rx="12" fill="#22252c" stroke="#3a3f4a" stroke-width="2"/>
+    <rect x="740" y="330" width="120" height="44" rx="12" fill="#22252c" stroke="#3a3f4a" stroke-width="2"/>
+    <path d="M708 352 h32" stroke="#e8e8ec" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="708" cy="352" r="7" fill="#e8e8ec"/><circle cx="740" cy="352" r="7" fill="#e8e8ec"/>
+    <rect x="588" y="396" width="272" height="34" rx="10" fill="#1c1f26"/>
+    <rect x="600" y="408" width="180" height="10" rx="5" fill="#2c323d"/>
+  </g>
+
+  <path d="M890 380 h64" stroke="#34d399" stroke-width="5" stroke-linecap="round"/>
+  <g>
+    <rect x="954" y="300" width="300" height="160" rx="24" fill="#1f2a27" stroke="#34d399" stroke-width="3"/>
+    <circle cx="1010" cy="360" r="26" fill="#34d399"/>
+    <path d="M998 360l8 8 16-20" fill="none" stroke="#12201b" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="1056" y="336" width="160" height="16" rx="8" fill="#3a4150"/>
+    <rect x="1056" y="364" width="120" height="12" rx="6" fill="#2c323d"/>
+    <rect x="978" y="404" width="120" height="24" rx="12" fill="#34d399" opacity=".25" stroke="#34d399" stroke-opacity=".6"/>
+    <rect x="1112" y="404" width="80" height="24" rx="12" fill="#f59e0b" opacity=".22" stroke="#f59e0b" stroke-opacity=".55"/>
+  </g>
+
+  <g filter="url(#soft)" opacity=".7">
+    <circle cx="720" cy="150" r="5" fill="#34d399"/><circle cx="640" cy="620" r="4" fill="#f59e0b"/><circle cx="1350" cy="200" r="4" fill="#ff7656"/><circle cx="1380" cy="580" r="5" fill="#34d399"/>
+  </g>
+</svg>

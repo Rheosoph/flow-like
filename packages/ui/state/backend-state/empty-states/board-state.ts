@@ -1,6 +1,7 @@
 import type {
 	IApplyFlowScriptResponse,
 	IBoard,
+	IBoardMutationOptions,
 	IBoardState,
 	IConnectionMode,
 	IExecutionMode,
@@ -16,7 +17,10 @@ import type {
 	IVersionType,
 } from "../../../";
 import type { IJwks, IRealtimeAccess } from "../../../";
-import type { SurfaceComponent } from "../../../components/a2ui/types";
+import type {
+	CanvasSettings,
+	SurfaceComponent,
+} from "../../../components/a2ui/types";
 import type {
 	ChatImage,
 	CopilotScope,
@@ -24,9 +28,23 @@ import type {
 	UnifiedChatMessage,
 	UnifiedCopilotResponse,
 } from "../../../lib/schema/copilot";
+import type {
+	IBoardSummary,
+	IBoardSummaryInclude,
+	IBoardVariables,
+} from "../../../lib/schema/flow/board-summary";
 
 export class EmptyBoardState implements IBoardState {
 	getBoards(appId: string): Promise<IBoard[]> {
+		throw new Error("Method not implemented.");
+	}
+	getBoardSummaries(
+		appId: string,
+		include?: IBoardSummaryInclude[],
+	): Promise<IBoardSummary[]> {
+		throw new Error("Method not implemented.");
+	}
+	getBoardVariables(appId: string): Promise<IBoardVariables[]> {
 		throw new Error("Method not implemented.");
 	}
 	getCatalog(appId: string): Promise<INode[]> {
@@ -134,6 +152,7 @@ export class EmptyBoardState implements IBoardState {
 		appId: string,
 		boardId: string,
 		command: IGenericCommand,
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand> {
 		throw new Error("Method not implemented.");
 	}
@@ -141,6 +160,7 @@ export class EmptyBoardState implements IBoardState {
 		appId: string,
 		boardId: string,
 		commands: IGenericCommand[],
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand[]> {
 		throw new Error("Method not implemented.");
 	}
@@ -181,6 +201,7 @@ export class EmptyBoardState implements IBoardState {
 		catalogNodes: INode[] | undefined,
 		selectedNodeIds: string[],
 		currentSurface: SurfaceComponent[] | null,
+		currentCanvasSettings: CanvasSettings | null,
 		selectedComponentIds: string[],
 		userPrompt: string,
 		history: UnifiedChatMessage[],

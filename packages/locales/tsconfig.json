@@ -1,0 +1,17 @@
+{
+	"compilerOptions": {
+		"lib": ["ESNext", "DOM"],
+		"target": "ESNext",
+		"module": "ESNext",
+		"moduleDetection": "force",
+		"jsx": "react-jsx",
+		"moduleResolution": "bundler",
+		"resolveJsonModule": true,
+		"verbatimModuleSyntax": true,
+		"noEmit": true,
+		"strict": true,
+		"skipLibCheck": true,
+		"noFallthroughCasesInSwitch": true
+	},
+	"include": ["src/**/*.ts", "src/**/*.tsx", "locales/**/*.json"]
+}

@@ -7,6 +7,10 @@ pub struct CompilerClaims {
     pub job_id: String,
     pub package_id: String,
     pub version: String,
+    /// Blake3 binding of the complete compilation job envelope (excluding the
+    /// JWT itself). This prevents a queue writer from swapping signed URLs,
+    /// hashes, providers, or target definitions while retaining valid IDs.
+    pub payload_hash: String,
     pub callback_url: String,
     #[serde(rename = "typ")]
     pub token_type: TokenType,
@@ -24,6 +28,7 @@ pub struct CompilerJwtParams {
     pub job_id: String,
     pub package_id: String,
     pub version: String,
+    pub payload_hash: String,
     pub callback_url: String,
     pub ttl_seconds: Option<i64>,
 }
@@ -36,6 +41,7 @@ pub fn sign(params: CompilerJwtParams) -> Result<String, BackendJwtError> {
         job_id: params.job_id,
         package_id: params.package_id,
         version: params.version,
+        payload_hash: params.payload_hash,
         callback_url: params.callback_url,
         token_type: TokenType::Compiler,
         iss: issuer().to_string(),

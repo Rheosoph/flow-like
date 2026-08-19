@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
 import {
@@ -70,6 +71,7 @@ export function A2UIGeoMap({
 	surfaceId,
 	onAction,
 }: ComponentProps<GeoMapComponent>) {
+	const { t } = useTranslation("common");
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const viewport = useResolved<GeoMapViewport>(component.viewport);
 	const markers = useResolved<GeoMapMarkerDef[]>(component.markers);
@@ -154,7 +156,7 @@ export function A2UIGeoMap({
 			};
 			onAction?.({
 				type: "userAction",
-				name: "viewportChange",
+				name: `viewportChange`,
 				surfaceId,
 				sourceComponentId: componentId,
 				timestamp: Date.now(),
@@ -174,7 +176,7 @@ export function A2UIGeoMap({
 			}
 			onAction?.({
 				type: "userAction",
-				name: "markerClick",
+				name: `markerClick`,
 				surfaceId,
 				sourceComponentId: componentId,
 				timestamp: Date.now(),
@@ -196,7 +198,7 @@ export function A2UIGeoMap({
 		(markerId: string, lngLat: { lng: number; lat: number }) => {
 			onAction?.({
 				type: "userAction",
-				name: "markerDragEnd",
+				name: `markerDragEnd`,
 				surfaceId,
 				sourceComponentId: componentId,
 				timestamp: Date.now(),
@@ -218,7 +220,7 @@ export function A2UIGeoMap({
 		(routeId: string) => {
 			onAction?.({
 				type: "userAction",
-				name: "routeClick",
+				name: `routeClick`,
 				surfaceId,
 				sourceComponentId: componentId,
 				timestamp: Date.now(),

@@ -170,6 +170,15 @@ async fn execute_inner(
     flow_config.register_app_meta_store(meta_store.clone());
     flow_config.register_log_store(log_store);
 
+    // Request-file offloads and `/tmp` uploads live under tmp/*, which the
+    // app-scoped content credential does not necessarily cover.
+    match request.credentials.to_store_type(StoreType::Tmp).await {
+        Ok(tmp_store) => flow_config.register_temporary_store(tmp_store),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to create scratch store - tmp/* paths will be unavailable");
+        }
+    }
+
     match request.credentials.to_logs_db_builder() {
         Ok(logs_db_builder) => {
             tracing::info!("Successfully created logs database builder");
@@ -184,8 +193,10 @@ async fn execute_inner(
     let model_provider_config = ModelProviderConfiguration::default();
 
     let http_client = HTTPClient::new_without_refetch();
-    let state =
+    let execution_environment = ExecutionEnvironment::server_default();
+    let mut state =
         FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
+    state.execution_environment = execution_environment;
 
     let mut registry = crate::execute::PREPARED_REGISTRY.clone();
     let mut failed_wasm_package_ids = BTreeSet::new();
@@ -342,9 +353,7 @@ async fn execute_inner(
     .await
     .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
 
-    run.set_execution_environment(
-        ExecutionEnvironment::from_env().unwrap_or(ExecutionEnvironment::Server),
-    );
+    run.set_execution_environment(execution_environment);
     if let Some(mode) = request.execution_mode {
         run.set_execution_mode(mode);
     }

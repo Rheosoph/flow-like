@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import { Handle, type HandleType, Position, useReactFlow } from "@xyflow/react";
 import { EllipsisVerticalIcon, GripIcon, ListIcon, Trash2 } from "lucide-react";
 import {
@@ -127,6 +128,28 @@ type FlowPinInnerProps = Readonly<{
 	selectorDataRef?: FlowSelectorDataRef;
 	selectorDataVersion?: number;
 }>;
+
+const DeletePinButton = memo(function DeletePinButton({
+	pin,
+	className,
+	onPinRemove,
+}: Readonly<{
+	pin: IPin;
+	className: string;
+	onPinRemove: (pin: IPin) => Promise<void>;
+}>) {
+	const { t } = useTranslation("flow");
+	return (
+		<button
+			type="button"
+			className={className}
+			title={t("deletePin", "Delete Pin")}
+			onClick={() => onPinRemove(pin)}
+		>
+			<Trash2 className="w-1.5 h-1.5" />
+		</button>
+	);
+});
 
 function FlowPinInnerComponent({
 	pin,
@@ -362,30 +385,24 @@ function FlowPinInnerComponent({
 						selectorDataVersion={selectorDataVersion}
 					/>
 					{pin.dynamic && onPinRemove && (
-						<button
-							type="button"
+						<DeletePinButton
+							pin={pin}
+							onPinRemove={onPinRemove}
 							className="opacity-0 bg-background border p-0.5 rounded-full group-hover:opacity-100 hover:text-primary"
-							title="Delete Pin"
-							onClick={() => onPinRemove(pin)}
-						>
-							<Trash2 className="w-1.5 h-1.5" />
-						</button>
+						/>
 					)}
 				</div>
 			)}
 			{!shouldRenderPinEdit && onPinRemove && pin.dynamic && (
-				<button
-					type="button"
+				<DeletePinButton
+					pin={pin}
+					onPinRemove={onPinRemove}
 					className={`opacity-0 bg-background border p-0.5 rounded-full group-hover:opacity-100 hover:text-primary ${
 						pin.pin_type === IPinType.Input
 							? "ml-2.5"
 							: "mr-2.5 right-0 absolute"
 					}`}
-					title="Delete Pin"
-					onClick={() => onPinRemove(pin)}
-				>
-					<Trash2 className="w-1.5 h-1.5" />
-				</button>
+				/>
 			)}
 		</SmallDotHandle>
 	);

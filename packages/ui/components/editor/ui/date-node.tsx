@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { TDateElement } from "platejs";
 import type { PlateElementProps } from "platejs/react";
 
@@ -10,6 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "../../..";
 import { cn } from "../../../lib/utils";
 
 export function DateElement(props: PlateElementProps<TDateElement>) {
+	const { t } = useTranslation("common");
 	const { editor, element } = props;
 
 	const readOnly = useReadOnly();
@@ -49,7 +51,7 @@ export function DateElement(props: PlateElementProps<TDateElement>) {
 					});
 				})()
 			) : (
-				<span>Pick a date</span>
+				<span>{t('pickADate', 'Pick a date')}</span>
 			)}
 		</span>
 	);

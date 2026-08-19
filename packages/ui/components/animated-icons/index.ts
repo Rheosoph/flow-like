@@ -10,6 +10,7 @@ export * from "./animated-library";
 export * from "./animated-sparkles";
 export * from "./animated-study-hat";
 export * from "./animated-key";
+export * from "./animated-language";
 export * from "./animated-users";
 export * from "./animated-dashboard";
 export * from "./animated-package";

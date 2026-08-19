@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
 import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
@@ -39,6 +40,7 @@ export function A2UIImageLabeler({
 	surfaceId,
 	componentId,
 }: ComponentProps<ImageLabelerComponent>) {
+	const { t } = useTranslation("common");
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -46,7 +48,7 @@ export function A2UIImageLabeler({
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 
 	const src = useResolved<string>(component.src);
-	const alt = useResolved<string>(component.alt) ?? "Image to label";
+	const alt = useResolved<string>(component.alt) ?? t('imageToLabel', 'Image to label');
 	const rawBoxes = useResolved<unknown>(component.boxes);
 	const labels = useResolved<string[]>(component.labels) ?? [];
 	const disabled = useResolved<boolean>(component.disabled) ?? false;
@@ -374,7 +376,7 @@ export function A2UIImageLabeler({
 				)}
 				{!imageLoaded && src && (
 					<div className="flex items-center justify-center h-64 bg-muted/30 text-muted-foreground">
-						Loading image...
+						{t('loadingImage', 'Loading image...')}
 					</div>
 				)}
 			</div>
@@ -382,16 +384,16 @@ export function A2UIImageLabeler({
 			{/* Selected box info */}
 			{selectedBoxId && (
 				<div className="flex items-center gap-2 p-2 bg-muted/30 rounded text-sm">
-					<span className="text-muted-foreground">Selected:</span>
+					<span className="text-muted-foreground">{t('selected', 'Selected:')}</span>
 					<span>
-						{boxes.find((b) => b.id === selectedBoxId)?.label || "No label"}
+						{boxes.find((b) => b.id === selectedBoxId)?.label || t('noLabel', 'No label')}
 					</span>
 					<button
 						type="button"
 						onClick={handleDeleteSelected}
 						className="ml-auto px-2 py-1 text-destructive hover:bg-destructive/10 rounded"
 					>
-						Delete
+						{t('delete', 'Delete')}
 					</button>
 				</div>
 			)}

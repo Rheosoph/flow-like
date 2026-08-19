@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import type { CreatePlateEditorOptions } from "platejs/react";
@@ -67,6 +68,7 @@ export function Comment(
 		onEditorClick?: () => void;
 	}>,
 ) {
+	const { t } = useTranslation("common");
 	const {
 		comment,
 		discussionLength,
@@ -193,7 +195,7 @@ export function Comment(
 					<span className="mr-1">
 						{formatCommentDate(new Date(comment.createdAt))}
 					</span>
-					{comment.isEdited && <span>(edited)</span>}
+					{comment.isEdited && <span>{t('edited', '(edited)')}</span>}
 				</div>
 
 				{isMyComment && (hovering || dropdownOpen) && (
@@ -297,6 +299,7 @@ function CommentMoreDropdown(props: {
 	onCloseAutoFocus?: () => void;
 	onRemoveComment?: () => void;
 }) {
+	const { t } = useTranslation("common");
 	const {
 		comment,
 		dropdownOpen,
@@ -377,11 +380,11 @@ function CommentMoreDropdown(props: {
 				<DropdownMenuGroup>
 					<DropdownMenuItem onClick={onEditComment}>
 						<PencilIcon className="size-4" />
-						Edit comment
+						{t('editComment', 'Edit comment')}
 					</DropdownMenuItem>
 					<DropdownMenuItem onClick={onDeleteComment}>
 						<TrashIcon className="size-4" />
-						Delete comment
+						{t('deleteComment', 'Delete comment')}
 					</DropdownMenuItem>
 				</DropdownMenuGroup>
 			</DropdownMenuContent>

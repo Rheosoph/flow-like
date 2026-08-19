@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -21,6 +22,7 @@ export function MetaConfiguration({
 	bit,
 	setBit,
 }: Readonly<{ bit: IBit; setBit: Dispatch<SetStateAction<IBit>> }>) {
+	const { t } = useTranslation("common");
 	const getMeta = (field: keyof IMetadata) => {
 		return bit.meta?.["en"]?.[field];
 	};
@@ -97,30 +99,30 @@ export function MetaConfiguration({
 			<Card className="w-full">
 				<CardHeader>
 					<CardTitle className="flex items-center justify-between">
-						Metadata Configuration
+						{t('metadataConfiguration', 'Metadata Configuration')}
 						<small className="font-normal text-muted-foreground">
 							{humanFileSize(bit.size ?? 0)}
 						</small>
 					</CardTitle>
 					<CardDescription>
-						Configure basic information about the model
+						{t('configureBasicInformationAboutTheModel', 'Configure basic information about the model')}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 						<div className="space-y-2">
-							<Label htmlFor="name">Name *</Label>
+							<Label htmlFor="name">{t('name', 'Name *')}</Label>
 							<Input
 								id="name"
 								value={getMeta("name") || ""}
 								onChange={(e) => updateMeta("name", e.target.value)}
-								placeholder="Model name"
+								placeholder={t('modelName', 'Model name')}
 								required
 							/>
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="filename">Filename</Label>
+							<Label htmlFor="filename">{t('filename', 'Filename')}</Label>
 							<Input
 								id="filename"
 								value={bit.file_name || ""}
@@ -134,7 +136,9 @@ export function MetaConfiguration({
 
 						<div className="space-y-2">
 							<Label htmlFor="age-rating">
-								Age Rating [{getMeta("age_rating") ?? 0}+]
+								{t("ageRatingValue", "Age Rating [{{rating}}+]", {
+									rating: getMeta("age_rating") ?? 0,
+								})}
 							</Label>
 							<Slider
 								id="age-rating"
@@ -149,24 +153,24 @@ export function MetaConfiguration({
 					</div>
 
 					<div className="space-y-2">
-						<Label htmlFor="description">Description *</Label>
+						<Label htmlFor="description">{t('description2', 'Description *')}</Label>
 						<Textarea
 							id="description"
 							value={getMeta("description") || ""}
 							onChange={(e) => updateMeta("description", e.target.value)}
-							placeholder="Brief description of the model"
+							placeholder={t('briefDescriptionOfTheModel', 'Brief description of the model')}
 							rows={2}
 							required
 						/>
 					</div>
 
 					<div className="space-y-2">
-						<Label htmlFor="long-description">Long Description</Label>
+						<Label htmlFor="long-description">{t('longDescription', 'Long Description')}</Label>
 						<Textarea
 							id="long-description"
 							value={getMeta("long_description") || ""}
 							onChange={(e) => updateMeta("long_description", e.target.value)}
-							placeholder="Detailed description of the model's capabilities and use cases"
+							placeholder={t('detailedDescriptionOfTheModelsCapabilitiesAndUseCases', 'Detailed description of the model\'s capabilities and use cases')}
 							rows={4}
 						/>
 					</div>
@@ -175,15 +179,15 @@ export function MetaConfiguration({
 
 			<Card>
 				<CardHeader>
-					<CardTitle>URLs & Links</CardTitle>
+					<CardTitle>{t('urlsLinks', 'URLs & Links')}</CardTitle>
 					<CardDescription>
-						Configure relevant URLs for the model
+						{t('configureRelevantUrlsForTheModel', 'Configure relevant URLs for the model')}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 						<div className="space-y-2">
-							<Label htmlFor="website">Website URL</Label>
+							<Label htmlFor="website">{t('websiteUrl', 'Website URL')}</Label>
 							<Input
 								id="website"
 								type="url"
@@ -194,7 +198,7 @@ export function MetaConfiguration({
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="docs-url">Documentation URL</Label>
+							<Label htmlFor="docs-url">{t('documentationUrl', 'Documentation URL')}</Label>
 							<Input
 								id="docs-url"
 								type="url"
@@ -205,7 +209,7 @@ export function MetaConfiguration({
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="support-url">Support URL</Label>
+							<Label htmlFor="support-url">{t('supportUrl', 'Support URL')}</Label>
 							<Input
 								id="support-url"
 								type="url"
@@ -218,7 +222,7 @@ export function MetaConfiguration({
 
 					<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 						<div className="space-y-2">
-							<Label htmlFor="repo-url">Repository URL</Label>
+							<Label htmlFor="repo-url">{t('repositoryUrl', 'Repository URL')}</Label>
 							<Input
 								id="repo-url"
 								type="url"
@@ -231,24 +235,24 @@ export function MetaConfiguration({
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="use-case">Use Case</Label>
+							<Label htmlFor="use-case">{t('useCase', 'Use Case')}</Label>
 							<Input
 								id="use-case"
 								value={getMeta("use_case") || ""}
 								onChange={(e) => updateMeta("use_case", e.target.value)}
-								placeholder="e.g., Chat, Code Generation, Analysis"
+								placeholder={t('egChatCodeGenerationAnalysis', 'e.g., Chat, Code Generation, Analysis')}
 							/>
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="license">License</Label>
+							<Label htmlFor="license">{t('license', 'License')}</Label>
 							<Input
 								id="license"
 								value={bit.license || ""}
 								onChange={(e) =>
 									setBit((old) => ({ ...old, license: e.target.value }))
 								}
-								placeholder="e.g., MIT, Apache-2.0, CC-BY-NC-4.0"
+								placeholder={t('egMitApache20Ccbync40', 'e.g., MIT, Apache-2.0, CC-BY-NC-4.0')}
 							/>
 						</div>
 					</div>
@@ -257,15 +261,15 @@ export function MetaConfiguration({
 
 			<Card>
 				<CardHeader>
-					<CardTitle>Media & Assets</CardTitle>
+					<CardTitle>{t('mediaAssets', 'Media & Assets')}</CardTitle>
 					<CardDescription>
-						Configure icons, thumbnails and preview media
+						{t('configureIconsThumbnailsAndPreviewMedia', 'Configure icons, thumbnails and preview media')}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 						<div className="space-y-2">
-							<Label htmlFor="icon">Icon URL</Label>
+							<Label htmlFor="icon">{t('iconUrl', 'Icon URL')}</Label>
 							<Input
 								id="icon"
 								type="url"
@@ -276,7 +280,7 @@ export function MetaConfiguration({
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="thumbnail">Thumbnail URL</Label>
+							<Label htmlFor="thumbnail">{t('thumbnailUrl', 'Thumbnail URL')}</Label>
 							<Input
 								id="thumbnail"
 								type="url"
@@ -288,7 +292,7 @@ export function MetaConfiguration({
 					</div>
 
 					<div className="space-y-2">
-						<Label htmlFor="preview-media">Preview Media URLs</Label>
+						<Label htmlFor="preview-media">{t('previewMediaUrls', 'Preview Media URLs')}</Label>
 						<div className="space-y-2">
 							{(getMeta("preview_media") || []).map(
 								(url: string, index: number) => (
@@ -308,13 +312,13 @@ export function MetaConfiguration({
 											size="sm"
 											onClick={() => removePreviewMedia(url)}
 										>
-											Remove
+											{t('remove', 'Remove')}
 										</Button>
 									</div>
 								),
 							)}
 							<Input
-								placeholder="Add preview media URL and press Enter"
+								placeholder={t('addPreviewMediaUrlAndPressEnter', 'Add preview media URL and press Enter')}
 								onKeyDown={(e) => {
 									if (e.key === "Enter") {
 										e.preventDefault();
@@ -330,18 +334,18 @@ export function MetaConfiguration({
 
 			<Card>
 				<CardHeader>
-					<CardTitle>Authors</CardTitle>
+					<CardTitle>{t('authors', 'Authors')}</CardTitle>
 					<CardDescription>
-						Add the authors or contributors of this model
+						{t('addTheAuthorsOrContributorsOfThisModel', 'Add the authors or contributors of this model')}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="space-y-2">
-						<Label htmlFor="add-author">Add Author</Label>
+						<Label htmlFor="add-author">{t('addAuthor', 'Add Author')}</Label>
 						<div className="flex gap-2">
 							<Input
 								id="add-author"
-								placeholder="e.g., DeepSeek AI, OpenAI"
+								placeholder={t('egDeepseekAiOpenai', 'e.g., DeepSeek AI, OpenAI')}
 								onKeyDown={(e) => {
 									if (e.key === "Enter") {
 										e.preventDefault();
@@ -360,7 +364,7 @@ export function MetaConfiguration({
 									input.value = "";
 								}}
 							>
-								Add
+								{t('add', 'Add')}
 							</Button>
 						</div>
 					</div>
@@ -388,18 +392,18 @@ export function MetaConfiguration({
 
 			<Card>
 				<CardHeader>
-					<CardTitle>Tags</CardTitle>
+					<CardTitle>{t('tags', 'Tags')}</CardTitle>
 					<CardDescription>
-						Add relevant tags for categorization
+						{t('addRelevantTagsForCategorization', 'Add relevant tags for categorization')}
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="space-y-2">
-						<Label htmlFor="add-tag">Add Tag</Label>
+						<Label htmlFor="add-tag">{t('addTag', 'Add Tag')}</Label>
 						<div className="flex gap-2">
 							<Input
 								id="add-tag"
-								placeholder="e.g., llm, chat, coding"
+								placeholder={t('egLlmChatCoding', 'e.g., llm, chat, coding')}
 								onKeyDown={(e) => {
 									if (e.key === "Enter") {
 										e.preventDefault();
@@ -418,7 +422,7 @@ export function MetaConfiguration({
 									input.value = "";
 								}}
 							>
-								Add
+								{t('add', 'Add')}
 							</Button>
 						</div>
 					</div>
@@ -446,19 +450,19 @@ export function MetaConfiguration({
 
 			<Card>
 				<CardHeader>
-					<CardTitle>Release Notes</CardTitle>
+					<CardTitle>{t('releaseNotes', 'Release Notes')}</CardTitle>
 					<CardDescription>
-						Document what&apos;s new in this version
+						{`Document what's new in this version`}
 					</CardDescription>
 				</CardHeader>
 				<CardContent>
 					<div className="space-y-2">
-						<Label htmlFor="release-notes">Release Notes</Label>
+						<Label htmlFor="release-notes">{t('releaseNotes', 'Release Notes')}</Label>
 						<Textarea
 							id="release-notes"
 							value={getMeta("release_notes") || ""}
 							onChange={(e) => updateMeta("release_notes", e.target.value)}
-							placeholder="What's new in this version?"
+							placeholder={`What's new in this version?`}
 							rows={4}
 						/>
 					</div>

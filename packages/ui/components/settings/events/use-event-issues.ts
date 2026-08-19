@@ -6,6 +6,8 @@ import {
 	getEventSections,
 	isTriggerSection,
 } from "../../../lib/event-sections";
+import { isRuntimeConfigured } from "../../../lib/runtime-vars-utils";
+import type { IVariable } from "../../../lib/schema/flow/board";
 import type { IEvent } from "../../../lib/schema/flow/event";
 
 export type IssueSeverity = "blocking" | "check";
@@ -33,7 +35,28 @@ export interface EventIssueInput {
 	requiresSink?: boolean;
 	/** Whether the route path draft collides with another event. */
 	routeError?: string | null;
+	/** Board variables, when a board is loaded, to check override coverage. */
+	boardVariables?: Record<string, IVariable> | null;
 }
+
+/**
+ * Triggers that fire without anyone present. Every other event type runs from a
+ * user session that can prompt for runtime variables and merge in the values
+ * stored on that device, so a missing override there is not a problem.
+ */
+const HEADLESS_EVENT_TYPES = new Set([
+	"cron",
+	"rest",
+	"mcp",
+	"api",
+	"daemon",
+	"discord",
+	"telegram",
+	"email",
+]);
+
+export const isHeadlessEventType = (eventType: string): boolean =>
+	HEADLESS_EVENT_TYPES.has(eventType);
 
 /**
  * `keys` is a list because a credential is not always stored where the defaults
@@ -67,6 +90,7 @@ export function computeEventIssues({
 	drift,
 	requiresSink,
 	routeError,
+	boardVariables,
 }: EventIssueInput): IEventIssue[] {
 	const issues: IEventIssue[] = [];
 	const sectionIds = getEventSections(event).map((section) => section.id);
@@ -110,6 +134,25 @@ export function computeEventIssues({
 				section: trigger("access"),
 				title: "Endpoint is public and unauthenticated",
 				detail: "Anyone who finds the URL can trigger this flow.",
+			});
+		}
+	}
+
+	if (boardVariables && isHeadlessEventType(event.event_type)) {
+		const unset = Object.entries(boardVariables)
+			.filter(
+				([key, variable]) =>
+					isRuntimeConfigured(variable) && !event.variables?.[key],
+			)
+			.map(([, variable]) => variable.name);
+
+		if (unset.length > 0) {
+			issues.push({
+				id: "runtime-vars-unset",
+				severity: "check",
+				section: "variables",
+				title: "Runtime variables have no value",
+				detail: `This trigger runs with no user to prompt, so ${unset.join(", ")} will read as empty. Set an override.`,
 			});
 		}
 	}
@@ -177,11 +220,19 @@ export function computeEventIssues({
 }
 
 export function useEventIssues(input: EventIssueInput): IEventIssue[] {
-	const { event, config, drift, requiresSink, routeError } = input;
+	const { event, config, drift, requiresSink, routeError, boardVariables } =
+		input;
 	return useMemo(
 		() =>
-			computeEventIssues({ event, config, drift, requiresSink, routeError }),
-		[event, config, drift, requiresSink, routeError],
+			computeEventIssues({
+				event,
+				config,
+				drift,
+				requiresSink,
+				routeError,
+				boardVariables,
+			}),
+		[event, config, drift, requiresSink, routeError, boardVariables],
 	);
 }
 

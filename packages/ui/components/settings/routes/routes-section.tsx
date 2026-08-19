@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import {
 	ArrowRight,
 	FileText,
@@ -107,21 +108,21 @@ export function RoutesSection({
 	onOpenBoard,
 	getBoardVersions,
 }: RoutesSectionProps) {
+	const { t } = useTranslation("settings");
 	const [isCreateOpen, setIsCreateOpen] = useState(false);
 
 	return (
 		<div className="space-y-4">
 			<div className="flex justify-between items-start">
 				<div className="space-y-1">
-					<h2 className="text-lg font-semibold">URL Routes</h2>
+					<h2 className="text-lg font-semibold">{t('urlRoutes', 'URL Routes')}</h2>
 					<p className="text-sm text-muted-foreground">
-						Map URL paths to pages or events. The "/" route is the default entry
-						point.
+						{t('mapUrlPathsToPagesOrEventsTheRouteIsTheDefaultEntryPoint', "Map URL paths to pages or events. The \"/\" route is the default entry point.")}
 					</p>
 				</div>
 				<Button onClick={() => setIsCreateOpen(true)} size="sm">
 					<Plus className="h-4 w-4 mr-2" />
-					Add Route
+					{t('addRoute', 'Add Route')}
 				</Button>
 			</div>
 
@@ -142,8 +143,8 @@ export function RoutesSection({
 			) : (
 				<EmptyState
 					icons={[Globe]}
-					title="No routes configured"
-					description="Routes map URL paths to pages or events. Create your first route to define how users navigate your app."
+					title={t('noRoutesConfigured', 'No routes configured')}
+					description={t('routesMapUrlPathsToPagesOrEventsCreateYourFirstRouteToDefineHowUsersNavigateYourApp', 'Routes map URL paths to pages or events. Create your first route to define how users navigate your app.')}
 					action={{
 						label: "Create Route",
 						onClick: () => setIsCreateOpen(true),
@@ -181,6 +182,7 @@ export function RouteCard({
 	onOpenPage,
 	onOpenBoard,
 }: RouteCardProps) {
+	const { t } = useTranslation("settings");
 	const pageInfo =
 		route.targetType === "page"
 			? pages.find((p) => p.pageId === route.pageId)
@@ -210,7 +212,7 @@ export function RouteCard({
 							</code>
 							{isDefaultRoute && (
 								<p className="text-xs text-muted-foreground mt-0.5">
-									Home Page
+									{t('homePage', 'Home Page')}
 								</p>
 							)}
 						</div>
@@ -254,7 +256,7 @@ export function RouteCard({
 							</div>
 							{pageInfo?.boardId && (
 								<p className="text-xs text-muted-foreground mt-0.5 truncate">
-									Board: {pageInfo.boardId.substring(0, 12)}...
+									{t('board', 'Board:')} {pageInfo.boardId.substring(0, 12)}{`...`}
 								</p>
 							)}
 						</div>
@@ -277,7 +279,7 @@ export function RouteCard({
 											<Pencil className="h-4 w-4" />
 										</Button>
 									</TooltipTrigger>
-									<TooltipContent>Edit Page</TooltipContent>
+									<TooltipContent>{t('editPage', 'Edit Page')}</TooltipContent>
 								</Tooltip>
 								{pageInfo.boardId && (
 									<Tooltip>
@@ -291,7 +293,7 @@ export function RouteCard({
 												<Workflow className="h-4 w-4" />
 											</Button>
 										</TooltipTrigger>
-										<TooltipContent>Open Flow</TooltipContent>
+										<TooltipContent>{t('openFlow', 'Open Flow')}</TooltipContent>
 									</Tooltip>
 								)}
 							</>
@@ -307,7 +309,7 @@ export function RouteCard({
 									<Trash2 className="h-4 w-4" />
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent>Delete Route</TooltipContent>
+							<TooltipContent>{t('deleteRoute', 'Delete Route')}</TooltipContent>
 						</Tooltip>
 					</div>
 				</div>
@@ -333,6 +335,7 @@ export function CreateRouteDialog({
 	onCreate,
 	getBoardVersions,
 }: CreateRouteDialogProps) {
+	const { t } = useTranslation("settings");
 	const [path, setPath] = useState("/");
 	const [targetType, setTargetType] = useState<RouteTargetType>("page");
 	const [pageId, setPageId] = useState("");
@@ -399,14 +402,14 @@ export function CreateRouteDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="sm:max-w-md">
 				<DialogHeader>
-					<DialogTitle>Create Route</DialogTitle>
+					<DialogTitle>{t('createRoute', 'Create Route')}</DialogTitle>
 					<DialogDescription>
-						Define a URL path and what it displays
+						{t('defineAUrlPathAndWhatItDisplays', 'Define a URL path and what it displays')}
 					</DialogDescription>
 				</DialogHeader>
 				<div className="space-y-4 py-4">
 					<div className="space-y-2">
-						<Label htmlFor="path">Path</Label>
+						<Label htmlFor="path">{t('path', 'Path')}</Label>
 						<Input
 							id="path"
 							value={path}
@@ -415,12 +418,12 @@ export function CreateRouteDialog({
 							className="font-mono"
 						/>
 						<p className="text-xs text-muted-foreground">
-							Use "/" for the home page
+							{t('useForTheHomePage', 'Use "/" for the home page')}
 						</p>
 					</div>
 
 					<div className="space-y-2">
-						<Label>Target Type</Label>
+						<Label>{t('targetType', 'Target Type')}</Label>
 						<Select
 							value={targetType}
 							onValueChange={(v) => setTargetType(v as RouteTargetType)}
@@ -432,13 +435,13 @@ export function CreateRouteDialog({
 								<SelectItem value="page">
 									<div className="flex items-center gap-2">
 										<FileText className="h-4 w-4" />
-										Page
+										{t('page', 'Page')}
 									</div>
 								</SelectItem>
 								<SelectItem value="event">
 									<div className="flex items-center gap-2">
 										<Sparkles className="h-4 w-4" />
-										Event
+										{t('event', 'Event')}
 									</div>
 								</SelectItem>
 							</SelectContent>
@@ -448,15 +451,15 @@ export function CreateRouteDialog({
 					{targetType === "page" && (
 						<>
 							<div className="space-y-2">
-								<Label>Page</Label>
+								<Label>{t('page', 'Page')}</Label>
 								<Select value={pageId} onValueChange={handlePageSelect}>
 									<SelectTrigger>
-										<SelectValue placeholder="Select a page" />
+										<SelectValue placeholder={t('selectAPage', 'Select a page')} />
 									</SelectTrigger>
 									<SelectContent>
 										{pages.length === 0 ? (
 											<div className="p-2 text-sm text-muted-foreground text-center">
-												No pages available. Create one in a flow first.
+												{t('noPagesAvailableCreateOneInAFlowFirst', 'No pages available. Create one in a flow first.')}
 											</div>
 										) : (
 											pages.map((page) => (
@@ -470,7 +473,7 @@ export function CreateRouteDialog({
 							</div>
 							{boardId && (
 								<div className="space-y-2">
-									<Label>Version</Label>
+									<Label>{t('version', 'Version')}</Label>
 									<Select
 										value={selectedVersion}
 										onValueChange={setSelectedVersion}
@@ -479,7 +482,7 @@ export function CreateRouteDialog({
 											<SelectValue />
 										</SelectTrigger>
 										<SelectContent>
-											<SelectItem value="latest">Latest</SelectItem>
+											<SelectItem value="latest">{t('latest', 'Latest')}</SelectItem>
 											{boardVersions.map((v) => (
 												<SelectItem key={v.join(".")} value={v.join(".")}>
 													v{v.join(".")}
@@ -489,8 +492,8 @@ export function CreateRouteDialog({
 									</Select>
 									<p className="text-xs text-muted-foreground">
 										{selectedVersion === "latest"
-											? "Always use the latest published version"
-											: `Lock to version ${selectedVersion}`}
+											? t('alwaysUseTheLatestPublishedVersion', 'Always use the latest published version')
+											: t('lockToVersionSelectedversion', 'Lock to version {{selectedVersion}}', { selectedVersion })}
 									</p>
 								</div>
 							)}
@@ -499,15 +502,15 @@ export function CreateRouteDialog({
 
 					{targetType === "event" && (
 						<div className="space-y-2">
-							<Label>Event</Label>
+							<Label>{t('event', 'Event')}</Label>
 							<Select value={eventId} onValueChange={setEventId}>
 								<SelectTrigger>
-									<SelectValue placeholder="Select an event" />
+									<SelectValue placeholder={t('selectAnEvent', 'Select an event')} />
 								</SelectTrigger>
 								<SelectContent>
 									{events.length === 0 ? (
 										<div className="p-2 text-sm text-muted-foreground text-center">
-											No events available
+											{t('noEventsAvailable', 'No events available')}
 										</div>
 									) : (
 										events.map((event) => (
@@ -523,10 +526,10 @@ export function CreateRouteDialog({
 				</div>
 				<DialogFooter>
 					<Button variant="outline" onClick={() => onOpenChange(false)}>
-						Cancel
+						{t('cancel', 'Cancel')}
 					</Button>
 					<Button onClick={handleCreate} disabled={isLoading || !isValid}>
-						{isLoading ? "Creating..." : "Create Route"}
+						{isLoading ? "Creating..." : t('createRoute', 'Create Route')}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

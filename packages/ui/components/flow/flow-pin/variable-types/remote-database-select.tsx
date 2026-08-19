@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { ChevronDown } from "lucide-react";
 import { type RefObject, useCallback, useEffect, useState } from "react";
 import { useBackend } from "../../../..";
@@ -38,6 +39,7 @@ export function RemoteDatabaseSelect({
 	boardRef?: RefObject<IBoard | undefined>;
 	setValue: (value: number[] | undefined) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const [open, setOpen] = useState(false);
 	const [loadedTables, setLoadedTables] = useState<{
@@ -117,7 +119,7 @@ export function RemoteDatabaseSelect({
 					className="w-fit! max-w-full! p-0 border-0 text-xs bg-card! text-start max-h-fit h-4 gap-0.5 flex-row items-center overflow-hidden"
 				>
 					<small className="text-start text-[10px] m-0! truncate">
-						{!targetAppId && "Select a project first"}
+						{!targetAppId && t('selectAProjectFirst', 'Select a project first')}
 						{targetAppId && (selectedTable || "Select database")}
 					</small>
 					<ChevronDown className="size-2 min-w-2 min-h-2 text-card-foreground shrink-0" />
@@ -126,13 +128,13 @@ export function RemoteDatabaseSelect({
 					<SelectGroup>
 						<SelectLabel>{pin.friendly_name}</SelectLabel>
 						{loading && tables.length === 0 && (
-							<SelectLabel>Loading databases...</SelectLabel>
+							<SelectLabel>{t('loadingDatabases', 'Loading databases...')}</SelectLabel>
 						)}
 						{error && (
-							<SelectLabel>Could not load remote databases</SelectLabel>
+							<SelectLabel>{t('couldNotLoadRemoteDatabases', 'Could not load remote databases')}</SelectLabel>
 						)}
 						{!loading && !error && tables.length === 0 && !selectedTable && (
-							<SelectLabel>No shared databases found</SelectLabel>
+							<SelectLabel>{t('noSharedDatabasesFound', 'No shared databases found')}</SelectLabel>
 						)}
 						{tables.map((table) => (
 							<SelectItem key={table} value={table}>
@@ -145,7 +147,7 @@ export function RemoteDatabaseSelect({
 								{selectedTableMissing && (
 									<span className="text-muted-foreground">
 										{" "}
-										(not found in project)
+										{t('notFoundInProject', '(not found in project)')}
 									</span>
 								)}
 							</SelectItem>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { AlertTriangle, HelpCircle, Settings } from "lucide-react";
 import Link from "next/link";
 import { Alert, AlertDescription, Button, Card, CardContent } from "../ui";
@@ -8,6 +9,7 @@ export function NoDefaultInterface({
 	appId,
 	eventId,
 }: Readonly<{ appId: string; eventId?: string }>) {
+	const { t } = useTranslation("interfaces");
 	return (
 		<div className="flex flex-col h-full bg-muted/20 grow">
 			<div className="flex-1 flex items-center justify-center p-8">
@@ -27,10 +29,10 @@ export function NoDefaultInterface({
 							{/* Heading */}
 							<div className="space-y-2">
 								<h3 className="text-lg font-semibold">
-									Interface Not Available
+									{t('interfaceNotAvailable', 'Interface Not Available')}
 								</h3>
 								<p className="text-sm text-muted-foreground">
-									This event type does not support a custom interface
+									{t('thisEventTypeDoesNotSupportACustomInterface', 'This event type does not support a custom interface')}
 								</p>
 							</div>
 
@@ -38,8 +40,7 @@ export function NoDefaultInterface({
 							<Alert className="w-full">
 								<HelpCircle className="h-4 w-4" />
 								<AlertDescription>
-									Event types without interface support handle data
-									automatically without requiring user interaction.
+									{t('eventTypesWithoutInterfaceSupportHandleDataAutomaticallyWithoutRequiringUserInteraction', "Event types without interface support handle data automatically without requiring user interaction.")}
 								</AlertDescription>
 							</Alert>
 
@@ -50,7 +51,7 @@ export function NoDefaultInterface({
 							>
 								<Button variant="outline" className="w-full">
 									<Settings className="w-4 h-4 mr-2" />
-									Configure Event Settings
+									{t('configureEventSettings', 'Configure Event Settings')}
 								</Button>
 							</Link>
 						</div>

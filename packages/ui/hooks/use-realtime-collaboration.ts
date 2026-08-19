@@ -8,8 +8,9 @@ import {
 	useState,
 } from "react";
 import type { RemoteSelectionParticipant } from "../components/flow/flow-node";
-import { createRealtimeSession } from "../lib";
+import { type IRealtimeAccess, createRealtimeSession } from "../lib";
 import { normalizeSelectionNodes } from "../lib/flow-board-utils";
+import { decodeJwtExpiryMs } from "../lib/realtime/authenticated-websocket";
 import type { IBoard } from "../lib/schema/flow/board";
 
 export interface PeerPresence {
@@ -40,6 +41,10 @@ export interface CursorStore {
 }
 
 const EMPTY_CURSORS: PeerCursor[] = [];
+
+/** Rotate the realtime token this long before its `exp` so reconnects never
+ *  replay an expired credential. */
+const TOKEN_ROTATE_MARGIN_MS = 5 * 60 * 1000;
 
 function cursorsEqual(a: PeerCursor[], b: PeerCursor[]): boolean {
 	if (a.length !== b.length) return false;
@@ -120,7 +125,9 @@ export function useRealtimeCollaboration({
 	const sessionRef = useRef<{
 		dispose: () => void;
 		reconnect: () => Promise<void>;
+		refreshAccess: (access: IRealtimeAccess) => void;
 	} | null>(null);
+	const tokenExpiresAtRef = useRef<number | null>(null);
 	const [peerStates, setPeerStates] = useState<PeerPresence[]>([]);
 	const remoteSelectionsRef = useRef<Map<string, RemoteSelectionParticipant[]>>(
 		new Map(),
@@ -152,9 +159,10 @@ export function useRealtimeCollaboration({
 	const hasBoardData = !!board.data;
 
 	// Use a ref for signaling servers so changes don't trigger session recreation.
-	// The session is created once with whatever servers are available (fallback kicks in
-	// inside createRealtimeSession when undefined). When the hub loads later with the
-	// same URL, no reconnect is needed.
+	// Authenticated sessions refuse to run without hub-configured servers, so
+	// when none are available yet (hub still loading), setup retries below until
+	// the hub provides them. When the hub loads later with the same URL, no
+	// reconnect is needed.
 	const signalingServersRef = useRef<string[] | undefined>(
 		hub.hub?.signaling?.length ? hub.hub.signaling : undefined,
 	);
@@ -175,6 +183,53 @@ export function useRealtimeCollaboration({
 		}
 
 		let disposed = false;
+		let rotating = false;
+		let rotateTimer: ReturnType<typeof setTimeout> | null = null;
+		let setupRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+		// Re-fetch realtime access and swap the registered signaling credential
+		// so the provider's automatic reconnects never replay an expired JWT.
+		// Guarded by the decoded expiry so auth-unrelated socket failures with a
+		// still-fresh token don't hammer the access endpoint.
+		const refreshRealtimeAccess = async () => {
+			if (disposed || rotating || !sessionRef.current) return;
+			const expiresAt = tokenExpiresAtRef.current;
+			if (
+				expiresAt !== null &&
+				expiresAt - Date.now() > TOKEN_ROTATE_MARGIN_MS
+			) {
+				return;
+			}
+			rotating = true;
+			try {
+				const access = await backend.boardState.getRealtimeAccess(
+					appId,
+					boardId,
+				);
+				if (disposed || !sessionRef.current) return;
+				sessionRef.current.refreshAccess(access);
+				tokenExpiresAtRef.current = decodeJwtExpiryMs(access.jwt);
+				scheduleTokenRotation();
+			} catch (e) {
+				console.warn("Realtime access refresh failed:", e);
+			} finally {
+				rotating = false;
+			}
+		};
+
+		const scheduleTokenRotation = () => {
+			if (rotateTimer !== null) clearTimeout(rotateTimer);
+			const expiresAt = tokenExpiresAtRef.current;
+			if (expiresAt === null) return;
+			rotateTimer = setTimeout(
+				() => {
+					rotateTimer = null;
+					void refreshRealtimeAccess();
+				},
+				Math.max(expiresAt - Date.now() - TOKEN_ROTATE_MARGIN_MS, 60_000),
+			);
+		};
+
 		const setup = async () => {
 			try {
 				const offline = await backend.isOffline(appId);
@@ -183,17 +238,14 @@ export function useRealtimeCollaboration({
 				if (offline) return;
 
 				const room = sessionKey;
-				const [access, jwks] = await Promise.all([
-					backend.boardState.getRealtimeAccess(appId, boardId),
-					backend.boardState
-						.getRealtimeJwks(appId, boardId)
-						.catch(() => undefined as any),
-				]);
+				const access = await backend.boardState.getRealtimeAccess(
+					appId,
+					boardId,
+				);
 
 				const session = await createRealtimeSession({
 					room,
 					access,
-					jwks,
 					sub,
 					signalingServers: signalingServersRef.current,
 					onStatusChange: (status) => {
@@ -203,6 +255,9 @@ export function useRealtimeCollaboration({
 							}
 							return status;
 						});
+					},
+					onAuthFailure: () => {
+						void refreshRealtimeAccess();
 					},
 				});
 
@@ -214,7 +269,10 @@ export function useRealtimeCollaboration({
 				sessionRef.current = {
 					dispose: session.dispose,
 					reconnect: session.reconnect,
+					refreshAccess: session.refreshAccess,
 				};
+				tokenExpiresAtRef.current = decodeJwtExpiryMs(access.jwt);
+				scheduleTokenRotation();
 				awarenessRef.current = session.awareness;
 				commandAwarenessRef.current = session.awareness;
 				sessionInitializedRef.current = sessionKey;
@@ -224,17 +282,35 @@ export function useRealtimeCollaboration({
 			} catch (e) {
 				console.warn("Realtime setup failed:", e);
 				setConnectionStatus("disconnected");
+				// Cold start: the hub config (and its signaling servers) may not have
+				// loaded yet. Wait for it instead of falling back to a public host.
+				if (!disposed && !signalingServersRef.current?.length) {
+					setupRetryTimer = setTimeout(retrySetupWhenSignalingArrives, 2000);
+				}
 			}
+		};
+
+		const retrySetupWhenSignalingArrives = () => {
+			setupRetryTimer = null;
+			if (disposed) return;
+			if (!signalingServersRef.current?.length) {
+				setupRetryTimer = setTimeout(retrySetupWhenSignalingArrives, 2000);
+				return;
+			}
+			void setup();
 		};
 		void setup();
 
 		return () => {
 			disposed = true;
+			if (rotateTimer !== null) clearTimeout(rotateTimer);
+			if (setupRetryTimer !== null) clearTimeout(setupRetryTimer);
 			sessionInitializedRef.current = null;
 			try {
 				sessionRef.current?.dispose();
 			} catch {}
 			sessionRef.current = null;
+			tokenExpiresAtRef.current = null;
 			awarenessRef.current = undefined;
 			commandAwarenessRef.current = undefined;
 			setAwareness(undefined);

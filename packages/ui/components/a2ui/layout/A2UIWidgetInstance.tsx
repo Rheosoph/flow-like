@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { createContext, useCallback, useContext, useMemo } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { useBackend } from "../../../state/backend-state";
@@ -247,6 +248,7 @@ export function A2UIWidgetInstance({
 	boardId,
 	onAction,
 }: ComponentProps) {
+	const { t } = useTranslation("common");
 	const props = component as unknown as WidgetInstanceComponentProps;
 	const {
 		instanceId,
@@ -346,14 +348,12 @@ export function A2UIWidgetInstance({
 					data-widget-instance={instanceId}
 					data-widget-id={widgetId}
 				>
-					Loading widget…
+					{t('loadingWidget', 'Loading widget…')}
 				</div>
 			);
 		}
 		return (
-			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">
-				Widget instance &quot;{instanceId}&quot; could not be resolved
-				{fetched.error ? `: ${fetched.error.message}` : ""}
+			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">{t('widgetInstanceQuotinstanceidquotCouldNotBeResolved', "Widget instance \"{{instanceId}}\" could not be resolved", { instanceId })}{fetched.error ? `: ${fetched.error.message}` : ""}
 			</div>
 		);
 	}
@@ -361,7 +361,7 @@ export function A2UIWidgetInstance({
 	if (!widgetDef.rootComponentId) {
 		return (
 			<div className="p-4 text-sm text-red-500 bg-red-50 rounded">
-				Widget definition missing rootComponentId
+				{t('widgetDefinitionMissingRootcomponentid', 'Widget definition missing rootComponentId')}
 			</div>
 		);
 	}

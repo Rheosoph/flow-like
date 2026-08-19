@@ -401,11 +401,22 @@ services:
       - "${SIGNALING_PORT:-4444}:4444"
     environment:
       PORT: 4444
+      NODE_ENV: ${SIGNALING_NODE_ENV:-production}
       REDIS_URL: redis://redis:6379
       SIGNAL_CHANNEL: ${SIGNAL_CHANNEL:-signal:publish}
+      # REQUIRED in authenticated mode (the default): the container exits at
+      # boot when BACKEND_PUB or REALTIME_ALLOWED_ORIGINS is empty. Set both in
+      # .env — see .env.example, section "Realtime Collaboration".
+      BACKEND_PUB: ${BACKEND_PUB:-}
+      BACKEND_KID: ${BACKEND_KID:-backend-es256-v1}
+      REALTIME_ALLOWED_ORIGINS: ${REALTIME_ALLOWED_ORIGINS:-}
+      REALTIME_MAX_CONNECTIONS_PER_SUB: ${REALTIME_MAX_CONNECTIONS_PER_SUB:-}
+      REALTIME_ALLOW_INSECURE_LOCAL_DEV: ${REALTIME_ALLOW_INSECURE_LOCAL_DEV:-false}
     depends_on:
       redis:
         condition: service_healthy
+    # /health is liveness-only: a Redis outage degrades fan-out (/ready goes
+    # 503) without restarting the container and killing live WebSockets.
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:4444/health"]
       interval: 10s

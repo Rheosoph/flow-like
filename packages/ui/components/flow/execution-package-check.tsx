@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Check, Cloud, Download, XCircle } from "lucide-react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -74,6 +75,7 @@ export function ExecutionPackageCheck({
 	onCancel,
 	loading,
 }: ExecutionPackageCheckProps) {
+	const { t } = useTranslation("flow");
 	const installable = packages.filter((p) => p.status === "installable");
 	const hasRemote = packages.some((p) => p.status === "remote_only");
 	const hasUnavailable = packages.some((p) => p.status === "unavailable");
@@ -82,9 +84,9 @@ export function ExecutionPackageCheck({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="max-w-lg">
 				<DialogHeader>
-					<DialogTitle>Package Access Check</DialogTitle>
+					<DialogTitle>{t('packageAccessCheck', 'Package Access Check')}</DialogTitle>
 					<DialogDescription>
-						This workflow uses packages with different access levels.
+						{t('thisWorkflowUsesPackagesWithDifferentAccessLevels', 'This workflow uses packages with different access levels.')}
 					</DialogDescription>
 				</DialogHeader>
 				<ScrollArea className="max-h-72">
@@ -102,9 +104,7 @@ export function ExecutionPackageCheck({
 										<span className="text-sm font-medium truncate block">
 											{pkg.packageName}
 										</span>
-										<span className="text-xs text-muted-foreground">
-											v{pkg.requiredVersion}
-										</span>
+										<span className="text-xs text-muted-foreground">{`v${pkg.requiredVersion}`}</span>
 									</div>
 									<Badge
 										variant={
@@ -128,7 +128,7 @@ export function ExecutionPackageCheck({
 							}
 							disabled={loading}
 						>
-							Install & Re-check
+							{t('installRecheck', 'Install & Re-check')}
 						</Button>
 					)}
 					{hasRemote && !hasUnavailable && (
@@ -137,7 +137,7 @@ export function ExecutionPackageCheck({
 						</Button>
 					)}
 					<Button variant="ghost" onClick={onCancel}>
-						Cancel
+						{t('cancel', 'Cancel')}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

@@ -59,11 +59,7 @@ export function Footer() {
 			<a href="/privacy-policy">
 				<small>{t("footer.privacy")}</small>
 			</a>
-			<a
-				href="https://great-co.de/legal-notice"
-				target="_blank"
-				rel="noreferrer"
-			>
+			<a href="/legal-notice">
 				<small>{t("footer.legal")}</small>
 			</a>
 			<a href="/data-deletion">

@@ -245,6 +245,10 @@ fn registration_auth_headers(
     let mut auth_headers = headers.clone();
     let registration_authorization = auth_headers.remove(PROXY_EVENT_AUTHORIZATION_HEADER);
     auth_headers.remove(axum::http::header::AUTHORIZATION);
+    // Also drop the edge's forwarded copy of the proxy caller's Authorization
+    // (CloudFront OAC), which would otherwise shadow the restored
+    // registration credential in `viewer_authorization`.
+    auth_headers.remove(crate::middleware::jwt::FORWARDED_AUTHORIZATION_HEADER);
     if let Some(value) = registration_authorization {
         auth_headers.insert(axum::http::header::AUTHORIZATION, value);
     }
@@ -1079,9 +1083,7 @@ async fn verify_inbound_auth(
         }
         "bearer_token" => {
             let expected = secret_config_value(cfg, "token", &state.encryption_key)?;
-            let provided = headers
-                .get(axum::http::header::AUTHORIZATION)
-                .and_then(|v| v.to_str().ok())
+            let provided = crate::middleware::jwt::viewer_authorization(headers)
                 .and_then(|v| v.strip_prefix("Bearer "))
                 .unwrap_or("");
             if provided.is_empty() || !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
@@ -1096,9 +1098,7 @@ async fn verify_inbound_auth(
                 &base64::engine::general_purpose::STANDARD,
                 format!("{user}:{pass}"),
             );
-            let provided = headers
-                .get(axum::http::header::AUTHORIZATION)
-                .and_then(|v| v.to_str().ok())
+            let provided = crate::middleware::jwt::viewer_authorization(headers)
                 .and_then(|v| v.strip_prefix("Basic "))
                 .unwrap_or("");
             if provided.is_empty() || !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
@@ -1377,9 +1377,7 @@ async fn verify_oauth_bearer(
 ) -> Result<Value, ApiError> {
     use jsonwebtoken::{DecodingKey, Validation, decode, decode_header};
 
-    let token = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
+    let token = crate::middleware::jwt::viewer_authorization(headers)
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or_else(|| ApiError::unauthorized("missing bearer token"))?
         .trim();
@@ -3640,11 +3638,17 @@ mod tests {
             axum::http::HeaderValue::from_static("Bearer app-connection-token"),
         );
         headers.insert(
+            crate::middleware::jwt::FORWARDED_AUTHORIZATION_HEADER,
+            axum::http::HeaderValue::from_static("Bearer app-connection-token"),
+        );
+        headers.insert(
             PROXY_EVENT_AUTHORIZATION_HEADER,
             axum::http::HeaderValue::from_static("Bearer registration-token"),
         );
 
         let auth_headers = registration_auth_headers(&headers, false);
+
+        assert!(!auth_headers.contains_key(crate::middleware::jwt::FORWARDED_AUTHORIZATION_HEADER));
 
         assert_eq!(
             auth_headers

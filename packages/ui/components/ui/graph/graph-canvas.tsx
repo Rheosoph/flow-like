@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { SigmaContainer, useRegisterEvents, useSigma } from "@react-sigma/core";
 import "@react-sigma/core/lib/style.css";
 import {
@@ -45,6 +46,7 @@ import type { ClusterModel } from "./graph-clusters";
 import {
 	type ConnectivityPartition,
 	type LayoutPosition as GraphPosition,
+	DEFAULT_NODE_SIZE,
 	applyClusterLayout,
 	computeSeedSpread,
 	createAnchoredPosition,
@@ -70,7 +72,10 @@ const IconNodeProgram = createNodeCompoundProgram([
 		],
 	}),
 	createNodeImageProgram({
-		padding: 0.3,
+		// The glyph is a type hint, not the subject. Filling most of the disc made
+		// it read as the node itself, which is also what buried the colour that
+		// actually distinguishes one object type from another.
+		padding: 0.42,
 		keepWithinCircle: true,
 	}),
 ]);
@@ -109,6 +114,11 @@ export interface GraphCanvasProps {
 	highlightedNodeIds?: Set<string>;
 	highlightedEdgeIds?: Set<string>;
 	hiddenLabels?: Set<string>;
+	/**
+	 * Restricts the stage to these nodes. Dimming stops paying off once the
+	 * context is large enough to be the problem itself; this removes it instead.
+	 */
+	visibleNodeIds?: Set<string>;
 	/** Groups the nodes into constellations instead of one undifferentiated field. */
 	clusters?: ClusterModel | null;
 	onNodeClick?: (nodeId: string) => void;
@@ -180,23 +190,27 @@ function computeColumnRanges(
 	return ranges;
 }
 
+const NODE_SIZE_MIN = 5;
+const NODE_SIZE_MAX = 18;
+
 function styleToNodeSize(
 	style?: LabelStyle,
 	degree?: number,
 	columnRanges?: ReadonlyMap<string, ColumnRange>,
 	props?: Record<string, unknown>,
 ): number {
-	if (!style?.size) return 10;
+	if (!style?.size) return DEFAULT_NODE_SIZE;
 	const { mode } = style.size;
-	if (mode === "fixed") return Math.max(8, style.size.value ?? 10);
+	if (mode === "fixed")
+		return Math.max(NODE_SIZE_MIN, style.size.value ?? DEFAULT_NODE_SIZE);
 	if (mode === "by-degree" && degree !== undefined) {
-		const min = style.size.min ?? 8;
-		const max = style.size.max ?? 28;
-		return Math.min(max, min + degree * 1.5);
+		const min = style.size.min ?? NODE_SIZE_MIN;
+		const max = style.size.max ?? NODE_SIZE_MAX;
+		return Math.min(max, min + degree * 1.2);
 	}
 	if (mode === "by-column" && style.size.column) {
-		const min = style.size.min ?? 8;
-		const max = style.size.max ?? 28;
+		const min = style.size.min ?? NODE_SIZE_MIN;
+		const max = style.size.max ?? NODE_SIZE_MAX;
 		const value = toFiniteNumber(props?.[style.size.column]);
 		const range = columnRanges?.get(style.size.column);
 		if (value === undefined || !range || range.max <= range.min) {
@@ -205,11 +219,11 @@ function styleToNodeSize(
 		const ratio = (value - range.min) / (range.max - range.min);
 		return min + ratio * (max - min);
 	}
-	return 10;
+	return DEFAULT_NODE_SIZE;
 }
 
-const HUB_SIZE_MIN = 14;
-const HUB_SIZE_MAX = 34;
+const HUB_SIZE_MIN = 11;
+const HUB_SIZE_MAX = 24;
 /**
  * Hub captions exempted from label culling. A forced label bypasses
  * `labelRenderedSizeThreshold` and the label grid entirely, so forcing all 400
@@ -225,9 +239,55 @@ const MAX_FORCED_HUB_LABELS = 48;
  * hub captions survive, member captions drop out.
  */
 function hubNodeSize(represented: number): number {
-	const scaled = HUB_SIZE_MIN + 2.2 * Math.log2(1 + Math.max(0, represented));
+	const scaled = HUB_SIZE_MIN + 1.5 * Math.log2(1 + Math.max(0, represented));
 	return Math.min(HUB_SIZE_MAX, Math.max(HUB_SIZE_MIN, scaled));
 }
+
+/** Nodes a stage seats comfortably before circles start crowding the edges out. */
+const SIZE_FIT_REFERENCE_NODES = 40;
+const MIN_FIT_SIZE_SCALE = 0.28;
+/** Stage the size ceiling is reckoned against, in CSS pixels. */
+const REFERENCE_STAGE_AREA = 1200 * 700;
+/** How much of the room a node gets its circle may fill, edge to edge. */
+const MAX_NODE_PITCH_SHARE = 0.3;
+const MIN_RENDERED_NODE_SIZE = 2;
+
+/**
+ * Shrinks nodes as the sample grows, because `autoRescale` fits the whole layout
+ * to the stage while `size` stays in screen pixels.
+ *
+ * Extra spacing in the layout cannot fix this: the auto-fit divides it straight
+ * back out, so the pitch a node gets on screen falls as `1/sqrt(nodeCount)`
+ * whatever the layout does. Only the pixel size is ours to set, so it follows the
+ * same curve — otherwise circles keep their pixels while the gaps between them
+ * close, and past a hundred-odd nodes the edges disappear underneath them.
+ */
+function fitSizeScale(nodeCount: number): number {
+	if (nodeCount <= SIZE_FIT_REFERENCE_NODES) return 1;
+	return Math.max(
+		MIN_FIT_SIZE_SCALE,
+		Math.sqrt(SIZE_FIT_REFERENCE_NODES / nodeCount),
+	);
+}
+
+/**
+ * Hard ceiling on a rendered node, as a share of the room the sample leaves it.
+ *
+ * Scaling alone cannot promise this: an overlay is free to declare `size: 28`,
+ * and a fraction of a large number is still large. The pitch — how far apart
+ * auto-fit can hold two nodes — is what the reader actually has, so the ceiling
+ * is a share of that and the declared size only matters below it.
+ */
+function maxNodeSize(nodeCount: number): number {
+	const pitch = Math.sqrt(REFERENCE_STAGE_AREA / Math.max(1, nodeCount));
+	return Math.max(MIN_RENDERED_NODE_SIZE, (pitch * MAX_NODE_PITCH_SHARE) / 2);
+}
+
+/**
+ * Margin between the label cutoff and the nodes it judges, so a plain node still
+ * clears the bar its own size was scaled against rather than landing exactly on it.
+ */
+const LABEL_THRESHOLD_HEADROOM = 0.8;
 
 function hexToRgba(hex: string, alpha: number): string {
 	const r = Number.parseInt(hex.slice(1, 3), 16);
@@ -238,13 +298,15 @@ function hexToRgba(hex: string, alpha: number): string {
 
 function getBaseEdgeAlpha(nodeCount: number): number {
 	if (nodeCount >= HUGE_THRESHOLD) return 0.08;
-	if (nodeCount >= LARGE_THRESHOLD) return 0.2;
-	return 0.3;
+	if (nodeCount >= LARGE_THRESHOLD) return 0.22;
+	return 0.5;
 }
 
 const CONTEXT_DIM_EDGE_SIZE = 0.75;
-const CONTEXT_DIM_EDGE_ALPHA = 0.08;
-const CONTEXT_DIM_NODE_AMOUNT = 0.82;
+const CONTEXT_DIM_EDGE_ALPHA = 0.06;
+const CONTEXT_DIM_NODE_AMOUNT = 0.88;
+/** Dimmed nodes also shrink, so the focus reads as depth and not just as colour. */
+const CONTEXT_DIM_NODE_SCALE = 0.75;
 
 function dimTowardBackground(color: string): string {
 	const theme = getGraphTheme();
@@ -416,7 +478,7 @@ async function finishLayoutAsync(
 
 		updateProgress?.(
 			completed / totalIterations,
-			"Separating overlapping nodes.",
+			i18next.t('separatingOverlappingNodes', 'Separating overlapping nodes.'),
 		);
 
 		// A pass that resolved nothing means the set is already clean.
@@ -465,7 +527,7 @@ async function applyLayoutAsync(
 
 		updateProgress(
 			(completedIterations / totalIterations) * 0.85,
-			`${completedIterations.toLocaleString()} / ${totalIterations.toLocaleString()} layout passes complete.`,
+			i18next.t('valVal2LayoutPassesComplete', '{{val}} / {{val2}} layout passes complete.', { val: completedIterations.toLocaleString(), val2: totalIterations.toLocaleString() }),
 		);
 
 		if (completedIterations < totalIterations) {
@@ -661,8 +723,8 @@ async function buildGraphAsync(
 
 	publish(
 		0.02,
-		"Preparing graph scene",
-		"Scheduling graph work so the page stays responsive.",
+		i18next.t('preparingGraphScene', 'Preparing graph scene'),
+		i18next.t('schedulingGraphWorkSoThePageStaysResponsive', 'Scheduling graph work so the page stays responsive.'),
 	);
 
 	const nodesBuilt = await processInChunks(
@@ -684,7 +746,7 @@ async function buildGraphAsync(
 			const attrs: Record<string, unknown> = {
 				label: node.caption ?? node.id,
 				subtitle: node.label,
-				size: 10,
+				size: DEFAULT_NODE_SIZE,
 				color: nodeColor,
 				x: position.x,
 				y: position.y,
@@ -721,7 +783,7 @@ async function buildGraphAsync(
 			publish(
 				NODE_PROGRESS_WEIGHT * fraction,
 				"Staging nodes",
-				`${Math.round(fraction * 100)}% of node metadata ready.`,
+				i18next.t('valOfNodeMetadataReady', '{{val}}% of node metadata ready.', { val: Math.round(fraction * 100) }),
 			);
 		},
 		isCancelled,
@@ -755,7 +817,7 @@ async function buildGraphAsync(
 			publish(
 				NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT * fraction,
 				"Linking connections",
-				`${Math.round(fraction * 100)}% of edges connected.`,
+				i18next.t('valOfEdgesConnected', '{{val}}% of edges connected.', { val: Math.round(fraction * 100) }),
 			);
 		},
 		isCancelled,
@@ -767,7 +829,7 @@ async function buildGraphAsync(
 		publish(
 			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT,
 			"Optimizing connections",
-			"Resolving parallel edges for clearer paths.",
+			i18next.t('resolvingParallelEdgesForClearerPaths', 'Resolving parallel edges for clearer paths.'),
 		);
 		indexParallelEdgesIndex(graph);
 		graph.forEachEdge((edge, edgeAttrs) => {
@@ -793,6 +855,8 @@ async function buildGraphAsync(
 	}
 
 	const density = graph.size / Math.max(1, graph.order);
+	const fitScale = fitSizeScale(graph.order);
+	const sizeCeiling = maxNodeSize(graph.order);
 	const sized = await processInChunks(
 		data.nodes,
 		getNodeChunkSize(nodeCount),
@@ -802,24 +866,23 @@ async function buildGraphAsync(
 			const assignment = clusters?.byNode.get(node.id);
 			// Only the default fixed size is overridden — a user who chose
 			// by-degree or by-column sizing keeps the encoding they picked.
-			if (assignment?.isHub && node.style?.size?.mode === "fixed") {
-				graph.setNodeAttribute(
-					node.id,
-					"size",
-					hubNodeSize(assignment.represented),
-				);
-				return;
-			}
+			const baseSize =
+				assignment?.isHub && node.style?.size?.mode === "fixed"
+					? hubNodeSize(assignment.represented)
+					: styleToNodeSize(
+							node.style,
+							degreeMap.get(node.id),
+							columnRanges,
+							node.props,
+						);
 
-			const baseSize = styleToNodeSize(
-				node.style,
-				degreeMap.get(node.id),
-				columnRanges,
-				node.props,
+			const scaledSize = Math.max(
+				MIN_RENDERED_NODE_SIZE,
+				Math.min(
+					baseSize * fitScale * (density > 4 ? 0.85 : 1),
+					sizeCeiling,
+				),
 			);
-			let scaledSize = baseSize;
-			if (isHuge) scaledSize = Math.max(3, baseSize * 0.4);
-			else if (density > 4) scaledSize = baseSize * 0.85;
 			graph.setNodeAttribute(node.id, "size", scaledSize);
 		},
 		(fraction) => {
@@ -827,8 +890,8 @@ async function buildGraphAsync(
 				NODE_PROGRESS_WEIGHT +
 					EDGE_PROGRESS_WEIGHT +
 					SIZE_PROGRESS_WEIGHT * fraction,
-				"Balancing node sizes",
-				"Scaling nodes for readability.",
+				i18next.t('balancingNodeSizes', 'Balancing node sizes'),
+				i18next.t('scalingNodesForReadability', 'Scaling nodes for readability.'),
 			);
 		},
 		isCancelled,
@@ -846,8 +909,8 @@ async function buildGraphAsync(
 		});
 		publish(
 			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT,
-			"Keeping layout stable",
-			"Reusing the current node positions while adding new connections.",
+			i18next.t('keepingLayoutStable', 'Keeping layout stable'),
+			`Reusing the current node positions while adding new connections.`,
 			"ready",
 		);
 		return {
@@ -865,7 +928,7 @@ async function buildGraphAsync(
 		publish(
 			base,
 			"Grouping nodes",
-			"Arranging each group around its hub.",
+			i18next.t('arrangingEachGroupAroundItsHub', 'Arranging each group around its hub.'),
 			"layout",
 		);
 		await applyClusterLayout(graph, clusters.clusters, {
@@ -873,7 +936,7 @@ async function buildGraphAsync(
 				publish(
 					base + LAYOUT_PROGRESS_WEIGHT * fraction,
 					"Grouping nodes",
-					`${Math.round(fraction * 100)}% of groups arranged.`,
+					i18next.t('valOfGroupsArranged', '{{val}}% of groups arranged.', { val: Math.round(fraction * 100) }),
 					"layout",
 				);
 			},
@@ -881,7 +944,7 @@ async function buildGraphAsync(
 			isCancelled,
 		});
 		if (isCancelled()) return null;
-		publish(1, "Graph ready", "Rendering interactive view.", "ready");
+		publish(1, "Graph ready", i18next.t('renderingInteractiveView', 'Rendering interactive view.'), "ready");
 		return {
 			graph,
 			shouldRunWorkerLayout: false,
@@ -893,12 +956,12 @@ async function buildGraphAsync(
 	if (partition.connected.length <= 1) {
 		publish(
 			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT,
-			"Arranging nodes",
-			"No connections to lay out — placing nodes on a grid.",
+			i18next.t('arrangingNodes', 'Arranging nodes'),
+			i18next.t('noConnectionsToLayOutPlacingNodesOnAGrid', 'No connections to lay out — placing nodes on a grid.'),
 			"layout",
 		);
 		packNodesOnGrid(graph, [...partition.connected, ...partition.isolated]);
-		publish(1, "Graph ready", "Rendering interactive view.", "ready");
+		publish(1, "Graph ready", i18next.t('renderingInteractiveView', 'Rendering interactive view.'), "ready");
 		return {
 			graph,
 			shouldRunWorkerLayout: false,
@@ -908,8 +971,8 @@ async function buildGraphAsync(
 	if (shouldUseWorkerLayout(partition.connected.length, edgeCount)) {
 		publish(
 			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT,
-			"Preparing worker layout",
-			"Rendering the graph now and refining positions in the background.",
+			i18next.t('preparingWorkerLayout', 'Preparing worker layout'),
+			i18next.t('renderingTheGraphNowAndRefiningPositionsInTheBackground', 'Rendering the graph now and refining positions in the background.'),
 			"ready",
 		);
 		return {
@@ -937,7 +1000,7 @@ async function buildGraphAsync(
 
 	if (isCancelled()) return null;
 
-	publish(1, "Graph ready", "Rendering interactive view.", "ready");
+	publish(1, "Graph ready", i18next.t('renderingInteractiveView', 'Rendering interactive view.'), "ready");
 	return {
 		graph,
 		shouldRunWorkerLayout: false,
@@ -952,6 +1015,7 @@ interface HighlightState {
 	highlightedNodeIds: Set<string> | undefined;
 	highlightedEdgeIds: Set<string> | undefined;
 	hiddenLabels: Set<string> | undefined;
+	visibleNodeIds: Set<string> | undefined;
 	neighborSet: Set<string> | null;
 	connectedEdgeSet: Set<string> | null;
 }
@@ -985,6 +1049,7 @@ function GraphCanvasLoadingOverlay({
 	edgeCount,
 	dimmed,
 }: GraphLoadingOverlayState & { dimmed: boolean }) {
+	const { t } = useTranslation("common");
 	const progressPercent = Math.max(
 		8,
 		Math.min(100, Math.round(progress * 100)),
@@ -1018,7 +1083,7 @@ function GraphCanvasLoadingOverlay({
 					<div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
 						<div className="rounded-2xl border bg-background/70 p-3">
 							<p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-								Nodes
+								{t('nodes2', 'Nodes')}
 							</p>
 							<p className="mt-1 text-lg font-semibold">
 								{formatOverlayMetric(nodeCount)}
@@ -1026,7 +1091,7 @@ function GraphCanvasLoadingOverlay({
 						</div>
 						<div className="rounded-2xl border bg-background/70 p-3">
 							<p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-								Edges
+								{t('edges', 'Edges')}
 							</p>
 							<p className="mt-1 text-lg font-semibold">
 								{formatOverlayMetric(edgeCount)}
@@ -1034,16 +1099,16 @@ function GraphCanvasLoadingOverlay({
 						</div>
 						<div className="col-span-2 rounded-2xl border bg-background/70 p-3 sm:col-span-1">
 							<p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-								Progress
+								{t('progress2', 'Progress')}
 							</p>
-							<p className="mt-1 text-lg font-semibold">{progressPercent}%</p>
+							<p className="mt-1 text-lg font-semibold">{`${progressPercent}%`}</p>
 						</div>
 					</div>
 
 					<div className="space-y-2">
 						<div className="flex items-center justify-between text-xs text-muted-foreground">
-							<span>Preparing interactive canvas</span>
-							<span>{progressPercent}%</span>
+							<span>{t('preparingInteractiveCanvas', 'Preparing interactive canvas')}</span>
+							<span>{`${progressPercent}%`}</span>
 						</div>
 						<div className="h-2 overflow-hidden rounded-full bg-muted">
 							<div
@@ -1296,6 +1361,7 @@ function SigmaControls({
 	onResetLayout,
 	disabled,
 }: { onResetLayout: () => void; disabled?: boolean }) {
+	const { t } = useTranslation("common");
 	const sigma = useSigma();
 	const buttonClassName = `h-8 w-8 flex items-center justify-center rounded transition-colors ${
 		disabled ? "cursor-not-allowed opacity-50" : "hover:bg-accent"
@@ -1322,7 +1388,7 @@ function SigmaControls({
 				type="button"
 				className={buttonClassName}
 				onClick={handleZoomIn}
-				title="Zoom in"
+				title={t('zoomIn', 'Zoom in')}
 				disabled={disabled}
 			>
 				<ZoomIn className="h-4 w-4" />
@@ -1331,7 +1397,7 @@ function SigmaControls({
 				type="button"
 				className={buttonClassName}
 				onClick={handleZoomOut}
-				title="Zoom out"
+				title={t('zoomOut', 'Zoom out')}
 				disabled={disabled}
 			>
 				<ZoomOut className="h-4 w-4" />
@@ -1340,7 +1406,7 @@ function SigmaControls({
 				type="button"
 				className={buttonClassName}
 				onClick={handleFitView}
-				title="Fit to view"
+				title={t('fitToView', 'Fit to view')}
 				disabled={disabled}
 			>
 				<Maximize className="h-4 w-4" />
@@ -1349,7 +1415,7 @@ function SigmaControls({
 				type="button"
 				className={buttonClassName}
 				onClick={onResetLayout}
-				title="Re-run layout"
+				title={t('rerunLayout', 'Re-run layout')}
 				disabled={disabled}
 			>
 				<RotateCcw className="h-4 w-4" />
@@ -1366,6 +1432,7 @@ export function GraphCanvas({
 	highlightedNodeIds,
 	highlightedEdgeIds,
 	hiddenLabels,
+	visibleNodeIds,
 	clusters,
 	onNodeClick,
 	onNodeShiftClick,
@@ -1373,6 +1440,7 @@ export function GraphCanvas({
 	onStageClick,
 	className,
 }: GraphCanvasProps) {
+	const { t } = useTranslation("common");
 	const [themeTick, setThemeTick] = useState(0);
 	const [layoutRunKey, setLayoutRunKey] = useState(0);
 	const [graph, setGraph] = useState<Graph | null>(null);
@@ -1450,8 +1518,8 @@ export function GraphCanvas({
 
 		setPreparationState({
 			phase: "building",
-			title: "Preparing graph scene",
-			detail: "Scheduling graph work so the page stays responsive.",
+			title: t('preparingGraphScene', 'Preparing graph scene'),
+			detail: t('schedulingGraphWorkSoThePageStaysResponsive', 'Scheduling graph work so the page stays responsive.'),
 			progress: 0.01,
 			nodeCount: nextData.nodes.length,
 			edgeCount: nextData.edges.length,
@@ -1487,8 +1555,8 @@ export function GraphCanvas({
 				setIsWorkerLayoutRunning(false);
 				setPreparationState({
 					phase: "ready",
-					title: "Graph ready",
-					detail: "Interactive view updated.",
+					title: t('graphReady', 'Graph ready'),
+					detail: t('interactiveViewUpdated', 'Interactive view updated.'),
 					progress: 1,
 					nodeCount: nextData.nodes.length,
 					edgeCount: nextData.edges.length,
@@ -1523,10 +1591,10 @@ export function GraphCanvas({
 
 		if (loading) {
 			return {
-				title: graph ? "Refreshing graph snapshot" : "Loading graph snapshot",
+				title: graph ? t('refreshingGraphSnapshot', 'Refreshing graph snapshot') : t('loadingGraphSnapshot', 'Loading graph snapshot'),
 				detail: graph
-					? "Keeping the current view visible while new graph data arrives."
-					: "Fetching nodes and connections from the database.",
+					? `Keeping the current view visible while new graph data arrives.`
+					: `Fetching nodes and connections from the database.`,
 				progress: graph ? 0.16 : 0.08,
 				nodeCount,
 				edgeCount,
@@ -1539,8 +1607,8 @@ export function GraphCanvas({
 			hasRenderableData
 		) {
 			return {
-				title: "Preparing graph scene",
-				detail: "Updating the canvas without blocking the page.",
+				title: t('preparingGraphScene', 'Preparing graph scene'),
+				detail: t('updatingTheCanvasWithoutBlockingThePage', 'Updating the canvas without blocking the page.'),
 				progress: 0.01,
 				nodeCount,
 				edgeCount,
@@ -1549,8 +1617,8 @@ export function GraphCanvas({
 
 		if (preparationState.phase === "idle" && hasRenderableData) {
 			return {
-				title: "Preparing graph scene",
-				detail: "Scheduling graph work so the page stays responsive.",
+				title: t('preparingGraphScene', 'Preparing graph scene'),
+				detail: t('schedulingGraphWorkSoThePageStaysResponsive', 'Scheduling graph work so the page stays responsive.'),
 				progress: 0.01,
 				nodeCount,
 				edgeCount,
@@ -1637,8 +1705,8 @@ export function GraphCanvas({
 
 		setPreparationState({
 			phase: "layout",
-			title: "Restarting layout",
-			detail: "Generating a fresh layout without blocking the page.",
+			title: t('restartingLayout', 'Restarting layout'),
+			detail: t('generatingAFreshLayoutWithoutBlockingThePage', 'Generating a fresh layout without blocking the page.'),
 			progress: 0.01,
 			nodeCount: nextData.nodes.length,
 			edgeCount: nextData.edges.length,
@@ -1654,6 +1722,7 @@ export function GraphCanvas({
 		highlightedNodeIds,
 		highlightedEdgeIds,
 		hiddenLabels,
+		visibleNodeIds,
 		neighborSet: null,
 		connectedEdgeSet: null,
 	});
@@ -1664,6 +1733,7 @@ export function GraphCanvas({
 	highlightRef.current.highlightedNodeIds = highlightedNodeIds;
 	highlightRef.current.highlightedEdgeIds = highlightedEdgeIds;
 	highlightRef.current.hiddenLabels = hiddenLabels;
+	highlightRef.current.visibleNodeIds = visibleNodeIds;
 
 	// Recompute neighbor sets when selectedNodeId changes
 	useEffect(() => {
@@ -1680,7 +1750,7 @@ export function GraphCanvas({
 	}, [selectedNodeId, graph]);
 
 	// Force sigma refresh when visibility/highlight props change
-	const sigmaRefreshKey = `${hiddenLabels ? [...hiddenLabels].join(",") : ""}_${highlightedNodeIds ? [...highlightedNodeIds].join(",") : ""}_${highlightedEdgeIds ? [...highlightedEdgeIds].join(",") : ""}_${selectedEdgeKey ?? ""}_${themeTick}`;
+	const sigmaRefreshKey = `${hiddenLabels ? [...hiddenLabels].join(",") : ""}_${highlightedNodeIds ? [...highlightedNodeIds].join(",") : ""}_${highlightedEdgeIds ? [...highlightedEdgeIds].join(",") : ""}_${visibleNodeIds ? `v${visibleNodeIds.size}:${[...visibleNodeIds].join(",")}` : ""}_${selectedEdgeKey ?? ""}_${themeTick}`;
 
 	// Stable reducers — read all dynamic state from ref
 	const nodeReducer = useCallback(
@@ -1698,41 +1768,50 @@ export function GraphCanvas({
 				return res;
 			}
 
-			if (hl.highlightedNodeIds && hl.highlightedNodeIds.size > 0) {
-				if (!hl.highlightedNodeIds.has(node)) {
-					const dim = dimTowardBackground(origColor);
-					res.color = dim;
-					res.borderColor = dim;
-					res.label = "";
-					res.zIndex = 0;
-					return res;
-				}
-				res.zIndex = 2;
+			if (hl.visibleNodeIds && !hl.visibleNodeIds.has(node)) {
+				res.hidden = true;
+				return res;
+			}
+
+			// Dropping back to a plain circle is what makes dimming visible at all:
+			// the icon program draws the white glyph over the disc at full opacity,
+			// so a node whose colour was faded still reads as bright and in focus.
+			const pushToBackground = () => {
+				const dim = dimTowardBackground(origColor);
+				res.color = dim;
+				res.borderColor = dim;
+				res.type = "circle";
+				res.image = undefined;
+				res.label = "";
+				res.zIndex = 0;
+				res.size = ((res.size as number) ?? DEFAULT_NODE_SIZE) *
+					CONTEXT_DIM_NODE_SCALE;
+			};
+
+			const pullToForeground = (zIndex: number) => {
 				res.color = origColor;
 				res.borderColor = origColor;
+				res.zIndex = zIndex;
+			};
+
+			if (hl.highlightedNodeIds && hl.highlightedNodeIds.size > 0) {
+				if (!hl.highlightedNodeIds.has(node)) pushToBackground();
+				else pullToForeground(2);
 				return res;
 			}
 
 			const activeNode = hl.selectedNodeId ?? hl.hoveredNode;
 			if (hl.neighborSet && activeNode) {
 				if (node === activeNode) {
-					res.zIndex = 3;
+					pullToForeground(3);
 					res.highlighted = true;
 					res.forceLabel = true;
-					res.color = origColor;
-					res.borderColor = origColor;
-					const s = (res.size as number) ?? 10;
-					res.size = s * 1.15;
+					res.size = ((res.size as number) ?? DEFAULT_NODE_SIZE) * 1.3;
 				} else if (hl.neighborSet.has(node)) {
-					res.zIndex = 2;
-					res.color = origColor;
-					res.borderColor = origColor;
+					pullToForeground(2);
+					res.forceLabel = true;
 				} else {
-					const dim = dimTowardBackground(origColor);
-					res.color = dim;
-					res.borderColor = dim;
-					res.label = "";
-					res.zIndex = 0;
+					pushToBackground();
 				}
 			}
 			return res;
@@ -1754,7 +1833,9 @@ export function GraphCanvas({
 			if (
 				hl.hiddenLabels?.has(srcLabel) ||
 				hl.hiddenLabels?.has(tgtLabel) ||
-				(storedLabel && hl.hiddenLabels?.has(storedLabel))
+				(storedLabel && hl.hiddenLabels?.has(storedLabel)) ||
+				(hl.visibleNodeIds &&
+					(!hl.visibleNodeIds.has(src) || !hl.visibleNodeIds.has(tgt)))
 			) {
 				res.hidden = true;
 				return res;
@@ -1863,7 +1944,14 @@ export function GraphCanvas({
 			enableEdgeEvents: !isHuge,
 			edgeLabelSize: 10,
 			labelSize: isHuge ? 10 : isLarge ? 11 : 12,
-			labelRenderedSizeThreshold: isHuge ? 18 : isLarge ? 12 : 6,
+			// A rendered-pixel cutoff, so it tracks the same fit scale the nodes get:
+			// left fixed while every node shrinks, it would cull the captions that
+			// used to clear it and read as labels going missing.
+			labelRenderedSizeThreshold: isHuge
+				? 18
+				: (isLarge ? 12 : 6) *
+					LABEL_THRESHOLD_HEADROOM *
+					fitSizeScale(nodeCount),
 			labelDensity: isHuge ? 0.07 : isDense ? 0.25 : isLarge ? 0.35 : 0.5,
 			labelGridCellSize: isHuge ? 300 : isDense ? 180 : isLarge ? 140 : 100,
 			labelFont: "Inter, system-ui, sans-serif",
@@ -1873,6 +1961,10 @@ export function GraphCanvas({
 			zIndex: !isHuge,
 			nodeReducer: isHuge ? undefined : nodeReducer,
 			edgeReducer: isHuge ? undefined : edgeReducer,
+			// Sigma's default is `sqrt(ratio)`, which shrinks a node far slower than
+			// it shrinks the distance to its neighbours: zooming out to take in the
+			// whole graph is exactly when circles swallow the edges between them.
+			zoomToSizeRatioFunction: (ratio: number) => ratio ** 0.8,
 			stagePadding: isLarge ? 60 : 40,
 			minCameraRatio: 0.01,
 			maxCameraRatio: 20,
@@ -1886,7 +1978,7 @@ export function GraphCanvas({
 			<div
 				className={`relative flex h-full w-full items-center justify-center text-muted-foreground ${className ?? ""}`}
 			>
-				No graph data to display
+				{t('noGraphDataToDisplay', 'No graph data to display')}
 			</div>
 		);
 	}
@@ -1933,7 +2025,7 @@ export function GraphCanvas({
 			{isWorkerLayoutRunning ? (
 				<div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-full border bg-background/80 px-3 py-1.5 text-xs text-muted-foreground shadow-sm backdrop-blur-sm">
 					<LoaderCircle className="h-3.5 w-3.5 animate-spin text-primary" />
-					<span>Refining layout</span>
+					<span>{t('refiningLayout', 'Refining layout')}</span>
 				</div>
 			) : null}
 

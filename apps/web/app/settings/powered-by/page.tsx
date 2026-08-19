@@ -1,5 +1,8 @@
+"use client";
+
 import { Button } from "@flow-like/flow-like-ui";
 import { Separator } from "@flow-like/flow-like-ui/components/ui/separator";
+import { useTranslation } from "@flow-like/locales";
 
 const poweredBy: {
 	name: string;
@@ -32,20 +35,25 @@ const poweredBy: {
 ];
 
 export default function PoweredByPage() {
+	const { t } = useTranslation("common");
 	return (
 		<main className="justify-start flex flex-col items-start w-full pr-4 flex-1 min-h-0">
 			<h2 className="scroll-m-20 text-3xl font-semibold tracking-tight first:mt-0">
-				Standing on the Shoulders of Giants
+				{t(
+					"standingOnTheShouldersOfGiants",
+					"Standing on the Shoulders of Giants",
+				)}
 			</h2>
 			<p className="leading-7 [&:not(:first-child)]:mt-4">
-				We are proud to acknowledge the open-source projects that have made
-				Flow-Like possible. Their contributions have helped us build a better
-				product, and we are grateful for their dedication to innovation.
+				{t(
+					"weAreProudToAcknowledgeTheOpensourceProjectsThatHaveMadeFlowlikePossibleTheirContributionsHaveHelpedUsBuildABetterProductAndWeAreGratefulForTheirDedicationToInnovation",
+					"We are proud to acknowledge the open-source projects that have made Flow-Like possible. Their contributions have helped us build a better product, and we are grateful for their dedication to innovation.",
+				)}
 			</p>
 			<Separator className="my-4" />
 			<div className="grid grid-cols-2 gap-2 w-full">
-				{poweredBy.map((element, i) => (
-					<PoweredByElement key={`${i}__powered_by`} {...element} />
+				{poweredBy.map((element) => (
+					<PoweredByElement key={element.name} {...element} />
 				))}
 			</div>
 		</main>
@@ -65,18 +73,19 @@ function PoweredByElement({
 	href: string;
 	license?: { name: string; href?: string };
 }>) {
+	const { t } = useTranslation("common");
 	return (
 		<div className="border p-4 bg-card text-card-foreground w-full col-span-1">
 			<h3>{name}</h3>
 			<p className="line-clamp-2 h-[3.75rem]">{description}</p>
 			<small>
-				By <b>{author}</b>
+				{t("by", "By")} <b>{author}</b>
 			</small>
 			<Separator className="my-2" />
 			<div className="flex flex-row items-center gap-4">
 				{href && (
 					<a href={href} target="_blank" rel="noreferrer">
-						<Button>Learn More</Button>
+						<Button>{t("learnMore", "Learn More")}</Button>
 					</a>
 				)}
 				{license &&

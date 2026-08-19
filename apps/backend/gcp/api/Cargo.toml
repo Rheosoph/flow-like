@@ -1,0 +1,52 @@
+[package]
+name = "gcp-api"
+version = "0.1.0"
+edition = "2024"
+description = "Flow-Like GCP API Service"
+
+[dependencies]
+# `default-features = false` is a correctness requirement here, not a size
+# optimization. packages/api defaults to ["aws", "cognito", "ses", "smtp",
+# "sendgrid"], and `credentials/mixed_credentials.rs::default_provider_name()`
+# returns "aws" for as long as the `aws` feature is compiled in — regardless of
+# which cloud the image is deployed to. With the defaults left on, any bucket
+# whose `*_BUCKET_PROVIDER` variable was omitted would resolve its runtime
+# credentials through the AWS provider and mint scoped credentials against the
+# wrong cloud, failing at request time rather than at startup. Removing the AWS
+# surface from the build makes "gcp" the only default that can be selected.
+flow-like-api = { workspace = true, default-features = false, features = ["gcp", "secrets-gcp", "firestore", "pubsub", "smtp", "sentry"] }
+flow-like-secrets.workspace = true
+flow-like-gcp-data.workspace = true
+flow-like-storage.workspace = true
+flow-like-catalog.workspace = true
+mimalloc.workspace = true
+axum.workspace = true
+sea-orm.workspace = true
+serde = { workspace = true, features = ["derive"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tower-http.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+# `tls-roots` compiles TLS with the image's ca-certificates bundle into the
+# tonic channel; telemetry.googleapis.com is https-only, and without a tls
+# feature the exporter fails every flush with HttpsUriWithoutTlsSupport.
+opentelemetry-otlp = { workspace = true, features = ["tls-roots"] }
+# Direct on purpose, pinned to the exact version the workspace already carries
+# transitively through opentelemetry-otlp: the OTLP auth interceptor in main.rs
+# names tonic's Interceptor, Status and ClientTlsConfig types, which the otlp
+# crate does not re-export. Default features off — only the tls-roots surface
+# the exporter's channel needs is compiled in.
+tonic = { version = "0.12.3", default-features = false, features = ["tls-roots"] }
+tracing-opentelemetry.workspace = true
+# The api `sentry` feature only arms the error-reporting middleware's forwarder,
+# and that forwarder returns early while no client is bound to the hub. The
+# client guard has to be constructed in the binary, so the Sentry crates are
+# direct dependencies of this crate rather than transitive ones.
+sentry.workspace = true
+sentry-tracing.workspace = true
+tokio = { workspace = true, features = ["full"] }
+url = "2.5"
+uuid.workspace = true

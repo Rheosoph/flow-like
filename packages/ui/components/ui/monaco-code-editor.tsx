@@ -16,30 +16,7 @@ function injectMonacoCodeStyles() {
 
 	const style = document.createElement("style");
 	style.id = styleId;
-	style.textContent = `
-		.monaco-code-editor-wrapper .monaco-editor .line-numbers {
-			font-size: 0.75rem;
-		}
-
-		.monaco-code-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider {
-			background: hsl(var(--muted-foreground) / 0.3) !important;
-			border-radius: 4px;
-		}
-
-		.monaco-code-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider:hover {
-			background: hsl(var(--muted-foreground) / 0.5) !important;
-		}
-
-		/* Fullscreen mode */
-		.monaco-code-editor-fullscreen {
-			position: fixed !important;
-			inset: 0 !important;
-			z-index: 50 !important;
-			height: 100vh !important;
-			width: 100vw !important;
-			border-radius: 0 !important;
-		}
-	`;
+	style.textContent = `.monaco-code-editor-wrapper .monaco-editor .line-numbers { font-size: 0.75rem; } .monaco-code-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider { background: hsl(var(--muted-foreground) / 0.3) !important; border-radius: 4px; } .monaco-code-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider:hover { background: hsl(var(--muted-foreground) / 0.5) !important; } /* Fullscreen mode */ .monaco-code-editor-fullscreen { position: fixed !important; inset: 0 !important; z-index: 50 !important; height: 100vh !important; width: 100vw !important; border-radius: 0 !important; }`;
 	document.head.appendChild(style);
 }
 

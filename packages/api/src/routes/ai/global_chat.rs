@@ -48,12 +48,12 @@ use flow_like::copilot::{ChatImage, CopilotScope, UnifiedCopilotResponse};
 use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryStatus};
 use flow_like::flow::copilot::platform::{PlatformToolBridge, run_internet_search};
 use flow_like::flow::copilot::tool_spec::{
-    INTERNET_SEARCH_TOOL, ResolvedToolApproval, find_global_tool_spec, missing_required_args,
-    resolve_tool_approval,
+    INTERNET_SEARCH_TOOL, PlatformToolSpec, ResolvedToolApproval, find_data_studio_tool_spec,
+    find_global_tool_spec, find_scout_tool_spec, missing_required_args, resolve_tool_approval,
 };
 use flow_like::flow::copilot::{
     AttachmentManifestEntry, ChatMessage, GlobalDataStudioContext, GlobalOpenBoardContext,
-    PlatformContextInput, build_platform_context, run_platform_chat,
+    PlatformContextInput, PlatformSpecialist, build_platform_context, run_platform_chat,
 };
 use flow_like::profile::Profile;
 use flow_like_types::tokio::{
@@ -78,9 +78,15 @@ use crate::{
     state::AppState,
 };
 
+pub mod feedback;
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", post(global_chat))
+        .route(
+            "/feedback",
+            axum::routing::put(feedback::upsert_global_chat_feedback),
+        )
         .route("/{run_id}/tool-result", post(global_chat_tool_result))
         .route("/{run_id}/cancel", post(global_chat_cancel))
         .route("/{run_id}/steer", post(global_chat_steer))
@@ -223,6 +229,15 @@ fn cancel_row_id(run_id: &str) -> String {
 
 fn owner_row_id(run_id: &str) -> String {
     format!("{OWNER_ROW_PREFIX}{run_id}")
+}
+
+/// Whether `sub` started the chat run that owns `run_id`. A nested specialist rides that run's id
+/// for tool coordination, so it must prove ownership before writing rows against it.
+pub(crate) async fn run_owned_by(db: &DatabaseConnection, run_id: &str, sub: &str) -> bool {
+    matches!(
+        GlobalChatToolCall::find_by_id(owner_row_id(run_id)).one(db).await,
+        Ok(Some(row)) if row.sub == sub
+    )
 }
 
 /// Insert a PENDING coordination row for one in-flight browser tool call.
@@ -456,7 +471,7 @@ pub(crate) async fn load_user_profile_opt(
 
 /// A frame to send down the SSE stream. `Token` carries a raw model/stream chunk; `ToolRequest`
 /// carries a serialized tool request the browser must execute.
-enum GlobalChatFrame {
+pub(crate) enum GlobalChatFrame {
     Token(String),
     ToolRequest(Value),
 }
@@ -466,11 +481,59 @@ enum GlobalChatFrame {
 /// the result POST may hit a different process than the streaming run (Lambda). Mirrors the desktop
 /// `GlobalPlatformBridge`: same missing-args guard, same approval policy (from the shared core spec),
 /// same result normalization — so the frontend tool handlers behave identically on both transports.
-struct ServerPlatformBridge {
+pub(crate) struct ServerPlatformBridge {
     db: DatabaseConnection,
     run_id: String,
     sub: String,
     frames: mpsc::UnboundedSender<GlobalChatFrame>,
+    /// Set when this bridge serves a nested specialist rather than the root orchestrator. It picks
+    /// the tool specs approval/timeouts are read from, and keeps the specialist out of the run's
+    /// steering queue — mid-run instructions belong to the orchestrator the user is talking to.
+    specialist: Option<PlatformSpecialist>,
+}
+
+impl ServerPlatformBridge {
+    /// Bridge for the root orchestrator turn that owns `run_id`.
+    pub(crate) fn orchestrator(
+        db: DatabaseConnection,
+        run_id: String,
+        sub: String,
+        frames: mpsc::UnboundedSender<GlobalChatFrame>,
+    ) -> Self {
+        Self {
+            db,
+            run_id,
+            sub,
+            frames,
+            specialist: None,
+        }
+    }
+
+    /// Bridge for a nested specialist run. It rides the owning chat run's id so the browser posts
+    /// results to the endpoint it already knows and a cancel of that run stops the specialist too.
+    pub(crate) fn specialist(
+        db: DatabaseConnection,
+        run_id: String,
+        sub: String,
+        frames: mpsc::UnboundedSender<GlobalChatFrame>,
+        specialist: PlatformSpecialist,
+    ) -> Self {
+        Self {
+            db,
+            run_id,
+            sub,
+            frames,
+            specialist: Some(specialist),
+        }
+    }
+
+    fn tool_spec(&self, tool_name: &str) -> Option<PlatformToolSpec> {
+        match self.specialist {
+            None => find_global_tool_spec(tool_name),
+            Some(PlatformSpecialist::DataStudio) => find_data_studio_tool_spec(tool_name),
+            Some(PlatformSpecialist::Scout) => find_scout_tool_spec(tool_name),
+        }
+    }
 }
 
 #[async_trait]
@@ -478,6 +541,11 @@ impl PlatformToolBridge for ServerPlatformBridge {
     /// One indexed read per tool round. Cheap next to the 500ms poll the tool path already runs,
     /// and it is the only way a browser's steer POST reaches a turn on another instance.
     async fn drain_steering(&self) -> Vec<String> {
+        // A specialist shares the run id but not the conversation: consuming these would delete
+        // instructions the user aimed at the orchestrator.
+        if self.specialist.is_some() {
+            return Vec::new();
+        }
         let rows = match GlobalChatToolCall::find()
             .filter(global_chat_tool_call::Column::RunId.eq(self.run_id.clone()))
             .filter(global_chat_tool_call::Column::Id.starts_with(STEER_ROW_PREFIX))
@@ -522,7 +590,7 @@ impl PlatformToolBridge for ServerPlatformBridge {
     }
 
     async fn call(&self, tool_name: &str, arguments: Value) -> String {
-        let spec = find_global_tool_spec(tool_name);
+        let spec = self.tool_spec(tool_name);
 
         // Reject calls with missing required arguments before any approval dialog or dispatch, so the
         // model retries with complete arguments (same guard as the desktop / SDK backends).
@@ -779,12 +847,12 @@ pub async fn global_chat(
     }
 
     let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<GlobalChatFrame>();
-    let bridge: Arc<dyn PlatformToolBridge> = Arc::new(ServerPlatformBridge {
-        db: state.db.clone(),
-        run_id: run_id.clone(),
-        sub: sub.clone(),
-        frames: frames_tx.clone(),
-    });
+    let bridge: Arc<dyn PlatformToolBridge> = Arc::new(ServerPlatformBridge::orchestrator(
+        state.db.clone(),
+        run_id.clone(),
+        sub.clone(),
+        frames_tx.clone(),
+    ));
 
     let token_frames = frames_tx.clone();
     let on_token = move |chunk: String| {

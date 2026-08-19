@@ -99,6 +99,14 @@ app.kubernetes.io/component: compiler
 {{- end }}
 
 {{/*
+Signaling labels
+*/}}
+{{- define "flow-like.signaling.labels" -}}
+{{ include "flow-like.labels" . }}
+app.kubernetes.io/component: signaling
+{{- end }}
+
+{{/*
 Create the name of the service account to use
 */}}
 {{- define "flow-like.serviceAccountName" -}}

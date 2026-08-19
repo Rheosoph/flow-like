@@ -224,10 +224,17 @@ pub fn sync_node_with_catalog(placed_node: &mut Node, catalog_node: &Node) {
                 // Update schema reference
                 placed_pin.schema = catalog_pin.schema.clone();
             }
-        } else {
+        } else if !crate::flow::node::mints_pins_on_update(&placed_node.name) {
             // Pin no longer exists in catalog - mark for removal
             pins_to_remove.push(pin_id.clone());
         }
+        // Otherwise the node's own `on_update` created this pin, so its absence from the
+        // catalog is the normal case rather than a stale leftover. Removing it here would
+        // drop the pin AND its edges; `on_update` runs immediately after this sync and would
+        // mint a replacement with a fresh id, silently detaching every wire the user made.
+        // Keeping it is safe both ways: these `on_update`s reconcile their pins by name, so
+        // one that is still wanted is adopted (id and edges intact) and one that is not is
+        // removed there.
     }
 
     // Remove pins that no longer exist
@@ -298,6 +305,7 @@ pub async fn sync_board_node_schemas(
             // generation. In particular, never overwrite a newer board with an older registry.
             if can_repair_from_catalog(catalog_version, placed_version) {
                 repair_catalog_pin_schemas(node, &catalog_node, &refs);
+                refresh_catalog_metadata(node, &catalog_node);
             }
             sync_oauth_metadata(node, &catalog_node);
             sync_wasm_permissions(node, &catalog_node);
@@ -312,6 +320,45 @@ pub async fn sync_board_node_schemas(
         for node in layer.nodes.values_mut() {
             sync_node(node, registry);
         }
+    }
+}
+
+/// Refreshes the descriptive, catalog-owned metadata of a placed node from the current catalog
+/// definition at the same schema version.
+///
+/// Until this existed a placed node froze its description, category, icon, docs and scores at
+/// placement time, so a wording fix or a re-tuned quality score in the catalog never reached
+/// existing boards. `on_update` runs after this and re-applies anything it derives dynamically
+/// (call-function names, typed pins), so nothing dynamic is lost.
+///
+/// Deliberately untouched: `friendly_name` (users rename nodes), pin types and schemas (owned by
+/// `on_update` and `repair_catalog_pin_schemas`), and any pin the catalog does not know (dynamic).
+fn refresh_catalog_metadata(placed_node: &mut Node, catalog_node: &Node) {
+    placed_node.description = catalog_node.description.clone();
+    placed_node.category = catalog_node.category.clone();
+    placed_node.icon = catalog_node.icon.clone();
+    placed_node.docs = catalog_node.docs.clone();
+    placed_node.scores = catalog_node.scores.clone();
+    placed_node.long_running = catalog_node.long_running;
+    placed_node.event_callback = catalog_node.event_callback;
+    placed_node.only_offline = catalog_node.only_offline;
+
+    // Pins are matched by name; a name that maps to more than one catalog pin is ambiguous and
+    // left alone, as is any pin the catalog does not define.
+    let mut by_name: HashMap<&str, Vec<&Pin>> = HashMap::new();
+    for pin in catalog_node.pins.values() {
+        by_name.entry(pin.name.as_str()).or_default().push(pin);
+    }
+    for pin in placed_node.pins.values_mut() {
+        let Some([catalog_pin]) = by_name.get(pin.name.as_str()).map(Vec::as_slice) else {
+            continue;
+        };
+        if catalog_pin.pin_type != pin.pin_type {
+            continue;
+        }
+        pin.friendly_name = catalog_pin.friendly_name.clone();
+        pin.description = catalog_pin.description.clone();
+        pin.options = catalog_pin.options.clone();
     }
 }
 
@@ -403,6 +450,60 @@ mod tests {
     }
 
     #[test]
+    fn sync_keeps_on_update_minted_pins_and_their_edges() {
+        // `df_sql_query` derives `param_*` pins in `on_update`, so they are absent from the
+        // catalog by design. Removing them on a version bump would drop the pin *and* its
+        // edges; `on_update` then re-mints one with a fresh id, so the wire is gone for good
+        // and the board looks like it was silently rewired.
+        let mut placed = Node::new("df_sql_query", "SQL Query", "desc", "Data/DataFusion");
+        placed.add_input_pin("query", "Query", "desc", VariableType::String);
+        let derived =
+            placed.add_input_pin("param_org_id", "$org_id", "desc", VariableType::Generic);
+        let derived_id = derived.id.clone();
+        derived.depends_on.insert("upstream_pin".to_string());
+        placed.version = Some(2);
+
+        let mut catalog = Node::new("df_sql_query", "SQL Query", "desc", "Data/DataFusion");
+        catalog.add_input_pin("query", "Query", "desc", VariableType::String);
+        catalog.add_input_pin("params", "Params", "desc", VariableType::Struct);
+        catalog.version = Some(3);
+
+        sync_node_with_catalog(&mut placed, &catalog);
+
+        let kept = placed
+            .get_pin_by_name("param_org_id")
+            .expect("derived pin must survive the version bump");
+        assert_eq!(kept.id, derived_id, "the pin id carries its edges");
+        assert!(kept.depends_on.contains("upstream_pin"));
+        assert!(placed.get_pin_by_name("params").is_some(), "new pin added");
+        assert_eq!(placed.version, Some(3));
+    }
+
+    #[test]
+    fn sync_still_removes_stale_pins_on_ordinary_nodes() {
+        // The preservation above is scoped to nodes that mint their own pins; everywhere else a
+        // pin missing from the catalog is genuinely stale.
+        let mut placed = Node::new("df_register_lance", "Register", "desc", "Data");
+        placed.add_input_pin("keep", "Keep", "desc", VariableType::String);
+        placed.add_input_pin(
+            "param_looks_derived",
+            "Stale",
+            "desc",
+            VariableType::Generic,
+        );
+        placed.version = Some(1);
+
+        let mut catalog = Node::new("df_register_lance", "Register", "desc", "Data");
+        catalog.add_input_pin("keep", "Keep", "desc", VariableType::String);
+        catalog.version = Some(2);
+
+        sync_node_with_catalog(&mut placed, &catalog);
+
+        assert!(placed.get_pin_by_name("param_looks_derived").is_none());
+        assert_eq!(placed.pins.len(), 1);
+    }
+
+    #[test]
     fn test_sync_preserves_connections() {
         let mut placed = Node::new("test", "Test", "desc", "Cat");
         let pin = placed.add_input_pin("data", "Data", "desc", VariableType::String);
@@ -489,6 +590,58 @@ mod tests {
         assert_eq!(
             placed.get_pin_by_name("data").unwrap().schema.as_deref(),
             Some(current_schema)
+        );
+    }
+
+    #[test]
+    fn same_version_node_refreshes_catalog_text_but_keeps_user_and_dynamic_fields() {
+        let mut placed = Node::new("test", "My renamed node", "old description", "Old/Category");
+        placed.set_version(2);
+        placed.add_icon("/old.svg");
+        placed
+            .add_input_pin(
+                "value",
+                "Value",
+                "old pin description",
+                VariableType::String,
+            )
+            .set_default_value(Some(flow_like_types::json::json!("user literal")));
+        // A pin the catalog does not know — minted by on_update — must be left alone.
+        placed.add_input_pin("dynamic", "Dynamic", "minted", VariableType::Integer);
+        // A pin whose type was retyped dynamically keeps its type.
+        placed
+            .add_output_pin("out", "Out", "old out", VariableType::Struct)
+            .data_type = VariableType::Integer;
+
+        let mut catalog = Node::new("test", "Test", "new description", "New/Category");
+        catalog.set_version(2);
+        catalog.add_icon("/new.svg");
+        catalog.add_input_pin(
+            "value",
+            "Value (v2)",
+            "new pin description",
+            VariableType::String,
+        );
+        catalog.add_output_pin("out", "Out (v2)", "new out", VariableType::Struct);
+
+        refresh_catalog_metadata(&mut placed, &catalog);
+
+        assert_eq!(placed.description, "new description");
+        assert_eq!(placed.category, "New/Category");
+        assert_eq!(placed.icon.as_deref(), Some("/new.svg"));
+        assert_eq!(placed.friendly_name, "My renamed node", "renames survive");
+        let value = placed.get_pin_by_name("value").unwrap();
+        assert_eq!(value.friendly_name, "Value (v2)");
+        assert_eq!(value.description, "new pin description");
+        assert!(value.default_value.is_some(), "user literals survive");
+        let dynamic = placed.get_pin_by_name("dynamic").unwrap();
+        assert_eq!(dynamic.description, "minted");
+        let out = placed.get_pin_by_name("out").unwrap();
+        assert_eq!(out.friendly_name, "Out (v2)");
+        assert_eq!(
+            out.data_type,
+            VariableType::Integer,
+            "dynamic typing survives"
         );
     }
 

@@ -1,6 +1,8 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import { motion } from "framer-motion";
-import { Check, ChevronRight, Lock, Route } from "lucide-react";
+import { ArrowRight, Check, Lock } from "lucide-react";
+import { Fragment } from "react";
 import type { CourseListItem, LearningPath } from "../../lib/learn/types";
 import { cn } from "../../lib/utils";
 
@@ -10,19 +12,22 @@ interface LearningPathCardProps {
 	readonly onSelectCourse?: (course: CourseListItem) => void;
 }
 
+type StepState = "completed" | "active" | "upcoming";
+
 export function LearningPathCard({
 	path,
 	progressByCourseId,
 	onSelectCourse,
 }: LearningPathCardProps) {
+	const { t } = useTranslation();
 	const progress = progressByCourseId ?? {};
 	const ordered = [...path.steps].sort((a, b) => a.position - b.position);
 
-	const stepStates = ordered.map((step) => {
+	const stepStates: ReadonlyArray<StepState> = ordered.map((step) => {
 		const p = step.course ? (progress[step.course.id] ?? 0) : 0;
-		if (p >= 1) return "completed" as const;
-		if (p > 0) return "active" as const;
-		return "upcoming" as const;
+		if (p >= 1) return "completed";
+		if (p > 0) return "active";
+		return "upcoming";
 	});
 
 	const firstUnfinished = stepStates.findIndex((s) => s !== "completed");
@@ -33,32 +38,24 @@ export function LearningPathCard({
 			initial={{ opacity: 0, y: 6 }}
 			animate={{ opacity: 1, y: 0 }}
 			transition={{ duration: 0.35, ease: "easeOut" }}
-			className="relative overflow-hidden rounded-2xl border border-border/60 bg-linear-to-br from-violet-500/10 via-card/95 to-card p-5 shadow-sm"
+			className="rounded-xl border border-border/70 bg-card p-4 md:p-5"
 		>
-			<div className="absolute inset-x-0 top-0 h-1 bg-linear-to-r from-violet-400/80 via-fuchsia-400/70 to-pink-400/70" />
-
-			<header className="relative flex flex-wrap items-start justify-between gap-3">
-				<div className="flex items-start gap-3 min-w-0">
-					<div className="grid size-9 shrink-0 place-items-center rounded-lg bg-violet-500/15 text-violet-400 ring-1 ring-violet-400/25">
-						<Route className="size-4" />
-					</div>
-					<div className="min-w-0 space-y-0.5">
-						<h3 className="truncate text-base font-semibold tracking-tight">
-							{path.title}
-						</h3>
-						{path.description && (
-							<p className="text-xs text-muted-foreground line-clamp-2">
-								{path.description}
-							</p>
-						)}
-					</div>
-				</div>
-				<div className="text-xs text-muted-foreground tabular-nums">
-					{totalCompleted}/{ordered.length} complete
-				</div>
+			<header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+				<h3 className="text-base font-semibold tracking-tight">{path.title}</h3>
+				{path.description && (
+					<p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+						{path.description}
+					</p>
+				)}
+				<span className="ml-auto font-mono text-[10px] uppercase tracking-wider tabular-nums text-muted-foreground">
+					{t("valOfValComplete", "{{done}} / {{total}} complete", {
+						done: totalCompleted,
+						total: ordered.length,
+					})}
+				</span>
 			</header>
 
-			<ol className="relative mt-5 grid gap-3 lg:grid-cols-[repeat(auto-fill,minmax(min(100%,12rem),1fr))]">
+			<ol className="mt-4 flex flex-col lg:flex-row lg:items-stretch">
 				{ordered.map((step, index) => {
 					const state = stepStates[index] ?? "upcoming";
 					const previousState = stepStates[index - 1];
@@ -67,16 +64,18 @@ export function LearningPathCard({
 						previousState !== undefined &&
 						previousState !== "completed";
 					const isNext = index === firstUnfinished && !isLocked;
+
 					return (
-						<PathStep
-							key={`${step.course_id}-${step.position}`}
-							step={step}
-							index={index}
-							state={state}
-							isLocked={isLocked}
-							isNext={isNext}
-							onSelectCourse={onSelectCourse}
-						/>
+						<Fragment key={`${step.course_id}-${step.position}`}>
+							{index > 0 && <StepWire live={previousState === "completed"} />}
+							<PathStep
+								step={step}
+								state={state}
+								isLocked={isLocked}
+								isNext={isNext}
+								onSelectCourse={onSelectCourse}
+							/>
+						</Fragment>
 					);
 				})}
 			</ol>
@@ -84,10 +83,38 @@ export function LearningPathCard({
 	);
 }
 
+/** The wire between two steps. Energized once the step before it is done. */
+function StepWire({ live }: { readonly live: boolean }) {
+	return (
+		<li
+			aria-hidden="true"
+			className="relative h-5 shrink-0 lg:h-auto lg:w-8"
+			role="presentation"
+		>
+			<span
+				className={cn(
+					"absolute left-4 top-0 bottom-0 w-px lg:hidden",
+					live ? "bg-primary" : "border-l border-dashed border-border",
+				)}
+			/>
+			<span
+				className={cn(
+					"absolute left-0 right-0 top-1/2 hidden -translate-y-1/2 lg:block",
+					live
+						? "h-0.5 bg-primary"
+						: "h-px border-t border-dashed border-border",
+				)}
+			/>
+		</li>
+	);
+}
+
 interface PathStepProps {
-	readonly step: { course_id: string; course: CourseListItem | null };
-	readonly index: number;
-	readonly state: "completed" | "active" | "upcoming";
+	readonly step: {
+		readonly course_id: string;
+		readonly course: CourseListItem | null;
+	};
+	readonly state: StepState;
 	readonly isLocked: boolean;
 	readonly isNext: boolean;
 	readonly onSelectCourse?: (course: CourseListItem) => void;
@@ -95,19 +122,19 @@ interface PathStepProps {
 
 function PathStep({
 	step,
-	index,
 	state,
 	isLocked,
 	isNext,
 	onSelectCourse,
 }: PathStepProps) {
+	const { t } = useTranslation();
 	const course = step.course;
 	const interactive = !isLocked && course != null && onSelectCourse != null;
 
-	const stepNumber = index + 1;
-
 	return (
-		<li className="relative">
+		<li
+			className={cn("relative min-w-0", isNext ? "lg:flex-[1.6]" : "lg:flex-1")}
+		>
 			<button
 				type="button"
 				onClick={() => {
@@ -115,65 +142,89 @@ function PathStep({
 				}}
 				disabled={!interactive}
 				className={cn(
-					"group relative flex w-full items-start gap-3 rounded-xl border bg-card/60 p-3 text-left transition-colors",
-					isLocked
-						? "border-border/40 opacity-60"
-						: "border-border/60 hover:border-violet-400/50 hover:bg-violet-500/5",
-					isNext && "ring-1 ring-violet-400/40",
+					"group relative flex size-full flex-col gap-1.5 rounded-lg border p-3 text-left transition-colors",
+					isLocked && "border-dashed border-border/60 bg-transparent",
+					!isLocked && state === "completed" && "border-border/70 bg-card",
+					!isLocked && state !== "completed" && "border-border/70 bg-card",
+					isNext && "border-primary bg-primary/5",
+					interactive && !isNext && "hover:border-border",
 					!interactive && "cursor-default",
 				)}
 			>
-				<div
+				<PathPin state={state} isLocked={isLocked} side="left" />
+				<PathPin state={state} isLocked={isLocked} side="right" />
+
+				<span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider">
+					{state === "completed" && (
+						<span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+							<Check className="size-3" />
+							{t("complete", "Complete")}
+						</span>
+					)}
+					{state === "active" && (
+						<span className="text-primary">
+							{t("inProgress", "In progress")}
+						</span>
+					)}
+					{state === "upcoming" && !isLocked && (
+						<span className="text-muted-foreground">
+							{t("upNext", "Up next")}
+						</span>
+					)}
+					{isLocked && (
+						<span className="inline-flex items-center gap-1 text-muted-foreground">
+							<Lock className="size-3" />
+							{t("locked", "Locked")}
+						</span>
+					)}
+				</span>
+
+				<span
 					className={cn(
-						"grid size-8 shrink-0 place-items-center rounded-full text-xs font-semibold ring-1 transition-colors",
-						state === "completed" &&
-							"bg-emerald-500/15 text-emerald-400 ring-emerald-400/30",
-						state === "active" &&
-							"bg-violet-500/15 text-violet-300 ring-violet-400/40",
-						state === "upcoming" &&
-							!isLocked &&
-							"bg-background text-muted-foreground ring-border",
-						isLocked && "bg-muted/50 text-muted-foreground/70 ring-border/40",
+						"line-clamp-2 text-sm font-semibold leading-tight tracking-tight",
+						isLocked && "text-muted-foreground",
 					)}
 				>
-					{state === "completed" ? (
-						<Check className="size-4" />
-					) : isLocked ? (
-						<Lock className="size-3.5" />
-					) : (
-						stepNumber
-					)}
-				</div>
-				<div className="min-w-0 flex-1 space-y-0.5">
-					<div className="flex items-center gap-1">
-						<p
-							className={cn(
-								"truncate text-sm font-medium",
-								state === "completed" && "text-muted-foreground",
-							)}
-						>
-							{course?.name ?? "Untitled course"}
-						</p>
-						{interactive && (
-							<ChevronRight className="size-3.5 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
-						)}
-					</div>
-					{course?.description && (
-						<p className="line-clamp-2 text-xs text-muted-foreground">
-							{course.description}
-						</p>
-					)}
-					<div className="flex flex-wrap items-center gap-1.5 pt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-						{course?.difficulty && <span>{course.difficulty}</span>}
-						{course?.estimated_minutes ? (
-							<>
-								<span aria-hidden>·</span>
-								<span>{course.estimated_minutes} min</span>
-							</>
-						) : null}
-					</div>
-				</div>
+					{course?.name ?? t("untitledCourse", "Untitled course")}
+				</span>
+
+				<span className="font-mono text-[10px] uppercase tracking-wider tabular-nums text-muted-foreground">
+					{course?.estimated_minutes
+						? t("valMin", "{{val}} min", { val: course.estimated_minutes })
+						: null}
+				</span>
+
+				{isNext && interactive && (
+					<span className="mt-1 inline-flex w-fit items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-xs font-semibold text-primary-foreground">
+						{t("continue", "Continue")}
+						<ArrowRight className="size-3" />
+					</span>
+				)}
 			</button>
 		</li>
+	);
+}
+
+function PathPin({
+	state,
+	isLocked,
+	side,
+}: {
+	readonly state: StepState;
+	readonly isLocked: boolean;
+	readonly side: "left" | "right";
+}) {
+	return (
+		<span
+			aria-hidden="true"
+			className={cn(
+				"absolute top-1/2 hidden size-2.5 -translate-y-1/2 rounded-full border-2 bg-background lg:block",
+				side === "left" ? "-left-1.5" : "-right-1.5",
+				state === "completed" &&
+					"border-emerald-500 bg-emerald-500 dark:border-emerald-400 dark:bg-emerald-400",
+				state === "active" && "border-primary bg-primary",
+				(state === "upcoming" || isLocked) && "border-border",
+			)}
+		/>
 	);
 }

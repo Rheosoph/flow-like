@@ -1,0 +1,32 @@
+[package]
+name = "azure-queue-worker"
+version = "0.1.0"
+edition = "2024"
+description = "Flow-Like Azure Queue Storage execution and compilation worker"
+
+[dependencies]
+# `azure_storage_queue` targets the azure_core 1.x credential ABI, so the
+# credential must come from the matching azure_identity 1.x line rather than
+# the 0.32 clients the rest of the workspace uses.
+azure_storage_queue = { version = "1.0.0", default-features = false }
+azure_core_queue = { package = "azure_core", version = "1.1.0", default-features = false, features = ["reqwest_rustls"] }
+azure_identity_queue = { package = "azure_identity", version = "1.0.0", default-features = false, features = ["tokio"] }
+blake3.workspace = true
+chrono.workspace = true
+flow-like.workspace = true
+flow-like-azure-data.workspace = true
+flow-like-storage.workspace = true
+flow-like-catalog = { workspace = true, features = ["server-execute", "remote-ml", "remote"] }
+flow-like-compiler.workspace = true
+flow-like-executor = { workspace = true, features = ["all-server-execute"] }
+flow-like-types.workspace = true
+image.workspace = true
+mimalloc.workspace = true
+sea-orm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+webp.workspace = true
+tokio = { workspace = true, features = ["full", "signal"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+uuid.workspace = true

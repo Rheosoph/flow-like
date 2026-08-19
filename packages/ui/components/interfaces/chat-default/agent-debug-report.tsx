@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	Bug,
 	Check,
@@ -24,7 +25,7 @@ import {
 
 function durationLabel(duration?: number) {
 	if (duration === undefined) return "running";
-	if (duration < 1_000) return `${Math.round(duration)} ms`;
+	if (duration < 1_000) return i18next.t('valMs', '{{val}} ms', { val: Math.round(duration) });
 	return `${(duration / 1_000).toFixed(duration < 10_000 ? 1 : 0)} s`;
 }
 
@@ -36,6 +37,7 @@ function outcomeClass(outcome: IAgentDebugReport["outcome"]) {
 }
 
 export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
+	const { t } = useTranslation("chat");
 	const { developerMode } = useDeveloperMode();
 	const [open, setOpen] = useState(false);
 	const [copied, setCopied] = useState<"json" | "markdown" | null>(null);
@@ -70,7 +72,7 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 						className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-primary/40"
 					>
 						<Bug className="size-3.5 text-muted-foreground" />
-						<span className="font-medium">Debug report</span>
+						<span className="font-medium">{`Debug report`}</span>
 						<span
 							className={cn(
 								"font-medium capitalize",
@@ -99,7 +101,7 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 							<span title={report.model}>
 								{[report.provider, modelName, report.reasoning_effort]
 									.filter(Boolean)
-									.join(" · ") || "Provider metadata unavailable"}
+									.join(" · ") || `Provider metadata unavailable`}
 							</span>
 							{report.terminal_code && (
 								<span className="font-mono">{report.terminal_code}</span>
@@ -109,27 +111,27 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 									type="button"
 									onClick={() => void copy("json")}
 									className="inline-flex items-center gap-1 rounded px-1.5 py-1 hover:bg-muted"
-									title="Copy JSON report"
+									title={`Copy JSON report`}
 								>
 									{copied === "json" ? (
 										<Check className="size-3" />
 									) : (
 										<Copy className="size-3" />
 									)}
-									JSON
+									{`JSON`}
 								</button>
 								<button
 									type="button"
 									onClick={() => void copy("markdown")}
 									className="inline-flex items-center gap-1 rounded px-1.5 py-1 hover:bg-muted"
-									title="Copy Markdown report"
+									title={`Copy Markdown report`}
 								>
 									{copied === "markdown" ? (
 										<Check className="size-3" />
 									) : (
 										<FileText className="size-3" />
 									)}
-									Markdown
+									{`Markdown`}
 								</button>
 							</div>
 						</div>
@@ -142,7 +144,7 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 							<div className="mb-2 space-y-1 rounded bg-background/50 px-2 py-1.5 font-mono text-[10px]">
 								{report.input_preview && (
 									<div>
-										<span className="text-muted-foreground">Run input</span>
+										<span className="text-muted-foreground">{`Run input`}</span>
 										<pre className="mt-0.5 whitespace-pre-wrap break-words">
 											{report.input_preview}
 										</pre>
@@ -150,7 +152,7 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 								)}
 								{report.output_preview && (
 									<div>
-										<span className="text-muted-foreground">Run output</span>
+										<span className="text-muted-foreground">{`Run output`}</span>
 										<pre className="mt-0.5 whitespace-pre-wrap break-words text-muted-foreground">
 											{report.output_preview}
 										</pre>
@@ -186,15 +188,13 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 									{(event.request_id || event.parent_request_id) && (
 										<p className="mt-1 break-all text-muted-foreground">
 											{event.request_id && `request: ${event.request_id}`}
-											{event.request_id && event.parent_request_id && " · "}
+											{event.request_id && event.parent_request_id && ` · `}
 											{event.parent_request_id &&
 												`parent: ${event.parent_request_id}`}
 										</p>
 									)}
 									{event.terminal_status && (
-										<p className="mt-1 break-all text-muted-foreground">
-											terminal status: {event.terminal_status}
-										</p>
+										<p className="mt-1 break-all text-muted-foreground">{`terminal status: ${event.terminal_status}`}</p>
 									)}
 									{event.summary && (
 										<p className="mt-1 whitespace-pre-wrap text-muted-foreground">
@@ -212,9 +212,7 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 										</div>
 									)}
 									{event.result_summary && (
-										<p className="mt-1 break-all">
-											result: {event.result_summary}
-										</p>
+										<p className="mt-1 break-all">{`result: ${event.result_summary}`}</p>
 									)}
 									{event.result_preview && (
 										<div className="mt-1">
@@ -227,14 +225,10 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 										</div>
 									)}
 									{event.reasoning && (
-										<p className="mt-1 whitespace-pre-wrap text-muted-foreground">
-											surfaced reasoning: {event.reasoning}
-										</p>
+										<p className="mt-1 whitespace-pre-wrap text-muted-foreground">{`surfaced reasoning: ${event.reasoning}`}</p>
 									)}
 									{event.error && (
-										<p className="mt-1 break-all text-red-500">
-											error: {event.error}
-										</p>
+										<p className="mt-1 break-all text-red-500">{`error: ${event.error}`}</p>
 									)}
 								</div>
 							))}

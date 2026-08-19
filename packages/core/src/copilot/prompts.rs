@@ -64,14 +64,21 @@ interface and its declarative interaction surface.
 
 - Never inspect, author, validate, submit, or explain FlowScript. Never create or change workflow
   board nodes, pins, connections, variables, function layers, entry nodes, or app Events.
-- Never mutate app data, database tables, storage files, or workflow runtime state.
+- Never author app data, database tables, or storage files.
 - You may define stable component IDs, data-binding paths, widget actions, input affordances, and
   loading/empty/error states so another specialist can wire them later. Do not claim that fetching,
   persistence, event handling, or workflow behavior is implemented by the UI tree.
+- Runtime VERIFICATION of persisted work is in scope: drive the live page like a user with
+  `interact_app_page` (set inputs, trigger buttons, read the returned runs, elements, and
+  screenshots), execute the page's persisted Events with `execute_event`, talk to the app's chat
+  with `call_app_chat`, and read run logs with `query_execution_logs`. Verification executes real
+  workflows with real side effects — use it to confirm the interface works end to end, never to
+  author data or stand in for the board specialist's wiring. A run you did not execute with clean
+  evidence is not verified.
 - If a delegated instruction also contains behavior or data wiring, build only the requested UI and
   include this exact handoff in the summary: "Board specialist must handle workflow wiring."
-- Do not call out-of-scope tools even if they are accidentally available. Use only UI authoring and
-  UI-inspection tools registered for this specialist.
+- Do not call out-of-scope tools even if they are accidentally available. Use only the UI authoring,
+  UI-inspection, and runtime-verification tools registered for this specialist.
 "#;
 
 /// Design contract shared by both frontend prompt builders.
@@ -194,8 +201,14 @@ dark correct AND stops you drifting back to stock values partway down the tree.
 - `canvasSettings.customCss` (PostCSS-scoped to this surface): the design stamp, keyframes,
   hover/focus, ::before/::after, media queries, `font-variant-numeric`, gradient textures. Classes
   apply only where a component's className references them. NEVER `:root` - it is not scoped and
-  leaks into the host app. `@import` is stripped, so webfonts are impossible. Keep under 12000
-  chars.
+  leaks into the host app. `@import` is stripped, so webfonts are impossible. The limit is 40,000
+  characters - room for the full design system the page deserves, so write it; an oversized sheet is
+  rejected whole, never truncated. When a CURRENT CANVAS SETTINGS block is present it is this
+  surface's LIVE stylesheet: build on the classes it already defines, OMIT `customCss` to leave it
+  untouched, and when you do change it send the COMPLETE sheet - the value replaces the previous
+  one, so every rule you leave out is deleted.
+  Because it is scoped per surface, it does NOT cascade to other pages: sibling pages that must
+  look identical each need their own copy of the same stylesheet.
 - Surface atmosphere belongs on the ROOT component's typed `background` (with
   `className: "min-h-screen"`); `canvasSettings.backgroundColor` only takes a `bg-*` token class.
 - `backdrop-blur`/`backdropFilter` is force-disabled on macOS WebKit: a translucent panel must read
@@ -515,7 +528,8 @@ once. It costs one call and decides how the build reaches the board.
 
 - An ordinary edit is a ONE-segment plan with `strategy: "single"`. That is the common case and the
   correct answer for most requests — do not invent segments for work that fits one draft.
-- Split only when the full document is genuinely too large to compose in one pass. Then pick:
+- Split only when the full document is genuinely too large to compose in one pass, or when one
+  instruction covers several pages that each deserve their own board. Then pick:
   - `"staged"` — grow ONE draft: write segment 1 alone, check it, then rewrite the same draft_id
     with segment 1+2, check, and so on. Commit ONCE at the end. The live board stays untouched
     until the whole plan validates, so this is the default for a decomposed build.
@@ -523,8 +537,8 @@ once. It costs one call and decides how the build reaches the board.
     STOP: the host applies that segment and starts the next one on a fresh draft_id. Use it when
     the build is large enough that a single commit would not be reached in time. Partial progress
     stays on the board if a later segment fails, so the user sees real, honest partial results.
-  - `"multi_board"` — only when the segments are genuinely INDEPENDENT entry points, each with its
-    own trigger event. Give those segments `board_ref: "new:<slug>"`.
+  - `"multi_board"` — when the segments are INDEPENDENT entry points, each with its own trigger
+    event; one board per page is the ordinary case. Give those segments `board_ref: "new:<slug>"`.
 
 - A SEGMENT IS NOT A STUB. Each one must be executable on its own: every node it adds must have its
   required inputs fed by a connection or a literal. Never write a segment as TODOs, comments, empty
@@ -554,13 +568,18 @@ progress, never against a deadline.
 - Extra time never relaxes the repair budget. Three consecutive identical compiler states still end
   the loop, because repeating a failing edit is not progress no matter how long you have.
 
-### WHEN MULTIPLE BOARDS ARE WRONG
+### WHEN MULTIPLE BOARDS ARE RIGHT, AND WHEN THEY ARE WRONG
 Boards of one app CANNOT call each other. There is no board-to-board invocation node, and board
 variables are board-scoped — two boards share only app data at rest (the app database and app
 storage). So connected logic (a parser feeding a state machine feeding a renderer) belongs in ONE
 board, decomposed into `function` layers, which is what the board organization rules already
-require. Reach for `"multi_board"` only when each segment would be independently triggerable and
-runs on its own, not when you want to split one connected program.
+require. Never use `"multi_board"` to split one connected program.
+
+PAGES are the standard multi-board case. A page's load handler plus its action handlers form an
+independently triggerable entry point that talks to other pages through app data and element refs,
+never through in-memory values — so a multi-page app normally gets ONE BOARD PER PAGE, each small
+enough to author, check and commit on its own. Keep pages together on one board only where they
+genuinely overlap: shared helper functions, the same tables, dashboards over the same data.
 "#;
 
 /// Former model-facing contract for the schema-constrained typed IR path. No live prompt builder
@@ -720,6 +739,11 @@ Reconciliation validates graph structure; it does not prove runtime behavior.
 - When this is a later run against an already-applied board, execute the exact entry/node whenever
   side effects are safe, inspect the returned logs, and query_execution_logs when live logs are
   incomplete. Use failures as evidence for a focused edit and re-run.
+- For UI-driven workflows, `interact_app_page` drives the LIVE rendered page like a user: set the
+  page's input values, trigger the wired component event (e.g. the button's `click`), and read the
+  returned runs, post-run element state, and screenshots. For chat-driven workflows,
+  `call_app_chat` sends a real message to the app's persisted chat Event and returns its reply.
+  These are the end-to-end proofs that the persisted board works behind its interface.
 - Never claim a build is runtime-correct without a successful execution and clean log evidence.
   If a run would send real mail, charge money, delete data, or cause another irreversible effect,
   do not run it automatically; state that runtime verification is still outstanding.
@@ -896,13 +920,16 @@ and instantiate its **widgets**. A board does NOT contain those element ids — 
 page/widget definitions — so you must look them up, not guess.
 
 GROUND YOURSELF FIRST: before writing or editing ANY `a2ui*` call, call `ui_inspect` (read-only, no
-approval). `ui_inspect` with operation `list` returns every page (with `element_refs`) and widget
-(with `selector`); `page`/`widget` return the full detail for one. Never invent an `elementRef` or a
+approval). `ui_inspect` with operation `list` returns every page (with `element_refs`), every
+project widget (with `selector`), and every widget shipped by an installed package under
+`package_widgets`; `page`/`widget` return the full detail for one. Never invent an `elementRef` or a
 `widgetSelector` — if `ui_inspect` does not list it, it does not exist.
 
 Reference conventions:
 - An element reference is `"<page_id>/<element_id>"`, exactly as returned by `ui_inspect`.
-- A widget selector is the widget's name (its `selector` from `ui_inspect`).
+- A widget selector is the widget's name (its `selector` from `ui_inspect`). A PACKAGE widget's
+  selector is instead the `pkg:{package_id}/{widget_id}` string `ui_inspect` reports for it — pass
+  that verbatim to `a2uiInstantiateWidget`; its `dyn*` input pins come from the widget's contract.
 
 Common a2ui calls (confirm exact signatures with `get_declarations`):
 - Read/write elements: `a2uiSetElementText({ elementRef, text })`,
@@ -1034,12 +1061,12 @@ signatures before writing.
 /// Board size/organization contract shared by board prompts. Mirrored by a reconcile-time
 /// diagnostic (`MAX_NODES_PER_LAYER`) so oversized layers are rejected, not just discouraged.
 pub const BOARD_ORGANIZATION_GUIDANCE: &str = r#"
-## BOARD ORGANIZATION (HARD LIMIT: 50 NODES PER LAYER)
-A single layer — the root, an event body, or one function layer — must never hold more than 50
+## BOARD ORGANIZATION (HARD LIMIT: 100 NODES PER LAYER)
+A single layer — the root, an event body, or one function layer — must never hold more than 100
 nodes. `check_flowscript` REJECTS source that would exceed this, so design within it from the start:
 
 - Decompose by responsibility: one entry function per event/page plus small helper `function`
-  declarations (each becomes its own Function layer with its own 50-node budget).
+  declarations (each becomes its own Function layer with its own 100-node budget).
 - Factor repeated patterns (fetch+parse, query+render, per-row assembly) into ONE helper function
   called from each site instead of duplicating chains.
 - Around 30 nodes in one function, start splitting; a function that reads as more than one
@@ -1146,6 +1173,44 @@ pub const NUMBERS_CONVERSIONS_GUIDANCE: &str = r#"
   value; supply the corresponding `name:` argument exactly once (typed IR: occurrence `0`).
 - No no-op identity calls: `stringFormat({ formatString: "{x}", x: value })` merely aliases
   `value` through a useless node — reference the value directly instead.
+"#;
+
+/// Pins that a node's `on_update` creates from its own configuration. Nothing in
+/// `get_declarations` lists them, so without this block the model either omits a binding it
+/// needed or supplies one while leaving the driving config for a later call — which cannot work,
+/// because the pin does not exist until the config is applied.
+pub const DYNAMIC_PIN_GUIDANCE: &str = r#"
+## PINS THAT ONLY EXIST AFTER CONFIGURATION
+Some nodes create their own input pins from a setting on the same node. `get_declarations` shows
+only the static pins, so these will never appear there — that is expected, not a missing node.
+- The setting that creates the pins and the values for them MUST be in the SAME call. The pins do
+  not exist until that setting is applied, so a value supplied in a later call has nowhere to land.
+- Never work around a dynamic pin by building its value into the surrounding string. That is the
+  exact bug these pins exist to prevent.
+
+### SQL parameters (`dfSqlQuery`, `dfSqlQueryCached`, `dfExecuteSql`, `dfWriteDelta`, `graphSqlQuery`)
+- Any value from outside the query — user input, a row field, an event payload, a variable — goes in
+  as a `$placeholder`, never concatenated into the SQL. Concatenating is a SQL injection and is
+  never acceptable, even for values that look safe.
+- Each distinct `$name` in the query literal creates one input pin, supplied as `param<Name>`:
+  `dfSqlQuery({ session, query: "SELECT * FROM users WHERE org = $org_id AND created > $since", paramOrgId: orgId, paramSince: cutoff })`
+- Repeating `$name` reuses that one pin and value; supply `param<Name>` exactly once (typed IR:
+  occurrence `0`). Numbered placeholders work too: `$1` -> `param1`.
+- Placeholders stand for VALUES ONLY. A table or column name cannot be a placeholder — pick those
+  from a fixed set in the flow, never from caller input.
+- Set filters use a list parameter: `array_has($ids, id)` with `paramIds` wired to an array. Do not
+  assemble an `IN (...)` list.
+- When the query itself arrives over a wire, no pins can be derived from it; pass a `params` object
+  keyed by placeholder name without the `$` instead.
+
+### Widget bindings (`a2uiInstantiateWidget`, `a2uiWidgetUpdateInputs`, `a2uiWidgetQuery`)
+- Pins come from the persisted widget, not from a literal: `dynPath<Field>` (bound data paths),
+  `dynProp<Id>` (exposed props), `dynCust<Id>` (customization options), `dynIn<Key>` (package widget
+  contract inputs), `dynArg<Key>` (widget query args).
+- `ui_inspect` with operation `widget` lists the exact pin names for a widget. The default `list`
+  operation does NOT — it returns selectors only. Never guess a binding name.
+- `widgetSelector` must be in the same call as the `dyn*` values, and must name a widget that
+  already exists. If the widget is being created in the same request, its build has to land first.
 "#;
 
 /// FlowPath is a three-field store handle, not a file object. Without this block the model writes
@@ -1329,7 +1394,7 @@ eventsGeneric(payload: Struct) {
 ```
 
 #### Loop bodies, impure continuation, and layer decomposition
-Aim for 20–30 nodes per helper and split before the hard 50-node layer limit. The statement after
+Aim for 20–30 nodes per helper and split before the hard 100-node layer limit. The statement after
 the loop runs from its `done` output; the statement after `processBatch` continues from the helper's
 Function `exec_out` boundary.
 ```flowscript-verified
@@ -1856,6 +1921,7 @@ FlowScript through write/patch/check/commit.
 {execution_guidance}
 
 {numbers_guidance}
+{dynamic_pin_guidance}
 
 {flowpath_guidance}
 
@@ -1888,9 +1954,11 @@ storage_tool (list/read only), ui_inspect
 (read-only pages/widgets/element refs — call before any a2ui* call), query_execution_logs (read one
 persisted run's logs). Never use database_tool or storage_tool mutation operations from this board
 specialist — including `delete_table`, which permanently drops a table and its schema.
-**Post-apply runtime verification**: execute_event and execute_node are only for a separate later
-verification request against an already-persisted board. They are not part of the current board
-build loop and must never run a merely queued draft.
+**Post-apply runtime verification**: execute_event, execute_node, interact_app_page (drive a live
+rendered page: set inputs, trigger buttons, observe runs + screenshots) and call_app_chat (send a
+real message to the app's chat Event) are only for a separate later verification request against an
+already-persisted board. They are not part of the current board build loop and must never run a
+merely queued draft.
 **Build or modify FlowScript**: get_current_flowscript (retrieve exact live board code),
 write_flowscript (retain/preview full source), patch_flowscript (focused exact-text repair),
 check_flowscript (compile and validate), commit_flowscript (queue the checked batch),
@@ -1922,6 +1990,7 @@ emit_commands (position-only MoveNode and canvas comments only)
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
+        dynamic_pin_guidance = DYNAMIC_PIN_GUIDANCE,
         flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
         function_cache_guidance = FUNCTION_CACHE_GUIDANCE,
@@ -1972,6 +2041,12 @@ Wrap it in a ```json fence like this:
 ```json
 {context}
 ```
+
+`canvasSettings` in that context is the surface's LIVE stylesheet, `customCss` included. Treat it as
+the current state of the design, not as an example: reuse the classes it already defines instead of
+inventing parallel ones. Omit `canvasSettings.customCss` from your JSON block to leave the stylesheet
+untouched. Include it only when you are changing it, and then emit the COMPLETE stylesheet — the
+value replaces the previous one, so any rule you leave out is deleted.
 
 ## Component Format
 ```json
@@ -2492,6 +2567,7 @@ pub fn general_system_prompt() -> String {
 {execution_guidance}
 
 {numbers_guidance}
+{dynamic_pin_guidance}
 
 {flowpath_guidance}
 
@@ -2508,6 +2584,7 @@ pub fn general_system_prompt() -> String {
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
+        dynamic_pin_guidance = DYNAMIC_PIN_GUIDANCE,
         flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
         function_cache_guidance = FUNCTION_CACHE_GUIDANCE,
@@ -2574,6 +2651,7 @@ FlowScript surface is required.
 {execution_guidance}
 
 {numbers_guidance}
+{dynamic_pin_guidance}
 
 {flowpath_guidance}
 
@@ -2588,6 +2666,7 @@ resend it; if the error says FlowScript is required, switch to the retained sour
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
+        dynamic_pin_guidance = DYNAMIC_PIN_GUIDANCE,
         flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
         function_cache_guidance = FUNCTION_CACHE_GUIDANCE,
@@ -2717,6 +2796,7 @@ resend.
 {execution_guidance}
 
 {numbers_guidance}
+{dynamic_pin_guidance}
 
 {flowpath_guidance}
 
@@ -2734,9 +2814,11 @@ storage_tool (list/read only), ui_inspect
 (read-only pages/widgets/element refs — call before any a2ui* call), query_execution_logs (read logs
 for an exact persisted run). Never use database_tool or storage_tool mutation operations from this
 board specialist — including `delete_table`, which permanently drops a table and its schema.
-**Post-apply runtime verification**: execute_event and execute_node are only for a separate later
-verification request against an already-persisted board. They are not part of the current board
-build loop and must never run a merely queued draft.
+**Post-apply runtime verification**: execute_event, execute_node, interact_app_page (drive a live
+rendered page: set inputs, trigger buttons, observe runs + screenshots) and call_app_chat (send a
+real message to the app's chat Event) are only for a separate later verification request against an
+already-persisted board. They are not part of the current board build loop and must never run a
+merely queued draft.
 **Build or modify FlowScript**: get_current_flowscript (retrieve exact live board code),
 write_flowscript (retain/preview full source), patch_flowscript (focused exact-text repair),
 check_flowscript (compile/validate), commit_flowscript (queue the checked batch), emit_commands
@@ -2756,6 +2838,7 @@ check_flowscript (compile/validate), commit_flowscript (queue the checked batch)
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
+        dynamic_pin_guidance = DYNAMIC_PIN_GUIDANCE,
         flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
         function_cache_guidance = FUNCTION_CACHE_GUIDANCE,
@@ -2790,6 +2873,16 @@ You are FlowPilot, a UI generator. You respond by calling UI tools. Text-only re
 3. Add a one-sentence summary after the tool call.
 A competent UI builder needs ONE `emit_ui` call for a new surface. `get_component_schema` is a
 fallback for genuinely undocumented components — not a routine step.
+
+## RUNTIME VERIFICATION TOOLS
+When the request asks you to verify or debug an already PERSISTED page (not the tree you are
+emitting right now), you can observe it at runtime: `ui_inspect` reads saved pages/widgets and their
+element refs; `interact_app_page` drives the live rendered page like a user (set input values,
+trigger a button's `click`, then read the returned runs, post-run element state, and screenshots);
+`execute_event` runs one of the app's persisted Events headlessly; `call_app_chat` sends a real
+message to the app's chat Event; `query_execution_logs` reads the full logs of one run by run_id.
+Emitted-but-unapplied UI cannot be driven — verify only persisted, rendered pages, and report what
+the evidence (runs, logs, screenshots) actually shows.
 
 ## emit_ui TOOL FORMAT
 ```json
@@ -3062,7 +3155,8 @@ mod tests {
             assert!(
                 prompt.contains("Never inspect, author, validate, submit, or explain FlowScript")
             );
-            assert!(prompt.contains("Never mutate app data"));
+            assert!(prompt.contains("Never author app data"));
+            assert!(prompt.contains("Runtime VERIFICATION of persisted work is in scope"));
             assert!(prompt.contains("Board specialist must handle workflow wiring."));
             assert!(prompt.contains("Do not claim that fetching"));
 
@@ -3307,6 +3401,38 @@ mod tests {
     }
 
     #[test]
+    fn board_prompts_explain_configuration_derived_pins() {
+        // Both halves matter: the model has to know these pins exist at all (nothing in
+        // `get_declarations` lists them), and that the driving config has to be in the same
+        // call — a value supplied later has no pin to land on.
+        for prompt in [
+            board_system_prompt("{}", "", 0, false, false),
+            board_sdk_flowscript_system_prompt("", 0),
+            general_system_prompt(),
+            board_sdk_system_prompt(),
+        ] {
+            assert!(prompt.contains("PINS THAT ONLY EXIST AFTER CONFIGURATION"));
+            assert!(prompt.contains("MUST be in the SAME call"));
+            // SQL parameters: the naming rule and the injection prohibition.
+            assert!(prompt.contains("`param<Name>`"));
+            assert!(prompt.contains("never concatenated into the SQL"));
+            assert!(prompt.contains("Placeholders stand for VALUES ONLY"));
+            assert!(prompt.contains("array_has($ids, id)"));
+            // Widget bindings: every prefix, and where the real names come from.
+            for prefix in [
+                "dynPath<Field>",
+                "dynProp<Id>",
+                "dynCust<Id>",
+                "dynIn<Key>",
+                "dynArg<Key>",
+            ] {
+                assert!(prompt.contains(prefix), "missing {prefix}");
+            }
+            assert!(prompt.contains("operation `widget` lists the exact pin names"));
+        }
+    }
+
+    #[test]
     fn board_prompts_cover_numbers_conversions_and_draft_continuation() {
         let prompts = [
             board_system_prompt("{}", "", 0, false, false),
@@ -3529,6 +3655,21 @@ mod tests {
         );
         assert!(SCOPE_SEGMENTATION_GUIDANCE.contains("do not invent segments"));
         assert!(SCOPE_SEGMENTATION_GUIDANCE.contains("Split only when"));
+    }
+
+    /// The no-board-to-board rule bounds connected logic only. Pages talk through app data and
+    /// element refs, so they are the case `multi_board` exists for; a prompt that reads as a blanket
+    /// warning pushes every page of a multi-page app onto one unsplittable board.
+    #[test]
+    fn scope_segmentation_makes_per_page_boards_the_ordinary_multi_board_case() {
+        assert!(SCOPE_SEGMENTATION_GUIDANCE.contains("PAGES are the standard multi-board case"));
+        assert!(SCOPE_SEGMENTATION_GUIDANCE.contains("ONE BOARD PER PAGE"));
+        assert!(SCOPE_SEGMENTATION_GUIDANCE.contains("one board per page is the ordinary case"));
+        assert!(
+            SCOPE_SEGMENTATION_GUIDANCE
+                .contains("Never use `\"multi_board\"` to split one connected program")
+        );
+        assert!(SCOPE_SEGMENTATION_GUIDANCE.contains("Boards of one app CANNOT call each other"));
     }
 
     #[test]

@@ -1,34 +1,22 @@
 "use client";
 import {
-	AppGeneralSettings,
-	Badge,
 	Button,
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
 	ChallengeRunner,
-	type FlowLibraryBoardCreationState,
-	FlowLibraryBoardsSection,
-	FlowLibraryHeader,
-	type IApp,
 	type IEvent,
-	IExecutionStage,
-	ILogLevel,
-	type IMetadata,
 	type IOAuthProvider,
 	type IStoredOAuthToken,
 	LessonActionButton,
 	LessonContent,
-	TooltipProvider,
-	UsePageContent,
+	LessonWorkspace,
+	type PaneTarget,
 	buildLessonAction,
-	isEqual,
+	paneModeForSubpath,
+	routeLabelForLessonSubpath,
 	useBackend,
-	useFlowBoardParentState,
 	useHub,
 	useInvoke,
+	useIsWideScreen,
+	useLessonWorkspaceLayout,
 } from "@flow-like/flow-like-ui";
 import type {
 	BoardSnapshot,
@@ -37,64 +25,27 @@ import type {
 	LessonAction,
 	LessonAppRef,
 } from "@flow-like/flow-like-ui";
-import { FlowWrapper } from "@flow-like/flow-like-ui/components/flow/flow-wrapper";
-import EventsPage from "@flow-like/flow-like-ui/components/settings/events/events-page";
-import {
-	type PageData,
-	PagesSection,
-} from "@flow-like/flow-like-ui/components/settings/routes";
 import { BOARD_BRIDGE_NATIVE_EVENT } from "@flow-like/flow-like-ui/lib/learn/board-bridge";
 import {
 	type UserLessonProgress,
 	translateId,
 } from "@flow-like/flow-like-ui/lib/learn/types";
-import { createId } from "@paralleldrive/cuid2";
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { EVENT_CONFIG } from "../../../lib/event-config";
 import "@xyflow/react/dist/style.css";
-import { ArrowLeft, CheckCircle2, ExternalLink, FileText } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
-import { EVENT_CONFIG } from "../../../lib/event-config";
 import { learnApi } from "../../../lib/learn-api";
 import { oauthConsentStore, oauthTokenStore } from "../../../lib/oauth-db";
 import {
 	getOAuthApiBaseUrl,
 	getOAuthService,
 } from "../../../lib/oauth-service";
-
-type PaneMode = "use" | "flow" | "flows" | "events" | "pages" | "config";
-
-interface PaneTarget {
-	readonly mode: PaneMode;
-	readonly appId: string;
-	readonly boardId?: string;
-	readonly nodeId?: string;
-	readonly version?: [number, number, number];
-	readonly routePath?: string;
-	readonly eventId?: string | null;
-	readonly newEventTemplate?: Partial<IEvent>;
-	readonly label?: string;
-}
-
-function routeLabelForLessonSubpath(subpath: string) {
-	if (subpath === "config") return "Config";
-	if (subpath === "events") return "Events";
-	if (subpath === "pages") return "Pages";
-	if (subpath === "flow") return "Board";
-	if (subpath === "use") return "App";
-	return "App";
-}
-
-function paneModeForSubpath(subpath: string): PaneMode {
-	if (subpath === "events") return "events";
-	if (subpath === "pages") return "pages";
-	if (subpath === "flow") return "flows";
-	if (subpath === "use") return "use";
-	return "config";
-}
 
 export default function LessonPage() {
 	return (
@@ -105,6 +56,7 @@ export default function LessonPage() {
 }
 
 function LessonContentPage() {
+	const { t } = useTranslation("common");
 	const auth = useAuth();
 	const { hub } = useHub();
 	const searchParams = useSearchParams();
@@ -123,10 +75,6 @@ function LessonContentPage() {
 	);
 	const profile = profileQuery.data?.hub_profile ?? null;
 	const profileId = profile?.id ?? "no-profile";
-	const oauthService = useMemo(
-		() => getOAuthService(getOAuthApiBaseUrl(profile?.hub)),
-		[profile?.hub],
-	);
 	const getProfile = useCallback(() => {
 		if (!profile) {
 			throw new Error("Profile is required for learning API calls.");
@@ -146,6 +94,40 @@ function LessonContentPage() {
 		enabled: Boolean(profile && auth.user),
 		queryFn: () => learnApi.myEnrollments(getProfile(), auth),
 	});
+
+	/** Same key as the course page, so arriving from there costs no request. */
+	const structureQuery = useQuery({
+		queryKey: ["learn", "structure", courseId, profileId],
+		enabled: Boolean(profile && courseId),
+		queryFn: () => learnApi.getCourseStructure(getProfile(), auth, courseId),
+	});
+
+	const courseLessons = useMemo(
+		() =>
+			(structureQuery.data?.modules ?? []).flatMap((m) =>
+				m.lessons.map((l) => ({
+					id: l.id,
+					title: l.title,
+					moduleId: m.id,
+				})),
+			),
+		[structureQuery.data],
+	);
+	const lessonIndex = useMemo(
+		() => courseLessons.findIndex((l) => l.id === lessonId),
+		[courseLessons, lessonId],
+	);
+	const previousLesson =
+		lessonIndex > 0 ? courseLessons[lessonIndex - 1] : null;
+	const nextLesson =
+		lessonIndex >= 0 && lessonIndex < courseLessons.length - 1
+			? courseLessons[lessonIndex + 1]
+			: null;
+	const lessonHref = useCallback(
+		(targetModuleId: string, targetLessonId: string) =>
+			`/learn/lesson?learnCourseId=${encodeURIComponent(courseId)}&learnModuleId=${encodeURIComponent(targetModuleId)}&learnLessonId=${encodeURIComponent(targetLessonId)}`,
+		[courseId],
+	);
 
 	const enrollment = useMemo(
 		() => (enrollmentQuery.data ?? []).find((e) => e.course_id === courseId),
@@ -224,6 +206,7 @@ function LessonContentPage() {
 	);
 	const [paneTarget, setPaneTarget] = useState<PaneTarget | null>(null);
 	const [paneTouched, setPaneTouched] = useState(false);
+	const isWideScreen = useIsWideScreen();
 	const uiEventTypes = useMemo(() => {
 		const set = new Set<string>();
 		Object.values(EVENT_CONFIG).forEach((cfg: any) => {
@@ -231,6 +214,10 @@ function LessonContentPage() {
 		});
 		return Array.from(set);
 	}, []);
+	const oauthService = useMemo(
+		() => getOAuthService(getOAuthApiBaseUrl(profile?.hub)),
+		[profile?.hub],
+	);
 	const handleStartOAuth = useCallback(
 		async (provider: IOAuthProvider) => {
 			await oauthService.startAuthorization(provider);
@@ -276,7 +263,7 @@ function LessonContentPage() {
 							return {
 								mode: "flows",
 								appId,
-								label: "Flows",
+								label: t("flows", "Flows"),
 							};
 						}
 						const version = params.version
@@ -292,7 +279,7 @@ function LessonContentPage() {
 							boardId,
 							nodeId: params.node ?? params.focus,
 							version,
-							label: "Board",
+							label: t("board", "Board"),
 						};
 					}
 					return {
@@ -318,7 +305,7 @@ function LessonContentPage() {
 						appId,
 						boardId,
 						nodeId,
-						label: "Board",
+						label: t("board", "Board"),
 					};
 				}
 				case "ADD_NODE": {
@@ -332,7 +319,7 @@ function LessonContentPage() {
 						mode: "flow",
 						appId,
 						boardId,
-						label: "Board",
+						label: t("board", "Board"),
 					};
 				}
 				case "CREATE_EVENT": {
@@ -342,7 +329,7 @@ function LessonContentPage() {
 						mode: "events",
 						appId,
 						newEventTemplate: action.template as Partial<IEvent>,
-						label: "Events",
+						label: t("events", "Events"),
 					};
 				}
 				case "OPEN_OR_CLONE_APP": {
@@ -356,7 +343,7 @@ function LessonContentPage() {
 						appId,
 						routePath: "/",
 						eventId: null,
-						label: "App",
+						label: t("app", "App"),
 					};
 				}
 			}
@@ -426,7 +413,7 @@ function LessonContentPage() {
 					mode: "flow",
 					appId,
 					boardId: translatedBoard,
-					label: "Board",
+					label: t("board", "Board"),
 				};
 			}
 		}
@@ -434,6 +421,9 @@ function LessonContentPage() {
 	}, [challenges, resolveAppId, enrollment]);
 
 	const hasAppPane = appRefs.length > 0 || boardDefaultTarget !== null;
+	const showSplitView = hasAppPane && isWideScreen;
+	const { mode, applyMode, revealWorkspace, panelGroupRef, appPanelRef } =
+		useLessonWorkspaceLayout(showSplitView);
 
 	useEffect(() => {
 		setPaneTarget(null);
@@ -474,569 +464,225 @@ function LessonContentPage() {
 		boardDefaultTarget,
 	]);
 
+	const requestBoardSnapshot = useCallback(
+		(timeoutMs: number) =>
+			new Promise<BoardSnapshot>((resolve, reject) => {
+				const timer = window.setTimeout(() => {
+					reject(new Error("Timed out waiting for board state."));
+				}, timeoutMs);
+				window.dispatchEvent(
+					new CustomEvent(BOARD_BRIDGE_NATIVE_EVENT, {
+						detail: {
+							resolve: (snapshot: BoardSnapshot) => {
+								window.clearTimeout(timer);
+								resolve(snapshot);
+							},
+							reject: (error: Error) => {
+								window.clearTimeout(timer);
+								reject(error);
+							},
+						},
+					}),
+				);
+			}),
+		[],
+	);
+
+	/**
+	 * A board challenge reads live board state, so the board has to be open. That
+	 * is something the UI can do on the learner's behalf — opening the pane here
+	 * beats failing the check and telling them to go open it themselves.
+	 */
 	const buildBoardSubmission = useCallback(async (): Promise<BoardSnapshot> => {
-		if (!paneTarget || paneTarget.mode !== "flow") {
+		if (paneTarget?.mode === "flow" && paneTarget.boardId) {
+			return requestBoardSnapshot(5000);
+		}
+
+		if (!boardDefaultTarget) {
 			throw new Error(
-				"Open the board in the side-by-side pane (Edit board) before checking.",
+				t(
+					"thisChallengeNeedsABoardThatIsNotLinkedToTheLesson",
+					"This challenge needs a board, but none is linked to the lesson.",
+				),
 			);
 		}
-		return new Promise<BoardSnapshot>((resolve, reject) => {
-			const timer = window.setTimeout(() => {
-				reject(new Error("Timed out waiting for board state."));
-			}, 5000);
-			window.dispatchEvent(
-				new CustomEvent(BOARD_BRIDGE_NATIVE_EVENT, {
-					detail: {
-						resolve: (snapshot: BoardSnapshot) => {
-							window.clearTimeout(timer);
-							resolve(snapshot);
-						},
-						reject: (error: Error) => {
-							window.clearTimeout(timer);
-							reject(error);
-						},
-					},
-				}),
-			);
-		});
-	}, [paneTarget]);
+
+		setPaneTarget(boardDefaultTarget);
+		setPaneTouched(true);
+		revealWorkspace();
+
+		for (let attempt = 0; attempt < 5; attempt++) {
+			try {
+				return await requestBoardSnapshot(1500);
+			} catch {
+				// The board is still mounting — the bridge answers once it is ready.
+			}
+		}
+		throw new Error(
+			t(
+				"couldNotReadTheBoardOpenItInTheWorkspacePaneAndTryAgain",
+				"Could not read the board. Open it in the workspace pane and try again.",
+			),
+		);
+	}, [
+		paneTarget,
+		boardDefaultTarget,
+		requestBoardSnapshot,
+		revealWorkspace,
+		t,
+	]);
 
 	if (!courseId || !moduleId || !lessonId) {
 		return (
 			<div className="flex-1 overflow-auto">
 				<div className="mx-auto max-w-3xl p-6 md:p-10">
-					<Card>
-						<CardHeader>
-							<CardTitle>Lesson missing</CardTitle>
-							<CardDescription>
-								Open a lesson from a course in the university catalog.
-							</CardDescription>
-						</CardHeader>
-						<CardContent>
-							<Button asChild variant="outline">
-								<Link href="/learn">
-									<ArrowLeft className="mr-2 h-4 w-4" />
-									All courses
-								</Link>
-							</Button>
-						</CardContent>
-					</Card>
-				</div>
-			</div>
-		);
-	}
-
-	return (
-		<div className="flex-1 flex flex-col h-full overflow-hidden">
-			<header className="border-b px-4 py-2 flex items-center gap-3">
-				<Link
-					href={`/learn/course?courseId=${encodeURIComponent(courseId)}`}
-					className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-				>
-					<ArrowLeft className="h-3 w-3" />
-					Back to course
-				</Link>
-				<div className="ml-auto flex items-center gap-2">
-					<Button
-						variant={lessonComplete ? "secondary" : "default"}
-						size="sm"
-						disabled={completeMutation.isPending || !lesson || lessonComplete}
-						onClick={() => completeMutation.mutate()}
-					>
-						<CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />
-						{lessonComplete ? "Completed" : "Mark complete"}
-					</Button>
-				</div>
-			</header>
-
-			<div
-				className={`flex-1 grid grid-cols-1 overflow-hidden ${
-					hasAppPane ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]" : ""
-				}`}
-			>
-				<section className="overflow-auto p-6 md:p-8 space-y-6">
-					{lesson ? (
-						<LessonContent lesson={lesson} assets={assets} />
-					) : (
-						<p>Loading…</p>
-					)}
-
-					{appRefs.length > 0 && (
-						<Card>
-							<CardHeader>
-								<CardTitle className="text-base">Try it in the app</CardTitle>
-							</CardHeader>
-							<CardContent className="flex flex-wrap gap-2">
-								{appRefs.map((r: LessonAppRef) => (
-									<LessonActionButton
-										key={r.id}
-										appRef={r}
-										resolveAppId={resolveAppId}
-										dispatch={dispatch}
-									/>
-								))}
-							</CardContent>
-						</Card>
-					)}
-
-					{challenges.length > 0 && (
-						<div className="space-y-3">
-							{challenges.map((c: Challenge) => {
-								const usesBoard =
-									c.kind === "BOARD_RIDDLE" || c.kind === "EXECUTE_NODE";
-								return (
-									<ChallengeRunner
-										key={c.id}
-										challenge={c}
-										onSubmit={(submission) => submitAttempt(c.id, submission)}
-										attempts={attemptsByChallenge.get(c.id) ?? []}
-										buildBoardSubmission={
-											usesBoard ? buildBoardSubmission : undefined
-										}
-									/>
-								);
-							})}
-						</div>
-					)}
-				</section>
-				{hasAppPane && (
-					<AppPane
-						target={paneTarget}
-						onTargetChange={setPaneTarget}
-						authSub={auth.user?.profile?.sub}
-						hub={hub}
-						uiEventTypes={uiEventTypes}
-						onStartOAuth={handleStartOAuth}
-						onRefreshToken={handleRefreshToken}
-					/>
-				)}
-			</div>
-		</div>
-	);
-}
-
-interface AppPaneProps {
-	readonly target: PaneTarget | null;
-	readonly onTargetChange: (target: PaneTarget) => void;
-	readonly authSub?: string;
-	readonly hub: ReturnType<typeof useHub>["hub"];
-	readonly uiEventTypes: string[];
-	readonly onStartOAuth: (provider: IOAuthProvider) => Promise<void>;
-	readonly onRefreshToken: (
-		provider: IOAuthProvider,
-		token: IStoredOAuthToken,
-	) => Promise<IStoredOAuthToken>;
-}
-
-function AppPane({
-	target,
-	onTargetChange,
-	authSub,
-	hub,
-	uiEventTypes,
-	onStartOAuth,
-	onRefreshToken,
-}: AppPaneProps) {
-	if (!target) {
-		return (
-			<aside className="hidden lg:flex flex-col border-l bg-muted/20 items-center justify-center p-8 text-center">
-				<div className="max-w-sm space-y-3">
-					<div className="rounded-lg bg-background border p-6">
-						<ExternalLink className="h-8 w-8 mx-auto text-muted-foreground" />
+					<div className="rounded-xl border border-border/70 p-6">
+						<h1 className="text-lg font-semibold">
+							{t("lessonMissing", "Lesson missing")}
+						</h1>
+						<p className="mt-1 text-sm text-muted-foreground">
+							{t(
+								"openALessonFromACourseInTheUniversityCatalog",
+								"Open a lesson from a course in the university catalog.",
+							)}
+						</p>
+						<Button asChild variant="outline" className="mt-4">
+							<Link href="/learn">
+								<ArrowLeft className="mr-2 h-4 w-4" />
+								{t("allCourses", "All courses")}
+							</Link>
+						</Button>
 					</div>
-					<h3 className="font-medium">Opening app</h3>
-					<p className="text-sm text-muted-foreground">
-						Preparing the lesson workspace.
-					</p>
 				</div>
-			</aside>
-		);
-	}
-
-	return (
-		<aside className="hidden lg:flex flex-col border-l bg-background overflow-hidden">
-			<div className="flex items-center gap-2 border-b px-3 py-2 text-xs text-muted-foreground">
-				<Badge variant="outline">
-					{target.label ?? (target.mode === "flow" ? "Board" : "App")}
-				</Badge>
-				<code className="truncate">
-					{target.mode === "flow" ? target.boardId : target.appId}
-				</code>
-				{target.mode === "flow" && (
-					<Button
-						variant="outline"
-						size="sm"
-						className="ml-auto h-6"
-						onClick={() =>
-							onTargetChange({
-								mode: "use",
-								appId: target.appId,
-								routePath: "/",
-								eventId: null,
-								label: "App",
-							})
-						}
-					>
-						Open app
-					</Button>
-				)}
-			</div>
-			<div className="flex-1 min-h-0 overflow-hidden">
-				<AppPaneContent
-					target={target}
-					onTargetChange={onTargetChange}
-					authSub={authSub}
-					hub={hub}
-					uiEventTypes={uiEventTypes}
-					onStartOAuth={onStartOAuth}
-					onRefreshToken={onRefreshToken}
-				/>
-			</div>
-		</aside>
-	);
-}
-
-interface AppPaneContentProps {
-	readonly target: PaneTarget;
-	readonly onTargetChange: (target: PaneTarget) => void;
-	readonly authSub?: string;
-	readonly hub: ReturnType<typeof useHub>["hub"];
-	readonly uiEventTypes: string[];
-	readonly onStartOAuth: (provider: IOAuthProvider) => Promise<void>;
-	readonly onRefreshToken: (
-		provider: IOAuthProvider,
-		token: IStoredOAuthToken,
-	) => Promise<IStoredOAuthToken>;
-}
-
-function AppPaneContent({
-	target,
-	onTargetChange,
-	authSub,
-	hub,
-	uiEventTypes,
-	onStartOAuth,
-	onRefreshToken,
-}: AppPaneContentProps) {
-	if (target.mode === "use") {
-		return (
-			<UsePageContent
-				eventConfig={EVENT_CONFIG}
-				notFound={<PaneEmpty title="App not found" />}
-				appId={target.appId}
-				routePath={target.routePath ?? "/"}
-				eventId={target.eventId ?? null}
-				embedded
-				onNavigate={(next) =>
-					onTargetChange({
-						...target,
-						routePath: next.routePath ?? target.routePath ?? "/",
-						eventId:
-							next.eventId === undefined
-								? (target.eventId ?? null)
-								: next.eventId,
-					})
-				}
-			/>
-		);
-	}
-
-	if (target.mode === "flow") {
-		if (!target.boardId) {
-			return (
-				<AppFlowsPane appId={target.appId} onTargetChange={onTargetChange} />
-			);
-		}
-		return (
-			<div className="h-full min-h-0">
-				<FlowWrapper
-					boardId={target.boardId}
-					appId={target.appId}
-					nodeId={target.nodeId}
-					version={target.version}
-					sub={authSub}
-					externalAssistant
-				/>
 			</div>
 		);
 	}
 
-	if (target.mode === "flows") {
-		return (
-			<AppFlowsPane appId={target.appId} onTargetChange={onTargetChange} />
-		);
-	}
+	const lessonBody = (
+		<div className="mx-auto w-full max-w-5xl space-y-6 p-6 md:p-8 lg:p-10">
+			{lesson ? (
+				<LessonContent lesson={lesson} assets={assets} />
+			) : (
+				<p className="text-sm text-muted-foreground">
+					{t("loading", "Loading…")}
+				</p>
+			)}
 
-	if (target.mode === "events") {
-		return (
-			<div className="h-full min-h-0 overflow-auto p-4">
-				<EventsPage
-					eventMapping={EVENT_CONFIG}
-					uiEventTypes={uiEventTypes}
-					tokenStore={oauthTokenStore}
-					consentStore={oauthConsentStore}
-					onStartOAuth={onStartOAuth}
-					onRefreshToken={onRefreshToken}
-					hub={hub}
-					appId={target.appId}
-					eventId={target.eventId ?? null}
-					embedded
-					onEventIdChange={(eventId) => onTargetChange({ ...target, eventId })}
-					onNavigateToFlow={(flow) =>
-						onTargetChange({
-							mode: "flow",
-							appId: flow.appId,
-							boardId: flow.boardId,
-							nodeId: flow.nodeId,
-							version: flow.version,
-							label: "Board",
-						})
-					}
-					newEventTemplate={target.newEventTemplate}
-				/>
-			</div>
-		);
-	}
+			{appRefs.length > 0 && (
+				<section className="rounded-lg border border-border/70 border-l-2 border-l-primary bg-card p-4">
+					<p className="font-mono text-[10px] uppercase tracking-wider text-primary">
+						{t("doItInTheWorkspace", "Do it in the workspace")}
+					</p>
+					<p className="mt-1.5 text-sm text-muted-foreground">
+						{showSplitView
+							? t(
+									"theseOpenInThePaneBesideTheLesson",
+									"These open in the pane beside the lesson — nothing leaves this screen.",
+								)
+							: t(
+									"theseOpenTheWorkspaceBelowTheLesson",
+									"These open the workspace below the lesson.",
+								)}
+					</p>
+					<div className="mt-3 flex flex-wrap gap-2">
+						{appRefs.map((r: LessonAppRef) => (
+							<LessonActionButton
+								key={r.id}
+								appRef={r}
+								resolveAppId={resolveAppId}
+								dispatch={dispatch}
+							/>
+						))}
+					</div>
+				</section>
+			)}
 
-	if (target.mode === "pages") {
-		return (
-			<AppPagesPane appId={target.appId} onTargetChange={onTargetChange} />
-		);
-	}
+			{challenges.length > 0 && (
+				<div className="space-y-4">
+					{challenges.map((c: Challenge) => {
+						const usesBoard =
+							c.kind === "BOARD_RIDDLE" || c.kind === "EXECUTE_NODE";
+						return (
+							<ChallengeRunner
+								key={c.id}
+								challenge={c}
+								onSubmit={(submission) => submitAttempt(c.id, submission)}
+								attempts={attemptsByChallenge.get(c.id) ?? []}
+								buildBoardSubmission={
+									usesBoard ? buildBoardSubmission : undefined
+								}
+							/>
+						);
+					})}
+				</div>
+			)}
 
-	return <AppConfigPane appId={target.appId} />;
-}
-
-function AppConfigPane({ appId }: Readonly<{ appId: string }>) {
-	const backend = useBackend();
-	const app = useInvoke(
-		backend.appState.getApp,
-		backend.appState,
-		[appId],
-		Boolean(appId),
-	);
-	const metadata = useInvoke(
-		backend.appState.getAppMeta,
-		backend.appState,
-		[appId],
-		Boolean(appId),
-	);
-	const [localApp, setLocalApp] = useState<IApp | undefined>();
-	const [localMetadata, setLocalMetadata] = useState<IMetadata | undefined>();
-
-	useEffect(() => {
-		setLocalApp(app.data);
-	}, [app.data]);
-
-	useEffect(() => {
-		setLocalMetadata(metadata.data);
-	}, [metadata.data]);
-
-	const hasChanges = useMemo(
-		() =>
-			Boolean(
-				app.data &&
-					metadata.data &&
-					localApp &&
-					localMetadata &&
-					(!isEqual(localApp, app.data) ||
-						!isEqual(localMetadata, metadata.data)),
-			),
-		[app.data, localApp, localMetadata, metadata.data],
-	);
-
-	const saveChanges = useCallback(async () => {
-		if (!localApp || !localMetadata) return;
-		await backend.appState.pushAppMeta(appId, localMetadata);
-		await backend.appState.updateApp(localApp);
-		await Promise.all([app.refetch(), metadata.refetch()]);
-		toast.success("App config saved");
-	}, [app, appId, backend.appState, localApp, localMetadata, metadata]);
-
-	if (!localApp || !localMetadata) {
-		return <PaneEmpty title="Loading app config..." />;
-	}
-
-	return (
-		<div className="h-full overflow-auto p-4">
-			<AppGeneralSettings
-				app={localApp}
-				metadata={localMetadata}
-				canEdit
-				hasChanges={hasChanges}
-				onAppChange={setLocalApp}
-				onMetadataChange={setLocalMetadata}
-				onSave={saveChanges}
-				onReset={() => {
-					setLocalApp(app.data);
-					setLocalMetadata(metadata.data);
-				}}
-			/>
+			{(previousLesson || nextLesson) && (
+				<nav className="flex gap-3 border-t pt-5">
+					{previousLesson && (
+						<Link
+							href={lessonHref(previousLesson.moduleId, previousLesson.id)}
+							className="flex-1 rounded-lg border border-border/70 p-3 transition-colors hover:bg-muted/50"
+						>
+							<span className="block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+								{t("previous", "Previous")}
+							</span>
+							<span className="mt-0.5 block truncate text-sm font-semibold">
+								{previousLesson.title}
+							</span>
+						</Link>
+					)}
+					{nextLesson && (
+						<Link
+							href={lessonHref(nextLesson.moduleId, nextLesson.id)}
+							className="flex-1 rounded-lg border border-border/70 p-3 text-right transition-colors hover:bg-muted/50"
+						>
+							<span className="block font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+								{t("next", "Next")}
+							</span>
+							<span className="mt-0.5 block truncate text-sm font-semibold">
+								{nextLesson.title}
+							</span>
+						</Link>
+					)}
+				</nav>
+			)}
 		</div>
 	);
-}
-
-function AppPagesPane({
-	appId,
-	onTargetChange,
-}: Readonly<{
-	appId: string;
-	onTargetChange: (target: PaneTarget) => void;
-}>) {
-	const backend = useBackend();
-	const pages = useInvoke(
-		backend.pageState.getPages,
-		backend.pageState,
-		[appId],
-		Boolean(appId),
-		[appId],
-	);
-	const pageData = useMemo<PageData[]>(() => {
-		const timestamp = {
-			secs_since_epoch: Math.floor(Date.now() / 1000),
-			nanos_since_epoch: 0,
-		};
-		return (pages.data ?? []).map((page) => ({
-			appId,
-			pageId: page.pageId,
-			boardId: page.boardId ?? null,
-			metadata: {
-				name: page.name,
-				description: page.description ?? "",
-				preview_media: [],
-				tags: [],
-				created_at: timestamp,
-				updated_at: timestamp,
-			},
-		}));
-	}, [appId, pages.data]);
-
-	const handleDeletePage = useCallback(
-		async (pageId: string, boardId: string | null) => {
-			if (!boardId) return;
-			await backend.pageState.deletePage(appId, pageId, boardId);
-			await pages.refetch();
-		},
-		[appId, backend.pageState, pages],
-	);
 
 	return (
-		<TooltipProvider>
-			<div className="h-full overflow-auto p-6">
-				<PagesSection
-					pages={pageData}
-					onOpenPage={(pageId, boardId) => {
-						const params = new URLSearchParams({
-							id: pageId,
-							app: appId,
-						});
-						if (boardId) params.set("board", boardId);
-						window.location.href = `/page-builder?${params.toString()}`;
-					}}
-					onOpenBoard={async (boardId) =>
-						onTargetChange({
-							mode: "flow",
-							appId,
-							boardId,
-							label: "Board",
-						})
-					}
-					onDelete={handleDeletePage}
-				/>
-			</div>
-		</TooltipProvider>
-	);
-}
-
-function AppFlowsPane({
-	appId,
-	onTargetChange,
-}: Readonly<{
-	appId: string;
-	onTargetChange: (target: PaneTarget) => void;
-}>) {
-	const backend = useBackend();
-	const parentRegister = useFlowBoardParentState();
-	const app = useInvoke(
-		backend.appState.getApp,
-		backend.appState,
-		[appId],
-		Boolean(appId),
-	);
-	const boards = useInvoke(
-		backend.boardState.getBoards,
-		backend.boardState,
-		[appId],
-		Boolean(appId),
-	);
-	const [boardCreation, setBoardCreation] =
-		useState<FlowLibraryBoardCreationState>({
-			open: false,
-			name: "",
-			description: "",
-		});
-
-	useEffect(() => {
-		if (!boards.data) return;
-		boards.data.forEach((board) => {
-			parentRegister?.addBoardParent(
-				board.id,
-				`/learn/lesson?learnPane=flows&learnPaneAppId=${appId}`,
-			);
-		});
-	}, [appId, boards.data, parentRegister]);
-
-	const handleCreateBoard = useCallback(async () => {
-		await backend.boardState.upsertBoard(
-			appId,
-			createId(),
-			boardCreation.name,
-			boardCreation.description,
-			ILogLevel.Debug,
-			IExecutionStage.Dev,
-		);
-		await Promise.allSettled([boards.refetch(), app.refetch()]);
-		setBoardCreation({ open: false, name: "", description: "" });
-	}, [appId, app, backend.boardState, boardCreation, boards]);
-
-	return (
-		<div className="h-full overflow-auto p-6">
-			<div className="flex flex-col gap-4">
-				<FlowLibraryHeader
-					boardCreation={boardCreation}
-					setBoardCreation={setBoardCreation}
-					onCreateBoard={handleCreateBoard}
-				/>
-				<FlowLibraryBoardsSection
-					boards={boards}
-					app={app.data}
-					boardCreation={boardCreation}
-					setBoardCreation={setBoardCreation}
-					onOpenBoard={async (boardId) =>
-						onTargetChange({
-							mode: "flow",
-							appId,
-							boardId,
-							label: "Board",
-						})
-					}
-					onDeleteBoard={async (boardId) => {
-						await backend.boardState.deleteBoard(appId, boardId);
-						await boards.refetch();
-					}}
-				/>
-			</div>
-		</div>
-	);
-}
-
-function PaneEmpty({ title }: Readonly<{ title: string }>) {
-	return (
-		<div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-			<div>
-				<FileText className="mx-auto mb-3 h-8 w-8" />
-				{title}
-			</div>
-		</div>
+		<LessonWorkspace
+			courseHref={`/learn/course?courseId=${encodeURIComponent(courseId)}`}
+			BackLink={({ href, className, children }) => (
+				<Link href={href} className={className}>
+					{children}
+				</Link>
+			)}
+			lessonIndex={lessonIndex}
+			lessonCount={courseLessons.length}
+			estimatedMinutes={lesson?.estimated_minutes}
+			lessonComplete={lessonComplete}
+			completePending={completeMutation.isPending}
+			canComplete={Boolean(lesson)}
+			onMarkComplete={() => completeMutation.mutate()}
+			showSplitView={showSplitView}
+			mode={mode}
+			onModeChange={applyMode}
+			panelGroupRef={panelGroupRef}
+			appPanelRef={appPanelRef}
+			paneTarget={paneTarget}
+			onPaneTargetChange={setPaneTarget}
+			authSub={auth.user?.profile?.sub}
+			hub={hub}
+			uiEventTypes={uiEventTypes}
+			oauth={{
+				tokenStore: oauthTokenStore,
+				consentStore: oauthConsentStore,
+				onStartOAuth: handleStartOAuth,
+				onRefreshToken: handleRefreshToken,
+			}}
+		>
+			{lessonBody}
+		</LessonWorkspace>
 	);
 }

@@ -1,4 +1,5 @@
 // dnd-kit imports
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	DndContext,
 	type DragEndEvent,
@@ -29,6 +30,7 @@ import {
 } from "@tanstack/react-table";
 import Dexie, { type Table } from "dexie";
 import {
+	CalendarDays,
 	ClipboardList,
 	Clock,
 	Columns3,
@@ -52,7 +54,22 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { cn } from "../../lib";
+import {
+	detectEpochUnit,
+	formatAbsoluteDateTime,
+	formatCalendarDate,
+	formatRelativeTime,
+	fromDateInputValue,
+	fromDateTimeInputValue,
+	inferTemporalValue,
+	localTimeZoneLabel,
+	parseTemporalValue,
+	toDateInputValue,
+	toDateTimeInputValue,
+	toEpochNumber,
+} from "../../lib/date";
 import type { IIndexConfig } from "../../state/backend-state/db-state";
 import {
 	Badge,
@@ -110,12 +127,20 @@ export type LanceFieldKind =
 	| "object"
 	| "unknown";
 
+export type LanceTemporalUnit =
+	| "second"
+	| "millisecond"
+	| "microsecond"
+	| "nanosecond"
+	| "day";
+
 export interface LanceField {
 	name: string;
 	kind: LanceFieldKind;
 	dims?: number;
 	items?: LanceFieldKind | LanceField;
 	nullable?: boolean;
+	temporal?: LanceTemporalUnit;
 }
 
 export interface LanceSchema {
@@ -178,6 +203,7 @@ export interface LanceDBExplorerProps {
 }
 
 interface LanceDBContextValue {
+	fields?: LanceField[];
 	onUpdateItem?: (
 		filter: string,
 		updates: Record<string, any>,
@@ -250,6 +276,7 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 	onSearch,
 	className,
 }) => {
+	const { t } = useTranslation("common");
 	const [schema, setSchema] = useState<LanceSchema | null>(null);
 
 	const [page, setPage] = useState(initialPage);
@@ -414,14 +441,14 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 				<Checkbox
 					checked={table.getIsAllPageRowsSelected()}
 					onCheckedChange={(v) => table.toggleAllPageRowsSelected(!!v)}
-					aria-label="Select all"
+					aria-label={t("selectAll", "Select all")}
 				/>
 			),
 			cell: ({ row }) => (
 				<Checkbox
 					checked={row.getIsSelected()}
 					onCheckedChange={(v) => row.toggleSelected(!!v)}
-					aria-label="Select row"
+					aria-label={t("selectRow", "Select row")}
 				/>
 			),
 			enableSorting: false,
@@ -523,8 +550,8 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 	);
 
 	const contextValue = useMemo<LanceDBContextValue>(
-		() => ({ onUpdateItem }),
-		[onUpdateItem],
+		() => ({ fields: schema?.fields, onUpdateItem }),
+		[schema?.fields, onUpdateItem],
 	);
 
 	return (
@@ -544,11 +571,12 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 						>
 							{fullscreen ? (
 								<>
-									<Minimize2 className="h-4 w-4 mr-2" /> Exit
+									<Minimize2 className="h-4 w-4 mr-2" /> {t("exit", "Exit")}
 								</>
 							) : (
 								<>
-									<Maximize2 className="h-4 w-4 mr-2" /> Fullscreen
+									<Maximize2 className="h-4 w-4 mr-2" />{" "}
+									{t("fullscreen", "Fullscreen")}
 								</>
 							)}
 						</Button>
@@ -677,7 +705,7 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 											colSpan={columns.length}
 											className="h-24 text-center text-muted-foreground"
 										>
-											Loading…
+											{t("loading", "Loading…")}
 										</TableCell>
 									</TableRow>
 								) : table.getRowModel().rows?.length ? (
@@ -721,7 +749,8 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 										>
 											<div className="flex w-full h-full items-center justify-center">
 												<div className="flex items-center gap-2">
-													<Info className="h-4 w-4" /> No results.
+													<Info className="h-4 w-4" />{" "}
+													{t("noResults", "No results.")}
 												</div>
 											</div>
 										</TableCell>
@@ -735,15 +764,17 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 						<div className="text-xs text-muted-foreground">
 							{knowsTotal ? (
 								<>
-									Showing <b>{currentFrom}</b>–<b>{currentTo}</b> of{" "}
-									<b>{(total ?? 0).toLocaleString()}</b>
+									{t("showing", "Showing")} <b>{currentFrom}</b>–
+									<b>{currentTo}</b> of <b>{(total ?? 0).toLocaleString()}</b>
 								</>
 							) : (
 								<>—</>
 							)}
 							{selectedCount > 0 && (
 								<Badge variant="secondary" className="ml-2">
-									{selectedCount} selected
+									{t("selectedcountSelected", "{{selectedCount}} selected", {
+										selectedCount,
+									})}
 								</Badge>
 							)}
 						</div>
@@ -753,12 +784,12 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 								onValueChange={(v) => handlePageSizeChange(Number(v))}
 							>
 								<SelectTrigger className="h-8 w-[120px]">
-									<SelectValue placeholder="Page size" />
+									<SelectValue placeholder={t("pageSize", "Page size")} />
 								</SelectTrigger>
 								<SelectContent>
 									{pageSizeOptions.map((n) => (
 										<SelectItem key={n} value={String(n)}>
-											{n} / page
+											{t("nPage", "{{n}} / page", { n })}
 										</SelectItem>
 									))}
 								</SelectContent>
@@ -769,7 +800,7 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 								onClick={() => handlePageChange(Math.max(1, page - 1))}
 								disabled={page === 1}
 							>
-								Prev
+								{t("prev", "Prev")}
 							</Button>
 							<div className="text-sm w-14 text-center">{page}</div>
 							<Button
@@ -778,7 +809,7 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 								onClick={() => handlePageChange(page + 1)}
 								disabled={isLastPage}
 							>
-								Next
+								{t("next", "Next")}
 							</Button>
 
 							<DropdownMenu>
@@ -789,11 +820,12 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 								</DropdownMenuTrigger>
 								<DropdownMenuContent align="end">
 									<DropdownMenuItem onClick={copySelectedAsCSV}>
-										<Download className="h-4 w-4 mr-2" /> Copy selected as CSV
+										<Download className="h-4 w-4 mr-2" />{" "}
+										{t("copySelectedAsCsv", "Copy selected as CSV")}
 									</DropdownMenuItem>
 									<DropdownMenuItem onClick={copySelectedAsJSON}>
-										<ClipboardList className="h-4 w-4 mr-2" /> Copy selected as
-										JSON
+										<ClipboardList className="h-4 w-4 mr-2" />{" "}
+										{t("copySelectedAsJson", "Copy selected as JSON")}
 									</DropdownMenuItem>
 									<DropdownMenuSeparator />
 									<DropdownMenuItem
@@ -804,7 +836,8 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 											setColumnSizing({});
 										}}
 									>
-										<RefreshCcw className="h-4 w-4 mr-2" /> Reset layout
+										<RefreshCcw className="h-4 w-4 mr-2" />{" "}
+										{t("resetLayout", "Reset layout")}
 									</DropdownMenuItem>
 								</DropdownMenuContent>
 							</DropdownMenu>
@@ -830,6 +863,7 @@ const SortableHeaderCell: React.FC<{
 	table: any;
 	isDraggable?: boolean;
 }> = ({ header, table, isDraggable = true }) => {
+	const { t } = useTranslation("common");
 	if (!header.column.getIsVisible?.()) return null;
 
 	const {
@@ -863,7 +897,7 @@ const SortableHeaderCell: React.FC<{
 			<div className="flex items-center gap-1">
 				{isDraggable && (
 					<span
-						title="Drag to reorder"
+						title={t("dragToReorder", "Drag to reorder")}
 						className="inline-flex h-4 w-4 items-center justify-center text-muted-foreground cursor-grab active:cursor-grabbing"
 						{...attributes}
 						{...listeners}
@@ -895,6 +929,7 @@ const ColumnVisibilityDropdown: React.FC<{
 	visibility: VisibilityState;
 	onChange: React.Dispatch<React.SetStateAction<VisibilityState>>;
 }> = ({ columns, visibility, onChange }) => {
+	const { t } = useTranslation("common");
 	const [query, setQuery] = useState("");
 
 	const isVisible = useCallback(
@@ -943,34 +978,32 @@ const ColumnVisibilityDropdown: React.FC<{
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
 				<Button variant="outline" size="sm">
-					<Columns3 className="h-4 w-4 mr-2" /> Columns
+					<Columns3 className="h-4 w-4 mr-2" /> {t("columns", "Columns")}
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-64">
 				<DropdownMenuLabel className="flex items-center justify-between">
-					<span>Toggle columns</span>
+					<span>{t("toggleColumns", "Toggle columns")}</span>
 					<SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
 				</DropdownMenuLabel>
 				<div className="px-2 pb-2">
 					<Input
 						value={query}
 						onChange={(e) => setQuery(e.target.value)}
-						placeholder="Filter columns…"
+						placeholder={t("filterColumns", "Filter columns…")}
 						className="h-8"
 					/>
 				</div>
 				<div className="px-2 pb-2 flex items-center justify-between gap-2">
 					<div className="flex flex-row items-center gap-2">
 						<Button size="sm" variant="outline" onClick={showAll}>
-							All
+							{t("all", "All")}
 						</Button>
 						<Button size="sm" variant="outline" onClick={hideAll}>
-							None
+							{t("none", "None")}
 						</Button>
 					</div>
-					<span className="text-xs text-muted-foreground">
-						{filtered.length}/{columns.filter((c) => c.canHide).length}
-					</span>
+					<span className="text-xs text-muted-foreground">{`${filtered.length}/${columns.filter((c) => c.canHide).length}`}</span>
 				</div>
 				<DropdownMenuSeparator />
 				<div className="max-h-64 overflow-auto pr-1">
@@ -987,7 +1020,7 @@ const ColumnVisibilityDropdown: React.FC<{
 					))}
 					{filtered.length === 0 && (
 						<div className="px-2 py-2 text-xs text-muted-foreground">
-							No columns.
+							{t("noColumns", "No columns.")}
 						</div>
 					)}
 				</div>
@@ -1000,6 +1033,7 @@ const DensityToggle: React.FC<{
 	value: "compact" | "comfortable" | "spacious";
 	onChange: (v: "compact" | "comfortable" | "spacious") => void;
 }> = ({ value, onChange }) => {
+	const { t } = useTranslation("common");
 	const label =
 		value === "compact"
 			? "Compact"
@@ -1009,33 +1043,37 @@ const DensityToggle: React.FC<{
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
-				<Button variant="outline" size="sm" title="Row density">
+				<Button
+					variant="outline"
+					size="sm"
+					title={t("rowDensity", "Row density")}
+				>
 					<SlidersHorizontal className="h-4 w-4 mr-2" /> {label}
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-40">
 				<DropdownMenuItem onClick={() => onChange("compact")}>
-					Compact
+					{t("compact", "Compact")}
 				</DropdownMenuItem>
 				<DropdownMenuItem onClick={() => onChange("comfortable")}>
-					Comfortable
+					{t("comfortable", "Comfortable")}
 				</DropdownMenuItem>
 				<DropdownMenuItem onClick={() => onChange("spacious")}>
-					Spacious
+					{t("spacious", "Spacious")}
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);
 };
 
-const DateCell: React.FC<{ value: any; onClick: () => void }> = ({
-	value,
-	onClick,
-}) => {
-	const date = new Date(value);
-	const isValid = !isNaN(date.getTime());
+const DateCell: React.FC<{
+	value: any;
+	unit?: LanceTemporalUnit;
+	onClick: () => void;
+}> = ({ value, unit, onClick }) => {
+	const date = parseTemporalValue(value, unit);
 
-	if (!isValid) {
+	if (!date) {
 		return (
 			<Button variant="ghost" size="sm" className="h-6 px-2" onClick={onClick}>
 				{String(value)}
@@ -1043,15 +1081,8 @@ const DateCell: React.FC<{ value: any; onClick: () => void }> = ({
 		);
 	}
 
-	const relativeTime = getRelativeTime(date);
-	const fullDate = date.toLocaleString(undefined, {
-		year: "numeric",
-		month: "long",
-		day: "numeric",
-		hour: "2-digit",
-		minute: "2-digit",
-		second: "2-digit",
-	});
+	// A day count has no instant to be relative to, so it reads as the date it is.
+	const dayPrecision = unit === "day";
 
 	return (
 		<Tooltip>
@@ -1062,39 +1093,23 @@ const DateCell: React.FC<{ value: any; onClick: () => void }> = ({
 					className="h-6 px-2 tabular-nums justify-start gap-1.5"
 					onClick={onClick}
 				>
-					<Clock className="h-3 w-3 text-muted-foreground" />
-					{relativeTime}
+					{dayPrecision ? (
+						<CalendarDays className="h-3 w-3 text-muted-foreground" />
+					) : (
+						<Clock className="h-3 w-3 text-muted-foreground" />
+					)}
+					{dayPrecision
+						? formatCalendarDate(date)
+						: formatRelativeTime(date, "long")}
 				</Button>
 			</TooltipTrigger>
 			<TooltipContent side="bottom" className="text-xs">
-				{fullDate}
+				{dayPrecision
+					? formatCalendarDate(date, "full")
+					: formatAbsoluteDateTime(date)}
 			</TooltipContent>
 		</Tooltip>
 	);
-};
-
-const getRelativeTime = (date: Date): string => {
-	const now = new Date();
-	const diff = now.getTime() - date.getTime();
-	const absDiff = Math.abs(diff);
-	const isFuture = diff < 0;
-
-	const seconds = Math.floor(absDiff / 1000);
-	const minutes = Math.floor(seconds / 60);
-	const hours = Math.floor(minutes / 60);
-	const days = Math.floor(hours / 24);
-
-	if (seconds < 60) return isFuture ? "in a moment" : "just now";
-	if (minutes < 60) return isFuture ? `in ${minutes}m` : `${minutes}m ago`;
-	if (hours < 24) return isFuture ? `in ${hours}h` : `${hours}h ago`;
-	if (days < 7) return isFuture ? `in ${days}d` : `${days}d ago`;
-
-	// For older dates, show abbreviated date
-	return date.toLocaleDateString(undefined, {
-		month: "short",
-		day: "numeric",
-		year: date.getFullYear() !== now.getFullYear() ? "numeric" : undefined,
-	});
 };
 
 const buildColumnForField = (
@@ -1115,7 +1130,8 @@ const Cell: React.FC<{
 	field: LanceField;
 	rowData: Record<string, any>;
 }> = ({ value, field, rowData }) => {
-	const { onUpdateItem } = useContext(LanceDBContext);
+	const { t } = useTranslation("common");
+	const { fields, onUpdateItem } = useContext(LanceDBContext);
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [editValue, setEditValue] = useState("");
 
@@ -1133,7 +1149,7 @@ const Cell: React.FC<{
 					className="h-6 px-2 text-muted-foreground"
 					onClick={openDialog}
 				>
-					NULL
+					{`NULL`}
 				</Button>
 			);
 		}
@@ -1151,6 +1167,11 @@ const Cell: React.FC<{
 					</Button>
 				);
 			case "number":
+				// Backends store instants as plain integers, so an Int64 column named
+				// `created_at` arrives here as a number and would read as a quantity.
+				if (inferTemporalValue(field.name, value)) {
+					return <DateCell value={value} onClick={openDialog} />;
+				}
 				return (
 					<Button
 						variant="ghost"
@@ -1162,7 +1183,9 @@ const Cell: React.FC<{
 					</Button>
 				);
 			case "date":
-				return <DateCell value={value} onClick={openDialog} />;
+				return (
+					<DateCell value={value} unit={field.temporal} onClick={openDialog} />
+				);
 			case "vector": {
 				const arr = ensureNumericArray(value);
 				const dims = field.dims ?? arr.length;
@@ -1173,7 +1196,7 @@ const Cell: React.FC<{
 						className="h-6 px-2 flex items-center gap-2"
 						onClick={openDialog}
 					>
-						<Badge variant="outline">{dims}d</Badge>
+						<Badge variant="outline">{`${dims}d`}</Badge>
 						<Sparkline data={arr.slice(0, 64)} />
 					</Button>
 				);
@@ -1181,6 +1204,11 @@ const Cell: React.FC<{
 			case "array":
 			case "object":
 			case "unknown":
+				// A type this mapper doesn't know still reads as an instant when the
+				// column name promises one, rather than as a JSON blob.
+				if (field.kind === "unknown" && inferTemporalValue(field.name, value)) {
+					return <DateCell value={value} onClick={openDialog} />;
+				}
 				return (
 					<Button
 						variant="ghost"
@@ -1188,7 +1216,7 @@ const Cell: React.FC<{
 						className="h-6 px-2"
 						onClick={openDialog}
 					>
-						<ListTree className="h-3 w-3 mr-1" /> View
+						<ListTree className="h-3 w-3 mr-1" /> {t("view", "View")}
 					</Button>
 				);
 			default: {
@@ -1220,10 +1248,157 @@ const Cell: React.FC<{
 				valueStr={editValue}
 				onValueChange={setEditValue}
 				field={field}
+				fields={fields}
 				rowData={rowData}
 				onUpdateItem={onUpdateItem}
 			/>
 		</>
+	);
+};
+
+interface TemporalCell {
+	/** The unit the stored number counts in, and the one an edit writes back. */
+	unit: LanceTemporalUnit;
+	/** The storage shape of the column, which an edit has to keep. */
+	wire: "number" | "string";
+}
+
+/**
+ * Whether a cell holds an instant, and how it is stored. Declared temporal
+ * columns say so in the schema; the rest are believed only when the column name
+ * promises an instant, because a bare number is otherwise a quantity.
+ */
+export const resolveTemporalCell = (
+	field: LanceField,
+	value: unknown,
+): TemporalCell | null => {
+	if (field.kind === "date") {
+		return {
+			unit: field.temporal ?? "millisecond",
+			wire: typeof value === "string" ? "string" : "number",
+		};
+	}
+
+	if (typeof value === "string") {
+		return isISODateString(value)
+			? { unit: "millisecond", wire: "string" }
+			: null;
+	}
+
+	if (
+		(field.kind === "number" || field.kind === "unknown") &&
+		inferTemporalValue(field.name, value)
+	) {
+		return { unit: detectEpochUnit(Number(value)), wire: "number" };
+	}
+
+	return null;
+};
+
+/**
+ * Edits an instant as a wall-clock date and time instead of as the epoch integer
+ * on disk, and writes it back in the column's own shape and unit.
+ */
+const TemporalValueEditor: React.FC<{
+	value: string;
+	temporal: TemporalCell;
+	nullable?: boolean;
+	onChange: (value: string) => void;
+}> = ({ value, temporal, nullable, onChange }) => {
+	const { t } = useTranslation("common");
+	const timeZone = useMemo(() => localTimeZoneLabel(), []);
+	const dayPrecision = temporal.unit === "day";
+
+	const date = useMemo(() => {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(value);
+		} catch {
+			parsed = value;
+		}
+		return parseTemporalValue(parsed, temporal.unit);
+	}, [value, temporal.unit]);
+
+	const emit = useCallback(
+		(next: Date | null) => {
+			if (!next) {
+				onChange("null");
+				return;
+			}
+			onChange(
+				JSON.stringify(
+					temporal.wire === "string"
+						? next.toISOString()
+						: toEpochNumber(next, temporal.unit),
+				),
+			);
+		},
+		[onChange, temporal.unit, temporal.wire],
+	);
+
+	return (
+		<div className="space-y-3">
+			<div className="flex flex-wrap items-center gap-2">
+				<Input
+					type={dayPrecision ? "date" : "datetime-local"}
+					step={dayPrecision ? undefined : 1}
+					className="w-auto"
+					value={
+						date
+							? dayPrecision
+								? toDateInputValue(date)
+								: toDateTimeInputValue(date)
+							: ""
+					}
+					onChange={(e) => {
+						const next = dayPrecision
+							? fromDateInputValue(e.target.value)
+							: fromDateTimeInputValue(e.target.value);
+						if (next || !e.target.value) emit(next);
+					}}
+				/>
+				<Button
+					variant="outline"
+					size="sm"
+					onClick={() => {
+						const now = new Date();
+						// A day column stores the calendar day the viewer is in, not the
+						// instant, which would round to tomorrow past midday in the east.
+						emit(
+							dayPrecision
+								? (fromDateInputValue(toDateTimeInputValue(now).slice(0, 10)) ??
+										now)
+								: now,
+						);
+					}}
+				>
+					<Clock className="h-3.5 w-3.5 mr-2" /> {t("now", "Now")}
+				</Button>
+				{nullable !== false && date && (
+					<Button variant="ghost" size="sm" onClick={() => emit(null)}>
+						<X className="h-3.5 w-3.5 mr-2" /> {t("clear", "Clear")}
+					</Button>
+				)}
+			</div>
+			<div className="rounded-md border bg-muted/40 px-3 py-2 space-y-1">
+				{date ? (
+					<>
+						<p className="text-sm">
+							{dayPrecision
+								? formatCalendarDate(date, "full")
+								: formatAbsoluteDateTime(date)}
+						</p>
+						<p className="text-xs text-muted-foreground">
+							{formatRelativeTime(date, "long")}
+							{!dayPrecision && timeZone ? ` · ${timeZone}` : ""}
+						</p>
+					</>
+				) : (
+					<p className="text-sm text-muted-foreground">NULL</p>
+				)}
+				<code className="block text-[11px] text-muted-foreground">{value}</code>
+			</div>
+		</div>
 	);
 };
 
@@ -1234,6 +1409,7 @@ const CellViewDialog: React.FC<{
 	valueStr: string;
 	onValueChange: (value: string) => void;
 	field: LanceField;
+	fields?: LanceField[];
 	rowData: Record<string, any>;
 	onUpdateItem?: (
 		filter: string,
@@ -1246,12 +1422,18 @@ const CellViewDialog: React.FC<{
 	valueStr,
 	onValueChange,
 	field,
+	fields,
 	rowData,
 	onUpdateItem,
 }) => {
+	const { t } = useTranslation("common");
 	const [localValue, setLocalValue] = useState(valueStr);
 	const [isEditing, setIsEditing] = useState(false);
 	const [saving, setSaving] = useState(false);
+	const temporal = useMemo(
+		() => resolveTemporalCell(field, value),
+		[field, value],
+	);
 
 	useEffect(() => {
 		setLocalValue(valueStr);
@@ -1275,30 +1457,12 @@ const CellViewDialog: React.FC<{
 				parsedValue = localValue;
 			}
 
-			// Build filter based on row data - try to use id or _rowid if available
-			const idField = rowData.id ?? rowData._rowid ?? rowData._id;
-			let filter: string;
-			if (idField !== undefined) {
-				const idKey =
-					"id" in rowData ? "id" : "_rowid" in rowData ? "_rowid" : "_id";
-				filter =
-					typeof idField === "string"
-						? `${idKey} = '${idField}'`
-						: `${idKey} = ${idField}`;
-			} else {
-				// Fallback: build filter from all primitive fields
-				const conditions = Object.entries(rowData)
-					.filter(
-						([, v]) =>
-							typeof v === "string" ||
-							typeof v === "number" ||
-							typeof v === "boolean",
-					)
-					.slice(0, 3)
-					.map(([k, v]) =>
-						typeof v === "string" ? `${k} = '${v}'` : `${k} = ${v}`,
-					);
-				filter = conditions.join(" AND ");
+			const filter = buildRowIdentityFilter(rowData, fields ?? []);
+			if (!filter) {
+				toast.error(
+					t("cannotIdentifyRowToUpdate", "Cannot identify the row to update"),
+				);
+				return;
 			}
 
 			await onUpdateItem(filter, { [field.name]: parsedValue });
@@ -1314,12 +1478,18 @@ const CellViewDialog: React.FC<{
 		onOpenChange,
 		onUpdateItem,
 		rowData,
+		fields,
 		field.name,
+		t,
 	]);
 
 	const PreviewContent = useMemo(() => {
 		if (value == null) {
-			return <div className="text-sm text-muted-foreground">NULL</div>;
+			return <div className="text-sm text-muted-foreground">{`NULL`}</div>;
+		}
+
+		if (temporal) {
+			return <DateDetail value={value} unit={temporal.unit} />;
 		}
 
 		switch (field.kind) {
@@ -1334,14 +1504,12 @@ const CellViewDialog: React.FC<{
 				);
 			case "number":
 				return <code className="text-sm">{String(value)}</code>;
-			case "date":
-				return <code className="text-sm">{formatDate(value)}</code>;
 			case "vector": {
 				const arr = ensureNumericArray(value);
 				const dims = field.dims ?? arr.length;
 				return (
 					<div className="flex items-center gap-3">
-						<Badge variant="outline">{dims}d</Badge>
+						<Badge variant="outline">{`${dims}d`}</Badge>
 						<Sparkline data={arr.slice(0, 128)} />
 					</div>
 				);
@@ -1365,7 +1533,7 @@ const CellViewDialog: React.FC<{
 				);
 			}
 		}
-	}, [field.kind, field.dims, value]);
+	}, [field.kind, field.dims, value, temporal]);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -1373,7 +1541,9 @@ const CellViewDialog: React.FC<{
 				<DialogHeader>
 					<DialogTitle className="flex items-center justify-between">
 						<span>
-							{isEditing ? `Edit ${field.name}` : `Preview ${field.name}`}
+							{isEditing
+								? t("editName", "Edit {{name}}", { name: field.name })
+								: t("previewName", "Preview {{name}}", { name: field.name })}
 						</span>
 						<div className="flex items-center gap-3 mr-4">
 							<div className="flex items-center gap-2">
@@ -1381,7 +1551,7 @@ const CellViewDialog: React.FC<{
 									htmlFor="edit-switch"
 									className="text-xs text-muted-foreground"
 								>
-									Edit
+									{t("edit", "Edit")}
 								</Label>
 								<Switch
 									id="edit-switch"
@@ -1389,7 +1559,7 @@ const CellViewDialog: React.FC<{
 									onCheckedChange={setIsEditing}
 								/>
 							</div>
-							<Badge variant="outline">{field.kind}</Badge>
+							<Badge variant="outline">{temporal ? "date" : field.kind}</Badge>
 						</div>
 					</DialogTitle>
 				</DialogHeader>
@@ -1398,17 +1568,24 @@ const CellViewDialog: React.FC<{
 						<div className="max-h-[60vh] overflow-auto pr-1">
 							{PreviewContent}
 						</div>
+					) : temporal ? (
+						<TemporalValueEditor
+							value={localValue}
+							temporal={temporal}
+							nullable={field.nullable}
+							onChange={setLocalValue}
+						/>
 					) : (
 						<Textarea
 							value={localValue}
 							onChange={(e) => setLocalValue(e.target.value)}
 							className="min-h-[300px] max-h-[60vh] font-mono text-sm"
-							placeholder="Enter value..."
+							placeholder={t("enterValue", "Enter value...")}
 						/>
 					)}
 					<div className="flex justify-end gap-2">
 						<Button variant="outline" onClick={() => onOpenChange(false)}>
-							<X className="h-4 w-4 mr-2" /> Close
+							<X className="h-4 w-4 mr-2" /> {t("close", "Close")}
 						</Button>
 						{isEditing && (
 							<Button onClick={handleSave} disabled={saving || !onUpdateItem}>
@@ -1479,7 +1656,7 @@ const Toolbar: React.FC<{
 			<Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
 			<Input
 				className="pl-8"
-				placeholder="Search…"
+				placeholder={i18next.t("search", "Search…")}
 				value={value}
 				onChange={(e) => onValueChange(e.target.value)}
 				onKeyDown={(e) => {
@@ -1488,10 +1665,10 @@ const Toolbar: React.FC<{
 			/>
 		</div>
 		<Button variant="outline" size="sm" onClick={onSearch}>
-			Apply
+			{i18next.t("apply", "Apply")}
 		</Button>
 		<Button variant="ghost" size="sm" onClick={onReset}>
-			Reset
+			{i18next.t("reset", "Reset")}
 		</Button>
 	</div>
 );
@@ -1500,6 +1677,7 @@ const DatabaseActionsDropdown: React.FC<{
 	onOptimize?: (keepVersions?: boolean) => Promise<void>;
 	onRefresh?: () => void;
 }> = ({ onOptimize, onRefresh }) => {
+	const { t } = useTranslation("common");
 	const [optimizing, setOptimizing] = useState(false);
 
 	const handleOptimize = async (keepVersions: boolean) => {
@@ -1515,16 +1693,23 @@ const DatabaseActionsDropdown: React.FC<{
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
-				<Button variant="outline" size="sm" title="Database Actions">
-					<Wrench className="h-4 w-4 mr-2" /> Actions
+				<Button
+					variant="outline"
+					size="sm"
+					title={t("databaseActions", "Database Actions")}
+				>
+					<Wrench className="h-4 w-4 mr-2" /> {t("actions", "Actions")}
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-56">
-				<DropdownMenuLabel>Database Operations</DropdownMenuLabel>
+				<DropdownMenuLabel>
+					{t("databaseOperations", "Database Operations")}
+				</DropdownMenuLabel>
 				<DropdownMenuSeparator />
 				{onRefresh && (
 					<DropdownMenuItem onClick={onRefresh}>
-						<RefreshCcw className="h-4 w-4 mr-2" /> Refresh Data
+						<RefreshCcw className="h-4 w-4 mr-2" />{" "}
+						{t("refreshData", "Refresh Data")}
 					</DropdownMenuItem>
 				)}
 				{onOptimize && (
@@ -1534,7 +1719,9 @@ const DatabaseActionsDropdown: React.FC<{
 							disabled={optimizing}
 						>
 							<Zap className="h-4 w-4 mr-2" />
-							{optimizing ? "Optimizing..." : "Optimize (Keep Versions)"}
+							{optimizing
+								? "Optimizing..."
+								: t("optimizeKeepVersions", "Optimize (Keep Versions)")}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onClick={() => handleOptimize(false)}
@@ -1569,6 +1756,7 @@ const SchemaDialog: React.FC<{
 	onGetIndices,
 	onDropIndex,
 }) => {
+	const { t } = useTranslation("common");
 	const [open, setOpen] = useState(false);
 	const [activeTab, setActiveTab] = useState<"schema" | "indices" | "add">(
 		"schema",
@@ -1655,12 +1843,14 @@ const SchemaDialog: React.FC<{
 	return (
 		<>
 			<Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-				<Settings className="h-4 w-4 mr-2" /> Schema
+				<Settings className="h-4 w-4 mr-2" /> {t("schema", "Schema")}
 			</Button>
 			<Dialog open={open} onOpenChange={setOpen}>
 				<DialogContent className="w-full max-w-lg max-h-[80vh] overflow-y-auto">
 					<DialogHeader>
-						<DialogTitle>Table: {tableName}</DialogTitle>
+						<DialogTitle>
+							{t("tableTablename", "Table: {{tableName}}", { tableName })}
+						</DialogTitle>
 					</DialogHeader>
 
 					{(hasSchemaOps || hasIndexOps) && (
@@ -1670,7 +1860,7 @@ const SchemaDialog: React.FC<{
 								size="sm"
 								onClick={() => setActiveTab("schema")}
 							>
-								Schema
+								{t("schema", "Schema")}
 							</Button>
 							{hasIndexOps && (
 								<Button
@@ -1678,7 +1868,7 @@ const SchemaDialog: React.FC<{
 									size="sm"
 									onClick={() => setActiveTab("indices")}
 								>
-									Indices
+									{t("indices", "Indices")}
 								</Button>
 							)}
 							{hasSchemaOps && (
@@ -1687,7 +1877,7 @@ const SchemaDialog: React.FC<{
 									size="sm"
 									onClick={() => setActiveTab("add")}
 								>
-									Modify
+									{t("modify", "Modify")}
 								</Button>
 							)}
 						</div>
@@ -1731,7 +1921,7 @@ const SchemaDialog: React.FC<{
 								</ScrollArea>
 							) : (
 								<div className="text-sm text-muted-foreground py-4">
-									No schema loaded yet.
+									{t("noSchemaLoadedYet", "No schema loaded yet.")}
 								</div>
 							)}
 						</>
@@ -1740,7 +1930,7 @@ const SchemaDialog: React.FC<{
 					{activeTab === "indices" && (
 						<div className="space-y-4">
 							<div className="space-y-2">
-								<Label>Current Indices</Label>
+								<Label>{t("currentIndices", "Current Indices")}</Label>
 								{loadingIndices ? (
 									<div className="text-sm text-muted-foreground">
 										Loading...
@@ -1778,18 +1968,20 @@ const SchemaDialog: React.FC<{
 									</ScrollArea>
 								) : (
 									<div className="text-sm text-muted-foreground">
-										No indices found.
+										{t("noIndicesFound", "No indices found.")}
 									</div>
 								)}
 							</div>
 
 							{onBuildIndex && schema && (
 								<div className="space-y-3 border-t pt-4">
-									<Label>Create New Index</Label>
+									<Label>{t("createNewIndex", "Create New Index")}</Label>
 									<div className="flex gap-2">
 										<Select value={indexColumn} onValueChange={setIndexColumn}>
 											<SelectTrigger className="flex-1">
-												<SelectValue placeholder="Select column" />
+												<SelectValue
+													placeholder={t("selectColumn", "Select column")}
+												/>
 											</SelectTrigger>
 											<SelectContent>
 												{schema.fields.map((f) => (
@@ -1820,10 +2012,10 @@ const SchemaDialog: React.FC<{
 						<div className="space-y-4 flex flex-col">
 							{onAddColumn && (
 								<div className="space-y-3 flex-shrink-0">
-									<Label>Add New Column</Label>
+									<Label>{t("addNewColumn", "Add New Column")}</Label>
 									<div className="grid gap-2 sm:grid-cols-[1fr_150px]">
 										<Input
-											placeholder="Column name"
+											placeholder={t("columnName", "Column name")}
 											value={newColumnName}
 											onChange={(e) => setNewColumnName(e.target.value)}
 										/>
@@ -1834,31 +2026,39 @@ const SchemaDialog: React.FC<{
 										/>
 									</div>
 									<Input
-										placeholder="Default value (optional — leave empty for NULL)"
+										placeholder={t(
+											"defaultValueOptionalLeaveEmptyForNull",
+											"Default value (optional — leave empty for NULL)",
+										)}
 										value={newColumnDefault}
 										onChange={(e) => setNewColumnDefault(e.target.value)}
 									/>
 									<div className="text-xs text-muted-foreground">
-										New columns are added as nullable. Leave the default empty
-										to backfill existing rows with NULL, or provide a typed
-										default value.
+										{t(
+											"newColumnsAreAddedAsNullableLeaveTheDefaultEmptyToBackfillExistingRowsWithNullOrProvideATypedDefaultValue",
+											"New columns are added as nullable. Leave the default empty to backfill existing rows with NULL, or provide a typed default value.",
+										)}
 									</div>
 									<Button
 										onClick={handleAddColumn}
 										disabled={!newColumnName || processing}
 										className="w-full"
 									>
-										{processing ? "Adding..." : "Add Column"}
+										{processing ? "Adding..." : t("addColumn", "Add Column")}
 									</Button>
 								</div>
 							)}
 
 							{onAlterColumn && schema && (
 								<div className="space-y-3 border-t pt-4 flex-1 min-h-0 flex flex-col">
-									<Label className="flex-shrink-0">Make Column Nullable</Label>
+									<Label className="flex-shrink-0">
+										{t("makeColumnNullable", "Make Column Nullable")}
+									</Label>
 									<div className="text-xs text-muted-foreground mb-2 flex-shrink-0">
-										Note: LanceDB only supports making columns nullable, not the
-										reverse.
+										{t(
+											"noteLancedbOnlySupportsMakingColumnsNullableNotTheReverse",
+											"Note: LanceDB only supports making columns nullable, not the reverse.",
+										)}
 									</div>
 									<ScrollArea className="flex-1 min-h-0">
 										<div className="space-y-1 pr-2">
@@ -1872,7 +2072,9 @@ const SchemaDialog: React.FC<{
 															{f.name}
 														</span>
 														<span className="text-xs text-muted-foreground">
-															{f.nullable ? "Nullable" : "Not Nullable"}
+															{f.nullable
+																? "Nullable"
+																: t("notNullable", "Not Nullable")}
 														</span>
 													</div>
 													{!f.nullable && (
@@ -1883,7 +2085,7 @@ const SchemaDialog: React.FC<{
 															onClick={() => onAlterColumn(f.name, true)}
 															disabled={processing}
 														>
-															Make Nullable
+															{t("makeNullable", "Make Nullable")}
 														</Button>
 													)}
 												</div>
@@ -1900,6 +2102,93 @@ const SchemaDialog: React.FC<{
 	);
 };
 
+const ROW_IDENTITY_KEYS = ["id", "_rowid", "_id"] as const;
+const ROW_IDENTITY_KINDS = new Set<LanceFieldKind>([
+	"string",
+	"number",
+	"boolean",
+	"date",
+]);
+const TEMPORAL_PRECISION: Record<Exclude<LanceTemporalUnit, "day">, number> = {
+	second: 0,
+	millisecond: 3,
+	microsecond: 6,
+	nanosecond: 9,
+};
+
+const sqlIdentifier = (name: string) => `\`${name.replace(/`/g, "``")}\``;
+const sqlStringLiteral = (value: string) => `'${value.replace(/'/g, "''")}'`;
+
+// Rows arrive from serde_arrow, so temporal columns are integers in the
+// column's native unit. Lance rejects bare integer literals against temporal
+// columns, so they must be cast explicitly.
+const sqlTemporalLiteral = (
+	value: number,
+	unit: LanceTemporalUnit,
+): string | null => {
+	if (!Number.isSafeInteger(value)) return null;
+	if (unit === "day") return `CAST(${value} AS DATE)`;
+	return `CAST(${value} AS TIMESTAMP(${TEMPORAL_PRECISION[unit]}))`;
+};
+
+const sqlScalarLiteral = (
+	value: unknown,
+	field?: LanceField,
+): string | null => {
+	switch (typeof value) {
+		case "string":
+			return sqlStringLiteral(value);
+		case "boolean":
+			return value ? "true" : "false";
+		case "number":
+			if (!Number.isFinite(value)) return null;
+			if (field?.kind === "date") {
+				return sqlTemporalLiteral(value, field.temporal ?? "millisecond");
+			}
+			return String(value);
+		default:
+			return null;
+	}
+};
+
+const sqlEqualsCondition = (
+	name: string,
+	value: unknown,
+	field?: LanceField,
+): string | null => {
+	if (value === null || value === undefined) {
+		return `${sqlIdentifier(name)} IS NULL`;
+	}
+	const literal = sqlScalarLiteral(value, field);
+	return literal ? `${sqlIdentifier(name)} = ${literal}` : null;
+};
+
+/**
+ * Builds a Lance SQL filter that identifies `rowData`: by its id-like column
+ * when present, otherwise by every scalar column value. Returns null when no
+ * usable column exists.
+ */
+export const buildRowIdentityFilter = (
+	rowData: Record<string, unknown>,
+	fields: LanceField[],
+): string | null => {
+	const byName = new Map(fields.map((f) => [f.name, f]));
+	for (const key of ROW_IDENTITY_KEYS) {
+		const value = rowData[key];
+		if (value === null || value === undefined) continue;
+		const condition = sqlEqualsCondition(key, value, byName.get(key));
+		if (condition) return condition;
+	}
+	const conditions = Object.entries(rowData)
+		.filter(([name]) => {
+			const field = byName.get(name);
+			return !field || ROW_IDENTITY_KINDS.has(field.kind);
+		})
+		.map(([name, value]) => sqlEqualsCondition(name, value, byName.get(name)))
+		.filter((condition): condition is string => condition !== null);
+	return conditions.length ? conditions.join(" AND ") : null;
+};
+
 export const arrowToLanceSchema = (arrow: ArrowSchemaJSON): LanceSchema => ({
 	table:
 		typeof arrow?.metadata?.["name"] === "string"
@@ -1908,16 +2197,46 @@ export const arrowToLanceSchema = (arrow: ArrowSchemaJSON): LanceSchema => ({
 	fields: (arrow?.fields ?? []).map(arrowFieldToLance),
 });
 
+const ARROW_TIME_UNITS: Record<string, LanceTemporalUnit> = {
+	Second: "second",
+	Millisecond: "millisecond",
+	Microsecond: "microsecond",
+	Nanosecond: "nanosecond",
+};
+
+const arrowPrimitiveTemporalUnit = (
+	dt: string,
+): LanceTemporalUnit | undefined => {
+	if (dt === "Date32") return "day";
+	if (dt === "Date64") return "millisecond";
+	return undefined;
+};
+
 const arrowFieldToLance = (f: any): LanceField => {
 	const name = String(f?.name ?? "");
 	const dt = f?.data_type;
 	const nullable = f?.nullable ?? true;
 
 	if (typeof dt === "string") {
-		return { name, kind: arrowPrimitiveToKind(dt), nullable };
+		const temporal = arrowPrimitiveTemporalUnit(dt);
+		return {
+			name,
+			kind: arrowPrimitiveToKind(dt),
+			nullable,
+			...(temporal ? { temporal } : {}),
+		};
 	}
 
 	if (dt && typeof dt === "object") {
+		if (dt.Timestamp) {
+			const [unit] = dt.Timestamp as [string, string | null];
+			return {
+				name,
+				kind: "date",
+				nullable,
+				temporal: ARROW_TIME_UNITS[unit] ?? "millisecond",
+			};
+		}
 		if (dt.FixedSizeList) {
 			const [child, size] = dt.FixedSizeList as [any, number];
 			const childType = child?.data_type;
@@ -1943,24 +2262,32 @@ const arrowFieldToLance = (f: any): LanceField => {
 				nullable,
 			};
 		}
-		if (dt.List) {
-			const [child] = dt.List as [any];
-			const childType = child?.data_type;
+		// A list holds a single child field, which serializes as the field itself
+		// rather than as a tuple, so destructuring it would throw.
+		const listChild =
+			dt.List ?? dt.LargeList ?? dt.ListView ?? dt.LargeListView;
+		if (listChild) {
+			const child = Array.isArray(listChild) ? listChild[0] : listChild;
 			return {
 				name,
 				kind: "array",
-				items:
-					typeof childType === "string"
-						? arrowPrimitiveToKind(childType)
-						: "unknown",
+				items: arrowFieldToLance(child).kind,
 				nullable,
 			};
 		}
-		if (dt.Struct) {
+		if (dt.Struct || dt.Map || dt.Union || dt.RunEndEncoded) {
 			return { name, kind: "object", nullable };
 		}
-		if (dt.Map) {
-			return { name, kind: "object", nullable };
+		if (dt.Dictionary) {
+			const [, valueType] = dt.Dictionary as [any, any];
+			return arrowFieldToLance({ name, data_type: valueType, nullable });
+		}
+		// Integer counts: a time of day within its unit, or an elapsed span.
+		if (dt.Time32 || dt.Time64 || dt.Duration) {
+			return { name, kind: "number", nullable };
+		}
+		if (dt.Decimal32 || dt.Decimal64 || dt.Decimal128 || dt.Decimal256) {
+			return { name, kind: "number", nullable };
 		}
 	}
 
@@ -2040,51 +2367,26 @@ const parseVector = (text: string | undefined): number[] | undefined => {
 	}
 };
 
-const formatDate = (v: any): string => {
-	try {
-		const d = new Date(v);
-		if (isNaN(d.getTime())) return String(v);
+/** The expanded view has the room for both readings, so it shows both. */
+const DateDetail: React.FC<{ value: any; unit?: LanceTemporalUnit }> = ({
+	value,
+	unit,
+}) => {
+	const date = parseTemporalValue(value, unit);
+	if (!date) return <code className="text-sm">{String(value)}</code>;
 
-		const now = new Date();
-		const diff = now.getTime() - d.getTime();
-		const absDiff = Math.abs(diff);
-
-		// For very recent times (< 1 minute), show "just now"
-		if (absDiff < 60_000) return "just now";
-
-		// For recent times (< 1 hour), show minutes
-		if (absDiff < 3_600_000) {
-			const mins = Math.floor(absDiff / 60_000);
-			return diff > 0 ? `${mins}m ago` : `in ${mins}m`;
-		}
-
-		// For today, show time only
-		if (d.toDateString() === now.toDateString()) {
-			return d.toLocaleTimeString(undefined, {
-				hour: "2-digit",
-				minute: "2-digit",
-			});
-		}
-
-		// For this year, show month and day
-		if (d.getFullYear() === now.getFullYear()) {
-			return d.toLocaleDateString(undefined, {
-				month: "short",
-				day: "numeric",
-				hour: "2-digit",
-				minute: "2-digit",
-			});
-		}
-
-		// For older dates, show full date
-		return d.toLocaleDateString(undefined, {
-			year: "numeric",
-			month: "short",
-			day: "numeric",
-		});
-	} catch {
-		return String(v);
-	}
+	return (
+		<div className="space-y-0.5">
+			<code className="text-sm">
+				{unit === "day"
+					? formatCalendarDate(date, "full")
+					: formatAbsoluteDateTime(date)}
+			</code>
+			<p className="text-xs text-muted-foreground">
+				{formatRelativeTime(date, "long")}
+			</p>
+		</div>
+	);
 };
 
 const describeField = (f: LanceField): string => {

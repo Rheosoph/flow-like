@@ -1,0 +1,172 @@
+{
+	"schema": "flow-like.doc-screenshot-plan/v1",
+	"app": "desktop",
+	"outputDir": "tmp/university-visual-qa",
+	"tauriFixture": "../fixtures/docs-studio.tauri.json",
+	"defaults": {
+		"viewport": {
+			"width": 1624,
+			"height": 1060,
+			"deviceScaleFactor": 1
+		},
+		"theme": "dark",
+		"format": "webp",
+		"timeoutMs": 120000,
+		"settleMs": 500,
+		"disableAnimations": true,
+		"hideScrollbars": true
+	},
+	"scenarios": [
+		{
+			"name": "university-catalog-desktop",
+			"path": "/debug/university/catalog",
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "[data-university-visual=\"catalog\"] img",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "university-catalog-desktop",
+					"output": "catalog-desktop.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "university-catalog-tablet",
+			"path": "/debug/university/catalog",
+			"viewport": {
+				"width": 900,
+				"height": 1100
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "[data-university-visual=\"catalog\"] img",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "university-catalog-tablet",
+					"output": "catalog-tablet.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "university-course-desktop",
+			"path": "/debug/university/course",
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "[data-university-visual=\"course\"]",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "university-course-desktop",
+					"output": "course-desktop.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "university-course-tablet",
+			"path": "/debug/university/course",
+			"viewport": {
+				"width": 900,
+				"height": 1100
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "[data-university-visual=\"course\"]",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "university-course-tablet",
+					"output": "course-tablet.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "university-lesson-desktop",
+			"path": "/debug/university/lesson",
+			"viewport": {
+				"width": 1440,
+				"height": 1100
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "[data-university-visual=\"lesson\"] img",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "university-lesson-desktop",
+					"output": "lesson-desktop.webp",
+					"mode": "viewport"
+				},
+				{
+					"type": "scroll",
+					"y": 900
+				},
+				{
+					"type": "capture",
+					"name": "university-lesson-reading-rhythm",
+					"output": "lesson-reading-rhythm.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "university-lesson-tablet",
+			"path": "/debug/university/lesson",
+			"viewport": {
+				"width": 900,
+				"height": 1100
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "[data-university-visual=\"lesson\"] img",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "university-lesson-tablet",
+					"output": "lesson-tablet.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "university-broken-media-fallback",
+			"path": "/debug/university/broken",
+			"viewport": {
+				"width": 1200,
+				"height": 1000
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "figure[data-lesson-media-failed=\"true\"]",
+					"state": "attached"
+				},
+				{
+					"type": "capture",
+					"name": "broken-lesson-media-fallback",
+					"output": "lesson-broken-media-fallback.webp",
+					"mode": "element",
+					"selector": "figure[data-lesson-media-failed=\"true\"]",
+					"padding": 24
+				}
+			]
+		}
+	]
+}

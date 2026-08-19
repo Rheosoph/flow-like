@@ -1,0 +1,22 @@
+[package]
+name = "flow-like-azure-data"
+version = "0.1.0"
+edition = "2024"
+description = "Entra-only Azure data-plane clients shared by the Azure API and queue workers: Cosmos DB REST client and managed-identity PostgreSQL connectivity"
+
+[dependencies]
+azure_core = "0.32.0"
+azure_identity = "0.32.0"
+bytes.workspace = true
+chrono.workspace = true
+moka.workspace = true
+reqwest.workspace = true
+sea-orm.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+tracing.workspace = true
+url = "2.5"
+urlencoding.workspace = true
+uuid.workspace = true

@@ -180,6 +180,12 @@ impl NodeLogic for RegisterAthenaNode {
         let output_location: String = context.evaluate_pin("output_location").await?;
         let table_name: String = context.evaluate_pin("table_name").await?;
 
+        if credential_mode == "environment" {
+            context
+                .execution_environment()
+                .ensure_no_ambient_credentials("Athena", &credential_mode)?;
+        }
+
         let cached_session = session.load_lazy(context).await?;
 
         // Build Athena connection options based on credential mode
@@ -458,6 +464,12 @@ impl NodeLogic for MountAthenaQueryNode {
             .evaluate_pin("format")
             .await
             .unwrap_or_else(|_| "parquet".to_string());
+
+        if credential_mode == "environment" {
+            context
+                .execution_environment()
+                .ensure_no_ambient_credentials("Athena S3", &credential_mode)?;
+        }
 
         let cached_session = session.load_lazy(context).await?;
 

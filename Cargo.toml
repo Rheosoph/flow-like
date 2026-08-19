@@ -15,6 +15,19 @@ members = [
     "apps/backend/aws/compiler-lambda",
     "apps/backend/aws/compiler-ecs",
     "apps/backend/aws/executor-ecs",
+    "apps/backend/azure/api",
+    "apps/backend/azure/queue-worker",
+    "packages/azure-data",
+    "apps/backend/gcp/api",
+    "apps/backend/gcp/queue-worker",
+    "packages/gcp-data",
+    "packages/scheduler-tick",
+    "apps/backend/azure/executor",
+    "apps/backend/azure/maintenance",
+    "apps/backend/azure/scheduler",
+    "apps/backend/gcp/executor",
+    "apps/backend/gcp/maintenance",
+    "apps/backend/gcp/scheduler",
     "apps/backend/kubernetes/api",
     "apps/backend/kubernetes/executor",
     "apps/backend/kubernetes/compiler",
@@ -82,6 +95,9 @@ flow-like-executor = { path = "packages/executor" }
 flow-like-compiler = { path = "packages/compiler" }
 flow-like-wasm = { path = "packages/wasm" }
 flow-like-secrets = { path = "packages/secrets" }
+flow-like-azure-data = { path = "packages/azure-data" }
+flow-like-gcp-data = { path = "packages/gcp-data" }
+flow-like-scheduler-tick = { path = "packages/scheduler-tick" }
 tauri-plugin-flow-like-dexie-blob-offload = { path = "packages/dexie-tauri-adapter/backend" }
 lambda_http = "0.15.1"
 futures = "0.3.31"
@@ -115,7 +131,7 @@ blake3 = "1.8.2"
 lambda_runtime = "0.14.2"
 aws-config = "1.8.16"
 aws-sdk-dynamodb = "1.80.0"
-aws-sdk-lambda = "1.88.0"
+aws-sdk-lambda = "1.120"
 aws-sdk-s3 = "1.93.0"
 aws-sdk-sesv2 = "1.85.0"
 aws-sdk-sqs = "1.63.0"

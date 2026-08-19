@@ -112,7 +112,7 @@ impl NodeLogic for S3StoreNode {
             return Err(flow_like_types::anyhow!("S3 bucket name is required"));
         }
 
-        let mut builder = provider.apply_to_s3_builder(AmazonS3Builder::new());
+        let mut builder = provider.apply_to_s3_builder(context, AmazonS3Builder::new())?;
         builder = builder.with_bucket_name(&bucket);
         if path_style {
             builder = builder.with_virtual_hosted_style_request(false);
@@ -225,7 +225,7 @@ impl NodeLogic for S3ExpressStoreNode {
             ));
         }
 
-        let mut builder = provider.apply_to_s3_builder(AmazonS3Builder::new());
+        let mut builder = provider.apply_to_s3_builder(context, AmazonS3Builder::new())?;
         builder = builder.with_bucket_name(&bucket).with_s3_express(true);
 
         let store = builder
@@ -334,7 +334,7 @@ impl NodeLogic for AzureBlobStoreNode {
         }
 
         let builder = MicrosoftAzureBuilder::new().with_container_name(&container);
-        let builder = provider.apply_to_azure_builder(builder)?;
+        let builder = provider.apply_to_azure_builder(context, builder)?;
 
         let store = builder
             .build()

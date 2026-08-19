@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useInternalNode } from "@xyflow/react";
 import { isEqual } from "lodash-es";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -27,6 +28,7 @@ export function PinEditModal({
 	boardId: string;
 	version?: [number, number, number];
 }>) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const { pushCommand } = useUndoRedo(appId, boardId);
@@ -188,9 +190,9 @@ export function PinEditModal({
 		>
 			<DialogContent className="sm:max-w-4xl max-h-[90vh]">
 				<DialogHeader>
-					<DialogTitle>Set Default Value</DialogTitle>
+					<DialogTitle>{t('setDefaultValue', 'Set Default Value')}</DialogTitle>
 					<DialogDescription>
-						The default value will only be used if the pin is not connected.
+						{t('theDefaultValueWillOnlyBeUsedIfThePinIsNotConnected2', 'The default value will only be used if the pin is not connected.')}
 					</DialogDescription>
 				</DialogHeader>
 				<DialogBody className="pr-2">

@@ -1,6 +1,8 @@
+use crate::data::datafusion::params;
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::excel::CSVTable;
 use flow_like::flow::{
+    board::Board,
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::ValueType,
@@ -28,11 +30,11 @@ impl NodeLogic for SqlQueryNode {
         let mut node = Node::new(
             "df_sql_query",
             "SQL Query",
-            "Execute a SQL query against a DataFusion session. Returns results as both a CSVTable (for analytics) and array of row objects (for iteration).",
+            "Execute a SQL query against a DataFusion session. Returns results as both a CSVTable (for analytics) and array of row objects (for iteration). Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
             "Data/DataFusion",
         );
         node.add_icon("/flow/icons/database.svg");
-        node.set_version(2);
+        node.set_version(3);
 
         node.add_input_pin(
             "exec_in",
@@ -52,10 +54,12 @@ impl NodeLogic for SqlQueryNode {
         node.add_input_pin(
             "query",
             "Query",
-            "SQL query to execute (e.g., SELECT * FROM mytable WHERE column > 10)",
+            "SQL query to execute (e.g., SELECT * FROM mytable WHERE column > 10). Use $placeholders for values that come from the flow (SELECT * FROM users WHERE id = $user_id) — each one adds an input pin to wire the value into. Placeholders stand for values only; table and column names cannot be parameterized.",
             VariableType::String,
         )
         .set_default_value(Some(json!("SELECT * FROM data LIMIT 100")));
+
+        params::add_params_pin(&mut node);
 
         node.add_output_pin(
             "exec_out",
@@ -99,17 +103,24 @@ impl NodeLogic for SqlQueryNode {
         node
     }
 
+    async fn on_update(&self, node: &mut Node, board: &Board) {
+        node.error = None;
+        params::sync_param_pins(node, "query", board);
+    }
+
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: DataFusionSession = context.evaluate_pin("session").await?;
         let query: String = context.evaluate_pin("query").await?;
+        let query_params = params::resolve_params(context, &query).await?;
 
         let cached_session = session.load(context).await?;
 
         context.log_message(&format!("Executing SQL: {}", query), LogLevel::Debug);
 
         let df = cached_session.ctx.sql(&query).await?;
+        let df = params::bind(df, &query_params)?;
         let batches = df.collect().await?;
 
         let csv_table = batches_to_csv_table(&batches)?;
@@ -594,7 +605,7 @@ mod tests {
 
         assert_eq!(node.name, "df_sql_query");
         assert_eq!(node.friendly_name, "SQL Query");
-        assert_eq!(node.version, Some(2));
+        assert_eq!(node.version, Some(3));
 
         let input_pins: Vec<_> = node
             .pins
@@ -611,6 +622,7 @@ mod tests {
         assert!(input_pins.iter().any(|p| p.name == "exec_in"));
         assert!(input_pins.iter().any(|p| p.name == "session"));
         assert!(input_pins.iter().any(|p| p.name == "query"));
+        assert!(input_pins.iter().any(|p| p.name == "params"));
         assert!(output_pins.iter().any(|p| p.name == "exec_out"));
         assert!(output_pins.iter().any(|p| p.name == "table"));
         assert!(output_pins.iter().any(|p| p.name == "rows"));

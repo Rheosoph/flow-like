@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { captureTelemetryError } from "@flow-like/flow-like-ui/lib/telemetry/errors";
 import * as Sentry from "@sentry/nextjs";
 import { useEffect } from "react";
@@ -9,6 +10,7 @@ export default function GlobalError({
 }: {
 	error: Error & { digest?: string };
 }) {
+	const { t } = useTranslation("common");
 	useEffect(() => {
 		Sentry.captureException(error);
 		captureTelemetryError(error, {
@@ -35,10 +37,10 @@ export default function GlobalError({
 					}}
 				>
 					<h2 style={{ fontSize: "1.5rem", fontWeight: 600 }}>
-						Something went wrong
+						{t('somethingWentWrong', 'Something went wrong')}
 					</h2>
 					<p style={{ fontSize: "0.875rem", color: "#a1a1aa" }}>
-						An unexpected error occurred.
+						{t('anUnexpectedErrorOccurred', 'An unexpected error occurred.')}
 					</p>
 					<div style={{ display: "flex", gap: "12px" }}>
 						<button
@@ -54,7 +56,7 @@ export default function GlobalError({
 								cursor: "pointer",
 							}}
 						>
-							Go Back
+							{t('goBack', 'Go Back')}
 						</button>
 						<button
 							type="button"
@@ -69,7 +71,7 @@ export default function GlobalError({
 								cursor: "pointer",
 							}}
 						>
-							Reload
+							{t('reload', 'Reload')}
 						</button>
 					</div>
 				</div>

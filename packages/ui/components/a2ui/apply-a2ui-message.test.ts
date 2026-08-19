@@ -207,3 +207,50 @@ describe("applyElementUpdate microWidgetInstance props patches", () => {
 		expect(dataOf(updated).props).toEqual({ title: "Hello" });
 	});
 });
+
+describe("value writes", () => {
+	const dataOf = (component: SurfaceComponent) =>
+		component.component as unknown as Record<string, unknown>;
+
+	const inputComponent = (data: Record<string, unknown>): SurfaceComponent =>
+		({ id: "field-1", component: data }) as unknown as SurfaceComponent;
+
+	test("setValue advances the revision even when the value is unchanged", () => {
+		const component = inputComponent({
+			type: "textField",
+			value: { literalString: "" },
+		});
+
+		const cleared = applyElementUpdate(component, {
+			type: "setValue",
+			value: "",
+		});
+
+		expect(dataOf(cleared).value).toEqual({ literalString: "" });
+		expect(dataOf(cleared).valueRevision).toBe(1);
+
+		const again = applyElementUpdate(cleared, { type: "setValue", value: "" });
+		expect(dataOf(again).valueRevision).toBe(2);
+	});
+
+	test("setChecked advances the revision alongside checked and value", () => {
+		const updated = applyElementUpdate(
+			inputComponent({ type: "checkbox", checked: { literalBool: false } }),
+			{ type: "setChecked", checked: true },
+		);
+
+		const data = dataOf(updated);
+		expect(data.checked).toBe(true);
+		expect(data.value).toBe(true);
+		expect(data.valueRevision).toBe(1);
+	});
+
+	test("updates that do not write a value leave the revision alone", () => {
+		const updated = applyElementUpdate(
+			inputComponent({ type: "textField", valueRevision: 4 }),
+			{ type: "setPlaceholder", placeholder: "Name" },
+		);
+
+		expect(dataOf(updated).valueRevision).toBe(4);
+	});
+});

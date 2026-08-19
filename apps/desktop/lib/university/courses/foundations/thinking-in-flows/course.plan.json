@@ -1,0 +1,1108 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-movforet-0d7i",
+		"name": "Thinking in Flows",
+		"language": "en",
+		"slug": "thinking-in-flows",
+		"difficulty": "BEGINNER",
+		"category": "FLOWS",
+		"estimatedMinutes": 95,
+		"isPublished": true,
+		"tags": ["flows", "studio", "nodes", "typed-workflows", "beginner"],
+		"position": 1,
+		"description": "Read and build node graphs with confidence: typed wires, pure vs impure evaluation, variables, layers, and run evidence — taught through one real support automation.",
+		"longDescription": "You'll pull apart a working Customer Support Automation board piece by piece — entry events, the two wire systems, on-demand evaluation, per-run state, collapsed layers — then rebuild its spine in your own app, put a real surface in front of it, and prove it works with run evidence. The finale hands you a broken duplicate of the board and asks you to reason your way to the missing node.",
+		"media": {
+			"icon": "media/app-logo.webp",
+			"banner": "assets/FlowLikeStudio.webp"
+		},
+		"assets": [
+			{
+				"name": "StudioCanvas",
+				"file": "assets/FlowLikeStudio.webp",
+				"replace": true
+			},
+			{
+				"name": "NodeTypes",
+				"file": "assets/FlowLikeNodes.webp",
+				"replace": true
+			},
+			{
+				"name": "TypedConnections",
+				"file": "assets/ConnectionsWires.webp",
+				"replace": true
+			},
+			{
+				"name": "FlowVariables",
+				"file": "assets/WorkingWithVariables.webp",
+				"replace": true
+			},
+			{
+				"name": "CollapsedLayer",
+				"file": "assets/CollapsingNodes.webp",
+				"replace": true
+			},
+			{
+				"name": "NodeCatalog",
+				"file": "assets/NodeCatalog.webp",
+				"replace": true
+			},
+			{
+				"name": "GenericPinTypes",
+				"file": "assets/GenericPinTypes.webp",
+				"replace": true
+			},
+			{
+				"name": "SetVariableType",
+				"file": "assets/SetVariableType.webp",
+				"replace": true
+			},
+			{
+				"name": "InsideLayers",
+				"file": "assets/InsideLayers.webp",
+				"replace": true
+			},
+			{
+				"name": "PlaceholdersForPrototyping",
+				"file": "assets/PlaceholdersForPrototyping.webp",
+				"replace": true
+			},
+			{
+				"name": "DrawPin",
+				"file": "assets/DrawPin.webp",
+				"replace": true
+			},
+			{
+				"name": "TypedCatalogSuggestions",
+				"file": "assets/TypedCatalogSuggestions.webp",
+				"replace": true
+			},
+			{
+				"name": "RunsAndLogs",
+				"file": "assets/RunsAndLogs.webp",
+				"replace": true
+			},
+			{
+				"name": "FlowWithLayers",
+				"file": "assets/FlowWithLayers.webp",
+				"replace": true
+			}
+		],
+		"modules": [
+			{
+				"id": "mod-movfzs6f-180",
+				"title": "Concepts",
+				"description": "Read the Customer Support Automation board like an engineer: canvas, node families, wires, evaluation rules, state, and layers.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "les-movfzthx-4hg",
+						"title": "Meet the Board",
+						"contentFile": "content/01-canvas.md",
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-thinking-canvas-entry",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Riko's kettle complaint just arrived. Look at @StudioCanvas — which node moves first?",
+								"explanation": "Every run enters through an event node: the red Incoming Support Request with the play badge beside it. The numbered comments are documentation and never execute, and canvas position schedules nothing. Customer Message is the tempting one — it sounds like the start of the story — but it's a pure node, which only evaluates if something downstream asks for its output.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "entry-event",
+											"label": "Incoming Support Request — the red event node with the play badge"
+										},
+										{
+											"id": "first-comment",
+											"label": "The '1 · Listen for requests' comment, since it labels step one"
+										},
+										{
+											"id": "leftmost-node",
+											"label": "Whichever node sits furthest to the left when the run starts"
+										},
+										{
+											"id": "customer-message",
+											"label": "Customer Message — it holds the customer's text, so it must come first"
+										}
+									],
+									"correct": ["entry-event"]
+								}
+							},
+							{
+								"id": "challenge-thinking-canvas-position",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You drag Send Reply from the far right of @StudioCanvas over to the far left and save. What changes at the next run?",
+								"explanation": "Nothing. Position is documentation for humans; execution follows the white wires from the event no matter where nodes sit. Moving a node never re-schedules it — 'execution sweeps left to right' is the single most common beginner misconception, and this course will keep beating it up. Wires also stay attached to their pins; they never snap to whatever is nearby.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "nothing-runtime",
+											"label": "Nothing — the wires still decide what runs, and they're unchanged"
+										},
+										{
+											"id": "runs-first",
+											"label": "Send Reply now runs first, because execution sweeps the canvas left to right"
+										},
+										{
+											"id": "wires-snap",
+											"label": "Its wires detach and reattach to the nearest compatible pins"
+										},
+										{
+											"id": "run-invalid",
+											"label": "The run fails, because a node may not sit to the left of its event"
+										}
+									],
+									"correct": ["nothing-runtime"]
+								}
+							},
+							{
+								"id": "challenge-thinking-app-vs-flow",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The Customer Support Automation board is one flow inside an app. Which of these live in the app but never appear as nodes on this canvas?",
+								"explanation": "An app wraps its flows together with Events, pages, storage, and configuration — you set those up at app level, and they never show as canvas nodes. Send Reply and the white wires are the opposite case: they exist only on the board. Expecting the canvas to show everything the app does is the trap; Events especially feel invisible until you know where to look.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "app-events",
+											"label": "The Events configuration that connects surfaces like mail or chat to the flow"
+										},
+										{
+											"id": "app-storage",
+											"label": "The app's stored data and uploaded files"
+										},
+										{
+											"id": "send-reply",
+											"label": "The Send Reply operation"
+										},
+										{
+											"id": "exec-wires",
+											"label": "The white execution wires"
+										}
+									],
+									"correct": ["app-events", "app-storage"]
+								}
+							}
+						]
+					},
+					{
+						"id": "les-movg0c68-zh9",
+						"title": "Nodes, Pins, and Two Kinds of Wires",
+						"contentFile": "content/02-boards-nodes-connections-pins.md",
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-thinking-node-families",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In @NodeTypes, Customer Message and Format Generic Value wear amber headers and carry no diamond-shaped pins at all. What are they?",
+								"explanation": "No diamond pins means no execution pins — the signature of a pure node, which evaluates when a downstream consumer needs its value. The Offline badge is about the workspace's connection state and never restyles nodes, and comments are the grey text boxes, not connectable nodes.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "pure-nodes",
+											"label": "Pure nodes — they evaluate when something downstream needs their output"
+										},
+										{
+											"id": "comments",
+											"label": "Comment nodes that happen to be connected to each other"
+										},
+										{
+											"id": "disabled",
+											"label": "Disabled nodes, tinted amber because the board shows an Offline badge"
+										},
+										{
+											"id": "second-events",
+											"label": "Secondary event nodes providing a second entry point"
+										}
+									],
+									"correct": ["pure-nodes"]
+								}
+							},
+							{
+								"id": "challenge-thinking-wire-roles",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements about the wires in @TypedConnections are true?",
+								"explanation": "Two systems share the canvas: solid white wires between diamond pins schedule standard nodes, dashed colored wires between round pins carry values, and the color reports the pin's type (pink is String here). The dangerous distractor is 'data triggers the node' — it never does. A standard node with perfect data and no execution input simply never runs.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "white-order",
+											"label": "The solid white wires decide which operation may run next"
+										},
+										{
+											"id": "dashed-values",
+											"label": "The dashed pink wires carry values between typed data pins"
+										},
+										{
+											"id": "data-triggers",
+											"label": "A data wire triggers its target node as soon as the value is ready"
+										},
+										{
+											"id": "color-cosmetic",
+											"label": "Wire colors are a display preference you can change per wire"
+										},
+										{
+											"id": "diamonds-data",
+											"label": "The diamond-shaped pins are where values enter a node"
+										}
+									],
+									"correct": ["white-order", "dashed-values"]
+								}
+							},
+							{
+								"id": "challenge-thinking-generic-pins",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In @GenericPinTypes, Format Generic Value's own pins are a muted grey-blue, while the Customer Message pin feeding it is pink. What does that tell you?",
+								"explanation": "Grey-blue marks a Generic pin: the node works with many types and locks onto the concrete type an incoming wire supplies; downstream connections must then match the resolved type. It's type inference, not a warning — an incompatible connection is refused while you drag, never tinted afterwards. Pin color always reports type, not requiredness or ownership.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "generic-adapts",
+											"label": "The node is generic — those pins adapt to whatever concrete type gets connected"
+										},
+										{
+											"id": "broken-pin",
+											"label": "The connection is invalid, and Studio dimmed the pins as a warning"
+										},
+										{
+											"id": "optional-pin",
+											"label": "Grey pins mark optional inputs; colored pins mark required ones"
+										},
+										{
+											"id": "node-owner",
+											"label": "Pin color identifies which node originally created the value"
+										}
+									],
+									"correct": ["generic-adapts"]
+								}
+							}
+						]
+					},
+					{
+						"id": "les-movg01nc-yko",
+						"title": "Who Runs, and When?",
+						"contentFile": "content/03-pure-vs-impure.md",
+						"estimatedMinutes": 10,
+						"position": 2,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-thinking-pure-demand",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "At the bottom of @TypedConnections, Customer Message feeds Format Generic Value — whose own Value output connects to nothing. During a run of the support flow, when does Format Generic Value evaluate?",
+								"explanation": "Never. Pure values are pulled by consumers, and this node has none — so there is no demand and no evaluation. 'The moment its input changes' is the push-model misconception: producers never fire pure nodes, and neither does the run starting or execution passing by on the canvas.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "never-demand",
+											"label": "It doesn't — no downstream node asks for its output"
+										},
+										{
+											"id": "run-start",
+											"label": "Once at the start of every run, like all pure nodes"
+										},
+										{
+											"id": "canvas-turn",
+											"label": "When execution reaches its position on the canvas"
+										},
+										{
+											"id": "push-model",
+											"label": "The moment Customer Message produces a new Message value"
+										}
+									],
+									"correct": ["never-demand"]
+								}
+							},
+							{
+								"id": "challenge-thinking-exec-missing",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A teammate wires a perfect Reply value into Send Reply's Body pin but forgets the white wire into its execution input. What happens on the next run?",
+								"explanation": "Send Reply never runs — data on a standard node's pins informs the work but never schedules it. 'Runs when the value is ready' is the same push-model trap from the pure-node side. And the graph is structurally legal, so the run starts fine; a disconnected execution input is a silent no-show, not a validation error.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "never-runs",
+											"label": "Send Reply never runs — data on its pins doesn't schedule it"
+										},
+										{
+											"id": "runs-on-data",
+											"label": "Send Reply runs as soon as the Body value is ready"
+										},
+										{
+											"id": "runs-last",
+											"label": "Send Reply runs at the end, after every connected node has finished"
+										},
+										{
+											"id": "fails-validation",
+											"label": "The run refuses to start and reports the disconnected node"
+										}
+									],
+									"correct": ["never-runs"]
+								}
+							},
+							{
+								"id": "challenge-thinking-side-effects",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "You're deciding which steps of the support flow deserve a place on the white execution path. Which belong there?",
+								"explanation": "Anything with a side effect, a cost, or a failure mode gets explicit, visible ordering: sending mail, calling a paid model, writing storage. Trimming and prompt-joining are deterministic transformations — pure nodes evaluated on demand. Putting them on the execution path isn't illegal, just noise that buries the consequential steps.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "send-email",
+											"label": "Sending the reply to the customer"
+										},
+										{
+											"id": "model-call",
+											"label": "Calling the drafting model, which costs money and can fail"
+										},
+										{
+											"id": "store-ticket",
+											"label": "Writing the ticket into the app's storage"
+										},
+										{
+											"id": "trim-text",
+											"label": "Trimming whitespace off the customer's message"
+										},
+										{
+											"id": "join-prompt",
+											"label": "Joining the instructions and the question into one prompt string"
+										}
+									],
+									"correct": ["send-email", "model-call", "store-ticket"]
+								}
+							}
+						]
+					},
+					{
+						"id": "les-movg14b8-q6i",
+						"title": "Variables: the Board's Memory",
+						"contentFile": "content/04-variables.md",
+						"estimatedMinutes": 10,
+						"position": 3,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-thinking-var-or-wire",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Escalation Enabled is read in three distant regions of the support board and can flip mid-run. What do you reach for?",
+								"explanation": "Shared, changing state is exactly what a variable is for: Sets on the execution path make every change visible, and each Get reflects the latest executed Set. Long wires deliver whatever their producer last output — they can't follow a mid-run flip — and three 'independent' variables for one fact guarantees they disagree eventually. Recomputing in pure nodes works only if the answer is derivable on demand, which a runtime flip isn't.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "typed-variable",
+											"label": "A Boolean variable — Get nodes where it's read, Sets on the execution path"
+										},
+										{
+											"id": "long-wires",
+											"label": "Three long data wires from the node that first computes the value"
+										},
+										{
+											"id": "per-region",
+											"label": "Three separate variables, one per region, so they can't interfere"
+										},
+										{
+											"id": "pure-recompute",
+											"label": "A pure node in each region that recomputes the answer on demand"
+										}
+									],
+									"correct": ["typed-variable"]
+								}
+							},
+							{
+								"id": "challenge-thinking-stale-value",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "During one run, a Get Confidence node returns 0.2 even though a Set Confidence holding 0.9 sits directly beside it on the canvas. What determines what the Get returns?",
+								"explanation": "The last Set that execution actually reached earlier in this run. Proximity on the canvas counts for nothing — the 0.9 Set beside the Get evidently wasn't on the executed path. Defaults only seed the value at the start of a run, and variable state is per-run and in-memory, so nothing leaks over from earlier runs.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "last-executed-set",
+											"label": "The most recent Set that execution reached earlier in this run"
+										},
+										{
+											"id": "nearest-set",
+											"label": "The Set node closest to the Get on the canvas"
+										},
+										{
+											"id": "default-wins",
+											"label": "The variable's default — Sets only take effect after the run completes"
+										},
+										{
+											"id": "other-run",
+											"label": "A Set from an earlier run whose value is still in memory"
+										}
+									],
+									"correct": ["last-executed-set"]
+								}
+							},
+							{
+								"id": "challenge-thinking-secret-config",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The support flow needs the mail provider's API token on your machine. Which settings belong on that variable?",
+								"explanation": "Secret controls handling (masked, treated as sensitive); Runtime Configured keeps the value out of the flow definition entirely, supplied per device via Runtime Variables. The tempting mistake is the saved default: masking changes the display, but a default writes the token into the flow itself, where every sync and export carries it along. Exposed hands the value to callers — the opposite of what a credential wants.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "secret",
+											"label": "Secret — mask the value and treat it as sensitive"
+										},
+										{
+											"id": "runtime-configured",
+											"label": "Runtime Configured — each device supplies its own value outside the flow definition"
+										},
+										{
+											"id": "exposed",
+											"label": "Exposed — so any caller can hand the token in"
+										},
+										{
+											"id": "default-value",
+											"label": "A normal default holding the token, so the flow works out of the box"
+										}
+									],
+									"correct": ["secret", "runtime-configured"]
+								}
+							}
+						]
+					},
+					{
+						"id": "les-movg24ec-xzm",
+						"title": "Layers, Functions, and Folding Detail Away",
+						"contentFile": "content/05-functions-and-collapse.md",
+						"estimatedMinutes": 10,
+						"position": 4,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-thinking-collapse-result",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In @CollapsedLayer, both amber pure nodes are selected and the toolbar's first button shows the Collapse tooltip. You click it. What lands on the board?",
+								"explanation": "One layer node whose boundary pins mirror the wires that crossed the selection edge; the selected nodes move into its nested graph, still in the same flow. A Call Function node only appears later, if you deliberately convert the layer — collapsing alone creates no callable signature and certainly no separate flow.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "layer-node",
+											"label": "One layer node whose boundary pins mirror the wires that crossed the selection"
+										},
+										{
+											"id": "call-function",
+											"label": "A Call Function node plus a new entry in the Functions list"
+										},
+										{
+											"id": "separate-flow",
+											"label": "Nothing here — the nodes move into a separate flow in the app"
+										},
+										{
+											"id": "group-frame",
+											"label": "A purely visual frame drawn around the two nodes"
+										}
+									],
+									"correct": ["layer-node"]
+								}
+							},
+							{
+								"id": "challenge-thinking-boundary-check",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Inside Prepare Support Reply (@InsideLayers), you rename the Message boundary pin and add a new Tone input. What must you check before the next run?",
+								"explanation": "Boundary pins are the layer's public interface, so every edit is an interface change: outer wires must still line up with the renamed and added pins, the inner Start-to-Return path must still connect, and a brand-new input needs a source or a sensible default. Inner node coordinates are pure layout — and renames apply to layers directly; function conversion is a different feature, not a prerequisite.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "outer-match",
+											"label": "Every outer wire into the layer still lines up with the renamed and added pins"
+										},
+										{
+											"id": "inner-intact",
+											"label": "The inner Start-to-Return execution path is still connected"
+										},
+										{
+											"id": "tone-source",
+											"label": "The new Tone input has a wire or a sensible default"
+										},
+										{
+											"id": "coords",
+											"label": "The inner nodes keep their previous canvas coordinates"
+										},
+										{
+											"id": "function-first",
+											"label": "The layer has been converted to a function, or the rename won't apply"
+										}
+									],
+									"correct": ["outer-match", "inner-intact", "tone-source"]
+								}
+							},
+							{
+								"id": "challenge-thinking-function-entry",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You implement Human Review and want to convert it into a reusable function, but its inner graph currently has two execution inputs wired from different places. What's true?",
+								"explanation": "An execution-bearing function needs exactly one entry — none can't be called, two can't decide where to begin — so you merge before converting. Conversion doesn't guess an entry for you, callers see one signature rather than a choice of doors, and functions absolutely can participate in execution; that's their main job.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "single-entry",
+											"label": "You must merge down to exactly one execution entry before converting"
+										},
+										{
+											"id": "leftmost-entry",
+											"label": "Conversion succeeds and picks the leftmost execution input as the entry"
+										},
+										{
+											"id": "both-entries",
+											"label": "The Call Function node simply exposes both entries as two execution pins"
+										},
+										{
+											"id": "pure-conversion",
+											"label": "The execution inputs are dropped, because functions are always pure"
+										}
+									],
+									"correct": ["single-entry"]
+								}
+							}
+						]
+					}
+				]
+			},
+			{
+				"id": "mod-movg2j7j-xzz",
+				"title": "Build Your First Workflow",
+				"description": "Rebuild the support board's spine in your own app, bind it to a real surface, and prove it with run evidence.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "les-movg2tul-7ji",
+						"title": "Wire the Logic",
+						"contentFile": "content/06-wire-the-logic.md",
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-thinking-context-catalog",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Searching 'mail' in the right-click catalog (@NodeCatalog) returns five nodes, including Watch Inbox. Dropping a wire from a String pin instead (@TypedCatalogSuggestions) returns four — Watch Inbox is gone. Why?",
+								"explanation": "The pin-drop catalog runs with Context Sensitive filtering: it only offers nodes that can legally connect to the pin you're holding, and Watch Inbox has no home for that String. Same catalog, same search — the pin is the extra filter. Nothing was uninstalled, and the Offline badge never hides catalog entries.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "context-filter",
+											"label": "Context Sensitive filtering hides nodes that can't connect to the dragged pin"
+										},
+										{
+											"id": "removed-node",
+											"label": "Watch Inbox was uninstalled between the two screenshots"
+										},
+										{
+											"id": "search-differs",
+											"label": "The two menus match the search term against different fields"
+										},
+										{
+											"id": "offline-hidden",
+											"label": "The Offline badge hides nodes that would need a network connection"
+										}
+									],
+									"correct": ["context-filter"]
+								}
+							},
+							{
+								"id": "challenge-thinking-missing-data-wire",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Predict first: you've wired the white spine event → drafting step → send, but forgot the dashed wire carrying the customer's message into the drafting step. What does the next run do?",
+								"explanation": "The spine runs end to end — execution doesn't wait for data — and the unwired input falls back to its default, most likely an empty string. That's how you get a polite, well-formed reply about absolutely nothing. 'It stops and waits' and 'it refuses to start' both imagine data participating in scheduling, and Studio suggests compatible nodes while you drag but never wires pins behind your back.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "runs-empty",
+											"label": "It runs the whole spine — the drafting step just works from an empty default value"
+										},
+										{
+											"id": "blocks",
+											"label": "It stops at the drafting step, waiting for the missing input"
+										},
+										{
+											"id": "validation",
+											"label": "It refuses to start until every input pin is wired"
+										},
+										{
+											"id": "auto-connect",
+											"label": "Studio auto-connects the message to the input because the types match"
+										}
+									],
+									"correct": ["runs-empty"]
+								}
+							},
+							{
+								"id": "challenge-thinking-draft-silent",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Your rebuilt board sends replies, but every one is generic mush that ignores the customer's words. Which two checks target the actual suspects?",
+								"explanation": "A garbage-in symptom lives in the data story: verify the drafting step receives the real message, and verify your pure prep chain's output is actually consumed — an unconsumed pure node never evaluates, silently. Moving nodes changes nothing (lesson 1 says hi), and white wires carry permission to run, never values — 'stale execution wires' aren't a thing.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "data-into-step",
+											"label": "Follow the dashed wires: does the drafting step receive the customer's real message?"
+										},
+										{
+											"id": "pure-consumed",
+											"label": "Confirm the pure prep nodes' outputs actually feed the drafting input — unconsumed pure nodes never evaluate"
+										},
+										{
+											"id": "move-left",
+											"label": "Move the drafting step further left so it runs before the reply goes out"
+										},
+										{
+											"id": "exec-carries",
+											"label": "Re-draw the white spine — a stale execution wire can deliver an old message"
+										}
+									],
+									"correct": ["data-into-step", "pure-consumed"]
+								}
+							}
+						]
+					},
+					{
+						"id": "les-movg3c3c-4yi",
+						"title": "Set It Live",
+						"contentFile": "content/07-set-it-live.md",
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-thinking-latest-vs-version",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Support replies are now customer-facing, and you're still editing the draft daily. Which setup protects customers while you iterate?",
+								"explanation": "A numbered version is immutable — customers keep a proven behavior while the draft churns. 'Yesterday's tests proved Latest is safe' is the trap: Latest follows every save, and yesterday's test says nothing about today's edit. Politeness agreements don't survive Tuesday afternoons, and a duplicated flow drifts and doubles maintenance — versions exist precisely so you don't need copies.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "pin-version",
+											"label": "Pin the production Event to a tested numbered version; keep iterating on the draft"
+										},
+										{
+											"id": "latest-tested",
+											"label": "Keep it on Latest — yesterday's tests proved the draft is safe"
+										},
+										{
+											"id": "latest-locked",
+											"label": "Keep it on Latest, but agree that nobody saves risky edits"
+										},
+										{
+											"id": "duplicate-flow",
+											"label": "Duplicate the flow and point the Event at the copy"
+										}
+									],
+									"correct": ["pin-version"]
+								}
+							},
+							{
+								"id": "challenge-thinking-local-only-run",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "One node tucked inside the Human Review layer is local-only. Everything else in the flow could run remotely. Where can a single run execute?",
+								"explanation": "Entirely locally. Before a run, the whole flow is inspected — nested layers included — and one local-only node pins the entire invocation to the local machine; a run is never split between workers. Collapsing hides detail from your eyes, not from the runtime, which is exactly why 'the layer hides it' feels plausible and isn't.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "all-local",
+											"label": "Entirely on the local machine — one run never splits"
+										},
+										{
+											"id": "split-run",
+											"label": "Remotely, with just that one node hopping back to the desktop"
+										},
+										{
+											"id": "layer-hides",
+											"label": "Remotely — nodes hidden inside a collapsed layer don't count"
+										},
+										{
+											"id": "per-node",
+											"label": "Wherever Studio decides per node at runtime, based on load"
+										}
+									],
+									"correct": ["all-local"]
+								}
+							},
+							{
+								"id": "challenge-thinking-exposed-eye",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In @FlowVariables, Customer Name and Escalation Enabled show an open eye while Confidence's eye is crossed out. What does the open eye mean?",
+								"explanation": "The eye toggles Exposed: app configuration and compatible invocations may supply that variable's value. It answers 'who may supply it' — Secret answers 'how is it displayed' and Runtime Configured answers 'where is it stored'; three different switches for three different questions, and none of them prints anything into logs.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "exposed-callers",
+											"label": "The variable is Exposed — app configuration and invocations can supply its value"
+										},
+										{
+											"id": "visible-logs",
+											"label": "Its value will be printed into the run logs"
+										},
+										{
+											"id": "unmasked",
+											"label": "It isn't a Secret, so its value shows unmasked in editors"
+										},
+										{
+											"id": "runtime-required",
+											"label": "It must be filled in on the Runtime Variables screen before any run"
+										}
+									],
+									"correct": ["exposed-callers"]
+								}
+							}
+						]
+					},
+					{
+						"id": "les-movg3r4s-fik",
+						"title": "Prove It With a Run",
+						"contentFile": "content/08-test-your-chatbot.md",
+						"estimatedMinutes": 10,
+						"position": 2,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-thinking-log-attribution",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In @RunsAndLogs, the log line 'Drafted a helpful reply and queued human review' (730 ms, 184 tokens in, 96 out) is attributed to which node?",
+								"explanation": "Draft Helpful Reply — a node that isn't even visible on the outer board, because it lives inside the collapsed Prepare Support Reply layer. Logs attach to the node that did the work, however deep it's folded. The outer layer node is the tempting answer, but attribution follows execution, not what the canvas happens to show.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "draft-helpful",
+											"label": "Draft Helpful Reply — the node inside the collapsed layer"
+										},
+										{
+											"id": "prepare-layer",
+											"label": "Prepare Support Reply — the layer node visible on the outer board"
+										},
+										{
+											"id": "event-node",
+											"label": "Incoming Support Request — the event that started the run"
+										},
+										{
+											"id": "send-reply",
+											"label": "Send Reply — the step that ultimately uses the draft"
+										}
+									],
+									"correct": ["draft-helpful"]
+								}
+							},
+							{
+								"id": "challenge-thinking-evidence-first",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "A tester reports the automation answered a billing question with kettle-descaling instructions. Which two moves produce evidence before you touch the graph?",
+								"explanation": "Symptom → run → node: find the matching run and read the per-node logs, and reproduce through the real surface so you have a fresh correlated run. Rewiring first destroys the crime scene, dragging nodes changes nothing about scheduling, and per-run state means there's nothing for a Studio restart to 'clear' — those three all edit before knowing.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "find-run",
+											"label": "Open Runs, select the matching entry, and read each node's logs and payload"
+										},
+										{
+											"id": "reproduce",
+											"label": "Reproduce the same message through the real surface and note the new run"
+										},
+										{
+											"id": "rewire-test",
+											"label": "Swap some wires around and watch whether the symptom changes"
+										},
+										{
+											"id": "canvas-shift",
+											"label": "Drag the drafting layer earlier on the canvas"
+										},
+										{
+											"id": "restart-app",
+											"label": "Restart Studio to clear any values cached between runs"
+										}
+									],
+									"correct": ["find-run", "reproduce"]
+								}
+							},
+							{
+								"id": "challenge-thinking-same-payload",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You fix one node and want to know whether the fix worked. Why rerun the historic payload instead of typing a fresh test message?",
+								"explanation": "Holding the input constant isolates your change: same payload, one edited node — any output difference is your fix or your new bug. It is not a guarantee: external model calls stay nondeterministic, so a rerun is a strong comparison point rather than a regression proof. And it's the fresh message through the surface that exercises the Event configuration — the rerun deliberately tests less.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "same-input",
+											"label": "Same input, one changed node — any difference in output is caused by your change"
+										},
+										{
+											"id": "deterministic",
+											"label": "Reruns are guaranteed identical, so a pass counts as a full regression test"
+										},
+										{
+											"id": "skip-external",
+											"label": "Reruns skip the external model call, making them faster and free"
+										},
+										{
+											"id": "exercises-event",
+											"label": "A rerun exercises the deployed Event configuration, which a fresh message wouldn't"
+										}
+									],
+									"correct": ["same-input"]
+								}
+							}
+						]
+					}
+				]
+			},
+			{
+				"id": "mod-movg39yz-iaq",
+				"title": "Challenge",
+				"description": "A broken duplicate of the support board lands on your desk — reason your way to the missing node.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "les-movg48jt-ywp",
+						"title": "Fill the Missing Node",
+						"contentFile": "content/09-final-assessment.md",
+						"estimatedMinutes": 15,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-thinking-wire-types",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Priority Support's gap sits between the event and Human Review. For the replacement drafting node to work there, which conditions must hold?",
+								"explanation": "Both stories must connect: control has to enter from the event's white wire and continue toward Human Review (a data wire alone schedules nothing), and its data pins must be type-compatible — String request in, a reply-shaped value onward. Position in the gap is irrelevant; making it pure would hide a costly, fallible call and wouldn't fire on arrival anyway, since pure values are pulled, not pushed; and the copied event is already this flow's entry — one flow, one entry, no second event needed.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "exec-both",
+											"label": "Control must enter it from the event's white wire and leave toward Human Review"
+										},
+										{
+											"id": "typed-data",
+											"label": "Its input must accept the String request, and its output must match what the reply path expects"
+										},
+										{
+											"id": "midway-position",
+											"label": "It must sit roughly midway in the gap so the execution sweep finds it"
+										},
+										{
+											"id": "pure-auto",
+											"label": "It should be a pure node, so it fires automatically once the request value arrives"
+										},
+										{
+											"id": "own-event",
+											"label": "It needs its own event node, since the original's event stayed in the other flow"
+										}
+									],
+									"correct": ["exec-both", "typed-data"]
+								}
+							},
+							{
+								"id": "challenge-thinking-pure-node",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "While the gap is still empty, the duplicated pure pair — Customer Message feeding Format Generic Value — sits at the bottom with its Value output unconnected. During a test run of Priority Support, when does it evaluate?",
+								"explanation": "Never: pure values are pulled by consumers, and nothing consumes this output. Run start, canvas position, and 'when the input changes' are the three classic wrong models of pure evaluation. This is also your wiring checklist for the repair — connect the prep chain into the new node's input, or your careful formatting will keep evaluating exactly zero times.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "never",
+											"label": "It doesn't — nothing consumes its output, so there's no demand"
+										},
+										{
+											"id": "start",
+											"label": "Once at run start, so its value is ready when the gap gets filled"
+										},
+										{
+											"id": "position",
+											"label": "When execution passes its place on the canvas"
+										},
+										{
+											"id": "push",
+											"label": "As soon as Customer Message's Message value changes"
+										}
+									],
+									"correct": ["never"]
+								}
+							},
+							{
+								"id": "challenge-thinking-credential",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "VIP replies run locally on the on-call laptop and need the mail provider's token. Where does it go?",
+								"explanation": "A Secret, Runtime Configured variable, with the real value entered only in the laptop's Runtime Variables. Secret governs handling; Runtime Configured keeps the value out of the flow definition — which is what keeps it off every machine that syncs or exports the board. The tempting shortcut is 'Secret alone': masking changes the display, but a saved default still writes the token into the flow. Exposed hands supply to callers, and a value typed into a node field is just plaintext with extra steps.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "secret-runtime",
+											"label": "A Secret, Runtime Configured variable — the laptop supplies the value via Runtime Variables"
+										},
+										{
+											"id": "secret-only",
+											"label": "Secret alone — the value is masked, so saving it as a default is fine"
+										},
+										{
+											"id": "plain-default",
+											"label": "A normal default in the flow — the board runs locally, so the value never leaves the machine"
+										},
+										{
+											"id": "exposed-input",
+											"label": "An Exposed variable, so the Event can pass the token in with each request"
+										},
+										{
+											"id": "node-field",
+											"label": "Typed directly into the mail node's input field, since only teammates open this board"
+										}
+									],
+									"correct": ["secret-runtime"]
+								}
+							},
+							{
+								"id": "challenge-thinking-layer",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "On the original board, your teammate reworks Prepare Support Reply: the Message boundary pin becomes Raw Message, and a Tone input appears. Which checks must pass before the next run of the original?",
+								"explanation": "Boundary pins are the layer's public contract, so this is an interface change three ways: outer wires must line up with the renamed and added pins, the inner Start-to-Return execution path must survive the rework, and the new Tone input needs a source or a default. Inner coordinates are layout, not contract — and layers take boundary edits directly; converting to a function is a separate decision about reuse, not a prerequisite.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "outer-match",
+											"label": "Every outer wire into the layer still lines up with the renamed and added pins"
+										},
+										{
+											"id": "inner-intact",
+											"label": "The inner Start-to-Return execution path is still connected"
+										},
+										{
+											"id": "tone-source",
+											"label": "The new Tone input has a wire or a sensible default"
+										},
+										{
+											"id": "coords",
+											"label": "The inner nodes keep their exact canvas coordinates"
+										},
+										{
+											"id": "function-first",
+											"label": "The layer is converted to a function first, so the rename can take effect"
+										}
+									],
+									"correct": ["outer-match", "inner-intact", "tone-source"]
+								}
+							},
+							{
+								"id": "challenge-thinking-event-version",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Real customers hit the original board's Event today, both drafts are being edited daily, and Priority Support still has a hole in it. Which release setup is safe?",
+								"explanation": "Pin the original's customer-facing Event to a tested numbered version — immutable, so daily edits can't reach customers — and let both drafts churn on Latest privately. You can't 'edit inside' a version; immutability is the entire point. Promising to save carefully is not a mechanism, and pointing customers at Priority Support would route them into a flow whose drafting step currently doesn't exist.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "pin-original",
+											"label": "Pin the original's customer Event to a tested numbered version; iterate on both drafts via Latest privately"
+										},
+										{
+											"id": "latest-careful",
+											"label": "Leave the original on Latest — the team promises to save only working edits"
+										},
+										{
+											"id": "edit-version",
+											"label": "Pin the Event to a version, then continue the rework inside that version"
+										},
+										{
+											"id": "swap-priority",
+											"label": "Point the customer Event at Priority Support meanwhile — it's the newer board"
+										}
+									],
+									"correct": ["pin-original"]
+								}
+							},
+							{
+								"id": "challenge-thinking-debug-run",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "You fill the gap, run one test, and the VIP reply arrives empty. Which two actions produce evidence before your next edit?",
+								"explanation": "Open the matching run and read the per-node logs — did the new node receive the request text, and what did it output? Then, after each single fix, rerun the same historic payload so any change in output is attributable to that fix. Random rewiring destroys your comparison baseline, and canvas distance was never part of the scheduling model — a rule from lesson one that has to hold under pressure, because pressure is when people drag nodes around hoping.",
+								"points": 10,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "read-run",
+											"label": "Open the matching run and read the per-node logs — did the new node receive the request text?"
+										},
+										{
+											"id": "rerun-payload",
+											"label": "After a single fix, rerun the same historic payload and compare outputs"
+										},
+										{
+											"id": "shuffle-wires",
+											"label": "Reconnect the data wires in different combinations until the reply fills in"
+										},
+										{
+											"id": "earlier-canvas",
+											"label": "Move the new node closer to the event so it runs earlier"
+										}
+									],
+									"correct": ["read-run", "rerun-payload"]
+								}
+							}
+						]
+					}
+				]
+			}
+		]
+	}
+}

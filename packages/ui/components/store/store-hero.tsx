@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import {
 	Download,
 	Heart,
@@ -10,7 +11,7 @@ import {
 } from "lucide-react";
 import { useIsMobile } from "../../hooks/use-mobile";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
-import { formatAppCategory } from "../../lib/app-category";
+import { useAppCategoryLabel } from "../../lib/app-category";
 import type { IAppVisibility } from "../../lib/schema/app/app";
 import { IAppVisibility as AppVis } from "../../lib/schema/app/app";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
@@ -61,6 +62,8 @@ export function StoreHero({
 	onJoinOrRequest: () => Promise<void> | void;
 	actionsExtra?: React.ReactNode;
 }>) {
+	const { t } = useTranslation("store");
+	const categoryLabel = useAppCategoryLabel();
 	const { primaryHue, isDark } = useThemeInfo();
 	const isMobile = useIsMobile();
 	const primarySize = isMobile ? "default" : "sm";
@@ -118,12 +121,12 @@ export function StoreHero({
 							</h1>
 							{isMember && (
 								<span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-									<Heart className="h-3 w-3" /> Yours
+									<Heart className="h-3 w-3" /> {t("yours", "Yours")}
 								</span>
 							)}
 						</div>
 						<div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground/60">
-							<span>{formatAppCategory(category)}</span>
+							<span>{categoryLabel(category)}</span>
 							<span className="select-none">·</span>
 							<span className="capitalize">{visibilityLabel(visibility)}</span>
 							{authors?.length > 0 && (
@@ -155,7 +158,7 @@ export function StoreHero({
 										className="w-full sm:w-auto"
 										onClick={onUse}
 									>
-										<Play className="h-3.5 w-3.5 mr-1.5" /> Use
+										<Play className="h-3.5 w-3.5 mr-1.5" /> {t("use", "Use")}
 									</Button>
 								)}
 								<Button
@@ -164,7 +167,8 @@ export function StoreHero({
 									className="w-full sm:w-auto"
 									onClick={onSettings}
 								>
-									<SettingsIcon className="h-3.5 w-3.5 mr-1.5" /> Settings
+									<SettingsIcon className="h-3.5 w-3.5 mr-1.5" />{" "}
+									{t("settings", "Settings")}
 								</Button>
 							</>
 						) : price > 0 ? (
@@ -188,7 +192,7 @@ export function StoreHero({
 								className="w-full sm:w-auto"
 								onClick={onJoinOrRequest}
 							>
-								<Download className="h-3.5 w-3.5 mr-1.5" /> Get
+								<Download className="h-3.5 w-3.5 mr-1.5" /> {t("get", "Get")}
 							</Button>
 						) : (
 							<Button

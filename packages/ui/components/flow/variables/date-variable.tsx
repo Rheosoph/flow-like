@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { format } from "date-fns";
 import { CalendarIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -25,6 +26,7 @@ export function DateVariable({
 	variable: IVariable;
 	onChange: (variable: IVariable) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const parsed = parseUint8ArrayToJson(variable.default_value);
 
 	const defaultDate = (() => {
@@ -93,7 +95,7 @@ export function DateVariable({
 					{selected ? (
 						`${format(selected, "PPP")} - ${timeValue}`
 					) : (
-						<span>Pick a date</span>
+						<span>{t('pickADate', 'Pick a date')}</span>
 					)}
 					<CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
 				</Button>
@@ -101,7 +103,7 @@ export function DateVariable({
 			<PopoverContent className="w-auto p-2">
 				<div className="flex flex-col items-center space-x-2 gap-2">
 					<div className="flex flex-row items-center gap-2">
-						<p className="text-nowrap">Time:</p>
+						<p className="text-nowrap">{t('time', 'Time:')}</p>
 						<Input
 							disabled={disabled}
 							type="time"

@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import {
 	Shortcuts as ShortcutsUI,
 	nowSystemTime,
@@ -15,6 +16,7 @@ import { toast } from "sonner";
 import { appsDB } from "../lib/apps-db";
 
 export function Shortcuts() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const router = useRouter();
 	const pathname = usePathname();
@@ -46,7 +48,7 @@ export function Shortcuts() {
 		async (projectName: string, isOnline: boolean) => {
 			const meta = {
 				name: projectName,
-				description: `Coding project: ${projectName}`,
+				description: t('codingProjectProjectname', 'Coding project: {{projectName}}', { projectName }),
 				tags: ["coding", "development"],
 				use_case: "Development",
 				created_at: nowSystemTime(),
@@ -75,7 +77,7 @@ export function Shortcuts() {
 				);
 			}
 
-			const boards = await backend.boardState.getBoards(app.id);
+			const boards = await backend.boardState.getBoardSummaries(app.id);
 			const firstBoard = boards?.[0];
 
 			if (firstBoard) {
@@ -111,7 +113,7 @@ export function Shortcuts() {
 				return appData?.[1] || null;
 			}}
 			getBoardsByAppId={async (backend: any, appId: string) => {
-				return await backend.boardState.getBoards(appId);
+				return await backend.boardState.getBoardSummaries(appId);
 			}}
 			toast={toast}
 			auth={auth}

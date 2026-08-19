@@ -1,5 +1,8 @@
 import { create } from "zustand";
-import type { SurfaceComponent } from "../components/a2ui/types";
+import type {
+	CanvasSettings,
+	SurfaceComponent,
+} from "../components/a2ui/types";
 import type {
 	FlowScriptApplyOptions,
 	FlowScriptApplyResultLike,
@@ -72,6 +75,9 @@ export interface AssistantWidgetSurface {
 	widgetId?: string;
 	/** Components currently on the canvas. */
 	currentComponents: SurfaceComponent[];
+	/** Canvas settings currently on the surface, customCss included. The assistant needs the live
+	 * stylesheet to edit it; `applyComponents` merges what it sends back over this. */
+	currentCanvasSettings?: CanvasSettings;
 	/** Ids of the components currently selected in the builder. */
 	selectedComponentIds: string[];
 	/** Captures the canvas as a PNG data URL (null when capture fails). */
@@ -91,7 +97,8 @@ export interface AssistantWidgetSurface {
 
 /**
  * Live context published by an open Data Studio page while it is mounted, so the global assistant
- * knows which app's data / ontology the user is looking at and defaults `data_studio_agent` there.
+ * knows which app's data / ontology the user is looking at. The routing policy still checks that
+ * app's configured Events before choosing a direct Data Studio fallback.
  */
 export interface AssistantDataStudioSurface {
 	/** App whose Data Studio is open. */

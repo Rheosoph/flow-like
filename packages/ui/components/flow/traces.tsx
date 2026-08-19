@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { useDebounce } from "@uidotdev/usehooks";
 import {
 	BombIcon,
@@ -54,6 +55,7 @@ export function Traces({
 	nodeIdFilter?: string;
 	onClearNodeIdFilter?: () => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const { currentMetadata } = useLogAggregation();
 
@@ -172,7 +174,7 @@ export function Traces({
 							}}
 							disabled={isFetchingNextPage}
 						>
-							Load more logs
+							{t('loadMoreLogs', 'Load more logs')}
 						</Button>
 					</div>
 				);
@@ -254,7 +256,7 @@ export function Traces({
 									variant="secondary"
 									onClick={onClearNodeIdFilter}
 								>
-									Node:{" "}
+									{t('node', 'Node:')}{" "}
 									{board.current?.nodes[nodeIdFilter]?.friendly_name ??
 										nodeIdFilter.slice(0, 8)}
 									<XIcon className="w-3 h-3" />
@@ -276,8 +278,8 @@ export function Traces({
 							<EmptyState
 								className="h-full w-full max-w-full"
 								icons={[LogsIcon, ScrollIcon, CheckCircle2Icon]}
-								description="No logs found yet, start an event to see your results here!"
-								title="No Logs"
+								description={t('noLogsFoundYetStartAnEventToSeeYourResultsHere', 'No logs found yet, start an event to see your results here!')}
+								title={t('noLogs', 'No Logs')}
 							/>
 						)}
 						{(messages?.length ?? 0) > 0 && (
@@ -365,6 +367,7 @@ const LogMessage = memo(function LogMessage({
 	onSetHeight: (index: number, height: number) => void;
 	onSelectNode: (nodeId: string) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const rowRef = useRef<HTMLDivElement>(null);
 
 	// Use useMemo instead of useState + useEffect to avoid re-renders
@@ -413,12 +416,12 @@ const LogMessage = memo(function LogMessage({
 							</small>
 							{log?.stats?.token_out && (
 								<small className="text-xs">
-									Token Out: {log.stats?.token_out}
+									{t('tokenOut', 'Token Out:')} {log.stats?.token_out}
 								</small>
 							)}
 							{log?.stats?.token_in && (
 								<small className="text-xs">
-									Token In: {log.stats?.token_in}
+									{t('tokenIn', 'Token In:')} {log.stats?.token_in}
 								</small>
 							)}
 						</div>
@@ -438,7 +441,7 @@ const LogMessage = memo(function LogMessage({
 							) : (
 								<span className="flex flex-row items-center gap-2">
 									<QuestionMarkCircledIcon className="w-4 h-4 size-4" />
-									Unknown Node
+									{t('unknownNode', 'Unknown Node')}
 								</span>
 							)}
 						</div>

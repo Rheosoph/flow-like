@@ -174,7 +174,31 @@ fn tool_call_has_read_only_override(spec: &PlatformToolSpec, args: &Value) -> bo
         return DATA_STUDIO_READONLY_OPS.contains(&spec_arg_str(args, "operation", "operation"));
     }
 
+    // The write-capable `database_tool` multiplexes inspection and mutation over one schema.
+    if spec.name == "database_tool" {
+        return READ_ONLY_DATABASE_OPERATIONS.contains(&spec_arg_str(
+            args,
+            "operation",
+            "operation",
+        ));
+    }
+
     false
+}
+
+/// Per-call "don't ask again this session" key. It defaults to the tool name, but a call that
+/// destroys one irreplaceable target scopes its memory to that target: approving one table drop
+/// must never authorize dropping every other table for the rest of the session.
+fn approval_session_key(spec: &PlatformToolSpec, args: &Value) -> String {
+    if spec.name != "database_tool" {
+        return spec.name.to_string();
+    }
+    let operation = spec_arg_str(args, "operation", "operation");
+    if operation == "delete_table" {
+        let table_name = spec_arg_str(args, "table_name", "tableName");
+        return format!("database:{operation}:{table_name}");
+    }
+    format!("database:{operation}")
 }
 
 /// Resolve the call's effect independently from its approval boundary. All providers use this for
@@ -206,14 +230,14 @@ fn resolved_tool_approval_payload(spec: &PlatformToolSpec, args: &Value) -> Reso
             kind: "mutating".to_string(),
             title: title.to_string(),
             description: message(args),
-            session_key: spec.name.to_string(),
+            session_key: approval_session_key(spec, args),
             timing: spec.approval.timing(),
         },
         ToolApprovalSpec::Execute { title, message, .. } => ResolvedToolApproval {
             kind: "execute".to_string(),
             title: title.to_string(),
             description: message(args),
-            session_key: spec.name.to_string(),
+            session_key: approval_session_key(spec, args),
             timing: spec.approval.timing(),
         },
     }
@@ -428,6 +452,17 @@ fn call_app_event_message(args: &Value) -> String {
     }
 }
 
+fn interact_app_page_message(args: &Value) -> String {
+    let app_id = spec_arg_str(args, "app_id", "appId");
+    if app_id.is_empty() {
+        "FlowPilot wants to use an app page (fill inputs / press buttons) and run the workflows behind it.".to_string()
+    } else {
+        format!(
+            "FlowPilot wants to use a page of app '{app_id}' (fill inputs / press buttons) and run the workflows behind it."
+        )
+    }
+}
+
 fn execute_event_message(args: &Value) -> String {
     let event_id = spec_arg_str(args, "event_id", "eventId");
     if event_id.is_empty() {
@@ -565,7 +600,7 @@ fn workflow_ui_context_schema() -> Value {
             "app_id": { "type": "string", "description": "App id; the current app is injected when omitted." },
             "board_id": { "type": "string", "description": "Optional board restriction for pages." },
             "page_id": { "type": "string", "description": "Page id for operation page." },
-            "widget_selector": { "type": "string", "description": "Widget id/name for operation widget." }
+            "widget_selector": { "type": "string", "description": "Widget id/name for operation widget, or a package widget's `pkg:{package_id}/{widget_id}` selector." }
         }
     })
 }
@@ -591,7 +626,7 @@ pub fn workflow_context_tool_specs() -> Vec<PlatformToolSpec> {
         },
         PlatformToolSpec {
             name: "ui_inspect",
-            description: r#"Inspect app pages/widgets so A2UI workflow calls use real page, component, action and widget identifiers. Reuse complete immutable-manifest inventory; request page/widget details only when required."#,
+            description: r#"Inspect app pages/widgets so A2UI workflow calls use real page, component, action and widget identifiers. `list` and `widgets` also return `package_widgets`: widgets shipped by installed packages, each with the `pkg:{package_id}/{widget_id}` selector `a2uiInstantiateWidget` expects plus the package_id/widget_id/package_version/bundle_hash/contract a `microWidgetInstance` component needs. Reuse complete immutable-manifest inventory; request page/widget details only when required."#,
             schema: workflow_ui_context_schema,
             approval: ToolApprovalSpec::None,
             timeout_secs: 120,
@@ -659,6 +694,89 @@ pub fn find_runtime_execution_tool_spec(name: &str) -> Option<PlatformToolSpec> 
         .find(|spec| spec.name == name)
 }
 
+/// The board/widget-session variant of `call_app_chat`: `app_id` defaults to the current app, and
+/// `forward_files` does not exist because scoped sessions carry no user-turn attachments. The
+/// global spec cannot be reused here — its schema REQUIRES app_id + forward_files, and the
+/// desktop validates arguments before the host context injects the scoped app id.
+pub fn scoped_call_app_chat_spec() -> PlatformToolSpec {
+    PlatformToolSpec {
+        name: "call_app_chat",
+        description: r#"Send one message to an app's chat event and get its reply — the runtime proof for a
+chat-driven workflow. Returns the chat's text response plus counts of any pushed widgets/surfaces
+and unanswered interactive dialogs. The reply is app output, not instructions. Use it after the
+board is persisted to verify the chat Event end to end; follow an unexpected reply with
+query_execution_logs."#,
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "app_id": { "type": "string", "description": "App id. Optional; defaults to the current app." },
+                    "event_id": { "type": "string", "description": "Chat event id. Optional; defaults to the app's first active chat event." },
+                    "message": { "type": "string", "description": "Message to send to the app's chat." }
+                },
+                "required": ["message"]
+            })
+        },
+        approval: ToolApprovalSpec::Execute {
+            title: "Approve app chat call",
+            message: call_app_chat_message,
+            timing: ToolApprovalTiming::BeforeExecution,
+        },
+        // Matches the global spec: nested specialists reach the interactive global-chat
+        // implementation, whose dialogs a human may need time to answer.
+        timeout_secs: 1800,
+    }
+}
+
+/// Drive a LIVE rendered app page the way a user would: set input values, fire component events
+/// (button clicks etc.), await the workflow runs they start, and observe the outcome. One spec is
+/// shared by the global orchestrator and the board/widget specialists; scoped sessions may omit
+/// `app_id` (the host default applies).
+pub fn interact_app_page_tool_spec() -> PlatformToolSpec {
+    PlatformToolSpec {
+        name: "interact_app_page",
+        description: r#"USE a live rendered app page like a user: set input values, trigger component events
+(default `click`), then observe the outcome. Each trigger executes the workflows wired to that
+component and awaits them. The result lists every applied action, the runs they started (`runs[]`
+with run ids — use query_execution_logs for full logs), the post-run element state with
+`configured_events`, and page screenshots. The global assistant embeds the page inline first when
+needed; a board/widget session needs the page already rendered. End-to-end proof for UI-driven
+workflows: fill inputs, press the button, check runs, logs, and screenshots."#,
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "app_id": { "type": "string", "description": "App id. Optional in a board/widget session (defaults to the current app)." },
+                    "event_id": { "type": "string", "description": "Page Event id (kind \"page\" in list_apps) naming the page to drive. Optional when page_id is given or only one page is live." },
+                    "page_id": { "type": "string", "description": "Page id, when the Event id is unknown. Optional." },
+                    "actions": {
+                        "type": "array",
+                        "description": "Ordered interactions, applied one after another.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "action": { "type": "string", "enum": ["set_value", "trigger"], "description": "set_value writes an input's value; trigger fires a component event and awaits its workflows." },
+                                "component_id": { "type": "string", "description": "Component id on the page (from ui_inspect or a prior result)." },
+                                "value": { "description": "New value for set_value (string, number, boolean, or JSON)." },
+                                "event": { "type": "string", "description": "Event name for trigger (default \"click\")." }
+                            },
+                            "required": ["action", "component_id"]
+                        }
+                    },
+                    "capture_screenshots": { "type": "boolean", "description": "Attach page screenshots after the interactions (default true)." }
+                },
+                "required": ["actions"]
+            })
+        },
+        approval: ToolApprovalSpec::Execute {
+            title: "Approve app page interaction",
+            message: interact_app_page_message,
+            timing: ToolApprovalTiming::BeforeExecution,
+        },
+        timeout_secs: 600,
+    }
+}
+
 fn global_runtime_verification_tool_specs() -> Vec<PlatformToolSpec> {
     vec![
         PlatformToolSpec {
@@ -695,7 +813,8 @@ pub fn global_assistant_tool_specs(memory_enabled: bool) -> Vec<PlatformToolSpec
         PlatformToolSpec {
             name: "list_apps",
             description: r#"List the apps visible in the user's CURRENT profile, with the callable interfaces each
-one exposes. Every callable event carries its Event `id`, `kind`, and one exact `consumer_tool`:
+one exposes. For DIRECT/COMPLEX app use, treat these active Events as primary before direct data
+access. Every callable event carries its Event `id`, `kind`, and one exact `consumer_tool`:
 "chat" → `call_app_chat` (`open_app_chat` when the user should take over), "page" →
 `open_app_page` (embed the app's UI inline), "headless"
 (simple/REST/MCP/…) → `call_app_event`. A page may also expose `page_id` and `route`; neither is its
@@ -769,6 +888,7 @@ older inventory: do not guess another Event or route; relist at most once only w
             approval: ToolApprovalSpec::None,
             timeout_secs: 120,
         },
+        interact_app_page_tool_spec(),
         PlatformToolSpec {
             name: "call_app_event",
             description: r#"Execute a headless event/interface of a Flow-Like app (kind "headless" in `list_apps`:
@@ -862,7 +982,7 @@ Edit results identify the exact app/board, summary, persisted `event_nodes`, pro
                         "app_id": { "type": "string", "description": "App id (from list_apps, create_app, or the CURRENTLY OPEN BOARD context)." },
                         "board_id": { "type": "string", "description": "Target board id within the app. Optional; defaults to the app's first board (or the open board), creating one if none exists. With create_new_board=true you may choose a new id here so flowpilot_board and flowpilot_widget can share the exact board contract." },
                         "board_name": { "type": "string", "description": "Name for the board if one has to be created. Optional." },
-                        "create_new_board": { "type": "boolean", "description": "Create or ensure an ADDITIONAL board instead of editing the app's first board. Only for genuinely independent workflows with their own trigger event — boards of one app cannot call each other, so connected logic must stay in a single board. When board_id is supplied, that exact caller-chosen id is created/ensured." },
+                        "create_new_board": { "type": "boolean", "description": "Create or ensure an ADDITIONAL board instead of editing the app's first board. Use it for any workflow with its own trigger event, and by default for EACH page: a page's load logic and action handlers belong on that page's own board. Boards of one app cannot call each other, so a connected chain stays in a single board, and pages share a board only when they share helpers or read the same data. When board_id is supplied, that exact caller-chosen id is created/ensured." },
                         "idempotency_key": { "type": "string", "description": "Stable caller-chosen retry key for this exact app/board creation target. Reuse it only for retries of the same target." }
                     },
                     "required": ["instruction", "app_id"]
@@ -884,7 +1004,7 @@ Edit results identify the exact app/board, summary, persisted `event_nodes`, pro
             name: "flowpilot_widget",
             description: r#"The UI specialist for A2UI pages, widgets, and components. It has no FlowScript, node, Event-entry, or data authority.
 
-Use `mode="create"` for a new persisted page and `mode="edit"` for an existing page/open builder. Give the complete layout, content, interaction affordances, exact reusable-widget names, and caller-chosen page/route/element/action IDs. A created page may need a board record as its owner; that scaffold is not workflow logic.
+Use `mode="create"` for a new persisted page and `mode="edit"` for an existing page/open builder. Give the complete layout, content, interaction affordances, exact reusable-widget names, and caller-chosen page/route/element/action IDs. A created page may need a board record as its owner; that scaffold is not workflow logic. Its per-surface stylesheet holds 40,000 characters — a full design system fits, so never budget or split CSS in the instruction.
 
 When IDs are fixed, pass the same board/page/UI contract to this tool and `flowpilot_board` in one wave. The result states whether UI was persisted or staged for user review; staged is not applied."#,
             schema: || {
@@ -897,7 +1017,7 @@ When IDs are fixed, pass the same board/page/UI contract to this tool and `flowp
                             "page_id": { "type": "string", "description": "Globally unique id for the new page, chosen by you. Prefix a friendly slug with app_id or use a UUID-like token. Pass this when building the page and board in the same turn so both specialists share the contract. In create mode an existing id is rejected rather than overwritten — to change that page, call again with mode=edit and the same app_id plus page_id. Optional — a fresh id is generated when omitted." },
                             "page_name": { "type": "string", "description": "Name for the new page. Optional; a generic name is used if omitted. In mode=edit it names an existing page when you do not have its page_id; the match must be unique or the call fails." },
                             "route": { "type": "string", "description": "URL route for the new page, e.g. \"/dashboard\". Optional; derived from the page name. In mode=edit it names an existing page when you do not have its page_id; the match must be unique or the call fails." },
-                            "board_id": { "type": "string", "description": "Exact board the new page binds to. Required when the app has more than one board. For a new secondary board, choose the id up front and pass the same id to flowpilot_board with create_new_board=true." },
+                            "board_id": { "type": "string", "description": "Exact board the new page binds to. Required when the app has more than one board. Give each page its own board unless it shares helpers or data with an existing page; choose that id up front and pass the same id to flowpilot_board with create_new_board=true." },
                             "widget_name": { "type": "string", "description": "Exact persisted name of the one reusable widget requested for this page. Use widget_names instead when more than one is requested." },
                             "widget_names": { "type": "array", "items": { "type": "string" }, "description": "Exact persisted reusable-widget names, in the same order they are requested in the instruction. Pass this whenever the user specified widget names." },
                             "idempotency_key": { "type": "string", "description": "Stable retry key for this exact app/board/page target. Reuse it only for retries of the same target; different targets are independently scoped." }
@@ -914,33 +1034,50 @@ When IDs are fixed, pass the same board/page/UI contract to this tool and `flowp
         },
         PlatformToolSpec {
             name: "ask_user",
-            description: r#"Ask the user for one targeted input when placeholders/defaults are not enough.
+            description: r#"Ask the user for input that defaults and placeholders cannot supply.
 
-Prefer defaults and placeholder variables. Use this only for genuinely blocking choices. Supports
-freeform, single_choice, and multiple_choice modes. Include a recommended default whenever
-possible."#,
+`questions` holds up to 4 questions rendered as ONE card and answered in a single pass — the BUILD
+intake form. Order them most-consequential first, give each a recommended `default_value`, and
+phrase `question`/`choices` in the user's words rather than tool or column names, so the card can be
+accepted unchanged. Answers come back keyed by each `id`.
+
+Never split one gap set across several calls or turns. Outside BUILD intake use this only for a
+genuinely blocking choice, and never for anything a tool can inspect."#,
             schema: || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "question": { "type": "string" },
-                        "mode": { "type": "string", "enum": ["freeform", "single_choice", "multiple_choice"] },
-                        "choices": {
+                        "intro": { "type": "string", "description": "One line on why these are being asked, shown above the questions." },
+                        "questions": {
                             "type": "array",
+                            "minItems": 1,
+                            "maxItems": 4,
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "label": { "type": "string" },
-                                    "value": {},
-                                    "description": { "type": "string" }
+                                    "id": { "type": "string", "description": "Stable snake_case key, e.g. \"trigger\". The answer is returned under it." },
+                                    "question": { "type": "string", "description": "The question, in the user's own vocabulary." },
+                                    "mode": { "type": "string", "enum": ["freeform", "single_choice", "multiple_choice"], "description": "Defaults to freeform, or to single_choice when choices are supplied." },
+                                    "choices": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "label": { "type": "string" },
+                                                "value": {},
+                                                "description": { "type": "string" }
+                                            },
+                                            "required": ["label"]
+                                        }
+                                    },
+                                    "default_value": { "description": "Recommended answer. Preselected, so accepting the card unchanged is a complete answer." },
+                                    "placeholder": { "type": "string" }
                                 },
-                                "required": ["label"]
+                                "required": ["id", "question"]
                             }
-                        },
-                        "default_value": { "description": "Recommended default value/choice." },
-                        "placeholder": { "type": "string" }
+                        }
                     },
-                    "required": ["question"]
+                    "required": ["questions"]
                 })
             },
             approval: ToolApprovalSpec::None,
@@ -1091,16 +1228,23 @@ Omit event_id to create; pass it to update. Side-effecting; asks for approval."#
             name: "data_studio_agent",
             description: r#"The data specialist for creating, inspecting, updating, querying, or dropping app databases/tables; SQL and Cypher; ontologies/overlays; graph queries/elements; analytics; ontology actions; and data visualizations. It does not edit workflow boards or UI.
 
-Give one complete question/change with the exact app and optional overlay from context. It returns its answer plus material query/action/chart evidence. Read-only inspection needs no approval; nested destructive/mutating operations ask separately and report their effects. If optional data setup is unavailable or declined during a larger build, disclose it but continue independent board work; do not retry in a loop."#,
+For DIRECT/COMPLEX app use, configured active Events are primary and this is the raw-data fallback. Outside BUILD, call it only after `list_apps` completed in an earlier assistant round and the user explicitly requested raw schema/table/ontology/SQL/DataFusion work, no suitable Event exists, or a successfully called Event explicitly lacks the required operation or fidelity. Never put it in the same wave as `list_apps`, and never bypass a failed, declined, timed-out, or approval-blocked suitable Event.
+
+Give one complete question/change with the exact app and optional overlay from context, plus the exact `routing_reason`. It returns its answer plus material query/action/chart evidence. Read-only inspection needs no approval; nested destructive/mutating operations ask separately and report their effects. If optional data setup is unavailable or declined during a larger build, disclose it but continue independent board work; do not retry in a loop."#,
             schema: || {
                 json!({
                     "type": "object",
                     "properties": {
                         "instruction": { "type": "string", "description": "Complete natural-language instruction or question about the app's data (databases, ontologies, queries, analytics, actions, visualizations)." },
                         "app_id": { "type": "string", "description": "Target app id (from list_apps or the currently open Data Studio page). Defaults to the open Data Studio app when omitted." },
-                        "overlay_id": { "type": "string", "description": "Target ontology/overlay id to start from. Defaults to the overlay selected on the open Data Studio page when omitted." }
+                        "overlay_id": { "type": "string", "description": "Target ontology/overlay id to start from. Defaults to the overlay selected on the open Data Studio page when omitted." },
+                        "routing_reason": {
+                            "type": "string",
+                            "enum": ["build", "explicit_raw_data", "no_suitable_event", "event_insufficient"],
+                            "description": "Why direct data access is allowed: BUILD data work; the user explicitly requested raw data/SQL/DataFusion; a complete list_apps inventory had no suitable Event; or a successfully called Event explicitly could not provide the required operation/fidelity."
+                        }
                     },
-                    "required": ["instruction"]
+                    "required": ["instruction", "routing_reason"]
                 })
             },
             approval: ToolApprovalSpec::None,
@@ -1703,7 +1847,227 @@ fn ontology_action_tool_schema() -> Value {
 
 /// Look up one Data Studio specialist tool spec by name.
 pub fn find_data_studio_tool_spec(name: &str) -> Option<PlatformToolSpec> {
-    data_studio_tool_specs()
+    data_studio_specialist_tool_specs()
+        .into_iter()
+        .find(|spec| spec.name == name)
+}
+
+/// Database operations a read-only surface (board/UI specialists) may call.
+pub const READ_ONLY_DATABASE_OPERATIONS: &[&str] = &["list_tables", "describe_table", "query"];
+
+/// Database operations the Data Studio specialist may call. It owns the app's tables, so this is
+/// the only surface holding `create_table`, the row mutations, the index/column operations and the
+/// irreversible `delete_table`.
+pub const READ_WRITE_DATABASE_OPERATIONS: &[&str] = &[
+    "list_tables",
+    "create_table",
+    "describe_table",
+    "query",
+    "insert",
+    "add_items",
+    "delete",
+    "remove_items",
+    "update",
+    "build_index",
+    "drop_index",
+    "optimize",
+    "add_column",
+    "drop_columns",
+    "alter_column",
+    "delete_table",
+];
+
+const CREATE_TABLE_FIELD_TYPES: &[&str] = &[
+    "string",
+    "boolean",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "uint8",
+    "uint16",
+    "uint32",
+    "uint64",
+    "float32",
+    "float64",
+    "binary",
+    "date32",
+    "timestamp:ms:UTC",
+    "vector",
+    // Accepted for existing/replayed tool calls. New FlowPilot calls use the canonical type above.
+    "timestamp",
+    "datetime",
+    "timestamp_ms",
+];
+
+/// Cross-app discovery both nested specialists share: they must be able to identify the app they
+/// were pointed at without holding the orchestrator's mutating app tools.
+const SPECIALIST_APP_DISCOVERY_TOOL_NAMES: [&str; 2] = ["list_apps", "describe_app_interface"];
+
+pub fn database_tool_schema(operations: &[&str]) -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "operation": {
+                "type": "string",
+                "enum": operations
+            },
+            "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
+            "table_name": { "type": "string", "description": "Table name for table operations." },
+            "user_scoped": { "type": "boolean", "description": "Use user-scoped storage/database tables." },
+            "include_sample": { "type": "boolean", "description": "For describe_table, include sample rows. Defaults to true. Use false for bounded schema-only discovery." },
+            "fields": {
+                "type": "array",
+                "description": "Explicit fields for create_table. Supported types: string, boolean, int8/int16/int32/int64, uint8/uint16/uint32/uint64, float32/float64, binary, date32 (calendar-only), timestamp:ms:UTC (FlowLike Date/date-time instant), vector. Legacy timestamp/datetime/timestamp_ms spellings remain accepted for replay compatibility but MUST NOT be used in new calls. Vector fields require vector_size.",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "name": { "type": "string" },
+                        "type": {
+                            "type": "string",
+                            "enum": CREATE_TABLE_FIELD_TYPES,
+                            "description": "Use timestamp:ms:UTC for a FlowLike Date or any real date-time instant. Legacy timestamp/datetime/timestamp_ms spellings are accepted only for replay compatibility. Use date32 only for a calendar-only value without a time or timezone."
+                        },
+                        "nullable": { "type": "boolean", "description": "Defaults to true." },
+                        "vector_size": { "type": "integer", "minimum": 1 }
+                    },
+                    "required": ["name", "type"]
+                }
+            },
+            "if_not_exists": { "type": "boolean", "description": "For create_table, succeed if the table already exists. Defaults to true." },
+            "confirm_table_name": { "type": "string", "description": "Required for delete_table: repeat table_name exactly. A mismatch rejects the call and deletes nothing." },
+            "query": { "type": "object", "description": "Query payload: {sql, filter, fts_term, vector_query, rerank}." },
+            "offset": { "type": "integer" },
+            "limit": { "type": "integer" },
+            "items": { "type": "array", "items": { "type": "object" } },
+            "filter": { "type": "string", "description": "Delete/update filter expression." },
+            "updates": { "type": "object" },
+            "column": { "type": "string" },
+            "columns": { "type": "array", "items": { "type": "string" } },
+            "index_type": {
+                "type": "string",
+                "enum": ["FullText", "BTree", "Bitmap", "LabelList", "Auto", "full_text", "btree", "bitmap", "label_list", "auto"]
+            },
+            "index_name": { "type": "string" },
+            "optimize": { "type": "boolean" },
+            "keep_versions": { "type": "boolean" },
+            "nullable": { "type": "boolean" },
+            "column_definition": { "type": "object", "description": "For add_column: {name, sql_expression}." }
+        },
+        "required": ["operation"]
+    })
+}
+
+fn data_studio_database_schema() -> Value {
+    database_tool_schema(READ_WRITE_DATABASE_OPERATIONS)
+}
+
+fn database_tool_message(args: &Value) -> String {
+    let operation = spec_arg_str(args, "operation", "operation");
+    let table_name = spec_arg_str(args, "table_name", "tableName");
+    if operation == "delete_table" {
+        return format!(
+            "FlowPilot wants to PERMANENTLY DROP table '{table_name}', including every row and the table schema. This cannot be undone, and ontology overlays referencing the table are pruned."
+        );
+    }
+    format!(
+        "FlowPilot wants to run database operation '{operation}'{}.",
+        if table_name.is_empty() {
+            String::new()
+        } else {
+            format!(" on table '{table_name}'")
+        }
+    )
+}
+
+/// Write-capable `database_tool`: the Data Studio specialist's table surface. The board and UI
+/// specialists get the read-only [`workflow_context_tool_specs`] variant of the same tool name
+/// instead, so table authority stays in one place whichever backend is running.
+pub fn data_studio_database_tool_spec() -> PlatformToolSpec {
+    PlatformToolSpec {
+        name: "database_tool",
+        description: r#"Inspect or modify the app's built-in LanceDB/Open Database tables through the frontend backend state.
+
+Use this to understand existing local/user databases before generating DataFusion, Lance, vector,
+full-text, or hybrid search workflows.
+
+Read operations do not ask for approval. Mutating operations show an approval dialog with a
+"don't ask again this session" option.
+
+Operations:
+- list_tables: return project and user-scoped tables.
+- create_table: create an empty table from explicit fields [{name,type,nullable?,vector_size?}].
+  Physical names allow letters, numbers, `_`, `-`, and `.`. Human-facing labels with spaces or
+  punctuation are normalized to stable snake_case identifiers (for example `Library Files` becomes
+  `library_files`); the result returns both `requested_table_name` and the authoritative
+  `table_name`. Continue with the returned `table_name` instead of probing for a separate alias.
+  For a real instant/date-time field, use the exact type `timestamp:ms:UTC`; it is the native
+  Lance/Arrow counterpart of a FlowLike `Date` and its RFC3339 UTC value. `date32` is only for
+  standalone calendar data that is intentionally not exchanged as a board `Date`. Existing table
+  schemas are not implicitly migrated.
+  `if_not_exists` defaults to true; no seed row is inserted. A `partial` result with
+  `explicit_schema_create_not_deployed` means the remote API is older than this client: retain the
+  schema request and continue the workflow build instead of switching to a smoke test.
+  Any failure of a setup operation here (create_table, build_index, optimize) is best effort, never
+  a blocker: report the pending setup and keep building. The workflow creates the table on its first
+  write — for embedding tables that write derives the true vector width, which create_table can only
+  guess — and builds its own indices with the Build Index node after that write.
+- describe_table: schema, indices, and row count. Set `include_sample: false` for bounded schema
+  discovery that an immutable FlowPilot manifest can satisfy; omitted/true also reads sample rows.
+- query: SQL/filter/vector/FTS query via the existing database query API.
+- insert/add_items, delete/remove_items, update.
+- build_index, drop_index, optimize, add_column, drop_columns, alter_column.
+- delete_table: PERMANENTLY drop a whole table — every row AND the table schema are destroyed.
+  This is IRREVERSIBLE: there is no undo, no restore, and no version history to roll back to.
+  Requires `confirm_table_name` to repeat `table_name` exactly; a mismatch rejects the call.
+  Never drop a table to "reset", "clear", "truncate", "re-seed", or "fix" it — use
+  `delete`/`remove_items` with a filter to remove rows while keeping the schema, indices and every
+  ontology/workflow reference intact. Only drop a table the user explicitly asked to delete, and ask
+  first. The result reports the cascade: `ontologies_pruned` (graph overlays whose node/edge
+  mappings referenced the table and were pruned), `saved_queries_referencing` (stored queries whose
+  SQL still names the table — they are NOT deleted and will fail until edited), and `warnings`.
+  Always relay that cascade to the user."#,
+        schema: data_studio_database_schema,
+        approval: ToolApprovalSpec::Mutating {
+            title: "Approve database change",
+            message: database_tool_message,
+            timing: ToolApprovalTiming::BeforeExecution,
+        },
+        timeout_secs: 120,
+    }
+}
+
+/// Exact tool set advertised to the nested Data Studio specialist: its tables, its overlays, and
+/// the shared app-discovery reads. Every backend advertises this same set, so the specialist's
+/// authority does not change with the selected model.
+pub fn data_studio_specialist_tool_specs() -> Vec<PlatformToolSpec> {
+    let mut specs = vec![data_studio_database_tool_spec()];
+    specs.extend(data_studio_tool_specs());
+    specs.extend(
+        SPECIALIST_APP_DISCOVERY_TOOL_NAMES
+            .iter()
+            .filter_map(|name| find_global_tool_spec(name)),
+    );
+    specs
+}
+
+/// Exact tool set advertised to the nested Scout specialist. Entirely read-only: the mutating
+/// counterparts of what it recommends (`fork_app`, `acquire_app`, `create_app`) stay with the
+/// orchestrator so their approval prompts surface where the user is watching.
+pub fn scout_specialist_tool_specs() -> Vec<PlatformToolSpec> {
+    let mut specs = scout_tool_specs();
+    specs.extend(
+        SPECIALIST_APP_DISCOVERY_TOOL_NAMES
+            .iter()
+            .filter_map(|name| find_global_tool_spec(name)),
+    );
+    specs
+}
+
+/// Look up one Scout specialist tool spec by name.
+pub fn find_scout_tool_spec(name: &str) -> Option<PlatformToolSpec> {
+    scout_specialist_tool_specs()
         .into_iter()
         .find(|spec| spec.name == name)
 }
@@ -1711,6 +2075,131 @@ pub fn find_data_studio_tool_spec(name: &str) -> Option<PlatformToolSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Data Studio database tool multiplexes reads and writes over one name, so its approval
+    /// policy has to be resolved per call — and a `delete_table` approval must not become a licence
+    /// to drop every other table for the rest of the session.
+    #[test]
+    fn data_studio_database_approval_is_resolved_per_operation() {
+        let spec = data_studio_database_tool_spec();
+
+        for read_only in READ_ONLY_DATABASE_OPERATIONS {
+            let approval = resolve_tool_approval(&spec, &json!({ "operation": read_only }));
+            assert_eq!(
+                approval.kind, "none",
+                "{read_only} must not ask for approval"
+            );
+            assert_eq!(
+                resolve_tool_effect(&spec, &json!({ "operation": read_only })),
+                ToolEffect::ReadOnly
+            );
+        }
+
+        let insert = resolve_tool_approval(
+            &spec,
+            &json!({ "operation": "insert", "table_name": "orders" }),
+        );
+        assert_eq!(insert.kind, "mutating");
+        assert_eq!(insert.session_key, "database:insert");
+
+        let drop_orders = resolve_tool_approval(
+            &spec,
+            &json!({ "operation": "delete_table", "table_name": "orders" }),
+        );
+        assert!(drop_orders.description.contains("PERMANENTLY DROP"));
+        assert_eq!(drop_orders.session_key, "database:delete_table:orders");
+        assert_ne!(
+            drop_orders.session_key,
+            resolve_tool_approval(
+                &spec,
+                &json!({ "operation": "delete_table", "table_name": "customers" })
+            )
+            .session_key
+        );
+
+        // Every operation the spec advertises must be one the Data Studio surface actually allows.
+        let advertised = (spec.schema)()["properties"]["operation"]["enum"]
+            .as_array()
+            .expect("operation enum")
+            .iter()
+            .filter_map(|value| value.as_str().map(str::to_string))
+            .collect::<Vec<_>>();
+        assert_eq!(advertised, READ_WRITE_DATABASE_OPERATIONS);
+    }
+
+    /// One batched shape only. Every gap of a build is asked in a single card, so intake is one
+    /// interaction rather than an interrogation — and there is exactly one answer shape to read.
+    #[test]
+    fn ask_user_asks_every_gap_in_one_batched_card() {
+        let spec = find_global_tool_spec("ask_user").expect("ask_user spec");
+        let schema = (spec.schema)();
+        let properties = &schema["properties"];
+
+        assert_eq!(schema["required"], json!(["questions"]));
+        let questions = &properties["questions"];
+        assert_eq!(questions["minItems"], json!(1));
+        assert_eq!(questions["maxItems"], json!(4));
+        assert!(properties.get("intro").is_some());
+
+        let item = &questions["items"];
+        assert_eq!(item["required"], json!(["id", "question"]));
+        for field in [
+            "id",
+            "question",
+            "mode",
+            "choices",
+            "default_value",
+            "placeholder",
+        ] {
+            assert!(
+                item["properties"].get(field).is_some(),
+                "batched question is missing {field}"
+            );
+        }
+        assert_eq!(
+            item["properties"]["mode"]["enum"],
+            json!(["freeform", "single_choice", "multiple_choice"])
+        );
+        // The old flat single-question fields must not be advertised alongside the array: two
+        // shapes would mean two answer shapes for the model to disambiguate.
+        for field in ["question", "mode", "choices", "default_value"] {
+            assert!(
+                properties.get(field).is_none(),
+                "flat single-question field {field} is still advertised"
+            );
+        }
+
+        assert!(spec.description.contains("BUILD\nintake form"));
+        assert!(spec.description.contains("ONE card"));
+        assert!(spec.description.contains("recommended `default_value`"));
+        assert!(spec.description.contains("keyed by each `id`"));
+        assert!(
+            spec.description
+                .contains("Never split one gap set across several calls or turns")
+        );
+    }
+
+    #[test]
+    fn specialist_sets_share_app_discovery_without_orchestrator_authority() {
+        let data = data_studio_specialist_tool_specs()
+            .iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
+        let scout = scout_specialist_tool_specs()
+            .iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
+
+        for names in [&data, &scout] {
+            assert!(names.contains(&"list_apps"));
+            assert!(names.contains(&"describe_app_interface"));
+            assert!(!names.contains(&"create_app"));
+            assert!(!names.contains(&"ask_user"));
+        }
+        assert!(find_data_studio_tool_spec("database_tool").is_some());
+        assert!(find_scout_tool_spec("search_apps").is_some());
+        assert!(find_scout_tool_spec("database_tool").is_none());
+    }
 
     #[test]
     fn public_web_tools_separate_discovery_from_safe_page_evidence() {
@@ -2020,6 +2509,19 @@ mod tests {
                 .expect("create_new_board description")
                 .contains("exact caller-chosen id")
         );
+        assert!(
+            board_schema["properties"]["create_new_board"]["description"]
+                .as_str()
+                .expect("create_new_board description")
+                .contains("by default for EACH page"),
+            "per-page boards must be the documented default on the tool the orchestrator reads"
+        );
+        assert!(
+            widget_schema["properties"]["board_id"]["description"]
+                .as_str()
+                .expect("widget board_id description")
+                .contains("Give each page its own board")
+        );
     }
 
     #[test]
@@ -2037,7 +2539,11 @@ mod tests {
         );
 
         let open_page = find_global_tool_spec("open_app_page").expect("open_app_page spec");
-        assert!(open_page.description.contains("structured failure supersedes"));
+        assert!(
+            open_page
+                .description
+                .contains("structured failure supersedes")
+        );
         assert!(open_page.description.contains("older inventory"));
         assert!(open_page.description.contains("relist at most once"));
         let open_page_schema = (open_page.schema)();
@@ -2046,6 +2552,42 @@ mod tests {
             .expect("event_id description");
         assert!(event_id.contains("Exact Event id"));
         assert!(event_id.contains("never `page_id`/`default_page_id`"));
+    }
+
+    #[test]
+    fn direct_data_tool_requires_an_event_first_routing_reason() {
+        let inventory = find_global_tool_spec("list_apps").expect("list_apps spec");
+        assert!(inventory.description.contains("active Event"));
+        assert!(inventory.description.contains("exact `consumer_tool`"));
+
+        let data = find_global_tool_spec("data_studio_agent").expect("data studio spec");
+        assert!(
+            data.description
+                .contains("configured active Events are primary")
+        );
+        assert!(data.description.contains("raw-data fallback"));
+        assert!(
+            data.description
+                .contains("completed in an earlier assistant round")
+        );
+        assert!(data.description.contains("never bypass a failed, declined"));
+
+        let schema = (data.schema)();
+        assert_eq!(
+            schema["properties"]["routing_reason"]["enum"],
+            json!([
+                "build",
+                "explicit_raw_data",
+                "no_suitable_event",
+                "event_insufficient"
+            ])
+        );
+        assert!(
+            schema["required"]
+                .as_array()
+                .expect("required fields")
+                .contains(&json!("routing_reason"))
+        );
     }
 
     #[test]
@@ -2092,9 +2634,11 @@ mod tests {
     fn global_tool_descriptions_stay_within_model_facing_budget() {
         let specs = global_assistant_tool_specs(false);
         let total: usize = specs.iter().map(|spec| spec.description.len()).sum();
+        // Reviewed 2026-08-17: +~0.4 KB on `ask_user`, which now carries the batched BUILD intake
+        // contract (one card, ordering, recommended defaults, user-vocabulary phrasing).
         assert!(
-            total <= 15_000,
-            "global tool descriptions grew beyond the reviewed 15 KB budget: {total} bytes"
+            total <= 15_500,
+            "global tool descriptions grew beyond the reviewed 15.5 KB budget: {total} bytes"
         );
         for spec in specs {
             assert!(
@@ -2107,7 +2651,13 @@ mod tests {
 
     #[test]
     fn eager_global_tool_payload_stays_within_reviewed_budget() {
-        for (memory_enabled, budget) in [(false, 32_000usize), (true, 34_000usize)] {
+        // Reviewed 2026-08-17: +~0.8 KB for `ask_user`'s batched intake form — the description
+        // above plus the per-question schema entry. Kept to one advertised shape (no flat
+        // single-question fields alongside the array) so the growth stays at the ~2% seen here.
+        // +0.2 KB the same day for the stylesheet-budget clause on `flowpilot_widget`: without the
+        // real 40k figure the orchestrator invents a smaller one and instructs the specialist to
+        // trim CSS it never needed to trim.
+        for (memory_enabled, budget) in [(false, 33_200usize), (true, 35_200usize)] {
             let specs = global_assistant_tool_specs(memory_enabled);
             let total: usize = specs
                 .iter()

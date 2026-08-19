@@ -2539,6 +2539,7 @@ impl NodeLogic for TextToSpeechNode {
             LogLevel::Info,
         );
 
+        crate::ensure_vertex_credentials_explicit(context, &provider)?;
         let audio = generate_speech_with_provider(&provider, &request).await?;
         let extension = extension_from_mime(audio.mime_type.as_deref(), &request.output_format);
         let path = output_path_for_audio(context, &output_path, &extension).await?;
@@ -2865,6 +2866,7 @@ impl NodeLogic for SpeechToTextNode {
             LogLevel::Info,
         );
 
+        crate::ensure_vertex_credentials_explicit(context, &provider)?;
         let result = transcribe_with_provider(&provider, &request).await?;
         let message = HistoryMessage::from_string(Role::User, &result.text);
         let history = History::new(

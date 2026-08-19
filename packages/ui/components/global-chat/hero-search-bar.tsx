@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import { ArrowUpIcon, ImageIcon, PaperclipIcon, XIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
@@ -14,6 +15,7 @@ const SUGGESTIONS = [
 ];
 
 export function HeroSearchBar() {
+	const { t } = useTranslation("chat");
 	const router = useRouter();
 	const setDraft = useGlobalChatStore((s) => s.setDraft);
 	const [value, setValue] = useState("");
@@ -31,14 +33,12 @@ export function HeroSearchBar() {
 		<div className="w-full flex flex-col items-center gap-5 px-4 pt-14 pb-8 shrink-0">
 			<div className="flex flex-col items-center gap-2 text-center">
 				<h1 className="text-3xl md:text-4xl font-bold tracking-tight">
-					What do you want to{" "}
-					<span className="bg-linear-to-r from-primary via-purple-500 to-primary bg-clip-text text-transparent">
+					{t('whatDoYouWantTo', 'What do you want to')}{" "}<Trans i18nKey="spanClassnamebglineartorFromprimaryViapurple500ToprimaryBgcliptextTexttransparentBuildSpan"><span className="bg-linear-to-r from-primary via-purple-500 to-primary bg-clip-text text-transparent">
 						build
 					</span>
-					?
-				</h1>
+					?</Trans></h1>
 				<p className="text-sm md:text-base text-muted-foreground">
-					Ask FlowPilot to create apps, find packages, or navigate Flow-Like.
+					{t('askFlowpilotToCreateAppsFindPackagesOrNavigateFlowlike', 'Ask FlowPilot to create apps, find packages, or navigate Flow-Like.')}
 				</p>
 			</div>
 			<div className="relative w-full max-w-2xl">
@@ -63,7 +63,7 @@ export function HeroSearchBar() {
 									<span className="max-w-32 truncate">{file.name}</span>
 									<button
 										type="button"
-										aria-label={`Remove ${file.name}`}
+										aria-label={t('removeName', 'Remove {{name}}', { name: file.name })}
 										className="rounded-full hover:text-destructive outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 										onClick={() =>
 											setFiles((prev) => prev.filter((_, i) => i !== index))
@@ -85,7 +85,7 @@ export function HeroSearchBar() {
 									submit(value);
 								}
 							}}
-							placeholder="Ask FlowPilot anything, or describe what you want to build…"
+							placeholder={t('askFlowpilotAnythingOrDescribeWhatYouWantToBuild', 'Ask FlowPilot anything, or describe what you want to build…')}
 							rows={1}
 							className="min-h-9 max-h-40 resize-none border-0 bg-transparent dark:bg-transparent shadow-none focus-visible:ring-0 py-1.5 px-2"
 						/>
@@ -107,7 +107,7 @@ export function HeroSearchBar() {
 							size="icon"
 							className="rounded-full shrink-0 mb-0.5 text-muted-foreground hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 							onClick={() => fileInputRef.current?.click()}
-							aria-label="Attach images"
+							aria-label={t('attachImages', 'Attach images')}
 						>
 							<PaperclipIcon className="size-4" />
 						</Button>
@@ -116,7 +116,7 @@ export function HeroSearchBar() {
 							className="rounded-full shrink-0 mb-0.5 shadow-sm transition-all duration-200 hover:shadow-md outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 							onClick={() => submit(value)}
 							disabled={!value.trim() && files.length === 0}
-							aria-label="Send"
+							aria-label={t('send', 'Send')}
 						>
 							<ArrowUpIcon className="size-4" />
 						</Button>

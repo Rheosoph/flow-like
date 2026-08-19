@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getPlotlyChartLayout, useChartTokens } from "../../../lib/chart-theme";
 import { cn } from "../../../lib/utils";
@@ -143,6 +144,7 @@ export function A2UIPlotlyChart({
 	style,
 	componentId,
 }: ComponentProps<PlotlyChartComponent>) {
+	const { t } = useTranslation("common");
 	const containerRef = useRef<HTMLDivElement>(null);
 	const plotlyRef = useRef<PlotlyModule | null>(null);
 	const clickBoundRef = useRef(false);
@@ -205,7 +207,7 @@ export function A2UIPlotlyChart({
 					y: DEFAULT_SAMPLE_DATA.y,
 					type: "scatter",
 					mode: "lines+markers",
-					name: "Sample Data",
+					name: t('sampleData', 'Sample Data'),
 					marker: { color: tokens.palette[0] },
 				},
 			];

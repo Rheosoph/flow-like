@@ -96,7 +96,9 @@ impl NodeLogic for WhileLoopNode {
             if !condition {
                 break;
             }
-            iter.set_value(flow_like_types::json::json!(i)).await;
+            let iter_value = flow_like_types::json::json!(i);
+            context.override_pin_value_if_active(&iter.id, &iter_value);
+            iter.set_value(iter_value).await;
             for node in &flow {
                 let mut sub_context = context.create_sub_context(node).await;
                 let run = InternalNode::trigger(&mut sub_context, &mut None, true).await;

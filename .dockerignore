@@ -19,8 +19,29 @@ node_modules/
 .env.*
 **/.env
 **/.env.*
+*.local
+**/*.local
+*.pem
+**/*.pem
+api.config.json
+**/api.config.json
+# Deployment-specific Azure config enters builds only as a BuildKit secret,
+# never via the context. The tracked flow-like.config.json public default must
+# stay in the context - builds read it.
+flow-like.azure.config.json
+**/flow-like.azure.config.json
+.cargo/config
+.cargo/config.toml
+**/.cargo/config
+**/.cargo/config.toml
 **/values-secrets.yaml
 **/values-secret*.yaml
+**/values-secrets.yml
+**/values-secret*.yml
+.claude/settings.local.json
+**/.claude/settings.local.json
+.claude/CLAUDE.local.md
+**/.claude/CLAUDE.local.md
 
 # Large files and caches
 *.log
@@ -42,3 +63,12 @@ assets/
 *.swp
 *.swo
 .DS_Store
+
+# Managed live-deployment exclusions
+api.config.json
+**/api.config.json
+*.pem
+**/*.pem
+.cargo/config.toml
+**/values-secrets.yml
+**/values-secret*.yml

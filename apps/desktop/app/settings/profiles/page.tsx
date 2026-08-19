@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type ISettingsProfile,
 	IThemes,
@@ -93,6 +94,7 @@ const THEME_TRANSLATION: Record<IThemes, unknown> = {
 };
 
 export default function SettingsProfilesPage() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const auth = useAuth();

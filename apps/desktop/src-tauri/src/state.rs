@@ -13,6 +13,55 @@ use crate::{event_bus::EventBus, profile::UserProfile, settings::Settings};
 
 pub use crate::functions::recording::state::TauriRecordingState;
 
+/// One tokenised snapshot of a local board, pinned to the revision it was built from.
+///
+/// `previous` keeps the last few revisions' snapshots alive so a webview that still holds one
+/// of their segment tokens gets a node-level patch instead of the whole segment (see
+/// `BoardSyncSnapshot::diff`), and so the next build reuses tokens incrementally.
+pub struct LocalBoardSnapshot {
+    pub updated_at: std::time::SystemTime,
+    pub hash: Option<u64>,
+    pub snapshot: Arc<flow_like::flow::board::sync::BoardSyncSnapshot>,
+    pub previous: Vec<Arc<flow_like::flow::board::sync::BoardSyncSnapshot>>,
+}
+
+/// Revisions retained per board for patch bases: the current one plus this many earlier ones.
+pub const LOCAL_BOARD_SNAPSHOT_HISTORY: usize = 3;
+
+impl LocalBoardSnapshot {
+    /// The segment carrying `token` in this or one of the retained earlier revisions.
+    pub fn segment_by_token(
+        &self,
+        token: &str,
+    ) -> Option<Arc<flow_like::flow::board::sync::SyncSegment>> {
+        self.snapshot.segment_by_token(token).or_else(|| {
+            self.previous
+                .iter()
+                .find_map(|snapshot| snapshot.segment_by_token(token))
+        })
+    }
+}
+
+/// Snapshots answering the webview's incremental `sync_board` IPC calls, keyed like the board
+/// registry (`{board_id}` or `{board_id}-{maj}-{min}-{pat}`).
+///
+/// A snapshot is reused only while the board's `(updated_at, hash)` pair is unchanged; every
+/// desktop mutation path (`execute_commands`, undo/redo, remote upsert) moves at least one of
+/// them. Registry refreshes rewrite node definitions without touching either, so they clear the
+/// map wholesale.
+#[derive(Clone, Default)]
+pub struct TauriBoardSyncState(
+    pub Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<LocalBoardSnapshot>>>>,
+);
+
+impl TauriBoardSyncState {
+    pub fn invalidate_all(app_handle: &AppHandle) {
+        if let Some(state) = app_handle.try_state::<TauriBoardSyncState>() {
+            state.0.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct TauriFlowLikeState(pub Arc<FlowLikeState>);
 impl TauriFlowLikeState {

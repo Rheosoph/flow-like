@@ -63,6 +63,9 @@ full-execute = ["full", "execute"]
 flow-like-catalog-core.workspace = true
 flow-like.workspace = true
 flow-like-types.workspace = true
+# Only for `to_camel_case`: SQL param pins are addressed by their FlowScript argument
+# name, and the node validates that two placeholders cannot render to the same one.
+flow-like-ast.workspace = true
 flow-like-model-provider.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog-macros.workspace = true

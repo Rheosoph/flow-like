@@ -1,12 +1,19 @@
 use crate::{
     functions::TauriFunctionError,
-    state::{TauriFlowLikeState, TauriSettingsState},
+    state::{
+        LOCAL_BOARD_SNAPSHOT_HISTORY, LocalBoardSnapshot, TauriBoardSyncState, TauriFlowLikeState,
+        TauriSettingsState,
+    },
 };
 use flow_like::{
     app::{App, AppVisibility},
     flow::{
         ast::{ApplyFlowScriptResult, RenderOptions, board_to_flowscript},
-        board::{Board, VersionType, commands::GenericCommand},
+        board::{
+            Board, VersionType,
+            commands::GenericCommand,
+            sync::{BoardSyncRequest, BoardSyncResponse, BoardSyncSnapshot},
+        },
         node::Node,
     },
     flow_like_storage::object_store::ObjectStore,
@@ -15,7 +22,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 
 // The AWS API runs behind a synchronous Lambda. Four MiB is the raw command-body ceiling;
@@ -120,6 +127,125 @@ pub async fn get_board(
     }
 
     Err(TauriFunctionError::new("Board not found"))
+}
+
+/// Segment id → snapshot key used by `TauriBoardSyncState`.
+fn local_snapshot_key(board_id: &str, version: Option<(u32, u32, u32)>) -> String {
+    match version {
+        Some((maj, min, pat)) => format!("{board_id}-{maj}-{min}-{pat}"),
+        None => board_id.to_string(),
+    }
+}
+
+/// The tokenised snapshot of `board` — the only place local snapshots are built.
+///
+/// Reused while the board's `(updated_at, hash)` is unchanged; otherwise rebuilt incrementally
+/// from the entry it replaces (token reuse by payload comparison, so a stale entry only costs
+/// hashing time) and the replaced entry's revisions are retained as patch bases. Hydration is
+/// never requested over IPC (bandwidth is not the constraint), so the catalog is empty.
+fn local_board_snapshot(
+    handler: &AppHandle,
+    cache_key: String,
+    board: &Board,
+) -> Result<Arc<LocalBoardSnapshot>, TauriFunctionError> {
+    let sync_state = handler
+        .try_state::<TauriBoardSyncState>()
+        .map(|state| state.0.clone());
+    let existing = sync_state.as_ref().and_then(|cache| {
+        cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&cache_key)
+            .cloned()
+    });
+    if let Some(entry) = &existing
+        && entry.updated_at == board.updated_at
+        && entry.hash == board.hash
+    {
+        return Ok(entry.clone());
+    }
+
+    let snapshot = Arc::new(
+        BoardSyncSnapshot::from_board_incremental(
+            board,
+            &[],
+            existing.as_ref().map(|entry| entry.snapshot.as_ref()),
+        )
+        .map_err(|error| TauriFunctionError::new(&format!("board sync: {error}")))?,
+    );
+    let mut previous = Vec::with_capacity(LOCAL_BOARD_SNAPSHOT_HISTORY);
+    if let Some(entry) = &existing {
+        previous.push(entry.snapshot.clone());
+        previous.extend(
+            entry
+                .previous
+                .iter()
+                .take(LOCAL_BOARD_SNAPSHOT_HISTORY.saturating_sub(1))
+                .cloned(),
+        );
+    }
+    let entry = Arc::new(LocalBoardSnapshot {
+        updated_at: board.updated_at,
+        hash: board.hash,
+        snapshot,
+        previous,
+    });
+    if let Some(cache) = sync_state {
+        cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(cache_key, entry.clone());
+    }
+    Ok(entry)
+}
+
+/// The sync diff for `board` against what the webview holds, with node-level patches for any
+/// segment token still retained locally.
+fn local_board_sync_diff(
+    handler: &AppHandle,
+    cache_key: String,
+    board: &Board,
+    request: &BoardSyncRequest,
+) -> Result<BoardSyncResponse, TauriFunctionError> {
+    let entry = local_board_snapshot(handler, cache_key, board)?;
+    let resolver = |token: &str| entry.segment_by_token(token);
+    Ok(entry.snapshot.diff(request, &resolver))
+}
+
+/// Incremental counterpart of `get_board` for the webview: same protocol as the API's
+/// `POST /board/{id}/sync`, over IPC. The webview holds the last board it assembled and sends its
+/// manifest; only changed parts cross the bridge instead of the whole board on every refetch.
+///
+/// Local boards are the user's own, so — unlike the remote endpoint — nothing is filtered here,
+/// matching what `get_board` returns.
+#[tauri::command(async)]
+pub async fn sync_board(
+    handler: AppHandle,
+    app_id: String,
+    board_id: String,
+    version: Option<(u32, u32, u32)>,
+    request: BoardSyncRequest,
+) -> Result<BoardSyncResponse, TauriFunctionError> {
+    let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
+    let board = match flow_like_state.get_board(&board_id, version) {
+        Ok(board) => board,
+        Err(_) => {
+            let app = App::load(app_id, flow_like_state.clone())
+                .await
+                .map_err(|_| TauriFunctionError::new("Board not found"))?;
+            app.open_board(board_id.clone(), Some(true), version)
+                .await
+                .map_err(|_| TauriFunctionError::new("Board not found"))?
+        }
+    };
+
+    let board = board.lock().await;
+    local_board_sync_diff(
+        &handler,
+        local_snapshot_key(&board_id, version),
+        &board,
+        &request,
+    )
 }
 
 #[tauri::command(async)]
@@ -388,49 +514,25 @@ pub async fn redo_board(
 /// Dynamic pins are minted with fresh ids wherever they are derived, so an interactive edit that
 /// creates them must ship that node state with the batch — otherwise a later `ConnectPin` points at
 /// an id the Hub never minted and every remote delivery for the board fails permanently.
+/// What `execute_command(s)` returns: the executed commands (plus derived node state, see below)
+/// and, when the webview sent its sync manifest, the board diff against the revision the batch
+/// produced — so the refetch that follows every edit is a lookup, not a second IPC round trip.
+#[derive(serde::Serialize)]
+pub struct ExecuteCommandsResponse {
+    pub commands: Vec<GenericCommand>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync: Option<BoardSyncResponse>,
+}
+
 #[tauri::command(async)]
 pub async fn execute_command(
     handler: AppHandle,
     app_id: String,
     board_id: String,
     command: GenericCommand,
-) -> Result<Vec<GenericCommand>, TauriFunctionError> {
-    let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
-    let store = TauriFlowLikeState::get_project_meta_store(&handler).await?;
-    let app = App::load(app_id.clone(), flow_like_state.clone()).await?;
-    if !app.boards.contains(&board_id) {
-        return Err(TauriFunctionError::new(&format!(
-            "Board {board_id} does not belong to app {app_id}"
-        )));
-    }
-    let requires_remote_delivery = !matches!(app.visibility, AppVisibility::Offline);
-
-    let board = flow_like_state.get_board(&board_id, None)?;
-
-    let mut board = board.lock().await;
-    crate::functions::ai::copilot::ensure_board_mutation_not_reserved_by_flowpilot(
-        &app_id, &board_id,
-    )
-    .map_err(|error| TauriFunctionError::new(&error))?;
-    let original_board = requires_remote_delivery.then(|| board.clone());
-    let commands = match board.execute_commands(vec![command], flow_like_state).await {
-        Ok(commands) => commands,
-        Err(error) => {
-            if let Some(original_board) = original_board {
-                *board = original_board;
-            }
-            return Err(error.into());
-        }
-    };
-    if requires_remote_delivery && let Err(error) = validate_remote_command_batch_size(&commands) {
-        if let Some(original_board) = original_board {
-            *board = original_board;
-        }
-        return Err(TauriFunctionError::new(&error));
-    }
-
-    save_board_with_rollback(&mut board, store, original_board).await?;
-    Ok(commands)
+    sync: Option<BoardSyncRequest>,
+) -> Result<ExecuteCommandsResponse, TauriFunctionError> {
+    execute_local_commands(handler, app_id, board_id, vec![command], sync).await
 }
 
 #[tauri::command(async)]
@@ -439,7 +541,18 @@ pub async fn execute_commands(
     app_id: String,
     board_id: String,
     commands: Vec<GenericCommand>,
-) -> Result<Vec<GenericCommand>, TauriFunctionError> {
+    sync: Option<BoardSyncRequest>,
+) -> Result<ExecuteCommandsResponse, TauriFunctionError> {
+    execute_local_commands(handler, app_id, board_id, commands, sync).await
+}
+
+async fn execute_local_commands(
+    handler: AppHandle,
+    app_id: String,
+    board_id: String,
+    commands: Vec<GenericCommand>,
+    sync: Option<BoardSyncRequest>,
+) -> Result<ExecuteCommandsResponse, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
     let store = TauriFlowLikeState::get_project_meta_store(&handler).await?;
     let app = App::load(app_id.clone(), flow_like_state.clone()).await?;
@@ -475,7 +588,36 @@ pub async fn execute_commands(
     }
 
     save_board_with_rollback(&mut board, store, original_board).await?;
-    Ok(commands)
+    // The write is committed. Build the revision's snapshot now — incrementally, from the one the
+    // webview last saw — so the sync that follows is a lookup whether it rides on this response
+    // or arrives as a separate `sync_board` call. Never fail the committed write over it.
+    let sync = match sync {
+        Some(request) => {
+            match local_board_sync_diff(
+                &handler,
+                local_snapshot_key(&board_id, None),
+                &board,
+                &request,
+            ) {
+                Ok(response) => Some(response),
+                Err(error) => {
+                    tracing::warn!(
+                        "board {board_id}: sync tail unavailable after execute, webview will sync separately: {error:?}"
+                    );
+                    None
+                }
+            }
+        }
+        None => {
+            if let Err(error) =
+                local_board_snapshot(&handler, local_snapshot_key(&board_id, None), &board)
+            {
+                tracing::warn!("board {board_id}: snapshot after execute failed: {error:?}");
+            }
+            None
+        }
+    };
+    Ok(ExecuteCommandsResponse { commands, sync })
 }
 
 #[tauri::command(async)]

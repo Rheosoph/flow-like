@@ -43,6 +43,12 @@ pub struct CompilationJob {
     pub version: String,
     /// Presigned GET URL for the raw `.wasm` file.
     pub wasm_download_url: String,
+    /// Storage implementation that authenticated the download URL.
+    ///
+    /// This is part of the signed job envelope. Consumers use it to select
+    /// provider-specific request requirements and must never infer upload
+    /// headers from an untrusted URL alone.
+    pub wasm_download_provider: CompilationStorageProvider,
     /// blake3 hash of the raw `.wasm` file for integrity verification.
     pub wasm_hash: String,
     /// Targets to compile for, each with presigned upload URLs.
@@ -63,6 +69,53 @@ pub struct CompilationTarget {
     pub cwasm_upload_url: String,
     /// Presigned PUT URL for the blake3 checksum file.
     pub checksum_upload_url: String,
+    /// Storage implementation that authenticated both PUT URLs.
+    pub upload_provider: CompilationStorageProvider,
+}
+
+/// Cloud object-store protocol used by a compilation job.
+///
+/// External compilation intentionally supports only the three cloud stores
+/// whose signed URL formats can be validated. Local, memory, and opaque object
+/// stores must use in-process compilation instead of handing an arbitrary URL
+/// to a worker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompilationStorageProvider {
+    AwsS3,
+    AzureBlob,
+    GoogleCloudStorage,
+}
+
+/// Return a deterministic blake3 binding for every executable field in a job.
+///
+/// The JWT itself is deliberately excluded because it carries this hash. The
+/// concrete helper lives with the wire type so producers and consumers cannot
+/// drift onto different canonicalization rules.
+pub fn compilation_job_payload_hash(job: &CompilationJob) -> Result<String, serde_json::Error> {
+    #[derive(Serialize)]
+    struct SignedCompilationEnvelope<'a> {
+        schema: &'static str,
+        job_id: &'a str,
+        package_id: &'a str,
+        version: &'a str,
+        wasm_download_url: &'a str,
+        wasm_download_provider: CompilationStorageProvider,
+        wasm_hash: &'a str,
+        targets: &'a [CompilationTarget],
+    }
+
+    let canonical = serde_json::to_vec(&SignedCompilationEnvelope {
+        schema: "flow-like-compilation-job/v1",
+        job_id: &job.job_id,
+        package_id: &job.package_id,
+        version: &job.version,
+        wasm_download_url: &job.wasm_download_url,
+        wasm_download_provider: job.wasm_download_provider,
+        wasm_hash: &job.wasm_hash,
+        targets: &job.targets,
+    })?;
+    Ok(blake3::hash(&canonical).to_hex().to_string())
 }
 
 /// Reference to a compilation job that may be either embedded inline or

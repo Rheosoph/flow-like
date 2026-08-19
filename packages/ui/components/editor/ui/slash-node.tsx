@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type * as React from "react";
 
 import type { PlateEditor, PlateElementProps } from "platejs/react";
@@ -202,6 +203,7 @@ const groups: Group[] = [
 export function SlashInputElement(
 	props: PlateElementProps<TComboboxInputElement>,
 ) {
+	const { t } = useTranslation("common");
 	const { editor, element } = props;
 
 	return (
@@ -210,7 +212,7 @@ export function SlashInputElement(
 				<InlineComboboxInput />
 
 				<InlineComboboxContent className="z-100">
-					<InlineComboboxEmpty>No results</InlineComboboxEmpty>
+					<InlineComboboxEmpty>{t('noResults2', 'No results')}</InlineComboboxEmpty>
 
 					{groups.map(({ group, items }) => (
 						<InlineComboboxGroup key={group}>

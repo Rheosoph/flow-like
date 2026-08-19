@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	BoldIcon,
 	Code2Icon,
@@ -22,6 +23,7 @@ import { ToolbarGroup } from "./toolbar";
 import { TurnIntoToolbarButton } from "./turn-into-toolbar-button";
 
 export function FloatingToolbarButtons() {
+	const { t } = useTranslation("common");
 	const readOnly = useEditorReadOnly();
 
 	return (
@@ -31,7 +33,7 @@ export function FloatingToolbarButtons() {
 					<ToolbarGroup>
 						<AIToolbarButton tooltip="AI commands">
 							<WandSparklesIcon />
-							Ask AI
+							{t('askAi', 'Ask AI')}
 						</AIToolbarButton>
 					</ToolbarGroup>
 

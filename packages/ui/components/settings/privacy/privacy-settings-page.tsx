@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { BarChart3, Bug, ShieldCheck, Timer } from "lucide-react";
 import {
 	Card,
@@ -68,11 +69,12 @@ const RETENTION_ROWS: { label: string; period: string }[] = [
 ];
 
 function RetentionNotice() {
+	const { t } = useTranslation("settings");
 	return (
 		<div className="space-y-2">
 			<Label className="flex items-center gap-2">
 				<Timer className="h-4 w-4" />
-				How long data is kept
+				{t('howLongDataIsKept', 'How long data is kept')}
 			</Label>
 			<ul className="space-y-1 text-sm text-muted-foreground">
 				{RETENTION_ROWS.map((row) => (
@@ -86,14 +88,7 @@ function RetentionNotice() {
 				))}
 			</ul>
 			<p className="text-sm text-muted-foreground">
-				Individual records are removed by a periodic sweep, so a record can
-				outlive its window by a little. The daily statistics are per-day counts;
-				one of them records that your install id was active on a given day so
-				returning-install counts stay correct. Counters already derived from a
-				report &mdash; how often an issue was seen, for instance &mdash; are
-				kept after the underlying records are deleted. These periods are the
-				defaults; the platform you are connected to may configure different
-				ones.
+				{`Individual records are removed by a periodic sweep, so a record can outlive its window by a little. The daily statistics are per-day counts; one of them records that your install id was active on a given day so returning-install counts stay correct. Counters already derived from a report — how often an issue was seen, for instance — are kept after the underlying records are deleted. These periods are the defaults; the platform you are connected to may configure different ones.`}
 			</p>
 		</div>
 	);
@@ -106,30 +101,26 @@ export function PrivacySettingsPage({
 	crashReportsEnabled,
 	onCrashReportsChange,
 }: Readonly<PrivacySettingsPageProps>) {
+	const { t } = useTranslation("settings");
 	return (
 		<Card>
 			<CardHeader>
 				<CardTitle className="flex items-center gap-2">
 					<ShieldCheck className="h-5 w-5" />
-					Privacy &amp; Telemetry
+					{t('privacyAmpTelemetry', "Privacy & Telemetry")}
 				</CardTitle>
 				<CardDescription>
-					Control what anonymous diagnostics and usage data Flow-Like may
-					collect. Both switches are independent &mdash; turning one off never
-					changes the other.
+					{t('controlWhatAnonymousDiagnosticsAndUsageDataFlowlikeMayCollectBothSwitchesAreIndependentMdashTurningOneOffNeverChangesTheOther', "Control what anonymous diagnostics and usage data Flow-Like may collect. Both switches are independent — turning one off never changes the other.")}
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-4">
 				<PrivacyToggle
 					id="crash-reports"
 					icon={<Bug className="h-4 w-4" />}
-					title="Crash & error reports"
+					title={t('crashErrorReports', 'Crash & error reports')}
 					description={
 						<>
-							On by default. Sends anonymous diagnostics when something breaks:
-							the exception type, a scrubbed stack trace and the app version.
-							Never a user id, never your IP address, never message, prompt or
-							board content.
+							{t('onByDefaultSendsAnonymousDiagnosticsWhenSomethingBreaksTheExceptionTypeAScrubbedStackTraceAndTheAppVersionNeverAUserIdNeverYourIpAddressNeverMessagePromptOrBoardContent', "On by default. Sends anonymous diagnostics when something breaks: the exception type, a scrubbed stack trace and the app version. Never a user id, never your IP address, never message, prompt or board content.")}
 						</>
 					}
 					checked={crashReportsEnabled}
@@ -140,13 +131,10 @@ export function PrivacySettingsPage({
 				<PrivacyToggle
 					id="anonymous-telemetry"
 					icon={<BarChart3 className="h-4 w-4" />}
-					title="Anonymous usage telemetry"
+					title={t('anonymousUsageTelemetry', 'Anonymous usage telemetry')}
 					description={
 						<>
-							Opt-in only. Shares aggregate counters and sanitized page paths
-							&mdash; never prompts, board content, names, or any personal data.
-							Usage events may be sampled, so only a share of page views is
-							recorded.
+							{t('optinOnlySharesAggregateCountersAndSanitizedPagePathsMdashNeverPromptsBoardContentNamesOrAnyPersonalDataUsageEventsMayBeSampledSoOnlyAShareOfPageViewsIsRecorded', "Opt-in only. Shares aggregate counters and sanitized page paths — never prompts, board content, names, or any personal data. Usage events may be sampled, so only a share of page views is recorded.")}
 						</>
 					}
 					checked={enabled === true}
@@ -154,15 +142,13 @@ export function PrivacySettingsPage({
 					onChange={onChange}
 				/>
 				<p className="text-sm text-muted-foreground">
-					Both use the same random install id. It is deleted once both switches
-					are off, and a fresh one is created if you turn either back on.
+					{t('bothUseTheSameRandomInstallIdItIsDeletedOnceBothSwitchesAreOffAndAFreshOneIsCreatedIfYouTurnEitherBackOn', "Both use the same random install id. It is deleted once both switches are off, and a fresh one is created if you turn either back on.")}
 				</p>
 				<Separator />
 				<RetentionNotice />
 				{!available && (
 					<p className="text-sm text-muted-foreground">
-						The connected platform has telemetry disabled, so nothing is
-						collected regardless of these settings.
+						{t('theConnectedPlatformHasTelemetryDisabledSoNothingIsCollectedRegardlessOfTheseSettings', "The connected platform has telemetry disabled, so nothing is collected regardless of these settings.")}
 					</p>
 				)}
 			</CardContent>

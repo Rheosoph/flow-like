@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type ColumnDef,
 	type SortingState,
@@ -44,6 +45,7 @@ export function DataTable<TData, TValue>({
 	data: TData[];
 	children?: React.ReactNode;
 }>) {
+	const { t } = useTranslation("common");
 	const [sorting, setSorting] = useState<SortingState>([]);
 	const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
 	const table = useReactTable({
@@ -72,7 +74,7 @@ export function DataTable<TData, TValue>({
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
 						<Button variant="outline" className="ml-auto">
-							Columns
+							{t('columns', 'Columns')}
 						</Button>
 					</DropdownMenuTrigger>
 					<DropdownMenuContent align="end">
@@ -139,7 +141,7 @@ export function DataTable<TData, TValue>({
 									colSpan={columns.length}
 									className="h-24 text-center"
 								>
-									No results.
+									{t('noResults', 'No results.')}
 								</TableCell>
 							</TableRow>
 						)}
@@ -153,7 +155,7 @@ export function DataTable<TData, TValue>({
 					onClick={() => table.previousPage()}
 					disabled={!table.getCanPreviousPage()}
 				>
-					Previous
+					{t('previous', 'Previous')}
 				</Button>
 				<Button
 					variant="outline"
@@ -161,7 +163,7 @@ export function DataTable<TData, TValue>({
 					onClick={() => table.nextPage()}
 					disabled={!table.getCanNextPage()}
 				>
-					Next
+					{t('next', 'Next')}
 				</Button>
 			</div>
 		</div>

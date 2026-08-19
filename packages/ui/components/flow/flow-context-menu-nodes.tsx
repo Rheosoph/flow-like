@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import { ChevronRightIcon, WorkflowIcon } from "lucide-react";
 import type { RefObject } from "react";
 import { memo, useMemo } from "react";
@@ -27,6 +28,7 @@ export const FlowContextMenuNodes = memo(function FlowContextMenuNodes({
 	onNodePlace: (node: INode) => Promise<void>;
 	menuBlockedRef?: RefObject<boolean>;
 }>) {
+	const { t } = useTranslation("flow");
 	const { leafs, sortedCategories } = useMemo(() => {
 		const leafs: INode[] = [];
 		const nodes = new Map<string, INode[]>();
@@ -87,9 +89,7 @@ export const FlowContextMenuNodes = memo(function FlowContextMenuNodes({
 					</ContextMenuItem>
 				))}
 				{items.length > MAX_SEARCH_RESULTS && (
-					<div className="px-2 py-1.5 text-xs text-muted-foreground text-center">
-						Showing {MAX_SEARCH_RESULTS} of {items.length} — refine your search
-					</div>
+					<div className="px-2 py-1.5 text-xs text-muted-foreground text-center">{t('showingMax_search_resultsOfLengthRefineYourSearch', 'Showing {{MAX_SEARCH_RESULTS}} of {{length}} — refine your search', { MAX_SEARCH_RESULTS, length: items.length })}</div>
 				)}
 			</>
 		);

@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { useState } from "react";
 import { IValueType } from "../../../lib/schema/flow/pin";
@@ -87,6 +88,7 @@ function MaskedSecretInput({
 	variable: IVariable;
 	updateVariable: (variable: IVariable) => Promise<void>;
 }>) {
+	const { t } = useTranslation("flow");
 	const [reveal, setReveal] = useState(false);
 	const value = decodeSecret(variable.default_value);
 
@@ -106,7 +108,7 @@ function MaskedSecretInput({
 						default_value: convertJsonToUint8Array(e.target.value) ?? null,
 					});
 				}}
-				placeholder="Enter secret value..."
+				placeholder={t('enterSecretValue', 'Enter secret value...')}
 				className="pr-10 font-mono"
 			/>
 			<Button

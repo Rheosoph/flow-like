@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	ClockIcon,
 	CornerDownRightIcon,
@@ -17,6 +18,7 @@ function truncate(text: string, max = 48) {
 
 /** The steering instructions the user pushed into a run, with their delivery outcome. */
 function SteerTrail({ run }: { run: IChatActiveRun }) {
+	const { t } = useTranslation("chat");
 	if (run.steers.length === 0) return null;
 	return (
 		<div className="flex flex-col gap-0.5 pl-5">
@@ -35,7 +37,7 @@ function SteerTrail({ run }: { run: IChatActiveRun }) {
 					<span className="truncate">{truncate(steer.content, 40)}</span>
 					{steer.status === "pending" && <span className="opacity-60">…</span>}
 					{steer.status === "failed" && (
-						<span className="opacity-80">not delivered</span>
+						<span className="opacity-80">{t('notDelivered', 'not delivered')}</span>
 					)}
 				</div>
 			))}
@@ -53,6 +55,7 @@ export function ChatRunControls({
 }: {
 	concurrency: IChatConcurrency;
 }) {
+	const { t } = useTranslation("chat");
 	const { runs, queued, atCapacity, onStop, onRemoveQueued } = concurrency;
 	if (runs.length === 0 && queued.length === 0) return null;
 
@@ -70,7 +73,7 @@ export function ChatRunControls({
 							)}
 						/>
 						<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-							{run.status === "cancelling" ? "Stopping — " : ""}
+							{run.status === "cancelling" ? t('stopping', "Stopping —") : ""}
 							{truncate(run.label)}
 						</span>
 						<Button
@@ -79,8 +82,8 @@ export function ChatRunControls({
 							className="size-6 shrink-0"
 							disabled={run.status === "cancelling"}
 							onClick={() => onStop(run.runId)}
-							title="Stop this response"
-							aria-label={`Stop response: ${truncate(run.label)}`}
+							title={t('stopThisResponse', 'Stop this response')}
+							aria-label={t('stopResponseVal', 'Stop response: {{val}}', { val: truncate(run.label) })}
 						>
 							<SquareIcon className="size-3 fill-current" />
 						</Button>
@@ -99,8 +102,8 @@ export function ChatRunControls({
 						size="icon"
 						className="size-6 shrink-0"
 						onClick={() => onRemoveQueued(entry.id)}
-						title="Remove from the queue"
-						aria-label={`Remove queued message: ${truncate(entry.content)}`}
+						title={`Remove from the queue`}
+						aria-label={t('removeQueuedMessageVal', 'Remove queued message: {{val}}', { val: truncate(entry.content) })}
 					>
 						<XIcon className="size-3" />
 					</Button>
@@ -108,7 +111,7 @@ export function ChatRunControls({
 			))}
 			{atCapacity && (
 				<p className="pl-3.5 text-[11px] text-muted-foreground">
-					All response slots are busy — the next message will be queued.
+					{t('allResponseSlotsAreBusyTheNextMessageWillBeQueued', 'All response slots are busy — the next message will be queued.')}
 				</p>
 			)}
 		</div>

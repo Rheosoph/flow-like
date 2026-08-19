@@ -1,0 +1,999 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-movghzcl-hbd3",
+		"name": "App Governance",
+		"language": "en",
+		"slug": "app-governance",
+		"difficulty": "INTERMEDIATE",
+		"category": "DEPLOYMENT",
+		"estimatedMinutes": 85,
+		"isPublished": true,
+		"tags": [
+			"governance",
+			"roles",
+			"permissions",
+			"sharing",
+			"publication",
+			"change-control"
+		],
+		"position": 5,
+		"description": "Take one support app from private build to public release: least-privilege roles, secrets that stay put, pinned versions, and a governance record that survives an audit.",
+		"longDescription": "Follow the Customer Support Copilot from private prototype to reviewed public release. You'll draw the app boundary and choose connectivity deliberately, stage visibility without leaking capability, turn jobs into exact permission-ladder levels, design roles that survive personnel changes, keep credentials out of Flow definitions and remote payloads, ship rollback-safe patch releases against pinned Events, and assemble the one-page operating model an auditor — or 2 a.m. you — can actually use. Quick checks after every lesson, and a six-part design-review final.",
+		"media": {
+			"icon": "assets/course-icon.webp",
+			"banner": "assets/visibility-settings.webp"
+		},
+		"assets": [
+			{
+				"name": "AppAnatomy",
+				"file": "assets/app-anatomy.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "app-anatomy.webp",
+				"replace": true
+			},
+			{
+				"name": "VisibilitySettings",
+				"file": "assets/visibility-settings.webp",
+				"kind": "IMAGE",
+				"replace": true
+			},
+			{
+				"name": "SharingAccess",
+				"file": "assets/share-apps.webp",
+				"kind": "IMAGE",
+				"replace": true
+			},
+			{
+				"name": "RightsAndRoles",
+				"file": "assets/rights-and-roles.webp",
+				"kind": "IMAGE",
+				"replace": true
+			},
+			{
+				"name": "BoardVersions",
+				"file": "assets/board-versions.webp",
+				"kind": "IMAGE",
+				"replace": true
+			},
+			{
+				"name": "RuntimeVariables",
+				"file": "assets/runtime-variables.webp",
+				"kind": "IMAGE",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "course-movghzcl-hbd3.module.boundaries",
+				"title": "Boundaries and Exposure",
+				"description": "Choose the app boundary, connectivity, and visibility deliberately.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "course-movghzcl-hbd3.lesson.app-boundary",
+						"title": "One App, One Blast Radius",
+						"contentFile": "content/01-app-boundary.md",
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "course-movghzcl-hbd3.challenge.boundary-connectivity",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Three support agents need assigned roles, and the triage schedule must run at 02:00 while every laptop is closed. Offline or online App?",
+								"explanation": "Team roles, synchronized access, and Events that run with no desktop open all require an online App. 'Offline because the data is sensitive' is the tempting pick — but offline doesn't add protection, it removes collaboration. Sensitive data in a team workflow is governed with roles and scoped credentials, not by unplugging.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "online",
+											"label": "Online — team roles and unattended server-side Events need the backend."
+										},
+										{
+											"id": "offline-sensitive",
+											"label": "Offline — support data is sensitive, so it should stay on one machine."
+										},
+										{
+											"id": "offline-export",
+											"label": "Offline, with a morning export/import routine to share results."
+										},
+										{
+											"id": "either-visibility",
+											"label": "Either — visibility settings control this, not connectivity."
+										}
+									],
+									"correct": ["online"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.hybrid-execution",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The Copilot's triage Flow is set to Hybrid. A web user triggers it while Marek's desktop is off. What happens?",
+								"explanation": "Hybrid picks one host per run: Desktop callers run locally, web and server-side callers run remotely. It never splits a single graph across machines and never waits for a desktop — the 'local-capable nodes run locally later' answer is the exact misconception this lesson refutes.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "runs-remote",
+											"label": "It runs remotely — web callers take the remote path."
+										},
+										{
+											"id": "splits",
+											"label": "The local-capable nodes run on Marek's desktop later; the rest run remotely now."
+										},
+										{
+											"id": "fails",
+											"label": "It fails, because Hybrid needs at least one desktop online."
+										},
+										{
+											"id": "queues",
+											"label": "It queues until any team member opens Flow-Like Desktop."
+										}
+									],
+									"correct": ["runs-remote"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.offline-copy",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You copy your offline prototype online for the team. What happened to the CRM token you had saved as a Secret runtime value?",
+								"explanation": "Creating an online copy produces a new App without your local runtime values — secrets never travel. 'It synced because I was signed in' feels plausible, but runtime values are per-device by design (lesson 5 digs into why), which is exactly why the fresh copy needs its own configuration review before anyone calls it production-ready.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "stripped",
+											"label": "Nothing moved — the online copy starts secret-stripped and unconfigured."
+										},
+										{
+											"id": "synced",
+											"label": "It synced into the copy because you were signed in when you copied."
+										},
+										{
+											"id": "embedded",
+											"label": "It was written into the Flow definition so the copy keeps working."
+										},
+										{
+											"id": "encrypted-upload",
+											"label": "It was encrypted and uploaded; teammates must request access to it."
+										}
+									],
+									"correct": ["stripped"]
+								}
+							}
+						]
+					},
+					{
+						"id": "course-movghzcl-hbd3.lesson.sharing-visibility",
+						"title": "Who Can See the Copilot?",
+						"contentFile": "content/02-sharing-and-visibility.md",
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "course-movghzcl-hbd3.challenge.prototype-purpose",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The Copilot needs feedback from three invited colleagues and nobody else. Which visibility fits?",
+								"explanation": "Prototype is the development-phase state — the UI's own words are 'Development phase, invite collaborators': team-only, invitations open. Private is the tempting minimal pick, but it syncs for your account only, so there's no team to invite into. Public Request and Public widen reach to everyone on the platform.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "prototype",
+											"label": "Prototype — team-only, with invitations enabled."
+										},
+										{
+											"id": "private",
+											"label": "Private — invitations are handled separately from visibility."
+										},
+										{
+											"id": "public-request",
+											"label": "Public Request — colleagues can request to join."
+										},
+										{
+											"id": "public",
+											"label": "Public — fastest option, and roles keep strangers out anyway."
+										}
+									],
+									"correct": ["prototype"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.reach-vs-capability",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "A designer redeems the Copilot's invite link. Which settings decide what she can actually do inside the App?",
+								"explanation": "Capability always comes from roles: the default role assigned the moment she joins, then whatever an admin assigns afterwards. Visibility only controls reach — Prototype imposes no read-only limit, which is exactly why lesson 4 treats the default role as the blast radius of every invitation. Central review gates public transitions, never individual joins.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "default-role",
+											"label": "The default role the link assigns on join."
+										},
+										{
+											"id": "assigned-role",
+											"label": "Any role an administrator assigns her afterwards."
+										},
+										{
+											"id": "visibility-state",
+											"label": "The visibility state — Prototype limits every member to read-only."
+										},
+										{
+											"id": "central-review",
+											"label": "Central review — invited members are approved within 1-3 days."
+										}
+									],
+									"correct": ["default-role", "assigned-role"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.public-request-stranger",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The Copilot reaches Public Request. What can a stranger outside the team now do?",
+								"explanation": "The UI's own copy answers it: 'Visible, people can request to join.' Joining instantly with the default role is Public behavior ('Everyone can join') — one rung further up the ladder. And either way, what a member can do still comes from roles, not from the visibility state.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "see-and-request",
+											"label": "See the App and request to join — membership still flows through your roles."
+										},
+										{
+											"id": "join-default",
+											"label": "Join instantly and receive the default role."
+										},
+										{
+											"id": "use-anon",
+											"label": "Trigger the App's public Events anonymously."
+										},
+										{
+											"id": "store-use",
+											"label": "Install it from the store and use it without joining the team."
+										}
+									],
+									"correct": ["see-and-request"]
+								}
+							}
+						]
+					}
+				]
+			},
+			{
+				"id": "course-movghzcl-hbd3.module.roles",
+				"title": "Roles and Least Privilege",
+				"description": "Understand the exact permission ladders and turn job responsibilities into maintainable roles.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "course-movghzcl-hbd3.lesson.permission-architecture",
+						"title": "Three Ladders and an Operator",
+						"contentFile": "content/03-permission-architecture.md",
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "course-movghzcl-hbd3.challenge.rosa-event-level",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Rosa must fire the nightly triage Event manually when the schedule misses, but must never rewire it. Which Events level does she need?",
+								"explanation": "Trigger is Browse plus ExecuteEvents: she can see and fire the Event, not change it. 'Workflows: Run' is the tempting cross-ladder answer — but Events are their own ladder, and executing a Flow directly is a different capability from triggering the Event that wraps it.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "events-trigger",
+											"label": "Events: Trigger"
+										},
+										{
+											"id": "events-manage",
+											"label": "Events: Manage — reliable triggering needs the full ladder."
+										},
+										{
+											"id": "events-browse",
+											"label": "Events: Browse — firing an Event is a read-style action."
+										},
+										{
+											"id": "workflows-run",
+											"label": "Workflows: Run — Events execute Flows, so that covers it."
+										}
+									],
+									"correct": ["events-trigger"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.edit-implies",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Marek holds Workflows: Edit and nothing else. Which actions can he already perform?",
+								"explanation": "A ladder level contains the levels below it within the same ladder: Edit is View plus Run plus write. It never reaches across ladders — Events, Observability, and Configuration each need their own grant. Assuming an editor can also read logs is exactly how debugging rights sneak into roles unexamined.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "view-flow",
+											"label": "Open and read the triage Flow."
+										},
+										{
+											"id": "run-flow",
+											"label": "Run the triage Flow."
+										},
+										{
+											"id": "trigger-event",
+											"label": "Trigger the nightly Event."
+										},
+										{
+											"id": "read-logs",
+											"label": "Read execution logs."
+										},
+										{
+											"id": "edit-config",
+											"label": "Edit the App's configuration."
+										}
+									],
+									"correct": ["view-flow", "run-flow"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.eighth-group",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The New Role dialog in @RightsAndRoles shows eight permission groups, but this lesson names seven ladders. What is the extra group?",
+								"explanation": "System (0/2) holds exactly the two elevation flags, Owner and Admin. Permission checks treat them as satisfying everything, so they sit above the ladders rather than inside one. Attributes is visible in the dialog too, but it lives below Permissions and grants nothing — it's key-value tags for filtering and policy rules.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "system",
+											"label": "System — the Owner/Admin elevation pair."
+										},
+										{
+											"id": "attributes",
+											"label": "Attributes — the custom key-value tags."
+										},
+										{
+											"id": "content",
+											"label": "Content — it spans two ladders' worth of flags."
+										},
+										{
+											"id": "api-keys",
+											"label": "A hidden ladder for API keys."
+										}
+									],
+									"correct": ["system"]
+								}
+							}
+						]
+					},
+					{
+						"id": "course-movghzcl-hbd3.lesson.designing-roles",
+						"title": "Roles That Survive People",
+						"contentFile": "content/04-designing-roles.md",
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "course-movghzcl-hbd3.challenge.default-role-blast",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You're creating the onboarding invite link for forty support agents who will run production. Which default role goes on the link?",
+								"explanation": "The default role is what every redeemer gets — including the wrong ones: forwarded links, typo'd addresses, URLs pasted into public docs. Viewer keeps that blast radius read-only; the Operator grant happens deliberately, per member, after joining. 'They'll all need it anyway' is exactly the reasoning that produced Friday's forty editors.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "viewer",
+											"label": "Viewer — assign Copilot Operator per person or group after they join."
+										},
+										{
+											"id": "operator",
+											"label": "Copilot Operator — it's the role they'll all need anyway."
+										},
+										{
+											"id": "editor",
+											"label": "Editor — nobody gets blocked during onboarding week."
+										},
+										{
+											"id": "admin-temp",
+											"label": "Administrator, temporarily, until onboarding ends."
+										}
+									],
+									"correct": ["viewer"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.editor-vs-builder",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Your release group alone moves production routes — yet builders got the Editor template unchanged. What did you hand them by accident?",
+								"explanation": "The built-in Editor bundles Content Publish plus WriteRoutes — release authority — with development rights. If your model separates building from releasing, cut a narrower Builder role (Workflows Edit, Events Manage, data write) instead. Editor never includes elevation or team administration; those distractors overshoot in the other direction.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "publish-routes",
+											"label": "Content Publish and route management (WriteRoutes)."
+										},
+										{
+											"id": "elevation",
+											"label": "Admin elevation."
+										},
+										{
+											"id": "team-admin",
+											"label": "Team and role administration."
+										},
+										{
+											"id": "nothing",
+											"label": "Nothing — the Editor template is scoped to development by design."
+										}
+									],
+									"correct": ["publish-routes"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.role-audit",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "An auditor asks what Copilot Operator members can really do. Which checks answer that credibly?",
+								"explanation": "Capability lives in effective flags and proves itself in recipient tests — lesson 3's rule applied. Names and descriptions are documentation, not enforcement. And testing as Owner proves nothing: elevation satisfies every ordinary check, so it masks each missing or excessive permission.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "effective-flags",
+											"label": "Read the role's effective flags — ladder levels plus any elevation."
+										},
+										{
+											"id": "denied-tests",
+											"label": "Run the allowed and denied acceptance tests from a non-elevated account."
+										},
+										{
+											"id": "role-name",
+											"label": "Confirm the role's name and description match the job."
+										},
+										{
+											"id": "owner-test",
+											"label": "Sign in as the Owner and try the same actions."
+										}
+									],
+									"correct": ["effective-flags", "denied-tests"]
+								}
+							}
+						]
+					}
+				]
+			},
+			{
+				"id": "course-movghzcl-hbd3.module.change-control",
+				"title": "Change and Release Governance",
+				"description": "Protect secrets, choose execution boundaries, version behavior, and navigate review.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "course-movghzcl-hbd3.lesson.secrets-execution",
+						"title": "The Token That Stays Home",
+						"contentFile": "content/05-secrets-and-execution.md",
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "course-movghzcl-hbd3.challenge.remote-payload",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Look at @RuntimeVariables. The nightly Event runs remotely. Which of the two configured values reaches the backend for that run?",
+								"explanation": "The page's own Security Notice states it: for remote execution, only non-secret runtime variables will be sent. SUPPORT_API_URL is tagged Runtime, so it travels; CRM_API_TOKEN is tagged Secret, so it stays home. 'Both, because the App is online' is the seductive answer — online sync moves the App definition, never your locally stored values.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "support-url",
+											"label": "SUPPORT_API_URL only — it's tagged Runtime, not Secret."
+										},
+										{
+											"id": "both",
+											"label": "Both — the App is online and shows All Configured."
+										},
+										{
+											"id": "token-only",
+											"label": "CRM_API_TOKEN only — credentials are what remote runs need most."
+										},
+										{
+											"id": "neither",
+											"label": "Neither — runtime variables are desktop-only in every execution mode."
+										}
+									],
+									"correct": ["support-url"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.default-leak",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A builder pastes the real CRM token into the variable's default value \"so teammates don't have to configure it.\" What did they actually do?",
+								"explanation": "Defaults are part of the Flow definition: they synchronize to everyone with board read access and travel with remote runs. Secret masking protects the locally saved value, not a default. And yes — the nightly run may even start working, which is what makes this leak so durable: it looks like a fix while it hands the token to every future board reader.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "leaked-definition",
+											"label": "Put the credential into the synchronized Flow definition — readable by anyone with board access, and sent on remote runs."
+										},
+										{
+											"id": "masked-default",
+											"label": "Nothing risky — defaults inherit the variable's Secret masking."
+										},
+										{
+											"id": "local-default",
+											"label": "Nothing risky — defaults stay on the device like saved runtime values."
+										},
+										{
+											"id": "fixed-remote",
+											"label": "Fixed the nightly Event the right way — remote runs can now authenticate."
+										}
+									],
+									"correct": ["leaked-definition"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.unattended-fix",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "So what's the right fix for the 02:00 unauthorized-requests incident?",
+								"explanation": "Unattended remote execution needs credentials that live where the run lives — an approved server-side mechanism. Unmarking Secret 'works' by broadcasting the token in every remote payload: you'd trade one outage for a standing leak. Keeping a laptop on or switching to a local sink also 'works' — until you remember the whole point of the schedule was to not depend on any desktop being open (lesson 1's execution boundary).",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "server-side",
+											"label": "Provision the CRM credential through an approved server-side mechanism for the remote Event."
+										},
+										{
+											"id": "unmark-secret",
+											"label": "Unmark the token as Secret so it's included in the remote payload."
+										},
+										{
+											"id": "laptop-on",
+											"label": "Have Rosa leave her laptop on overnight so the value stays reachable."
+										},
+										{
+											"id": "local-sink",
+											"label": "Switch the Event to a local sink so it can use the desktop Secret."
+										}
+									],
+									"correct": ["server-side"]
+								}
+							}
+						]
+					},
+					{
+						"id": "course-movghzcl-hbd3.lesson.versioning-publication",
+						"title": "Pin It or It Drifts",
+						"contentFile": "content/06-versioning-and-publication.md",
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "course-movghzcl-hbd3.challenge.create-version-effect",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In @BoardVersions you click Create Version and choose Patch. What just happened?",
+								"explanation": "Create Version cuts an immutable snapshot and leaves Latest as the moving working draft. Pinned Events never jump on their own — moving one is a deliberate release step — and the App's free-form metadata version is an unrelated label, not a snapshot of anything.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "snapshot",
+											"label": "The current draft became an immutable patch snapshot; Latest stays editable and moves on."
+										},
+										{
+											"id": "latest-locked",
+											"label": "Latest is locked until the patch is approved."
+										},
+										{
+											"id": "events-move",
+											"label": "Every Event that follows a numbered version jumps to the new patch."
+										},
+										{
+											"id": "app-version",
+											"label": "The App's metadata version field updates to match."
+										}
+									],
+									"correct": ["snapshot"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.bad-patch-response",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The freshly pinned 1.4.3 misbehaves in production. Which steps belong in your response?",
+								"explanation": "Rollback means re-selecting the version that already worked, then shipping the fix as a fresh patch — recoverable at every step. Snapshots are immutable, so 'fix 1.4.3 in place' isn't just unwise, it's impossible. And pointing production at Latest recreates the 2 a.m. incident on purpose: every draft save becomes an instant release, including the broken ones.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "repin",
+											"label": "Re-pin the production Event to 1.4.2."
+										},
+										{
+											"id": "debug-latest",
+											"label": "Debug on Latest and cut 1.4.4 once it's tested."
+										},
+										{
+											"id": "edit-snapshot",
+											"label": "Open 1.4.3 and fix it in place."
+										},
+										{
+											"id": "follow-latest",
+											"label": "Point production at Latest so the fix ships the moment it's written."
+										},
+										{
+											"id": "delete-version",
+											"label": "Delete 1.4.3 immediately so no Event can select it."
+										}
+									],
+									"correct": ["repin", "debug-latest"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.on-hold-request",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Your Public Request submission comes back on hold with reviewer comments. What's the productive move?",
+								"explanation": "An App has one active pending or on-hold request, and a duplicate submission is rejected — the request's activity log is the conversation, so resolve the feedback there. Withdrawing to 'reset the clock' just discards the review progress you already have, and version numbers are release records (this lesson), not review currency.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "resolve",
+											"label": "Answer the feedback on the existing request and update the evidence."
+										},
+										{
+											"id": "second-request",
+											"label": "Submit a second request with a better description."
+										},
+										{
+											"id": "withdraw-resubmit",
+											"label": "Withdraw and resubmit to restart the 1-3 day review clock."
+										},
+										{
+											"id": "major-version",
+											"label": "Cut a major version — a bigger release usually clears review."
+										}
+									],
+									"correct": ["resolve"]
+								}
+							}
+						]
+					}
+				]
+			},
+			{
+				"id": "course-movghzcl-hbd3.module.assessment",
+				"title": "Operating Model and Assessment",
+				"description": "Combine access, evidence, release, and response controls into a durable operating model.",
+				"position": 3,
+				"lessons": [
+					{
+						"id": "course-movghzcl-hbd3.lesson.operating-model",
+						"title": "An Operating Model That Survives an Audit",
+						"contentFile": "content/07-governance-operating-model.md",
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "course-movghzcl-hbd3.challenge.one-checkbox-high",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A teammate flips one checkbox: the invite link's default role, Viewer to Operator. How do you classify the change?",
+								"explanation": "Classification follows consequence, not diff size. That one flag hands execution rights to every future link redeemer — lesson 4's entire Friday incident in a single click. 'Low because the diff is small' is precisely the reasoning the classification scheme exists to block.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "high",
+											"label": "High — it changes the exposure boundary, regardless of diff size."
+										},
+										{
+											"id": "low",
+											"label": "Low — it's a single flag with no code change."
+										},
+										{
+											"id": "standard",
+											"label": "Standard — it's a tested, easily reversible setting."
+										},
+										{
+											"id": "emergency",
+											"label": "Emergency — revert it immediately without review."
+										}
+									],
+									"correct": ["high"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.incident-first-moves",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "02:10 — the CRM sync Event is writing garbage and denied-request alerts are spiking. Which moves belong to the Incident loop right now?",
+								"explanation": "Incident order is contain, preserve, restore, communicate — then hand off to the Change loop for the real fix (patch, test, re-pin, per lesson 6). Writing the fix first destroys evidence and ships untested code into an already-bad night. Break-glass elevation exists, but as a controlled procedure with activation evidence and post-incident removal — not a self-grant for speed.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "contain",
+											"label": "Deactivate the Event and revoke the suspect role."
+										},
+										{
+											"id": "preserve",
+											"label": "Preserve logs and evidence before changing configuration."
+										},
+										{
+											"id": "restore",
+											"label": "Re-pin the last known-good version."
+										},
+										{
+											"id": "patch-now",
+											"label": "Write the fix on Latest and pin a fresh patch immediately."
+										},
+										{
+											"id": "grant-admin",
+											"label": "Grant yourself Admin so nothing slows the response down."
+										}
+									],
+									"correct": ["contain", "preserve", "restore"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.store-timeline",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The governance record reads: \"Visibility: Prototype. Production Event: pinned 1.4.3.\" Marketing wants the Copilot in the store this afternoon. What actually gates the timeline?",
+								"explanation": "The Visibility page's own footnote sets expectations: public transitions require central review, 1-3 days. Pinned versions, roles, and evidence make the review pass — they don't make it disappear. No version number is required for a visibility change; that distractor confuses the release record with the exposure decision.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "central-review",
+											"label": "Central publication review — public transitions take 1-3 days and need the evidence package."
+										},
+										{
+											"id": "toggle",
+											"label": "Nothing — Prototype to Public is a settings change once roles exist."
+										},
+										{
+											"id": "major-first",
+											"label": "Cutting 2.0.0 first — store listings require a major version."
+										},
+										{
+											"id": "invite-reviewers",
+											"label": "Inviting the review team into the App so they can approve from inside."
+										}
+									],
+									"correct": ["central-review"]
+								}
+							}
+						]
+					},
+					{
+						"id": "course-movghzcl-hbd3.lesson.final-assessment",
+						"title": "Final Assessment: Take the Copilot Public",
+						"contentFile": "content/08-final-assessment.md",
+						"estimatedMinutes": 15,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "course-movghzcl-hbd3.challenge.online-boundary",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Proposal 1 argues the Copilot must be an online App. Which of the team's requirements actually force that choice?",
+								"explanation": "Roles with synchronized access, unattended server-side Events, and the publication workflow are exactly what the online backend adds (lesson 1). The runtime-value option is the trap from lesson 5: runtime values are stored locally per device and are never uploaded — going online syncs the App definition, not anyone's configured values, and Secrets stay home either way.",
+								"points": 15,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "team-collaboration",
+											"label": "Support agents need assigned roles and synchronized access."
+										},
+										{
+											"id": "remote-events",
+											"label": "The nightly triage schedule must run while every desktop is closed."
+										},
+										{
+											"id": "publication",
+											"label": "The App is headed for publication review and a store listing."
+										},
+										{
+											"id": "runtime-sync",
+											"label": "The builders want their configured runtime values to sync between machines."
+										}
+									],
+									"correct": [
+										"team-collaboration",
+										"remote-events",
+										"publication"
+									]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.operator-role",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Proposal 2 is the operators' role card: run production Flows, trigger Events when schedules miss, read logs and analytics — never edit logic or schedules. Which ladder levels belong on the card?",
+								"explanation": "Run, Trigger, and Full cover execute-and-diagnose completely, because each ladder level already contains the levels below it — Run includes View, Trigger includes Browse (lesson 3). Edit and Manage are the tempting 'just in case' additions, and they're precisely what turns an operator's slip into a production logic change — the operate/build separation lesson 4 exists for.",
+								"points": 15,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "flows-run",
+											"label": "Workflows: Run"
+										},
+										{
+											"id": "events-trigger",
+											"label": "Events: Trigger"
+										},
+										{
+											"id": "observability-full",
+											"label": "Observability: Full"
+										},
+										{
+											"id": "flows-edit",
+											"label": "Workflows: Edit"
+										},
+										{
+											"id": "events-manage",
+											"label": "Events: Manage"
+										}
+									],
+									"correct": [
+										"flows-run",
+										"events-trigger",
+										"observability-full"
+									]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.database-scope",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Proposal 3 gives analysts access to the ticket database — tables only, no browsing the App's files. Which grant is the narrowest that works?",
+								"explanation": "ReadDatabase exists exactly for tables-without-files. The ladder's Read level is the safe-looking pick — lesson 3 teaches ladders as the default shape — but it bundles ReadFiles with ReadDatabase, granting the file browsing this proposal rules out. ReadFiles alone fails the same way: it implies database read for compatibility while staying broader than the need. WriteDatabase points the wrong direction entirely — analysts inspect outcomes, they don't change them.",
+								"points": 15,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "read-database",
+											"label": "The raw ReadDatabase flag"
+										},
+										{
+											"id": "files-data-read",
+											"label": "Files & Data ladder: Read"
+										},
+										{
+											"id": "read-files",
+											"label": "The raw ReadFiles flag"
+										},
+										{
+											"id": "write-database",
+											"label": "The raw WriteDatabase flag"
+										}
+									],
+									"correct": ["read-database"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.secret-remote",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Proposal 4 ships the nightly schedule as-is: the CRM token stays a Secret on the builder's desktop, \"because the App syncs online anyway.\" What happens on the first unattended run?",
+								"explanation": "Secret values are stored locally and excluded from remote execution payloads — the Runtime Variables page's Security Notice says only non-secret runtime variables are sent (lesson 5). The fix is a server-side credential for the unattended path. Nothing prompts anyone: an unattended run has no one to ask, which is the whole reason it needs credentials living where it runs (lesson 1's execution boundary).",
+								"points": 15,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "secret-excluded",
+											"label": "The run can't use the token — Secret values are excluded from remote execution payloads."
+										},
+										{
+											"id": "secret-synced",
+											"label": "It works — online Apps synchronize configured values to the backend."
+										},
+										{
+											"id": "secret-logged",
+											"label": "It works — the backend reads the value from the Flow definition and masks it in logs."
+										},
+										{
+											"id": "secret-prompt",
+											"label": "The run pauses and prompts the next signed-in operator to supply the value."
+										}
+									],
+									"correct": ["secret-excluded"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.pinned-release",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Proposal 5: production is pinned to 1.4.2 and a compatible fix is ready on Latest. Which steps make the release sound?",
+								"explanation": "Patch, test, re-pin, keep the rollback target — lesson 6's release loop, recoverable at every step. Numbered snapshots are immutable, so 1.4.2 can't be edited in place. And following Latest 'just for the day' is the 2 a.m. incident adopted as policy: every draft save becomes an instant production release while nobody is watching.",
+								"points": 15,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "create-patch",
+											"label": "Create and test a patch snapshot from Latest."
+										},
+										{
+											"id": "update-pin",
+											"label": "Move the production Event to the tested patch and verify the full path."
+										},
+										{
+											"id": "retain-rollback",
+											"label": "Keep 1.4.2 selectable until rollback is no longer plausible."
+										},
+										{
+											"id": "edit-snapshot",
+											"label": "Apply the fix directly inside the immutable 1.4.2 snapshot."
+										},
+										{
+											"id": "follow-latest",
+											"label": "Point production at Latest for the day so the fix arrives instantly."
+										}
+									],
+									"correct": ["create-patch", "update-pin", "retain-rollback"]
+								}
+							},
+							{
+								"id": "course-movghzcl-hbd3.challenge.publication-readiness",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Proposal 6 covers the public move. Which statements about publication review are true?",
+								"explanation": "Publication is a reviewed state transition with an audit trail: one active pending or on-hold request, feedback resolved in place, and — when the AI Act feature is enabled — a current assessment gating public targets (lessons 2 and 6). The last option is the dangerous comfort: approval changes visibility and nothing else. If an Event still follows Latest on acceptance day, you've published drift — pinning is your job, before you submit (lesson 7's ship-it discipline).",
+								"points": 25,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "active-request-limit",
+											"label": "While one request is pending or on hold, a second request is rejected."
+										},
+										{
+											"id": "review-history",
+											"label": "The request and its log entries are the durable record of review status and activity."
+										},
+										{
+											"id": "ai-act-gate",
+											"label": "With the AI Act feature enabled, a missing, draft, or blocked assessment stops a public-target request."
+										},
+										{
+											"id": "latest-is-release",
+											"label": "Approval snapshots the current Latest and pins every production Event to it."
+										}
+									],
+									"correct": [
+										"active-request-limit",
+										"review-history",
+										"ai-act-gate"
+									]
+								}
+							}
+						]
+					}
+				]
+			}
+		]
+	}
+}

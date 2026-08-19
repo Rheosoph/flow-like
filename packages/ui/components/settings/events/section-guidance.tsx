@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { InfoIcon, XIcon } from "lucide-react";
 import { useCallback, useState } from "react";
 import type { EventSectionId } from "../../../lib/event-sections";
@@ -29,6 +30,7 @@ export function SectionGuidance({
 	event,
 	section,
 }: Readonly<{ event: IEvent; section: EventSectionId }>) {
+	const { t } = useTranslation("settings");
 	const [dismissed, setDismissed] = useState<Record<string, boolean>>(() =>
 		readDismissed(),
 	);
@@ -61,7 +63,7 @@ export function SectionGuidance({
 				onClick={() => persist({ ...dismissed, [key]: false })}
 			>
 				<InfoIcon className="h-3 w-3" />
-				Show guidance for this section
+				{t('showGuidanceForThisSection', 'Show guidance for this section')}
 			</Button>
 		);
 	}
@@ -77,14 +79,14 @@ export function SectionGuidance({
 					className={`text-[12.5px] leading-relaxed text-muted-foreground ${showWhat ? "mt-1" : ""}`}
 				>
 					<span className="font-semibold text-foreground">
-						Most common mistake:
+						{t('mostCommonMistake', 'Most common mistake:')}
 					</span>{" "}
 					{guidance.mistake}
 				</p>
 			</div>
 			<button
 				type="button"
-				aria-label="Hide guidance"
+				aria-label={t('hideGuidance', 'Hide guidance')}
 				onClick={() => persist({ ...dismissed, [key]: true })}
 				className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
 			>

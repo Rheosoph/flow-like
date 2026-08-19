@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type ISettingsProfile,
 	IThemes,
@@ -157,6 +158,7 @@ async function uploadToSignedUrl(url: string, file: File): Promise<void> {
 }
 
 export default function SettingsProfilesPage() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const auth = useAuth();

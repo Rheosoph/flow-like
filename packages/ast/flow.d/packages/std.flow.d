@@ -20,6 +20,17 @@ declare function controlBranch({ condition?: bool }): void;
 declare function controlForEach({ array: any[] }): { value: any, index: int };
 
 /**
+ * Loops over an Array in batches, running the body once per slice of up to Batch Size elements
+ * @param array — Array to Loop
+ * @param batchSize (optional) — Maximum number of elements per batch. Values below 1 are clamped to 1.
+ * @returns batch — The current slice, holding up to Batch Size elements
+ * @returns index — Zero based index of the current batch
+ * @returns startIndex — Index of the first element of this batch inside the source array
+ * @impure has side effects / drives control flow
+ */
+declare function controlForEachBatch({ array: any[], batchSize?: int }): { batch: any[], index: int, startIndex: int };
+
+/**
  * Loops over an Array; allows breaking early from inside the loop body.
  * @param break (optional) — Trigger this to terminate the active loop early (callable from inside Loop Body)
  * @param array — Array to Loop
@@ -45,6 +56,18 @@ declare function controlParExecution({ threadModel?: string }): void;
  * @impure has side effects / drives control flow
  */
 declare function controlParForEach({ array: any[], maxConcurrent?: int }): { value: any, index: int };
+
+/**
+ * Loops over an Array in batches, running the body for multiple batches in parallel
+ * @param array — Array to Loop
+ * @param batchSize (optional) — Maximum number of elements per batch. Values below 1 are clamped to 1.
+ * @param maxConcurrent (optional) — Maximum number of concurrent body executions (0 = unlimited)
+ * @returns batch — The current slice, holding up to Batch Size elements
+ * @returns index — Zero based index of the current batch
+ * @returns startIndex — Index of the first element of this batch inside the source array
+ * @impure has side effects / drives control flow
+ */
+declare function controlParForEachBatch({ array: any[], batchSize?: int, maxConcurrent?: int }): { batch: any[], index: int, startIndex: int };
 
 /**
  * Sequential Execution
@@ -2635,6 +2658,38 @@ declare function mapSetRef({ varRef: string, key: string, value: any }): void;
  * @impure has side effects / drives control flow
  */
 declare function utilsMdHtmlToMd({ html: string, skippedTags?: string[] }): string;
+
+/**
+ * Renders GitHub-flavoured Markdown as HTML
+ * @param markdown — Markdown source to render
+ * @param allowHtml (optional) — Pass raw HTML in the source through to the output. Leave off for untrusted input.
+ * @param smartPunctuation (optional) — Convert quotes, dashes and ellipses to typographic equivalents
+ * @returns html — The rendered HTML
+ * @impure has side effects / drives control flow
+ */
+declare function utilsMdMdToHtml({ markdown: string, allowHtml?: bool, smartPunctuation?: bool }): string;
+
+/**
+ * Converts a rich text document (plate_json) into HTML, keeping alignment, colours, columns and table spans that Markdown cannot express
+ * @param document — Rich text document, with or without the plate_json:: prefix
+ * @param images (optional) — How to render image nodes
+ * @param fullDocument (optional) — Wrap the output in a complete HTML document with default styling
+ * @param title (optional) — Document title, used only when Full Document is enabled
+ * @returns html — The converted HTML
+ * @returns media — Every image, video, audio and file reference found in the document
+ * @impure has side effects / drives control flow
+ */
+declare function utilsMdPlateToHtml({ document: string, images?: string, fullDocument?: bool, title?: string }): { html: string, media: string[] };
+
+/**
+ * Converts a rich text document (plate_json) into GitHub-flavoured Markdown
+ * @param document — Rich text document, with or without the plate_json:: prefix
+ * @param images (optional) — How to render image nodes
+ * @returns markdown — The converted Markdown
+ * @returns media — Every image, video, audio and file reference found in the document
+ * @impure has side effects / drives control flow
+ */
+declare function utilsMdPlateToMd({ document: string, images?: string }): { markdown: string, media: string[] };
 
 
 // === Utils/Math/Vector ===

@@ -101,7 +101,11 @@ jobs:
             release_bundle_dir: "target/x86_64-apple-darwin/release/bundle"
             retry_runner_arch: "X64"
             args: "--target x86_64-apple-darwin --config src-tauri/configs/tauri.macos.intel.conf.json --config src-tauri/configs/tauri.ci.conf.json --verbose"
-          - platform: "ubuntu-latest"
+          # Pinned, not ubuntu-latest: the AppImage snapshots whatever the runner
+          # provides on build day (glibc floor, bundled WebKitGTK and support
+          # libraries), so the label flipping would silently move our supported
+          # distribution baseline.
+          - platform: "ubuntu-24.04"
             release_bundle_dir: "target/release/bundle"
             args: "--config src-tauri/configs/tauri.linux.x64.conf.json --config src-tauri/configs/tauri.ci.conf.json --verbose"
           - platform: "ubuntu-24.04-arm"
@@ -367,6 +371,11 @@ jobs:
         working-directory: apps/desktop
         run: bun ./scripts/prepare-windows-prereqs.ts --arch x64
 
+      - name: Prepare AppImage tooling (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash .github/scripts/prepare-appimage-tools.sh
+
       - name: Build and Release
         id: build_release
         continue-on-error: true
@@ -409,6 +418,16 @@ jobs:
         shell: bash
         run: |
           echo "::warning::Tauri's initial release upload failed, but all built installer assets were recovered and verified by digest."
+
+      # Runs after the upload because tauri-action builds and publishes in one
+      # step. Failing here keeps the release a draft and blocks the updater
+      # metadata job, so a broken AppImage never reaches the update channel.
+      - name: Verify AppImage bundle (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          RELEASE_BUNDLE_DIR: ${{ matrix.release_bundle_dir }}
+        run: bash .github/scripts/verify-appimage-bundle.sh
 
   finalize-updater-json:
     name: Finalize updater metadata

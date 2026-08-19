@@ -217,8 +217,10 @@ export const enCommon = {
 
 	// Navigation – page links
 	"header.integrations": "Integrations",
+	"header.store": "Store",
 	"header.security": "Security",
 	"footer.link.integrations": "Integrations",
+	"footer.link.store": "Store",
 	"footer.link.whitelabel": "White Label",
 	"footer.link.security": "Security",
 };

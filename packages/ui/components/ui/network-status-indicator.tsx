@@ -1,11 +1,13 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { WifiIcon, WifiOffIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNetworkStatus } from "../../hooks/use-network-status";
 import { cn } from "../../lib/utils";
 
 export function NetworkStatusIndicator() {
+	const { t } = useTranslation("common");
 	const isOnline = useNetworkStatus();
 	const [showOfflineMessage, setShowOfflineMessage] = useState(false);
 
@@ -36,12 +38,12 @@ export function NetworkStatusIndicator() {
 			{isOnline ? (
 				<>
 					<WifiIcon className="h-4 w-4" />
-					<span>Back Online</span>
+					<span>{t('backOnline', 'Back Online')}</span>
 				</>
 			) : (
 				<>
 					<WifiOffIcon className="h-4 w-4" />
-					<span>Offline - Using Cached Data</span>
+					<span>{t('offlineUsingCachedData', 'Offline - Using Cached Data')}</span>
 				</>
 			)}
 		</div>

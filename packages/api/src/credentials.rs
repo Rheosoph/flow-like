@@ -5,6 +5,7 @@ use aws_credentials::AwsRuntimeCredentials;
 #[cfg(feature = "azure")]
 use azure_credentials::AzureRuntimeCredentials;
 use flow_like::credentials::SharedCredentials;
+use flow_like::flow::execution::ExecutionEnvironment;
 use flow_like::flow_like_storage::files::store::FlowLikeStore;
 use flow_like::state::FlowLikeState;
 use flow_like_storage::lancedb::connection::ConnectBuilder;
@@ -55,6 +56,83 @@ pub fn validate_path_component(value: &str, name: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Longest segment this function will ever emit.
+const MAX_STORAGE_PATH_SEGMENT_CHARS: usize = 80;
+/// Hex characters of the disambiguating digest appended to a lossy segment.
+/// Twelve hex characters is 48 bits, which is far more than the number of
+/// distinct subjects any deployment holds and short enough to stay readable.
+const STORAGE_PATH_SEGMENT_DIGEST_CHARS: usize = 12;
+
+/// Collapses an identifier into a single storage path segment.
+///
+/// The scratch directory `tmp/user/{sub}/apps/{app_id}` has five consumers that
+/// must agree character for character, or the credential covers a directory
+/// nobody writes to: the `/tmp` presign route, the HTTP-sink request offload,
+/// the Azure directory SAS issuer, the AWS session policy and the GCP credential
+/// access boundary. They share this function rather than each carrying a copy.
+///
+/// A segment that survives sanitisation unchanged is returned verbatim, which
+/// keeps opaque IDs (`app_id`, and any subject the IdP already emits in this
+/// alphabet) readable and stable. A segment that had to be rewritten — because
+/// `validate_path_component` deliberately admits `|` and `:`, because it was
+/// longer than the ceiling, or because it trimmed to nothing — carries a digest
+/// of the *original* value. Without it `auth0|123`, `auth0:123` and `auth0_123`
+/// would all collapse onto one directory, and a credential scoped to that
+/// directory would reach another subject's scratch space.
+pub fn storage_path_segment(value: &str, fallback: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len().min(MAX_STORAGE_PATH_SEGMENT_CHARS));
+    let mut lossy = value.chars().count() > MAX_STORAGE_PATH_SEGMENT_CHARS;
+    for ch in value.chars().take(MAX_STORAGE_PATH_SEGMENT_CHARS) {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+            lossy = true;
+        }
+    }
+
+    let trimmed = sanitized.trim_matches(|ch| ch == '.' || ch == '_');
+    lossy |= trimmed.len() != sanitized.len();
+
+    if !lossy {
+        return if trimmed.is_empty() {
+            fallback.to_string()
+        } else {
+            trimmed.to_string()
+        };
+    }
+
+    let digest = blake3::hash(value.as_bytes()).to_hex();
+    let digest = &digest[..STORAGE_PATH_SEGMENT_DIGEST_CHARS];
+    let base = if trimmed.is_empty() {
+        fallback
+    } else {
+        trimmed
+    };
+    let base: String = base
+        .chars()
+        .take(MAX_STORAGE_PATH_SEGMENT_CHARS - STORAGE_PATH_SEGMENT_DIGEST_CHARS - 1)
+        .collect();
+    let base = base.trim_end_matches(|ch| ch == '.' || ch == '_');
+    let base = if base.is_empty() { fallback } else { base };
+    format!("{base}-{digest}")
+}
+
+/// The scratch prefixes every scoped credential must authorise, built from the
+/// same segments the writers use. Returned as a pair so no caller can sanitise
+/// one and forget the other.
+pub fn temporary_prefixes(sub: &str, app_id: &str) -> (String, String) {
+    let app_segment = storage_path_segment(app_id, "app");
+    (
+        format!(
+            "tmp/user/{}/apps/{}",
+            storage_path_segment(sub, "user"),
+            app_segment
+        ),
+        format!("tmp/global/apps/{}", app_segment),
+    )
 }
 
 #[async_trait]
@@ -210,21 +288,21 @@ impl RuntimeCredentials {
     }
 
     pub async fn to_store(&self, meta: bool) -> Result<FlowLikeStore> {
-        match self {
-            #[cfg(feature = "aws")]
-            RuntimeCredentials::Aws(aws) => aws.into_shared_credentials().to_store(meta).await,
-            #[cfg(feature = "azure")]
-            RuntimeCredentials::Azure(azure) => {
-                azure.into_shared_credentials().to_store(meta).await
-            }
-            #[cfg(feature = "gcp")]
-            RuntimeCredentials::Gcp(gcp) => gcp.into_shared_credentials().to_store(meta).await,
-            #[cfg(feature = "r2")]
-            RuntimeCredentials::R2(r2) => r2.into_shared_credentials().to_store(meta).await,
-            RuntimeCredentials::Mixed(mixed) => {
-                mixed.into_shared_credentials().to_store(meta).await
-            }
-        }
+        self.to_store_type(if meta {
+            flow_like::credentials::StoreType::Meta
+        } else {
+            flow_like::credentials::StoreType::Content
+        })
+        .await
+    }
+
+    pub async fn to_store_type(
+        &self,
+        store_type: flow_like::credentials::StoreType,
+    ) -> Result<FlowLikeStore> {
+        self.into_shared_credentials()
+            .to_store_type(store_type)
+            .await
     }
 
     pub async fn to_db(&self, app_id: &str) -> Result<ConnectBuilder> {
@@ -258,7 +336,7 @@ impl RuntimeCredentials {
     #[instrument(skip(self, state), level = "debug")]
     pub async fn to_state(&self, state: AppState) -> Result<FlowLikeState> {
         let package_widget_source = state.wasm_registry.clone();
-        let flow_state = match self {
+        let mut flow_state = match self {
             #[cfg(feature = "aws")]
             RuntimeCredentials::Aws(aws) => aws.to_state(state).await,
             #[cfg(feature = "azure")]
@@ -269,6 +347,10 @@ impl RuntimeCredentials {
             RuntimeCredentials::R2(r2) => r2.to_state(state).await,
             RuntimeCredentials::Mixed(mixed) => mixed.to_state(state).await,
         }?;
+
+        // The API is a shared server: anything built on this state must not
+        // fall back to the process's own cloud identity.
+        flow_state.execution_environment = ExecutionEnvironment::Server;
 
         if let Some(package_widget_source) = package_widget_source {
             flow_state
@@ -292,5 +374,90 @@ impl RuntimeCredentials {
             RuntimeCredentials::R2(r2) => r2.into_shared_credentials(),
             RuntimeCredentials::Mixed(mixed) => mixed.into_shared_credentials(),
         }
+    }
+}
+
+#[cfg(test)]
+mod storage_path_segment_tests {
+    use super::{storage_path_segment, temporary_prefixes, validate_path_component};
+
+    /// The overwhelmingly common shape — an opaque ID — must survive untouched,
+    /// or every existing scratch object moves the day this lands.
+    #[test]
+    fn already_safe_segments_are_returned_verbatim() {
+        for value in ["app-1", "user_1", "01JABCDEF0123456789", "a.b-c_d"] {
+            assert_eq!(storage_path_segment(value, "fallback"), value);
+        }
+    }
+
+    /// `validate_path_component` admits `|` and `:` because IdP subjects use
+    /// them, so the collapse they force is the normal case, not an edge case.
+    #[test]
+    fn subjects_that_collapse_stay_distinguishable() {
+        for value in ["auth0|123", "auth0:123", "auth0_123"] {
+            assert!(
+                validate_path_component(value, "sub").is_ok(),
+                "{value} should reach the sanitiser at all"
+            );
+        }
+        let segments = ["auth0|123", "auth0:123", "auth0_123"]
+            .map(|value| storage_path_segment(value, "user"))
+            .to_vec();
+
+        let mut unique = segments.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            segments.len(),
+            "distinct subjects must not share a scratch directory: {segments:?}"
+        );
+        assert_eq!(storage_path_segment("auth0_123", "user"), "auth0_123");
+    }
+
+    #[test]
+    fn the_digest_is_stable_across_calls() {
+        assert_eq!(
+            storage_path_segment("sink:abc", "user"),
+            storage_path_segment("sink:abc", "user")
+        );
+    }
+
+    #[test]
+    fn empty_and_fully_stripped_values_fall_back_without_colliding() {
+        assert_eq!(storage_path_segment("", "user"), "user");
+        let dots = storage_path_segment("...", "user");
+        let underscores = storage_path_segment("___", "user");
+        assert!(dots.starts_with("user-"), "{dots}");
+        assert!(underscores.starts_with("user-"), "{underscores}");
+        assert_ne!(dots, underscores);
+    }
+
+    #[test]
+    fn segments_never_exceed_the_ceiling_or_end_in_a_separator() {
+        let long = "a".repeat(200);
+        let segment = storage_path_segment(&long, "user");
+        assert!(segment.len() <= 80, "{} chars", segment.len());
+        assert!(!segment.ends_with('_') && !segment.ends_with('.'));
+        // Truncation alone must not merge two different subjects.
+        assert_ne!(segment, storage_path_segment(&format!("{long}b"), "user"));
+    }
+
+    /// The prefix a scoped credential authorises and the path the `/tmp` route
+    /// and the HTTP-sink offload write must be built from the same segments.
+    /// This is the invariant every cloud's prefix builder now depends on.
+    #[test]
+    fn temporary_prefixes_match_what_the_writers_build() {
+        let (user_prefix, global_prefix) = temporary_prefixes("sink:abc", "app-1");
+        assert_eq!(
+            user_prefix,
+            format!(
+                "tmp/user/{}/apps/{}",
+                storage_path_segment("sink:abc", "user"),
+                storage_path_segment("app-1", "app")
+            )
+        );
+        assert_eq!(global_prefix, "tmp/global/apps/app-1");
+        assert!(!user_prefix.contains(':'), "{user_prefix}");
     }
 }

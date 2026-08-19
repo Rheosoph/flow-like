@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	SubscriptionPage,
@@ -13,6 +14,7 @@ import { toast } from "sonner";
 import { currentRelativeUrl } from "../../lib/return-url";
 
 export default function SubscriptionPageWrapper() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const hub = useHub();
 	const auth = useAuth();
@@ -60,14 +62,14 @@ export default function SubscriptionPageWrapper() {
 		return (
 			<main className="flex flex-row items-center justify-center w-full flex-1 min-h-0 py-12">
 				<div className="text-center p-6 border rounded-lg shadow-lg bg-card">
-					<h3>Please log in to view subscription options.</h3>
+					<h3>{t('pleaseLogInToViewSubscriptionOptions', 'Please log in to view subscription options.')}</h3>
 					<Button
 						onClick={() =>
 							auth.signinRedirect({ url_state: currentRelativeUrl() })
 						}
 						className="mt-4"
 					>
-						Log In
+						{t('logIn', 'Log In')}
 					</Button>
 				</div>
 			</main>
@@ -87,10 +89,10 @@ export default function SubscriptionPageWrapper() {
 			<main className="flex flex-row items-center justify-center w-full flex-1 min-h-0 py-12">
 				<div className="text-center p-6">
 					<h3 className="text-xl font-semibold mb-2">
-						Premium Features Not Available
+						{t('premiumFeaturesNotAvailable', 'Premium Features Not Available')}
 					</h3>
 					<p className="text-muted-foreground">
-						Premium subscription features are not enabled on this instance.
+						{t('premiumSubscriptionFeaturesAreNotEnabledOnThisInstance', 'Premium subscription features are not enabled on this instance.')}
 					</p>
 				</div>
 			</main>
@@ -111,9 +113,9 @@ export default function SubscriptionPageWrapper() {
 				<div className="flex flex-row items-center justify-center w-full flex-1 min-h-0 py-12">
 					<div className="text-center p-6">
 						<h3 className="text-xl font-semibold mb-2">
-							Failed to load pricing information.
+							{t('failedToLoadPricingInformation', 'Failed to load pricing information.')}
 						</h3>
-						<p className="text-muted-foreground">Please try again later.</p>
+						<p className="text-muted-foreground">{t('pleaseTryAgainLater', 'Please try again later.')}</p>
 					</div>
 				</div>
 			)}

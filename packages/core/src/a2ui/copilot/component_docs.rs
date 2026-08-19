@@ -98,6 +98,13 @@ pub const COMPONENT_CATALOG: &str = r##"
 
 ### Widget System
 - `widgetInstance` - Reusable widget component instance
+- `microWidgetInstance` - An instance of a widget shipped by an installed PACKAGE (rendered in a
+  sandboxed iframe). Requires `instanceId` plus `packageId`, `widgetId` and `packageVersion`; pass
+  `bundleHash` and `contract` through as well, and set input values on `props`. Every one of those
+  fields except `instanceId` MUST be copied verbatim from `ui_inspect` (operation `list`/`widgets`
+  returns them under `package_widgets`) — they cannot be guessed, and a wrong or missing
+  `bundleHash` renders nothing on desktop. Bind the contract's declared events through
+  `actionBindings`, exactly as for `widgetInstance`.
 - An INTERACTIVE widget (rows/cards with buttons the user acts on) MUST declare its named actions
   at the WIDGET level inside its `inlineWidgetDef` — a widget with an empty `actions` list cannot
   be bound to any workflow. Use the exact action names the request asks for as the action ids:
@@ -805,8 +812,13 @@ a settings screen.
 3. `canvasSettings.customCss`: a scoped stylesheet for what the other two cannot do - keyframe
    animations, hover/focus states, pseudo-elements (::before/::after), extra media queries.
    Classes it defines apply only where a component's `className` references them. Never style
-   `:root` in it (it leaks outside this surface). Keep customCss under 12000 chars and any
-   single style string under 1000.
+   `:root` in it (it leaks outside this surface). customCss is capped at 40,000 characters - a full
+   design system is expected and fits well inside that, and an oversized sheet is rejected whole
+   rather than truncated - but keep any single style string under 1000 chars.
+   When CURRENT CANVAS SETTINGS shows an existing stylesheet, OMIT `customCss` from emit_ui to
+   keep it exactly as-is. Only include it when you are changing it, and then send the COMPLETE
+   stylesheet: the value replaces the previous one, so a fragment silently drops every rule you
+   left out.
 
 ## Theme Colors (default vocabulary - always correct in light AND dark mode)
 

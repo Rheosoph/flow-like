@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { File, Loader2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
@@ -63,8 +64,8 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 
 function formatFileSize(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	if (bytes < 1024 * 1024) return i18next.t('valKb', '{{val}} KB', { val: (bytes / 1024).toFixed(1) });
+	return i18next.t('valMb', '{{val}} MB', { val: (bytes / (1024 * 1024)).toFixed(1) });
 }
 
 function fileNameFromUrl(url: string): string {
@@ -106,6 +107,7 @@ export function A2UIFileInput({
 	componentId,
 	surfaceId,
 }: ComponentProps<FileInputComponent>) {
+	const { t } = useTranslation("common");
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const isTriggering = useIsComponentTriggering(componentId);
@@ -249,7 +251,7 @@ export function A2UIFileInput({
 					size: file.size,
 					type: file.type,
 					uploading: false,
-					uploadError: "Upload failed",
+					uploadError: t('uploadFailed', 'Upload failed'),
 				};
 				uploadResults.push(errorFile);
 
@@ -381,7 +383,7 @@ export function A2UIFileInput({
 						<>
 							<Loader2 className="h-8 w-8 animate-spin" />
 							<span className="text-sm">
-								{isUploading ? "Uploading files..." : "Running action..."}
+								{isUploading ? t('uploadingFiles', 'Uploading files...') : t('runningAction', 'Running action...')}
 							</span>
 						</>
 					) : (
@@ -389,13 +391,11 @@ export function A2UIFileInput({
 							<Upload className="h-8 w-8" />
 							<span className="text-sm">
 								{multiple
-									? "Drop files here or click to browse"
-									: "Drop a file here or click to browse"}
+									? t('dropFilesHereOrClickToBrowse', 'Drop files here or click to browse')
+									: t('dropAFileHereOrClickToBrowse', 'Drop a file here or click to browse')}
 							</span>
 							{accept && (
-								<span className="text-xs text-muted-foreground/70">
-									Accepts: {accept}
-								</span>
+								<span className="text-xs text-muted-foreground/70">{t('acceptsAccept', 'Accepts: {{accept}}', { accept })}</span>
 							)}
 						</>
 					)}

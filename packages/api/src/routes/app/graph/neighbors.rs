@@ -21,6 +21,9 @@ pub struct NeighborsPayload {
     #[serde(default = "default_direction")]
     pub direction: String,
     pub limit: Option<usize>,
+    /// Relationship labels to follow. Omit or leave empty to follow all of them.
+    #[serde(default)]
+    pub edge_labels: Option<Vec<String>>,
 }
 
 fn default_depth() -> usize {
@@ -90,6 +93,7 @@ pub async fn neighbors(
             payload.depth,
             direction,
             payload.limit,
+            payload.edge_labels.as_deref(),
         )
         .await?;
 

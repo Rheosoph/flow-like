@@ -12,10 +12,51 @@ use flow_like::{
 use flow_like_storage::object_store;
 use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[cfg(feature = "gcp")]
 const GCS_STORAGE_TOKEN_OPTION: &str = "google_storage_token";
+#[cfg(feature = "gcp")]
+const GCS_SERVICE_ACCOUNT_KEY_OPTION: &str = "google_service_account_key";
+
+/// Metadata-server endpoint that mints an OAuth2 token for the service account
+/// bound to the running Cloud Run revision, GCE instance or GKE pod.
+#[cfg(feature = "gcp")]
+const METADATA_TOKEN_PATH: &str = "/computeMetadata/v1/instance/service-accounts/default/token";
+#[cfg(feature = "gcp")]
+const DEFAULT_METADATA_HOST: &str = "metadata.google.internal";
+#[cfg(feature = "gcp")]
+const DEFAULT_METADATA_IP: &str = "169.254.169.254";
+#[cfg(feature = "gcp")]
+const METADATA_FLAVOR_HEADER: &str = "Metadata-Flavor";
+#[cfg(feature = "gcp")]
+const METADATA_FLAVOR_VALUE: &str = "Google";
+/// A cached metadata token is only reused while this much life remains. The
+/// downscoped token handed to a client inherits the base token's remaining
+/// lifetime, so serving a nearly-dead base token would mint client credentials
+/// that expire minutes after they are issued.
+#[cfg(feature = "gcp")]
+const METADATA_TOKEN_MIN_LIFETIME_SECONDS: i64 = 5 * 60;
+/// Ceiling on cache residency. Metadata tokens live ~1h and the metadata server
+/// refreshes its own copy near the end of that window; re-asking every ten
+/// minutes keeps this process close to a full-lifetime token without turning
+/// every scoped-credential request into a metadata round trip.
+#[cfg(feature = "gcp")]
+const METADATA_TOKEN_CACHE_TTL_SECONDS: u64 = 10 * 60;
+#[cfg(feature = "gcp")]
+const METADATA_CONNECT_TIMEOUT_SECONDS: u64 = 3;
+#[cfg(feature = "gcp")]
+const METADATA_REQUEST_TIMEOUT_SECONDS: u64 = 10;
+
+#[cfg(feature = "gcp")]
+#[derive(Clone)]
+struct CachedMetadataToken {
+    token: String,
+    expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[cfg(feature = "gcp")]
+static METADATA_TOKENS: OnceLock<moka::sync::Cache<String, CachedMetadataToken>> = OnceLock::new();
 
 /// GCP Runtime Credentials with downscoped access tokens
 ///
@@ -86,7 +127,7 @@ impl GcpRuntimeCredentials {
     }
 
     pub fn from_env() -> Self {
-        let service_account_key = std::env::var("GOOGLE_APPLICATION_CREDENTIALS_JSON").ok();
+        let service_account_key = service_account_key_from_env();
         let logs_bucket = std::env::var("GCP_LOG_BUCKET")
             .or_else(|_| std::env::var("LOG_BUCKET"))
             .unwrap_or_default();
@@ -115,7 +156,7 @@ impl GcpRuntimeCredentials {
     }
 
     pub async fn master_credentials(&self) -> Self {
-        let service_account_key = std::env::var("GOOGLE_APPLICATION_CREDENTIALS_JSON").ok();
+        let service_account_key = service_account_key_from_env();
 
         GcpRuntimeCredentials {
             service_account_key,
@@ -129,6 +170,59 @@ impl GcpRuntimeCredentials {
             content_path_prefix: None,
             user_content_path_prefix: None,
         }
+    }
+
+    /// Decide where the base OAuth2 token comes from.
+    ///
+    /// An explicitly configured key always wins. Silently preferring the
+    /// metadata identity over a key the operator deliberately supplied would
+    /// swap the acting principal — and with it the effective IAM grants — with
+    /// no signal at all, so the keyless path only engages where it is the only
+    /// path. That is every Cloud Run / GKE Workload Identity deployment, which
+    /// is precisely where the previous hard error made this unusable.
+    ///
+    /// A blank key never reaches here from configuration —
+    /// `service_account_key_from_env` collapses an empty
+    /// `GOOGLE_APPLICATION_CREDENTIALS_JSON` to `None` so that "set but empty"
+    /// cannot masquerade as a key — but a deserialized payload can still carry
+    /// one, and blank key material is unusable either way.
+    fn base_token_source(&self) -> GcpBaseTokenSource {
+        match self
+            .service_account_key
+            .as_ref()
+            .filter(|key| !key.trim().is_empty())
+        {
+            Some(key) => GcpBaseTokenSource::ServiceAccountKey(key.clone()),
+            None => GcpBaseTokenSource::Metadata,
+        }
+    }
+
+    /// Whether this credential set came from `scoped_credentials` rather than
+    /// from server configuration. Mirrors `GcpSharedCredentials::is_scoped`.
+    fn is_scoped(&self) -> bool {
+        !self.allowed_prefixes.is_empty()
+            || self.expiration.is_some()
+            || self.content_path_prefix.is_some()
+            || self.user_content_path_prefix.is_some()
+    }
+
+    /// Gate in front of the keyless (ADC) database builders.
+    ///
+    /// ADC resolves the workload's own runtime service account, which carries no
+    /// Credential Access Boundary and so is unrestricted across the bucket. That
+    /// is the intended identity for master credentials under Workload Identity
+    /// and the wrong one for a scoped credential, where the downscoped token is
+    /// the only thing enforcing prefix isolation.
+    fn ensure_keyless_allowed(&self) -> Result<()> {
+        if self.is_scoped() {
+            return Err(anyhow!(
+                "scoped GCP credentials carry no usable access token (prefixes: {:?}, expiration: {:?}) - \
+                 refusing to fall back to the ambient runtime identity, which enforces no prefix restriction",
+                self.allowed_prefixes,
+                self.expiration
+            ));
+        }
+        Ok(())
     }
 
     #[tracing::instrument(
@@ -149,17 +243,23 @@ impl GcpRuntimeCredentials {
         crate::credentials::validate_path_component(sub, "sub")?;
         crate::credentials::validate_path_component(app_id, "app_id")?;
 
-        let service_account_key = self
-            .service_account_key
-            .clone()
-            .ok_or_else(|| anyhow!("Service account key not set"))?;
+        // Decided here, ahead of the prefix work, so the one place this flow
+        // branches by credential shape stays visible at the top. Under Workload
+        // Identity there is no key JSON anywhere in the environment, so the
+        // unconditional key requirement that used to sit on this line failed
+        // every scoped-credential request on Cloud Run.
+        let token_source = self.base_token_source();
 
         let apps_prefix = format!("apps/{}", app_id);
         let db_prefix = format!("{}/storage/db", apps_prefix);
         let user_prefix = format!("users/{}/apps/{}", sub, app_id);
         let log_prefix = format!("runs/{}", app_id);
-        let temporary_user_prefix = format!("tmp/user/{}/apps/{}", sub, app_id);
-        let temporary_global_prefix = format!("tmp/global/apps/{}", app_id);
+        // The writers (`/tmp` presign, HTTP-sink offload) run both segments
+        // through `storage_path_segment`, so the prefixes this credential
+        // authorises have to as well — a raw `sink:abc` here would name a
+        // directory nothing ever writes to.
+        let (temporary_user_prefix, temporary_global_prefix) =
+            crate::credentials::temporary_prefixes(sub, app_id);
         let (content_path_prefix, user_content_path_prefix) =
             scoped_content_path_prefixes(&apps_prefix, &user_prefix, &mode);
 
@@ -179,12 +279,12 @@ impl GcpRuntimeCredentials {
             CredentialsAccess::EditAppDb => (vec![db_prefix.clone()], true),
             CredentialsAccess::EditUser => (vec![user_prefix.clone()], true),
             CredentialsAccess::ReadUser => (vec![user_prefix.clone()], false),
+            // Run logs (`runs/{app_id}`) are written only by the server
+            // executor (ServerExecute) and read only through the API
+            // (ReadLogs); the desktop keeps its own local log store. The
+            // client-facing invoke modes therefore never touch that prefix.
             CredentialsAccess::InvokeNone => (
-                vec![
-                    user_prefix.clone(),
-                    temporary_user_prefix.clone(),
-                    log_prefix.clone(),
-                ],
+                vec![user_prefix.clone(), temporary_user_prefix.clone()],
                 true,
             ),
             CredentialsAccess::InvokeRead => (
@@ -193,7 +293,6 @@ impl GcpRuntimeCredentials {
                     user_prefix.clone(),
                     temporary_user_prefix.clone(),
                     temporary_global_prefix.clone(),
-                    log_prefix.clone(),
                 ],
                 false,
             ),
@@ -203,7 +302,6 @@ impl GcpRuntimeCredentials {
                     user_prefix.clone(),
                     temporary_user_prefix.clone(),
                     temporary_global_prefix.clone(),
-                    log_prefix.clone(),
                 ],
                 true,
             ),
@@ -221,7 +319,7 @@ impl GcpRuntimeCredentials {
         };
 
         // Generate a base access token, then downscope it with Credential Access Boundary
-        let base_token = generate_access_token(&service_account_key, state).await?;
+        let base_token = token_source.access_token(state).await?;
         let access_token = if matches!(mode, CredentialsAccess::ServerExecute) {
             downscope_token_for_rules(
                 &base_token,
@@ -236,9 +334,28 @@ impl GcpRuntimeCredentials {
                         ],
                         true,
                     ),
-                    GcpAccessRule::new(self.logs_bucket.clone(), vec![log_prefix.clone()], true),
+                    // Run logs are append-only: the executor creates and
+                    // appends Lance tables but never deletes; Lance's own
+                    // auto-cleanup is best-effort and logs on denial.
+                    GcpAccessRule::with_access(
+                        self.logs_bucket.clone(),
+                        vec![log_prefix.clone()],
+                        GcpAccess::Append,
+                    ),
                     GcpAccessRule::new(self.meta_bucket.clone(), vec![apps_prefix.clone()], false),
                 ],
+            )
+            .await?
+        } else if matches!(mode, CredentialsAccess::ReadLogs) {
+            // Run logs live in the logs bucket (see `to_logs_db_builder`), not
+            // the content bucket the other client modes are scoped to.
+            downscope_token_for_rules(
+                &base_token,
+                &[GcpAccessRule::with_access(
+                    self.logs_bucket.clone(),
+                    vec![log_prefix.clone()],
+                    GcpAccess::Read,
+                )],
             )
             .await?
         } else {
@@ -291,8 +408,12 @@ impl GcpRuntimeCredentials {
         let db_prefix = format!("{}/storage/db", apps_prefix);
         let user_prefix = format!("users/{}/apps/{}", sub, app_id);
         let log_prefix = format!("runs/{}", app_id);
-        let temporary_user_prefix = format!("tmp/user/{}/apps/{}", sub, app_id);
-        let temporary_global_prefix = format!("tmp/global/apps/{}", app_id);
+        // The writers (`/tmp` presign, HTTP-sink offload) run both segments
+        // through `storage_path_segment`, so the prefixes this credential
+        // authorises have to as well — a raw `sink:abc` here would name a
+        // directory nothing ever writes to.
+        let (temporary_user_prefix, temporary_global_prefix) =
+            crate::credentials::temporary_prefixes(sub, app_id);
         let (content_path_prefix, user_content_path_prefix) =
             scoped_content_path_prefixes(&apps_prefix, &user_prefix, &mode);
 
@@ -312,12 +433,12 @@ impl GcpRuntimeCredentials {
             CredentialsAccess::EditAppDb => (vec![db_prefix.clone()], true),
             CredentialsAccess::EditUser => (vec![user_prefix.clone()], true),
             CredentialsAccess::ReadUser => (vec![user_prefix.clone()], false),
+            // Run logs (`runs/{app_id}`) are written only by the server
+            // executor (ServerExecute) and read only through the API
+            // (ReadLogs); the desktop keeps its own local log store. The
+            // client-facing invoke modes therefore never touch that prefix.
             CredentialsAccess::InvokeNone => (
-                vec![
-                    user_prefix.clone(),
-                    temporary_user_prefix.clone(),
-                    log_prefix.clone(),
-                ],
+                vec![user_prefix.clone(), temporary_user_prefix.clone()],
                 true,
             ),
             CredentialsAccess::InvokeRead => (
@@ -326,7 +447,6 @@ impl GcpRuntimeCredentials {
                     user_prefix.clone(),
                     temporary_user_prefix.clone(),
                     temporary_global_prefix.clone(),
-                    log_prefix.clone(),
                 ],
                 false,
             ),
@@ -336,7 +456,6 @@ impl GcpRuntimeCredentials {
                     user_prefix.clone(),
                     temporary_user_prefix.clone(),
                     temporary_global_prefix.clone(),
-                    log_prefix.clone(),
                 ],
                 true,
             ),
@@ -369,9 +488,28 @@ impl GcpRuntimeCredentials {
                         ],
                         true,
                     ),
-                    GcpAccessRule::new(self.logs_bucket.clone(), vec![log_prefix.clone()], true),
+                    // Run logs are append-only: the executor creates and
+                    // appends Lance tables but never deletes; Lance's own
+                    // auto-cleanup is best-effort and logs on denial.
+                    GcpAccessRule::with_access(
+                        self.logs_bucket.clone(),
+                        vec![log_prefix.clone()],
+                        GcpAccess::Append,
+                    ),
                     GcpAccessRule::new(self.meta_bucket.clone(), vec![apps_prefix.clone()], false),
                 ],
+            )
+            .await?
+        } else if matches!(mode, CredentialsAccess::ReadLogs) {
+            // Run logs live in the logs bucket (see `to_logs_db_builder`), not
+            // the content bucket the other client modes are scoped to.
+            downscope_token_for_rules(
+                &base_token,
+                &[GcpAccessRule::with_access(
+                    self.logs_bucket.clone(),
+                    vec![log_prefix.clone()],
+                    GcpAccess::Read,
+                )],
             )
             .await?
         } else {
@@ -432,6 +570,240 @@ fn scoped_content_path_prefixes(
     .then(|| user_prefix.to_string());
 
     (app, user)
+}
+
+/// Where the base OAuth2 token that the STS Credential Access Boundary exchange
+/// downscopes is obtained from.
+///
+/// Only base-token acquisition branches here. Everything downstream — the
+/// access boundary rules, the `CredentialsAccess` table, the prefix scoping —
+/// is identical for both variants, because the STS exchange accepts any access
+/// token regardless of how it was minted.
+#[cfg(feature = "gcp")]
+enum GcpBaseTokenSource {
+    /// Cloud Run, GCE and GKE Workload Identity. No key material exists in the
+    /// environment; the platform mints tokens for the service account bound to
+    /// the workload.
+    Metadata,
+    /// Local development and non-GCP hosts, where an explicitly supplied
+    /// service account key JSON is the only way to authenticate.
+    ServiceAccountKey(String),
+}
+
+#[cfg(feature = "gcp")]
+impl GcpBaseTokenSource {
+    async fn access_token(&self, state: &State) -> Result<String> {
+        match self {
+            Self::Metadata => fetch_metadata_token().await,
+            Self::ServiceAccountKey(key) => generate_access_token(key, state).await,
+        }
+    }
+}
+
+/// Read the master service account key from the environment, treating a
+/// set-but-empty variable as absent.
+///
+/// `std::env::var` returns `Ok("")` for `GOOGLE_APPLICATION_CREDENTIALS_JSON=`,
+/// which is the shape an optional Terraform variable renders to. Passing that
+/// through as `Some("")` made "no key configured" and "key configured as blank"
+/// indistinguishable downstream, where the difference decides whether the
+/// process runs on the configured principal or the ambient one.
+#[cfg(feature = "gcp")]
+fn service_account_key_from_env() -> Option<String> {
+    std::env::var("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+        .ok()
+        .filter(|key| !key.trim().is_empty())
+}
+
+/// Metadata authorities to try, in order: hostname first, link-local IP second.
+///
+/// Mirrors object_store's `InstanceCredentialProvider` — including the
+/// `GCE_METADATA_*` overrides — so the token this module mints and the token
+/// object_store mints inside the same process come from the same server. A
+/// deployment that redirected one and not the other would quietly run on two
+/// different identities. The IP fallback exists because metadata access must
+/// survive a pod with no working DNS; the hostname is unresolvable long before
+/// the address is unreachable.
+#[cfg(feature = "gcp")]
+fn metadata_authorities() -> [String; 2] {
+    let non_empty = |value: String| {
+        let value = value.trim().to_string();
+        (!value.is_empty()).then_some(value)
+    };
+
+    let host = std::env::var("GCE_METADATA_HOST")
+        .or_else(|_| std::env::var("GCE_METADATA_ROOT"))
+        .ok()
+        .and_then(non_empty)
+        .unwrap_or_else(|| DEFAULT_METADATA_HOST.to_string());
+    let ip = std::env::var("GCE_METADATA_IP")
+        .ok()
+        .and_then(non_empty)
+        .unwrap_or_else(|| DEFAULT_METADATA_IP.to_string());
+
+    [host, ip]
+}
+
+/// Fetch an OAuth2 access token for the workload's own service account from the
+/// GCE/Cloud Run metadata server.
+///
+/// This is the keyless path. Under Workload Identity no service account key
+/// JSON exists to sign a JWT assertion with, so the metadata server is the only
+/// source of a base token — and without it every scoped-credential request on
+/// Cloud Run failed outright.
+///
+/// The returned token never leaves this process: it is the *subject* token of
+/// the STS exchange, and only the downscoped result reaches a client. That is
+/// why no scope narrowing is requested here. The metadata server hands back the
+/// workload's full token (`cloud-platform` on Cloud Run), which is what the
+/// Credential Access Boundary exchange expects as its subject; the narrowing
+/// that matters is expressed by the boundary itself, which GCP enforces
+/// server-side on every object operation.
+#[cfg(feature = "gcp")]
+async fn fetch_metadata_token() -> Result<String> {
+    let [host, ip] = metadata_authorities();
+
+    let cache = METADATA_TOKENS.get_or_init(|| {
+        moka::sync::Cache::builder()
+            .max_capacity(4)
+            .time_to_live(std::time::Duration::from_secs(
+                METADATA_TOKEN_CACHE_TTL_SECONDS,
+            ))
+            .build()
+    });
+
+    // The moka TTL is a ceiling, not the truth — the metadata server decides the
+    // real lifetime. Re-checking the advertised expiry keeps a nearly-dead token
+    // out of the STS exchange. A freshly fetched short token is still used: the
+    // metadata server refreshes on its own schedule and rejecting one here would
+    // turn a narrow window into a hard outage.
+    if let Some(cached) = cache.get(&host)
+        && cached.expires_at - chrono::Utc::now()
+            > chrono::Duration::seconds(METADATA_TOKEN_MIN_LIFETIME_SECONDS)
+    {
+        return Ok(cached.token);
+    }
+
+    // `no_proxy` is load-bearing, not tidiness: an ambient HTTP_PROXY would
+    // route this request — and the service account token in its response —
+    // through a third party. The metadata server is link-local and unroutable,
+    // so there is never a legitimate proxy for it. HTTPS is likewise absent by
+    // design; the endpoint is plain HTTP on an address only the hypervisor can
+    // answer for, which is why `https_only` is not set here as it is elsewhere.
+    //
+    // Redirects are refused for the same reason: the only correct responder for
+    // this request is the link-local address itself, so a 3xx pointing anywhere
+    // else is either a misconfiguration or an attempt to feed this process a
+    // token from a server it does not trust.
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(
+            METADATA_CONNECT_TIMEOUT_SECONDS,
+        ))
+        .timeout(std::time::Duration::from_secs(
+            METADATA_REQUEST_TIMEOUT_SECONDS,
+        ))
+        .build()
+        .map_err(|error| anyhow!("failed to construct GCP metadata client: {error}"))?;
+
+    #[derive(Deserialize)]
+    struct MetadataTokenResponse {
+        access_token: String,
+        expires_in: i64,
+    }
+
+    let mut last_error: Option<flow_like_types::Error> = None;
+    for authority in [host.as_str(), ip.as_str()] {
+        // `Metadata-Flavor: Google` is the SSRF guard, not a formality: the
+        // metadata server rejects any request that omits it, so a confused
+        // proxy or a redirect-following client cannot be steered into reading
+        // the token on an attacker's behalf. Requiring the header back on the
+        // response closes the other direction — a hijacked
+        // `metadata.google.internal` cannot feed this process a token it
+        // controls, because a plain HTTP server does not echo the header.
+        let response = client
+            .get(format!("http://{}{}", authority, METADATA_TOKEN_PATH))
+            .header(METADATA_FLAVOR_HEADER, METADATA_FLAVOR_VALUE)
+            .send()
+            .await;
+
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                last_error = Some(anyhow!(
+                    "GCP metadata token request to {authority} failed: {error}"
+                ));
+                continue;
+            }
+        };
+
+        let status = response.status();
+        let flavor_echoed = response
+            .headers()
+            .get(METADATA_FLAVOR_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case(METADATA_FLAVOR_VALUE));
+
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            last_error = Some(anyhow!(
+                "GCP metadata server at {authority} returned HTTP {status}: {body}"
+            ));
+            continue;
+        }
+
+        // Warned about, never enforced. The echo would be a useful signal that
+        // the responder really is the metadata server, but Google documents the
+        // header only as a *request* requirement: `google-auth` checks it in its
+        // `ping()` environment probe and in neither `get()` nor
+        // `get_service_account_token()`, object_store's own
+        // `InstanceCredentialProvider` never checks it, and GKE has been
+        // reported serving token responses without it. Requiring it would trade
+        // a total credential outage for a narrow anti-spoofing check that the
+        // platform does not promise to support.
+        if !flavor_echoed {
+            tracing::warn!(
+                authority,
+                "GCP metadata token response omitted {METADATA_FLAVOR_HEADER}: {METADATA_FLAVOR_VALUE}"
+            );
+        }
+
+        // A malformed body falls through to the next authority rather than
+        // aborting: the hostname answering with junk is exactly the broken-DNS
+        // case the link-local address exists to survive.
+        let token: MetadataTokenResponse = match response.json().await {
+            Ok(token) => token,
+            Err(error) => {
+                last_error = Some(anyhow!(
+                    "invalid GCP metadata token response from {authority}: {error}"
+                ));
+                continue;
+            }
+        };
+
+        // Clamped because `chrono::Duration::seconds` panics on an absurd input
+        // and this runs inside a request handler. Clamping low degrades to
+        // "never serve from cache", which is correct rather than merely safe.
+        let lifetime = chrono::Duration::seconds(token.expires_in.clamp(0, 24 * 60 * 60));
+        cache.insert(
+            host.clone(),
+            CachedMetadataToken {
+                token: token.access_token.clone(),
+                expires_at: chrono::Utc::now() + lifetime,
+            },
+        );
+
+        return Ok(token.access_token);
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        anyhow!(
+            "no GCP credentials available: the metadata server was unreachable at {host} and {ip}, \
+             and no service account key is configured. On Cloud Run/GKE bind a runtime service \
+             account to the workload; off-GCP set GOOGLE_APPLICATION_CREDENTIALS_JSON."
+        )
+    }))
 }
 
 /// Generate a short-lived OAuth2 access token using the service account key
@@ -545,6 +917,18 @@ async fn parse_token_response(response: reqwest::Response) -> Result<String> {
 /// Downscope an access token using Google's STS endpoint with Credential Access Boundaries.
 /// This creates a new token that is restricted to the specified paths and permissions.
 /// The token will only be able to access objects under the specified prefixes in the bucket.
+///
+/// The boundary is a whitelist, not a Cloud-Storage-only subtraction: a token
+/// exchanged against a `cloud-platform` subject was verified to be refused
+/// (HTTP 403) by Cloud Resource Manager, Secret Manager and Pub/Sub, and by
+/// Cloud Storage operations outside the boundary, while the subject token
+/// reached all of them. "Credential Access Boundaries are only available for
+/// Cloud Storage" means the rules can only *name* Cloud Storage resources — not
+/// that other APIs stay reachable. So it does not matter whether the subject
+/// token came from a scoped key assertion or the metadata server's full-scope
+/// workload token; do not add a `scope` parameter to narrow it, because STS
+/// rejects the exchange outright with `invalid_request` when a scope accompanies
+/// an access boundary.
 #[cfg(feature = "gcp")]
 async fn downscope_token(
     access_token: &str,
@@ -567,16 +951,56 @@ async fn downscope_token(
 struct GcpAccessRule {
     bucket: String,
     prefixes: Vec<String>,
-    write_access: bool,
+    access: GcpAccess,
+}
+
+/// What a Credential Access Boundary rule may do under its prefixes.
+///
+/// `Append` is create + read: GCS requires `storage.objects.delete` to
+/// overwrite an existing object, so `objectCreator` alone can neither
+/// overwrite nor delete — the shape Lance needs for run logs (fresh data
+/// files, `.txn` files and conditional-put manifests, never a delete).
+#[cfg(feature = "gcp")]
+#[derive(Clone, Copy)]
+enum GcpAccess {
+    Read,
+    Append,
+    Write,
+}
+
+#[cfg(feature = "gcp")]
+impl GcpAccess {
+    fn roles(self) -> &'static [&'static str] {
+        match self {
+            GcpAccess::Read => &["inRole:roles/storage.objectViewer"],
+            GcpAccess::Append => &[
+                "inRole:roles/storage.objectCreator",
+                "inRole:roles/storage.objectViewer",
+            ],
+            GcpAccess::Write => &["inRole:roles/storage.objectAdmin"],
+        }
+    }
 }
 
 #[cfg(feature = "gcp")]
 impl GcpAccessRule {
     fn new(bucket: String, prefixes: Vec<String>, write_access: bool) -> Self {
+        Self::with_access(
+            bucket,
+            prefixes,
+            if write_access {
+                GcpAccess::Write
+            } else {
+                GcpAccess::Read
+            },
+        )
+    }
+
+    fn with_access(bucket: String, prefixes: Vec<String>, access: GcpAccess) -> Self {
         Self {
             bucket,
             prefixes,
-            write_access,
+            access,
         }
     }
 }
@@ -588,11 +1012,7 @@ async fn downscope_token_for_rules(access_token: &str, rules: &[GcpAccessRule]) 
     let access_boundary_rules: Vec<serde_json::Value> = rules
         .iter()
         .map(|rule| {
-            let permission_role = if rule.write_access {
-                "inRole:roles/storage.objectAdmin"
-            } else {
-                "inRole:roles/storage.objectViewer"
-            };
+            let permission_roles = rule.access.roles();
 
             // Build condition expression for path restrictions.
             // This restricts both object access (resource.name) and list operations (objectListPrefix).
@@ -614,7 +1034,7 @@ async fn downscope_token_for_rules(access_token: &str, rules: &[GcpAccessRule]) 
                 .collect();
 
             json!({
-                "availablePermissions": [permission_role],
+                "availablePermissions": permission_roles,
                 "availableResource": format!("//storage.googleapis.com/projects/_/buckets/{}", rule.bucket),
                 "availabilityCondition": {
                     "expression": conditions.join(" || ")
@@ -747,20 +1167,20 @@ impl RuntimeCredentialsTrait for GcpRuntimeCredentials {
 
         let bucket = self.content_bucket.clone();
 
-        if let Some(ref service_account_key) = self.service_account_key {
-            config.register_build_logs_database(Arc::new(make_gcs_builder_with_key(
-                bucket.clone(),
-                service_account_key.clone(),
-            )));
-            config.register_build_project_database(Arc::new(make_gcs_builder_with_key(
-                bucket.clone(),
-                service_account_key.clone(),
-            )));
-            config.register_build_user_database(Arc::new(make_gcs_builder_with_key(
-                bucket,
-                service_account_key.clone(),
-            )));
-        } else if let Some(ref access_token) = self.access_token {
+        // Narrowest credential first, matching `GcpSharedCredentials`. Branching
+        // on the key first — as this did — let a present-but-blank key win over a
+        // real downscoped token in the same struct, discarding the only
+        // restriction the credential carried.
+        let scoped_token = self
+            .access_token
+            .as_ref()
+            .filter(|token| !token.trim().is_empty());
+        let master_key = self
+            .service_account_key
+            .as_ref()
+            .filter(|key| !key.trim().is_empty());
+
+        if let Some(access_token) = scoped_token {
             config.register_build_logs_database(Arc::new(make_gcs_builder_with_token(
                 bucket.clone(),
                 access_token.clone(),
@@ -773,8 +1193,35 @@ impl RuntimeCredentialsTrait for GcpRuntimeCredentials {
                 bucket,
                 access_token.clone(),
             )));
+        } else if let Some(service_account_key) = master_key {
+            config.register_build_logs_database(Arc::new(make_gcs_builder_with_key(
+                bucket.clone(),
+                service_account_key.clone(),
+            )));
+            config.register_build_project_database(Arc::new(make_gcs_builder_with_key(
+                bucket.clone(),
+                service_account_key.clone(),
+            )));
+            config.register_build_user_database(Arc::new(make_gcs_builder_with_key(
+                bucket,
+                service_account_key.clone(),
+            )));
         } else {
-            return Err(anyhow!("No GCP credentials available"));
+            // Keyless master credentials: no key JSON and no downscoped token is
+            // the normal shape on Cloud Run, so erroring here made the GCP
+            // master path unusable under Workload Identity for the same reason
+            // `scoped_credentials` was. Registering the builders without any
+            // storage option lets object_store walk its own credential chain
+            // down to the metadata server — the same identity
+            // `fetch_metadata_token` uses, so the two paths cannot disagree.
+            //
+            // Master credentials only: a scoped credential that lands here has
+            // lost its token, and the runtime identity it would pick up instead
+            // enforces none of the prefixes it was scoped to.
+            self.ensure_keyless_allowed()?;
+            config.register_build_logs_database(Arc::new(make_gcs_builder_adc(bucket.clone())));
+            config.register_build_project_database(Arc::new(make_gcs_builder_adc(bucket.clone())));
+            config.register_build_user_database(Arc::new(make_gcs_builder_adc(bucket)));
         }
 
         let mut flow_like_state = FlowLikeState::new(config, http_client);
@@ -786,18 +1233,38 @@ impl RuntimeCredentialsTrait for GcpRuntimeCredentials {
     }
 }
 
+/// Build a LanceDB connection factory over a GCS bucket.
+///
+/// `credential` is `None` only on the deliberate keyless path. A blank
+/// credential is never normalised to `None` here: object_store rejects a
+/// present-but-blank key, and that rejection is the outcome we want. Dropping
+/// the option instead would resolve ADC and quietly substitute the unrestricted
+/// runtime identity for the credential that was supposed to constrain the
+/// caller.
+#[cfg(feature = "gcp")]
+fn make_gcs_builder(
+    bucket: String,
+    credential: Option<(&'static str, String)>,
+) -> impl Fn(object_store::path::Path) -> ConnectBuilder {
+    move |path| {
+        let url = format!("gs://{}/{}", bucket, path);
+        let builder = connect(&url);
+        match &credential {
+            Some((option, value)) => builder.storage_option(option.to_string(), value.clone()),
+            None => builder,
+        }
+    }
+}
+
 #[cfg(feature = "gcp")]
 fn make_gcs_builder_with_key(
     bucket: String,
     service_account_key: String,
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder {
-    move |path| {
-        let url = format!("gs://{}/{}", bucket, path);
-        connect(&url).storage_option(
-            "google_service_account_key".to_string(),
-            service_account_key.clone(),
-        )
-    }
+    make_gcs_builder(
+        bucket,
+        Some((GCS_SERVICE_ACCOUNT_KEY_OPTION, service_account_key)),
+    )
 }
 
 #[cfg(feature = "gcp")]
@@ -805,10 +1272,16 @@ fn make_gcs_builder_with_token(
     bucket: String,
     access_token: String,
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder {
-    move |path| {
-        let url = format!("gs://{}/{}", bucket, path);
-        connect(&url).storage_option(GCS_STORAGE_TOKEN_OPTION.to_string(), access_token.clone())
-    }
+    make_gcs_builder(bucket, Some((GCS_STORAGE_TOKEN_OPTION, access_token)))
+}
+
+/// Application Default Credentials: no explicit credential, so object_store
+/// resolves service-account key -> ADC file -> `InstanceCredentialProvider` on
+/// the metadata server. This is the keyless equivalent of the two builders
+/// above.
+#[cfg(feature = "gcp")]
+fn make_gcs_builder_adc(bucket: String) -> impl Fn(object_store::path::Path) -> ConnectBuilder {
+    make_gcs_builder(bucket, None)
 }
 
 // ============================================================================

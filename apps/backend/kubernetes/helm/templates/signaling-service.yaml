@@ -1,0 +1,19 @@
+{{- if .Values.signaling.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flow-like.fullname" . }}-signaling
+  labels:
+    {{- include "flow-like.signaling.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.signaling.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: {{ include "flow-like.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: signaling
+{{- end }}

@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	ArrowLeft,
 	Check,
@@ -93,6 +94,7 @@ export function WidgetDetail({
 	appId,
 	widgetId,
 }: Readonly<{ appId: string; widgetId: string }>) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const setQueryParams = useSetQueryParams();
 	const [previewWidth, setPreviewWidth] = useState<number | null>(440);
@@ -235,13 +237,13 @@ export function WidgetDetail({
 					size="icon"
 					className="h-7 w-7 shrink-0"
 					onClick={() => setQueryParams("widgetId", undefined)}
-					aria-label="Back to widgets"
+					aria-label={t('backToWidgets', 'Back to widgets')}
 				>
 					<ArrowLeft className="h-4 w-4" />
 				</Button>
 				<div className="min-w-0">
 					<div className="text-[11px] text-muted-foreground">
-						Widgets{tags[0] ? ` / ${tags[0]}` : ""}
+						{t('widgets', 'Widgets')}{tags[0] ? ` / ${tags[0]}` : ""}
 					</div>
 					<div className="flex items-center gap-2">
 						<h1 className="truncate text-[17px] font-semibold tracking-tight">
@@ -273,11 +275,11 @@ export function WidgetDetail({
 
 				<Button variant="outline" size="sm" onClick={() => setIsEditOpen(true)}>
 					<Pencil className="mr-1.5 h-3.5 w-3.5" />
-					Edit details
+					{t('editDetails', 'Edit details')}
 				</Button>
 				<Button size="sm" onClick={openBuilder}>
 					<Settings className="mr-1.5 h-3.5 w-3.5" />
-					Open builder
+					{t('openBuilder', 'Open builder')}
 				</Button>
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
@@ -285,7 +287,7 @@ export function WidgetDetail({
 							variant="outline"
 							size="icon"
 							className="h-8 w-8"
-							aria-label="More actions"
+							aria-label={t('moreActions', 'More actions')}
 						>
 							<MoreVertical className="h-4 w-4" />
 						</Button>
@@ -293,7 +295,7 @@ export function WidgetDetail({
 					<DropdownMenuContent align="end">
 						<DropdownMenuItem onClick={copyId}>
 							<Copy className="mr-2 h-4 w-4" />
-							Copy widget ID
+							{t('copyWidgetId', 'Copy widget ID')}
 						</DropdownMenuItem>
 						<DropdownMenuSeparator />
 						<DropdownMenuItem
@@ -301,7 +303,7 @@ export function WidgetDetail({
 							onClick={handleDelete}
 						>
 							<Trash2 className="mr-2 h-4 w-4" />
-							Delete widget
+							{t('deleteWidget', 'Delete widget')}
 						</DropdownMenuItem>
 					</DropdownMenuContent>
 				</DropdownMenu>
@@ -311,7 +313,7 @@ export function WidgetDetail({
 				<section className="flex min-h-0 min-w-0 flex-col border-b lg:border-b-0 lg:border-r">
 					<div className="flex items-center gap-3 border-b px-4 py-2">
 						<span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-							Preview
+							{t('preview', 'Preview')}
 						</span>
 						<div className="flex h-6 items-center overflow-hidden rounded-md border">
 							{VIEWPORTS.map((width) => (
@@ -327,14 +329,12 @@ export function WidgetDetail({
 								active={previewWidth === null}
 								onClick={() => setPreviewWidth(null)}
 							>
-								Fill
+								{t('fill', 'Fill')}
 							</ViewportButton>
 						</div>
 						<div className="flex-1" />
-						<span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-							<span className="h-1.5 w-1.5 rounded-full bg-tertiary" />
-							Live · sample data
-						</span>
+						<span className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><Trans i18nKey="spanClassnameh15W15RoundedfullBgtertiaryLiveSampleData"><span className="h-1.5 w-1.5 rounded-full bg-tertiary" />
+							Live · sample data</Trans></span>
 					</div>
 
 					<div
@@ -357,9 +357,9 @@ export function WidgetDetail({
 						) : (
 							<div className="flex flex-col items-center justify-center gap-2 text-muted-foreground">
 								<LayoutGridIcon className="h-10 w-10 opacity-40" />
-								<p className="text-sm">This widget has no elements yet</p>
+								<p className="text-sm">{t('thisWidgetHasNoElementsYet', 'This widget has no elements yet')}</p>
 								<Button variant="link" size="sm" onClick={openBuilder}>
-									Open the builder to add some
+									{t('openTheBuilderToAddSome', 'Open the builder to add some')}
 								</Button>
 							</div>
 						)}
@@ -371,7 +371,7 @@ export function WidgetDetail({
 								<p className="max-w-[52ch] text-[12.5px]">{description}</p>
 							) : (
 								<AddLink onClick={() => setIsEditOpen(true)}>
-									Add a description
+									{t('addADescription', 'Add a description')}
 								</AddLink>
 							)}
 						</StripItem>
@@ -386,22 +386,22 @@ export function WidgetDetail({
 									))}
 								</div>
 							) : (
-								<AddLink onClick={() => setIsEditOpen(true)}>Add tags</AddLink>
+								<AddLink onClick={() => setIsEditOpen(true)}>{t('addTags', 'Add tags')}</AddLink>
 							)}
 						</StripItem>
 
-						<StripItem label="Notes">
+						<StripItem label={t('notes', 'Notes')}>
 							{longDescription ? (
 								<button
 									type="button"
 									onClick={() => setIsEditOpen(true)}
 									className="text-[12.5px] text-muted-foreground underline-offset-2 hover:underline"
 								>
-									Written · open to edit
+									{t('writtenOpenToEdit', 'Written · open to edit')}
 								</button>
 							) : (
 								<AddLink onClick={() => setIsEditOpen(true)}>
-									Write detailed notes
+									{t('writeDetailedNotes', 'Write detailed notes')}
 								</AddLink>
 							)}
 						</StripItem>
@@ -417,7 +417,7 @@ export function WidgetDetail({
 							</Fact>
 							<Fact label="Data">{widget.data?.dataModel?.length ?? 0}</Fact>
 							{metadata.data?.updated_at && (
-								<Fact label="Updated">
+								<Fact label={t('updated', 'Updated')}>
 									{formatRelativeTime(
 										metadata.data.updated_at as IDate,
 										"short",
@@ -431,7 +431,7 @@ export function WidgetDetail({
 				<aside className="flex min-h-0 flex-col bg-muted/20">
 					<div className="shrink-0 space-y-1 border-b px-4 py-3">
 						<div className="flex items-center gap-2">
-							<h2 className="text-[13px] font-semibold">Properties</h2>
+							<h2 className="text-[13px] font-semibold">{t('properties', 'Properties')}</h2>
 							<Badge
 								variant="outline"
 								className="font-mono text-[10.5px] tabular-nums"
@@ -440,8 +440,7 @@ export function WidgetDetail({
 							</Badge>
 						</div>
 						<p className="text-[11.5px] leading-snug text-muted-foreground">
-							What a page can configure when it places this widget. Changes here
-							only affect the preview.
+							{t('whatAPageCanConfigureWhenItPlacesThisWidgetChangesHereOnlyAffectThePreview', "What a page can configure when it places this widget. Changes here only affect the preview.")}
 						</p>
 					</div>
 
@@ -450,13 +449,12 @@ export function WidgetDetail({
 							{exposedProps.length === 0 ? (
 								<div className="flex flex-col items-center gap-2 py-10 text-center text-muted-foreground">
 									<Settings className="h-7 w-7 opacity-40" />
-									<p className="text-sm">No properties exposed yet</p>
+									<p className="text-sm">{t('noPropertiesExposedYet', 'No properties exposed yet')}</p>
 									<p className="max-w-[30ch] text-[11.5px]">
-										Expose a property in the builder to let pages configure this
-										widget without duplicating it.
+										{`Expose a property in the builder to let pages configure this widget without duplicating it.`}
 									</p>
 									<Button variant="link" size="sm" onClick={openBuilder}>
-										Open the builder
+										{t('openTheBuilder', 'Open the builder')}
 									</Button>
 								</div>
 							) : (
@@ -503,19 +501,17 @@ export function WidgetDetail({
 							onClick={() => setOverrides({})}
 						>
 							<RotateCcw className="mr-1.5 h-3 w-3" />
-							Reset preview
+							{t('resetPreview', 'Reset preview')}
 						</Button>
 						{overrideCount > 0 && (
-							<span className="font-mono text-[10.5px] text-muted-foreground tabular-nums">
-								{overrideCount} changed
-							</span>
+							<span className="font-mono text-[10.5px] text-muted-foreground tabular-nums">{t('overridecountChanged', '{{overrideCount}} changed', { overrideCount })}</span>
 						)}
 					</div>
 
 					{actions.length > 0 && (
 						<div className="shrink-0 border-t px-4 py-3">
 							<h3 className="pb-2 text-[9.5px] font-semibold uppercase tracking-[0.09em] text-muted-foreground">
-								Actions
+								{t('actions', 'Actions')}
 							</h3>
 							{actions.map((action) => (
 								<div
@@ -535,7 +531,7 @@ export function WidgetDetail({
 								</div>
 							))}
 							<p className="pt-1.5 text-[11px] leading-snug text-muted-foreground">
-								Each page decides what these run when it places the widget.
+								{t('eachPageDecidesWhatTheseRunWhenItPlacesTheWidget', 'Each page decides what these run when it places the widget.')}
 							</p>
 						</div>
 					)}
@@ -686,6 +682,7 @@ function PropControl({
 	onChange: (value: unknown) => void;
 	onReset: () => void;
 }>) {
+	const { t } = useTranslation("common");
 	const { literal, path } = useMemo(
 		() => unwrapValue(readPropValue(components, prop)),
 		[components, prop],
@@ -703,9 +700,9 @@ function PropControl({
 					<button
 						type="button"
 						onClick={onReset}
-						title="Reset to the widget's own value"
+						title={t('resetToTheWidgetsOwnValue', 'Reset to the widget\'s own value')}
 						className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-						aria-label={`Reset ${prop.label}`}
+						aria-label={t('resetLabel', 'Reset {{label}}', { label: prop.label })}
 					/>
 				)}
 				<span className="flex-1" />
@@ -724,7 +721,7 @@ function PropControl({
 			{isBound ? (
 				<div className="flex h-8 items-center gap-2 rounded-md border border-dashed border-primary/40 bg-primary/5 px-2.5 font-mono text-[11.5px] text-primary">
 					<Link2 className="h-3 w-3 shrink-0" />
-					<span className="truncate">{path || "bound by the page"}</span>
+					<span className="truncate">{path || t('boundByThePage', 'bound by the page')}</span>
 				</div>
 			) : (
 				<PropField prop={prop} value={value} onChange={onChange} />
@@ -861,6 +858,7 @@ function EditDetailsSheet({
 	initial: EditState;
 	onSave: (next: EditState) => Promise<void>;
 }>) {
+	const { t } = useTranslation("common");
 	const [draft, setDraft] = useState<EditState>(initial);
 	const [newTag, setNewTag] = useState("");
 	const [isSaving, setIsSaving] = useState(false);
@@ -904,9 +902,9 @@ function EditDetailsSheet({
 				className="flex w-full flex-col gap-0 p-0 sm:max-w-lg"
 			>
 				<SheetHeader className="border-b">
-					<SheetTitle>Edit details</SheetTitle>
+					<SheetTitle>{t('editDetails', 'Edit details')}</SheetTitle>
 					<SheetDescription>
-						Name, description and notes shown wherever this widget is listed.
+						{t('nameDescriptionAndNotesShownWhereverThisWidgetIsListed', 'Name, description and notes shown wherever this widget is listed.')}
 					</SheetDescription>
 				</SheetHeader>
 
@@ -924,10 +922,10 @@ function EditDetailsSheet({
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="widget-detail-description">Description</Label>
+							<Label htmlFor="widget-detail-description">{t('description', 'Description')}</Label>
 							<Textarea
 								id="widget-detail-description"
-								placeholder="One sentence on what this widget shows and when to use it."
+								placeholder={t('oneSentenceOnWhatThisWidgetShowsAndWhenToUseIt', 'One sentence on what this widget shows and when to use it.')}
 								className="min-h-20 resize-none"
 								value={draft.description}
 								onChange={(e) =>
@@ -937,11 +935,11 @@ function EditDetailsSheet({
 						</div>
 
 						<div className="space-y-2">
-							<Label htmlFor="widget-detail-tag">Tags</Label>
+							<Label htmlFor="widget-detail-tag">{t('tags', 'Tags')}</Label>
 							<div className="flex gap-2">
 								<Input
 									id="widget-detail-tag"
-									placeholder="Add a tag…"
+									placeholder={t('addATag', 'Add a tag…')}
 									value={newTag}
 									onChange={(e) => setNewTag(e.target.value)}
 									onKeyDown={(e) => {
@@ -952,7 +950,7 @@ function EditDetailsSheet({
 									}}
 								/>
 								<Button variant="outline" onClick={addTag}>
-									Add
+									{t('add', 'Add')}
 								</Button>
 							</div>
 							{draft.tags.length > 0 && (
@@ -968,23 +966,21 @@ function EditDetailsSheet({
 													tags: prev.tags.filter((t) => t !== tag),
 												}))
 											}
-										>
-											{tag} ×
-										</Badge>
+										>{`${tag} ×`}</Badge>
 									))}
 								</div>
 							)}
 						</div>
 
 						<div className="space-y-2">
-							<Label>Notes</Label>
+							<Label>{t('notes', 'Notes')}</Label>
 							<div className="min-h-[200px] rounded-md border">
 								<TextEditor
 									appId={appId}
 									editable
 									isMarkdown
 									initialContent={
-										draft.long_description || "*Add detailed notes…*"
+										draft.long_description || t('addDetailedNotes', '*Add detailed notes…*')
 									}
 									onChange={(content) =>
 										setDraft((prev) => ({ ...prev, long_description: content }))
@@ -997,7 +993,7 @@ function EditDetailsSheet({
 
 				<SheetFooter className="flex-row justify-end gap-2 border-t">
 					<Button variant="outline" onClick={() => reseed(false)}>
-						Cancel
+						{t('cancel', 'Cancel')}
 					</Button>
 					<Button onClick={save} disabled={isSaving || !draft.name.trim()}>
 						{isSaving ? (
@@ -1005,7 +1001,7 @@ function EditDetailsSheet({
 						) : (
 							<Check className="mr-1.5 h-4 w-4" />
 						)}
-						Save
+						{t('save', 'Save')}
 					</Button>
 				</SheetFooter>
 			</SheetContent>

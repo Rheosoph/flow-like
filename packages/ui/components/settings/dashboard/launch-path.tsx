@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	ArrowRightIcon,
 	CheckIcon,
@@ -14,7 +15,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
-import type { IApp, IBoard } from "../../../lib";
+import type { IApp, IBoardListing } from "../../../lib";
 import { IAppVisibility } from "../../../lib";
 import { formatDuration, formatRelativeTime } from "../../../lib/date";
 import { cn } from "../../../lib/utils";
@@ -103,6 +104,7 @@ function RailSignalRow({
 	signal: AttentionSignal;
 	onOpenPanel: (panel: InspectorPanel) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const className =
 		"flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted/60";
 	const tone =
@@ -116,9 +118,7 @@ function RailSignalRow({
 			<StateDot tone={tone} />
 			<span className="min-w-0 flex-1 truncate">{signal.label}</span>
 			{signal.stage && (
-				<span className="shrink-0 text-[10px] text-muted-foreground">
-					Stage {signal.stage}
-				</span>
+				<span className="shrink-0 text-[10px] text-muted-foreground">{t('stageStage', 'Stage {{stage}}', { stage: signal.stage })}</span>
 			)}
 		</>
 	);
@@ -175,7 +175,7 @@ export function LaunchPath({
 }: Readonly<{
 	appId: string;
 	app: IApp;
-	boards: IBoard[];
+	boards: IBoardListing[];
 	surfaces: ProjectSurface[];
 	runs: ProjectRunHealth;
 	aiAct: AiActStatus;
@@ -184,9 +184,8 @@ export function LaunchPath({
 	signals: AttentionSignal[];
 	onOpenPanel: (panel: InspectorPanel) => void;
 }>) {
-	const boardsWithContent = boards.filter(
-		(board) => Object.keys(board.nodes).length > 0,
-	);
+	const { t } = useTranslation("settings");
+	const boardsWithContent = boards.filter((board) => board.nodeCount > 0);
 	const hasLogic = boardsWithContent.length > 0;
 	const activeSurfaces = surfaces.filter((surface) => surface.active);
 	const hasTriggers = activeSurfaces.length > 0;
@@ -205,22 +204,19 @@ export function LaunchPath({
 	const completed = stageStates.filter((state) => state === "done").length;
 	const currentIndex = stageStates.findIndex((state) => state === "current");
 
-	const nodeTotal = boards.reduce(
-		(sum, board) => sum + Object.keys(board.nodes).length,
-		0,
-	);
+	const nodeTotal = boards.reduce((sum, board) => sum + board.nodeCount, 0);
 
 	return (
 		<div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)]">
 			<div>
 				<div className="mb-4 flex items-center gap-3">
 					<span className="text-xs uppercase tracking-wider text-muted-foreground">
-						Launch progress
+						{t('launchProgress', 'Launch progress')}
 					</span>
 					<span className="text-xs text-muted-foreground">
 						{currentIndex >= 0
-							? `stage ${currentIndex + 1} of ${stageStates.length}`
-							: `${completed} of ${stageStates.length} complete`}
+							? t('stageValOfLength', 'stage {{val}} of {{length}}', { val: currentIndex + 1, length: stageStates.length })
+							: t('completedOfLengthComplete', '{{completed}} of {{length}} complete', { completed, length: stageStates.length })}
 					</span>
 					<div className="ml-auto w-40">
 						<Meter value={completed} total={stageStates.length} />
@@ -230,19 +226,19 @@ export function LaunchPath({
 				{/* 1 — build */}
 				<StageRow
 					state={stageStates[0]}
-					title="Build the logic"
+					title={t('buildTheLogic', 'Build the logic')}
 					badge={
 						stageStates[0] === "done" ? (
 							<Badge variant="secondary" className="text-[10px]">
-								Done
+								{t('done', 'Done')}
 							</Badge>
 						) : (
-							<Badge className="text-[10px]">Start here</Badge>
+							<Badge className="text-[10px]">{t('startHere', 'Start here')}</Badge>
 						)
 					}
 					summary={
 						hasLogic
-							? `${boardsWithContent.length} flow${boardsWithContent.length === 1 ? "" : "s"} · ${nodeTotal} nodes`
+							? t('lengthFlowvalNodetotalNodes', '{{length}} flow{{val}} · {{nodeTotal}} nodes', { length: boardsWithContent.length, val: boardsWithContent.length === 1 ? "" : "s", nodeTotal })
 							: undefined
 					}
 				>
@@ -256,11 +252,9 @@ export function LaunchPath({
 								>
 									<WorkflowIcon className="h-3.5 w-3.5 text-muted-foreground" />
 									<span className="truncate">{board.name}</span>
-									<span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-										{Object.keys(board.nodes).length} nodes
-										{board.updated_at && (
+									<span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">{t('countNodes', { defaultValue_one: '{{count}} Node', defaultValue_other: '{{count}} Nodes', count: board.nodeCount })}{board.updatedAt && (
 											<span className="hidden md:inline">
-												{formatRelativeTime(board.updated_at, "narrow")}
+												{formatRelativeTime(board.updatedAt, "narrow")}
 											</span>
 										)}
 									</span>
@@ -270,20 +264,19 @@ export function LaunchPath({
 					) : (
 						<Card className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
 							<p className="max-w-prose text-xs text-muted-foreground">
-								A flow is the logic your app runs. Start from a blank canvas, a
-								template, or describe what you want and let FlowPilot draft it.
+								{`A flow is the logic your app runs. Start from a blank canvas, a template, or describe what you want and let FlowPilot draft it.`}
 							</p>
 							<div className="flex shrink-0 flex-wrap gap-2 sm:ml-auto">
 								<Link href={`/library/config/flows?id=${appId}`}>
 									<Button size="sm">
 										<PlusIcon className="mr-1.5 h-3 w-3" />
-										New flow
+										{t('newFlow', 'New flow')}
 									</Button>
 								</Link>
 								<Link href={`/library/config/templates?id=${appId}`}>
 									<Button variant="outline" size="sm">
 										<CopyIcon className="mr-1.5 h-3 w-3" />
-										From template
+										{t('fromTemplate', 'From template')}
 									</Button>
 								</Link>
 							</div>
@@ -294,22 +287,22 @@ export function LaunchPath({
 				{/* 2 — triggers */}
 				<StageRow
 					state={stageStates[1]}
-					title="Connect the triggers"
+					title={t('connectTheTriggers', 'Connect the triggers')}
 					badge={
 						stageStates[1] === "done" ? (
 							<Badge variant="secondary" className="text-[10px]">
-								Done
+								{t('done', 'Done')}
 							</Badge>
 						) : stageStates[1] === "current" ? (
-							<Badge className="text-[10px]">You are here</Badge>
+							<Badge className="text-[10px]">{t('youAreHere', 'You are here')}</Badge>
 						) : undefined
 					}
 					summary={
 						hasTriggers
-							? `${activeSurfaces.length} active of ${surfaces.length}`
+							? t('lengthActiveOfLength2', '{{length}} active of {{length2}}', { length: activeSurfaces.length, length2: surfaces.length })
 							: hasLogic
 								? undefined
-								: "Needs at least one flow"
+								: t('needsAtLeastOneFlow', 'Needs at least one flow')
 					}
 				>
 					{surfaces.length > 0 ? (
@@ -330,8 +323,7 @@ export function LaunchPath({
 					) : hasLogic ? (
 						<Card className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
 							<p className="max-w-prose text-xs text-muted-foreground">
-								A trigger decides when your flows run — an incoming message, a
-								schedule, a page someone opens, or an API call.
+								{t('aTriggerDecidesWhenYourFlowsRunAnIncomingMessageAScheduleAPageSomeoneOpensOrAnApiCall', "A trigger decides when your flows run — an incoming message, a schedule, a page someone opens, or an API call.")}
 							</p>
 							<Link
 								href={`/library/config/pages?id=${appId}`}
@@ -339,7 +331,7 @@ export function LaunchPath({
 							>
 								<Button size="sm">
 									<SparklesIcon className="mr-1.5 h-3 w-3" />
-									Set up events
+									{t('setUpEvents', 'Set up events')}
 								</Button>
 							</Link>
 						</Card>
@@ -349,22 +341,22 @@ export function LaunchPath({
 				{/* 3 — try it */}
 				<StageRow
 					state={stageStates[2]}
-					title="Try it end-to-end"
+					title={t('tryItEndtoend', 'Try it end-to-end')}
 					badge={
 						stageStates[2] === "done" ? (
 							<Badge variant="secondary" className="text-[10px]">
-								Done
+								{t('done', 'Done')}
 							</Badge>
 						) : stageStates[2] === "current" ? (
-							<Badge className="text-[10px]">You are here</Badge>
+							<Badge className="text-[10px]">{t('youAreHere', 'You are here')}</Badge>
 						) : undefined
 					}
 					summary={
 						hasRun
-							? `${runs.windowRuns} runs in 24h${runs.windowFailed > 0 ? ` · ${runs.windowFailed} failed` : ""}`
+							? t('windowrunsRunsIn24hval', '{{windowRuns}} runs in 24h{{val}}', { windowRuns: runs.windowRuns, val: runs.windowFailed > 0 ? ` · ${runs.windowFailed} failed` : "" })
 							: hasTriggers
 								? undefined
-								: "Needs a trigger"
+								: t('needsATrigger', 'Needs a trigger')
 					}
 				>
 					{hasTriggers && (
@@ -384,15 +376,11 @@ export function LaunchPath({
 														tone={health.failed > 0 ? "critical" : "ok"}
 													/>
 													<span className="truncate">
-														{board?.name ?? "Deleted flow"}
+														{board?.name ?? t('deletedFlow', 'Deleted flow')}
 													</span>
-													<span className="ml-auto text-muted-foreground">
-														{health.total} run{health.total === 1 ? "" : "s"}
-														{health.failed > 0 && (
+													<span className="ml-auto text-muted-foreground">{t('countRuns', { defaultValue_one: '{{count}} run', defaultValue_other: '{{count}} runs', count: health.total })}{health.failed > 0 && (
 															<span className="text-destructive">
-																{" · "}
-																{health.failed} failed
-															</span>
+																{` · `}{t('failedFailed', '{{failed}} failed', { failed: health.failed })}</span>
 														)}
 													</span>
 												</div>
@@ -400,27 +388,26 @@ export function LaunchPath({
 										})}
 									{runs.p95Micros !== null && (
 										<p className="pt-1 text-[11px] text-muted-foreground">
-											p95 duration {formatDuration(runs.p95Micros)}
+											{t('p95Duration', 'p95 duration')} {formatDuration(runs.p95Micros)}
 										</p>
 									)}
 								</div>
 							) : (
 								<p className="text-xs text-muted-foreground">
-									Nothing has run yet. Trigger the app once to confirm the whole
-									chain works before you share it.
+									{t('nothingHasRunYetTriggerTheAppOnceToConfirmTheWholeChainWorksBeforeYouShareIt', "Nothing has run yet. Trigger the app once to confirm the whole chain works before you share it.")}
 								</p>
 							)}
 							<div className="flex flex-wrap gap-2">
 								<Link href={`/use?id=${appId}`}>
 									<Button size="sm" variant={hasRun ? "outline" : "default"}>
 										<PlayCircleIcon className="mr-1.5 h-3 w-3" />
-										Run it
+										{t('runIt', 'Run it')}
 									</Button>
 								</Link>
 								<Link href={`/use?id=${appId}`}>
 									<Button variant="outline" size="sm">
 										<EyeIcon className="mr-1.5 h-3 w-3" />
-										Preview as user
+										{t('previewAsUser', 'Preview as user')}
 									</Button>
 								</Link>
 							</div>
@@ -431,30 +418,30 @@ export function LaunchPath({
 				{/* 4 — invite */}
 				<StageRow
 					state={stageStates[3]}
-					title="Invite people in"
+					title={t('invitePeopleIn', 'Invite people in')}
 					badge={
 						stageStates[3] === "blocked" ? (
 							<Badge variant="outline" className="text-[10px]">
-								Blocked
+								{t('blocked', 'Blocked')}
 							</Badge>
 						) : stageStates[3] === "done" ? (
 							<Badge variant="secondary" className="text-[10px]">
-								Unlocked
+								{t('unlocked', 'Unlocked')}
 							</Badge>
 						) : undefined
 					}
-					summary="Team, Roles and share links"
+					summary={t('teamRolesAndShareLinks', 'Team, Roles and share links')}
 				>
 					{canInvite ? (
 						<div className="flex flex-wrap gap-2">
 							<Link href={`/library/config/team?id=${appId}`}>
 								<Button variant="outline" size="sm">
-									Manage team
+									{t('manageTeam', 'Manage team')}
 								</Button>
 							</Link>
 							<Link href={`/library/config/roles?id=${appId}`}>
 								<Button variant="outline" size="sm">
-									Define roles
+									{t('defineRoles', 'Define roles')}
 								</Button>
 							</Link>
 						</div>
@@ -467,8 +454,8 @@ export function LaunchPath({
 							}
 						>
 							{app.visibility === IAppVisibility.Offline
-								? "An offline project lives only on this device. Bring it online to invite collaborators and assign roles."
-								: "A private project is synced to your account only. Switch to Prototype to invite collaborators, assign roles and share a link."}
+								? t('anOfflineProjectLivesOnlyOnThisDeviceBringItOnlineToInviteCollaboratorsAndAssignRoles', 'An offline project lives only on this device. Bring it online to invite collaborators and assign roles.')
+								: t('aPrivateProjectIsSyncedToYourAccountOnlySwitchToPrototypeToInviteCollaboratorsAssignRolesAndShareALink', 'A private project is synced to your account only. Switch to Prototype to invite collaborators, assign roles and share a link.')}
 						</Blocker>
 					)}
 				</StageRow>
@@ -476,16 +463,14 @@ export function LaunchPath({
 				{/* 5 — listing */}
 				<StageRow
 					state={stageStates[4]}
-					title="Write the listing"
+					title={t('writeTheListing', 'Write the listing')}
 					badge={
 						<Badge
 							variant={listingDone === listing.length ? "secondary" : "outline"}
 							className="text-[10px]"
-						>
-							{listingDone} of {listing.length}
-						</Badge>
+						>{t('listingdoneOfLength', '{{listingDone}} of {{length}}', { listingDone, length: listing.length })}</Badge>
 					}
-					summary="What people see in the store"
+					summary={t('whatPeopleSeeInTheStore', 'What people see in the store')}
 				>
 					<Card className="space-y-3 p-4">
 						<Meter
@@ -516,7 +501,7 @@ export function LaunchPath({
 							size="sm"
 							onClick={() => onOpenPanel("listing")}
 						>
-							Edit listing
+							{t('editListing', 'Edit listing')}
 							<ArrowRightIcon className="ml-1.5 h-3 w-3" />
 						</Button>
 					</Card>
@@ -525,20 +510,20 @@ export function LaunchPath({
 				{/* 6 — publish */}
 				<StageRow
 					state={stageStates[5]}
-					title="Publish & grow"
+					title={t('publishGrow', 'Publish & grow')}
 					last
 					badge={
 						<Badge variant="outline" className="text-[10px]">
-							{listed ? "Ready to submit" : "Not started"}
+							{listed ? t('readyToSubmit', 'Ready to submit') : t('notStarted', 'Not started')}
 						</Badge>
 					}
-					summary="Review takes 1–3 days"
+					summary={t('reviewTakes13Days', 'Review takes 1–3 days')}
 				>
 					<Card className="flex flex-wrap items-center gap-3 p-4 text-xs">
 						{aiAct.available ? (
 							<span className="flex items-center gap-2">
 								<SendIcon className="h-3.5 w-3.5 text-muted-foreground" />
-								EU AI Act
+								{t('euAiAct', 'EU AI Act')}
 								{aiAct.hasAssessment ? (
 									<Badge variant="secondary" className="text-[10px]">
 										{aiAct.riskCategory ?? "Assessed"}
@@ -547,13 +532,13 @@ export function LaunchPath({
 									</Badge>
 								) : (
 									<Badge variant="outline" className="text-[10px]">
-										Not submitted
+										{t('notSubmitted', 'Not submitted')}
 									</Badge>
 								)}
 							</span>
 						) : (
 							<span className="text-muted-foreground">
-								Bring the project online to start the publication process.
+								{t('bringTheProjectOnlineToStartThePublicationProcess', 'Bring the project online to start the publication process.')}
 							</span>
 						)}
 						<Button
@@ -562,7 +547,7 @@ export function LaunchPath({
 							className="ml-auto"
 							onClick={() => onOpenPanel("compliance")}
 						>
-							Open publication
+							{t('openPublication', 'Open publication')}
 						</Button>
 					</Card>
 				</StageRow>
@@ -571,13 +556,13 @@ export function LaunchPath({
 			{/* right rail */}
 			<div className="space-y-4">
 				<SectionCard
-					title="Needs you"
+					title={t('needsYou', 'Needs you')}
 					count={signals.length}
 					contentClassName="p-2"
 				>
 					{signals.length === 0 ? (
 						<p className="px-2 py-3 text-xs text-muted-foreground">
-							Nothing is blocked right now.
+							{t('nothingIsBlockedRightNow', 'Nothing is blocked right now.')}
 						</p>
 					) : (
 						<div className="space-y-0.5">
@@ -592,16 +577,16 @@ export function LaunchPath({
 					)}
 				</SectionCard>
 
-				<SectionCard title="At a glance">
+				<SectionCard title={t('atAGlance', 'At a glance')}>
 					<div className="space-y-2 text-xs">
 						<div className="flex items-center gap-2">
-							<span className="text-muted-foreground">Runs · 24h</span>
+							<span className="text-muted-foreground">{t('runs24h2', 'Runs · 24h')}</span>
 							<span className="ml-auto font-medium tabular-nums">
 								{runs.windowRuns.toLocaleString()}
 							</span>
 						</div>
 						<div className="flex items-center gap-2">
-							<span className="text-muted-foreground">Success</span>
+							<span className="text-muted-foreground">{t('success', 'Success')}</span>
 							<span className="ml-auto font-medium tabular-nums">
 								{runs.successRate === null
 									? "—"
@@ -609,7 +594,7 @@ export function LaunchPath({
 							</span>
 						</div>
 						<div className="flex items-center gap-2">
-							<span className="text-muted-foreground">Last run</span>
+							<span className="text-muted-foreground">{t('lastRun', 'Last run')}</span>
 							<span className="ml-auto font-medium">
 								{runs.lastRunAt
 									? formatRelativeTime(
@@ -620,7 +605,7 @@ export function LaunchPath({
 							</span>
 						</div>
 						<div className="flex items-center gap-2">
-							<span className="text-muted-foreground">Status</span>
+							<span className="text-muted-foreground">{t('status', 'Status')}</span>
 							<span className="ml-auto">
 								<Badge variant="secondary" className="text-[10px]">
 									{app.status}
@@ -631,7 +616,7 @@ export function LaunchPath({
 				</SectionCard>
 
 				{app.changelog && (
-					<SectionCard title="Latest release">
+					<SectionCard title={t('latestRelease', 'Latest release')}>
 						<div className="space-y-1 text-xs">
 							<Badge variant="outline" className="text-[10px]">
 								v{app.version ?? "unversioned"}
@@ -649,7 +634,7 @@ export function LaunchPath({
 					className="w-full text-destructive"
 					onClick={() => onOpenPanel("advanced")}
 				>
-					Advanced & danger zone
+					{t('advancedDangerZone', 'Advanced & danger zone')}
 				</Button>
 			</div>
 		</div>

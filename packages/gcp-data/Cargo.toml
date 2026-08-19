@@ -1,0 +1,19 @@
+[package]
+name = "flow-like-gcp-data"
+version = "0.1.0"
+edition = "2024"
+description = "Keyless GCP data-plane clients shared by the GCP API and queue workers: Firestore REST client and Cloud SQL IAM PostgreSQL connectivity"
+
+[dependencies]
+base64.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+sea-orm.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time", "sync"] }
+tracing.workspace = true
+urlencoding.workspace = true
+uuid.workspace = true

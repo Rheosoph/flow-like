@@ -1,0 +1,765 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-building-with-flowpilot",
+		"name": "Building with FlowPilot",
+		"language": "en",
+		"slug": "building-with-flowpilot",
+		"difficulty": "BEGINNER",
+		"category": "GETTING_STARTED",
+		"estimatedMinutes": 65,
+		"isPublished": true,
+		"tags": ["flowpilot", "ai", "copilot", "getting-started", "building"],
+		"position": 8,
+		"description": "FlowPilot builds apps with you — learn to direct it well and review its work like a pro.",
+		"longDescription": "Co-build a support-inbox triage app with Flow-Like's built-in AI assistant. Learn what FlowPilot can see and do, run the describe → plan → apply → review loop, write prompts that produce working boards, delegate pages and data work through conversation, and debug with run context when your sharp junior colleague gets it wrong.",
+		"media": {
+			"icon": "media/app-logo.webp",
+			"banner": "assets/course-banner.webp"
+		},
+		"assets": [
+			{
+				"name": "LandingPage",
+				"file": "assets/LandingPage.webp",
+				"replace": true
+			},
+			{
+				"name": "FlowPilotLoop",
+				"file": "assets/flowpilot-loop.webp",
+				"replace": true
+			},
+			{
+				"name": "FlowLikeStudio",
+				"file": "assets/FlowLikeStudio.webp",
+				"replace": true
+			},
+			{
+				"name": "PageBuilder",
+				"file": "assets/PageBuilder.webp",
+				"replace": true
+			},
+			{
+				"name": "DataStudioOverview",
+				"file": "assets/DataStudioOverview.webp",
+				"replace": true
+			},
+			{
+				"name": "ChatUI",
+				"file": "assets/ChatUI.webp",
+				"replace": true
+			},
+			{
+				"name": "RunsAndLogs",
+				"file": "assets/RunsAndLogs.webp",
+				"replace": true
+			}
+		],
+		"modules": [
+			{
+				"id": "mod-flowpilot-meet-your-copilot",
+				"title": "Meet your copilot",
+				"description": "What FlowPilot can do, what it can see, and the loop that keeps you in charge.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "les-flowpilot-capabilities",
+						"title": "What can FlowPilot actually do?",
+						"contentFile": "content/01-what-can-flowpilot-do.md",
+						"estimatedMinutes": 10,
+						"position": 0,
+						"challenges": [
+							{
+								"id": "challenge-flowpilot-readonly-recon",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You open the triage board and send: \"Explain this workflow and point out where errors are handled. Do not change it.\" What does FlowPilot do?",
+								"explanation": "FlowPilot can explain the current board, its nodes, and connections without changing them — it receives the open board as visible context, so there is nothing to paste. The tempting answer is that it can't see the board: it can, which is exactly why read-only recon prompts are a safe first move.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "explains-without-editing",
+											"label": "It describes the board and its connections without modifying anything"
+										},
+										{
+											"id": "stages-an-edit",
+											"label": "It has to stage at least one board edit before it can answer"
+										},
+										{
+											"id": "needs-node-ids",
+											"label": "It asks you to paste every node ID first — it can't see the open board"
+										},
+										{
+											"id": "declines-questions",
+											"label": "It declines — FlowPilot handles build requests, not questions"
+										}
+									],
+									"correct": ["explains-without-editing"]
+								}
+							},
+							{
+								"id": "challenge-flowpilot-capability-map",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which of these can FlowPilot actually do from one conversation? Select all that apply.",
+								"explanation": "FlowPilot spans workflows, interfaces, and data from a single conversation — but it works from visible context (the open board, your selections, run context), not from scanning your machine. And deleting existing board items always requires your explicit confirmation, even in Auto mode.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "wire-nodes",
+											"label": "Add and wire nodes on the board you have open"
+										},
+										{
+											"id": "build-page",
+											"label": "Create a page and show it as a preview before it's applied"
+										},
+										{
+											"id": "read-disk",
+											"label": "Scan every file on your computer to gather context"
+										},
+										{
+											"id": "auto-deletes",
+											"label": "Delete existing nodes without ever asking, as long as Auto mode is on"
+										},
+										{
+											"id": "data-studio",
+											"label": "Delegate a data question to Data Studio and answer with an inline chart"
+										}
+									],
+									"correct": ["wire-nodes", "build-page", "data-studio"]
+								}
+							},
+							{
+								"id": "challenge-flowpilot-model-choice",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A teammate on the free profile model asks FlowPilot for the complete triage app — board, page, data, and events — and gets a half-finished tangle. What's the most likely explanation?",
+								"explanation": "The docs are explicit: the free profile model is useful for questions and small changes but will probably not create a complete app reliably — larger builds want a higher-tier profile model or an external agent. The browser distractor confuses two facts: FlowPilot itself works in web and desktop; it's the external CLI agents (GitHub Copilot, Claude Code, Codex) that are desktop-only.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "model-tier",
+											"label": "The free model suits questions and small changes; a complete app needs a higher-tier model or an external coding agent"
+										},
+										{
+											"id": "no-app-builds",
+											"label": "FlowPilot can't create complete apps, no matter which model is selected"
+										},
+										{
+											"id": "flowscript-required",
+											"label": "The request has to be written in FlowScript — plain-language asks are ignored"
+										},
+										{
+											"id": "browser-blocked",
+											"label": "FlowPilot doesn't run in the browser at all, so nothing was ever built"
+										}
+									],
+									"correct": ["model-tier"]
+								}
+							}
+						]
+					},
+					{
+						"id": "les-flowpilot-loop",
+						"title": "The loop: say it, see it, steer it",
+						"contentFile": "content/02-the-loop.md",
+						"estimatedMinutes": 10,
+						"position": 1,
+						"challenges": [
+							{
+								"id": "challenge-flowpilot-loop-order",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Look at @FlowPilotLoop. Between \"Describe intent\" and nodes appearing on your board, what happens?",
+								"explanation": "Stages 2 and 3 of the loop: FlowPilot plans the scope, nodes, wiring, and data, and board edits are compiled and validated before they are offered for application. Nothing is swapped in silently — the diff, diagnostics, and logs in stage 4 are yours to accept or dismiss.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "plan-validate",
+											"label": "FlowPilot plans the change, and the board edit is compiled and validated before it's offered to you"
+										},
+										{
+											"id": "instant-apply",
+											"label": "Nodes appear the moment you finish typing — the plan stage is just a progress indicator"
+										},
+										{
+											"id": "board-locked",
+											"label": "The board locks against all other edits until FlowPilot finishes"
+										},
+										{
+											"id": "sandbox-copy",
+											"label": "FlowPilot builds on a hidden copy of your board and swaps it in silently"
+										}
+									],
+									"correct": ["plan-validate"]
+								}
+							},
+							{
+								"id": "challenge-flowpilot-auto-delete",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Auto mode is ON, and FlowPilot decides the Human Review layer is redundant and wants to remove it. What happens?",
+								"explanation": "Auto mode runs tools and applies completed reviews without asking each time, including destructive actions — but deletion of existing board items is the exception and still requires explicit confirmation. \"Never allowed to remove nodes\" is wrong too: removing nodes is a normal capability; it's just always gated by you.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "still-confirms",
+											"label": "It still asks you to confirm — deleting existing board items is the one gate Auto mode never waives"
+										},
+										{
+											"id": "silent-delete",
+											"label": "It deletes the layer immediately — Auto mode waives every confirmation"
+										},
+										{
+											"id": "cannot-delete",
+											"label": "Nothing — FlowPilot is never allowed to remove nodes from a board"
+										},
+										{
+											"id": "auto-off",
+											"label": "Flow-Like switches Auto mode off and pauses the conversation"
+										}
+									],
+									"correct": ["still-confirms"]
+								}
+							},
+							{
+								"id": "challenge-flowpilot-stale-review",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "While FlowPilot's board review sits unapplied, you drag Send Reply and rewire a pin yourself. The review no longer matches the live board. What does FlowPilot do with it?",
+								"explanation": "A board review that no longer matches the live board is marked stale instead of being applied over newer work. Auto-merge is the tempting answer, but FlowPilot doesn't silently rebase — you ask again and it re-plans with full, current context. That's the loop's feedback arrow doing its job.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "marks-stale",
+											"label": "The review is marked stale instead of being applied over your newer work"
+										},
+										{
+											"id": "applies-anyway",
+											"label": "It applies anyway — the review was generated first, so it wins"
+										},
+										{
+											"id": "auto-merge",
+											"label": "It rebases the review onto your change automatically and applies the merged result"
+										},
+										{
+											"id": "reverts-yours",
+											"label": "It reverts your manual edit so the review fits the board again"
+										}
+									],
+									"correct": ["marks-stale"]
+								}
+							}
+						]
+					}
+				]
+			},
+			{
+				"id": "mod-flowpilot-build-with-words",
+				"title": "Build with words",
+				"description": "Prompt craft for boards, plus pages and data work through conversation.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "les-flowpilot-prompts",
+						"title": "Prompts that produce working boards",
+						"contentFile": "content/03-prompts-that-produce-boards.md",
+						"estimatedMinutes": 10,
+						"position": 0,
+						"challenges": [
+							{
+								"id": "challenge-flowpilot-best-prompt",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Which prompt gives FlowPilot the best shot at a change you can review and accept in one pass?",
+								"explanation": "One scoped change, anchored to named nodes, with an explicit don't-touch constraint — that's a diff you can actually judge. \"Make my support app better\" forces FlowPilot to guess your intent, and a full rebuild turns review into archaeology.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "scoped-named",
+											"label": "\"On this board, after Prepare Support Reply, flag messages mentioning refunds and route them into Human Review. Keep Send Reply unchanged.\""
+										},
+										{
+											"id": "vague-better",
+											"label": "\"Make my support app better.\""
+										},
+										{
+											"id": "somewhere",
+											"label": "\"Add refund detection somewhere, wherever it fits best.\""
+										},
+										{
+											"id": "surprise",
+											"label": "\"Rebuild the whole board from scratch however you think is best.\""
+										}
+									],
+									"correct": ["scoped-named"]
+								}
+							},
+							{
+								"id": "challenge-flowpilot-prompt-ingredients",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "You're writing the ask for the refund-flagging step. Which ingredients belong in the prompt? Select all that apply.",
+								"explanation": "Outcome, named inputs and outputs, scope, and enough context to verify the result — that's the formula. Pasting the catalog is the tempting extra: unnecessary, because FlowPilot finds appropriate nodes and declarations in the live catalog on its own. And plain language is the intended interface; FlowScript is what FlowPilot generates for your review, not what you owe it.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "name-io",
+											"label": "Name the inputs and outputs the step should use"
+										},
+										{
+											"id": "keep-constraint",
+											"label": "Say what must stay unchanged"
+										},
+										{
+											"id": "verify-context",
+											"label": "Give enough context to verify the result — what a correct outcome looks like"
+										},
+										{
+											"id": "paste-catalog",
+											"label": "Paste the node catalog so FlowPilot knows which nodes exist"
+										},
+										{
+											"id": "write-flowscript",
+											"label": "Write the change in FlowScript yourself — prose prompts are just decoration"
+										}
+									],
+									"correct": ["name-io", "keep-constraint", "verify-context"]
+								}
+							},
+							{
+								"id": "challenge-flowpilot-diff-check",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "FlowPilot answers your refund ask with a completed board review. Before you click Apply, where do you check what its generated code actually does?",
+								"explanation": "The FlowScript workspace shows the generated source, its status, and compiler diagnostics before anything is applied. \"Compiled and validated means it's guaranteed correct\" is the trap: validation proves the change is well-formed, not that it matches your intent — that part of review stays yours.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "flowscript-workspace",
+											"label": "The FlowScript workspace — generated source, status, and compiler diagnostics"
+										},
+										{
+											"id": "run-logs-only",
+											"label": "Nowhere until you run it — logs after execution are the first visibility you get"
+										},
+										{
+											"id": "trust-validation",
+											"label": "No need — compiled and validated means it's guaranteed to do what you meant"
+										},
+										{
+											"id": "os-console",
+											"label": "The operating system console, where FlowPilot prints its reasoning"
+										}
+									],
+									"correct": ["flowscript-workspace"]
+								}
+							}
+						]
+					},
+					{
+						"id": "les-flowpilot-delegation",
+						"title": "Pages, data, and delegation",
+						"contentFile": "content/04-pages-data-delegation.md",
+						"estimatedMinutes": 10,
+						"position": 1,
+						"challenges": [
+							{
+								"id": "challenge-flowpilot-builder-context",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In @PageBuilder the Open tickets card is selected. With FlowPilot open in this builder you say: \"Make this card more compact.\" How does it know which card you mean?",
+								"explanation": "FlowPilot in the page or widget builder receives the existing component tree and any selected component IDs, so \"this card\" resolves to your selection. Selecting before you ask is the most reliable way to target a local change — no JSON pasting required, and no full-page regeneration forced.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "selection-context",
+											"label": "The builder passes the component tree and your selected component IDs as context"
+										},
+										{
+											"id": "newest-card",
+											"label": "It assumes you mean the most recently added component"
+										},
+										{
+											"id": "paste-json",
+											"label": "You must paste the card's JSON definition into the chat first"
+										},
+										{
+											"id": "whole-page-only",
+											"label": "It can't do targeted edits — it always regenerates the entire page"
+										}
+									],
+									"correct": ["selection-context"]
+								}
+							},
+							{
+								"id": "challenge-flowpilot-ui-vs-workflow",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The dashboard page needs a workflow that actually loads its ticket data. Who builds that?",
+								"explanation": "The UI specialist owns the page, components, styling, and bindings — it does not build the workflow behind them. Ask global FlowPilot for both parts in one outcome-oriented prompt and it coordinates the UI specialist with the board specialist and can create the connecting page event.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "global-coordinates",
+											"label": "Global FlowPilot, given one outcome-oriented ask — it coordinates the UI specialist, the board specialist, and the Event"
+										},
+										{
+											"id": "ui-does-it",
+											"label": "The UI specialist wires the workflow automatically while generating the page"
+										},
+										{
+											"id": "pages-static",
+											"label": "Nobody — pages can't be connected to workflows"
+										},
+										{
+											"id": "hand-only",
+											"label": "You, by hand — FlowPilot can't create or update app Events"
+										}
+									],
+									"correct": ["global-coordinates"]
+								}
+							},
+							{
+								"id": "challenge-flowpilot-event-first",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "You ask global FlowPilot: \"How many open tickets mention refunds?\" Which statements describe how it proceeds? Select all that apply.",
+								"explanation": "Event-first routing is the rule: configured app interfaces are the primary path, direct datasource access is a deliberate fallback, and results can come back as inline charts. The distractor is exactly what the docs rule out — a failed or declined Event is not silently bypassed through the underlying data.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "events-first",
+											"label": "It first inspects the app's configured Events and prefers a matching chat, page, or headless interface"
+										},
+										{
+											"id": "deliberate-fallback",
+											"label": "It goes to Data Studio directly when you explicitly want raw SQL or schema access, or no Event covers the request"
+										},
+										{
+											"id": "silent-bypass",
+											"label": "If a matching Event fails, it silently answers from the underlying data instead"
+										},
+										{
+											"id": "inline-chart",
+											"label": "It can present the result as an inline chart"
+										}
+									],
+									"correct": ["events-first", "deliberate-fallback", "inline-chart"]
+								}
+							}
+						]
+					}
+				]
+			},
+			{
+				"id": "mod-flowpilot-stay-in-charge",
+				"title": "Stay in charge",
+				"description": "Reading run evidence, repairing mistakes, and the final co-build.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "les-flowpilot-repair",
+						"title": "When FlowPilot is wrong",
+						"contentFile": "content/05-when-flowpilot-is-wrong.md",
+						"estimatedMinutes": 10,
+						"position": 0,
+						"challenges": [
+							{
+								"id": "challenge-flowpilot-run-evidence",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Look at @RunsAndLogs. What tells you what the drafting step actually did in the last run?",
+								"explanation": "The log panel ties each message to the node that produced it — the drafting step logged what it did, how long it took (730.00ms), and its token usage. The green check is the tempting answer: it only proves the run finished without error, not that each step did what you intended.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "log-line",
+											"label": "The log line \"Drafted a helpful reply and queued human review\", with its timing and token counts, attributed to the Draft Helpful Reply node"
+										},
+										{
+											"id": "green-check",
+											"label": "The green check on the run — success means every step behaved as intended"
+										},
+										{
+											"id": "duration-only",
+											"label": "The 1.85 s total duration in the Runs sidebar"
+										},
+										{
+											"id": "sticky-notes",
+											"label": "The gray design notes pinned on the board"
+										}
+									],
+									"correct": ["log-line"]
+								}
+							},
+							{
+								"id": "challenge-flowpilot-fix-prompt",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A run failed and the reply never went out. What's the strongest next message to FlowPilot?",
+								"explanation": "The board panel can receive run-log context, and FlowPilot uses run context and execution logs to investigate failures — so hand it the evidence. \"Fix it\" gives your junior colleague no case file, and a from-scratch rebuild throws away a board where only one thing is broken.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "attach-context",
+											"label": "\"Why did this run fail? Use the attached log context and suggest a fix.\""
+										},
+										{
+											"id": "just-fix",
+											"label": "\"Fix it.\""
+										},
+										{
+											"id": "rebuild",
+											"label": "\"Delete this board and rebuild the whole flow from scratch.\""
+										},
+										{
+											"id": "resend-original",
+											"label": "Re-send the original build prompt so FlowPilot starts clean"
+										}
+									],
+									"correct": ["attach-context"]
+								}
+							},
+							{
+								"id": "challenge-flowpilot-repair-facts",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which of these are real moves in the repair loop? Select all that apply.",
+								"explanation": "FlowPilot generates and repairs FlowScript against the live board, and historic runs can be re-run with the same payloads to prove a fix. Nothing about a repair skips review — a fix lands as a reviewable change like any other, and applied work can always be changed again by the next review.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "repair-flowscript",
+											"label": "FlowPilot can repair FlowScript against the current board, not just generate it fresh"
+										},
+										{
+											"id": "rerun-payload",
+											"label": "You can select a historic run and re-run it with the same payload to test the fix"
+										},
+										{
+											"id": "applied-final",
+											"label": "Once a change is applied it's final — repair only works on unapplied reviews"
+										},
+										{
+											"id": "skip-review-on-fix",
+											"label": "Fix reviews skip the review step, because the original change was already approved"
+										}
+									],
+									"correct": ["repair-flowscript", "rerun-payload"]
+								}
+							}
+						]
+					},
+					{
+						"id": "les-flowpilot-final",
+						"title": "Co-build: the inbox triage app",
+						"contentFile": "content/06-final-co-build.md",
+						"estimatedMinutes": 15,
+						"position": 1,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-flowpilot-final-stale",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Sam rewires Send Reply by hand while FlowPilot's refund-routing review (R1) is still pending. The pending review now targets a board that no longer exists. What happens, and what's your move?",
+								"explanation": "A review that no longer matches the live board is marked stale instead of being applied over newer work — nothing is overwritten and nothing auto-merges. The loop's feedback arrow is the fix: ask again, and FlowPilot re-plans against the board as it is now, Sam's rewire included.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "stale-reask",
+											"label": "The review is marked stale; you ask FlowPilot again so it re-plans against the current board with full context"
+										},
+										{
+											"id": "applies-over",
+											"label": "The review applies over Sam's rewire — generated changes take precedence over manual ones"
+										},
+										{
+											"id": "undo-first",
+											"label": "You must undo Sam's rewire before FlowPilot can produce any new review"
+										},
+										{
+											"id": "auto-rebase",
+											"label": "FlowPilot rebases the stale review automatically and applies the merged result"
+										}
+									],
+									"correct": ["stale-reask"]
+								}
+							},
+							{
+								"id": "challenge-flowpilot-final-model-strategy",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Riley — browser only, free profile model — wants the entire triage app from a single prompt. What do you recommend?",
+								"explanation": "Two lessons meet here. The free model suits questions and small changes, so a larger build wants a higher-tier profile model — and in the browser that's the only lever, because external CLI agents like Claude Code are desktop-only. Then build in scoped, reviewable asks: one unreviewable mega-diff is a bad idea on any model.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "capable-scoped",
+											"label": "Pick a higher-tier profile model, then build in scoped asks — entry flow, then page, then data — reviewing each diff"
+										},
+										{
+											"id": "install-cli",
+											"label": "Keep the free model but connect Claude Code to the browser session"
+										},
+										{
+											"id": "mega-prompt",
+											"label": "One giant prompt is fine if it's detailed enough; accept the result without review to save time"
+										},
+										{
+											"id": "hand-build",
+											"label": "Skip FlowPilot — complete apps can only be built node by node, by hand"
+										}
+									],
+									"correct": ["capable-scoped"]
+								}
+							},
+							{
+								"id": "challenge-flowpilot-final-review-gates",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "R4 demands no surprise deletions, and your Auto mode is on. Before launch you list what FlowPilot stages for human judgment. Which statements are accurate? Select all that apply.",
+								"explanation": "Every surface has its gate: board edits arrive compiled and validated, generated UI is previewed before it's applied, and direct data mutations follow your current approval mode. The distractor flips the one exception that never flips — deleting existing board items requires explicit confirmation even with Auto mode on, which is exactly what R4 needs.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "board-compiled",
+											"label": "Board edits are compiled and validated before they're offered for application"
+										},
+										{
+											"id": "ui-preview",
+											"label": "Generated pages and widgets are shown as a preview before they're applied"
+										},
+										{
+											"id": "data-approval",
+											"label": "Direct data mutations follow the current approval mode"
+										},
+										{
+											"id": "auto-delete-ok",
+											"label": "With Auto mode on, deleting existing board items no longer needs confirmation"
+										}
+									],
+									"correct": ["board-compiled", "ui-preview", "data-approval"]
+								}
+							},
+							{
+								"id": "challenge-flowpilot-final-dashboard-ask",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "R2 needs the team dashboard page and the workflow that feeds it. Which ask gets both, correctly owned?",
+								"explanation": "The UI specialist owns the page and its bindings but does not build workflows, so the winning move is one outcome-oriented prompt to global FlowPilot — it coordinates the UI and board specialists and creates the connecting page event. Two vague prompts lose the naming and scope that make either result reviewable.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "outcome-both",
+											"label": "To global FlowPilot: \"Build the support dashboard page and the workflow that loads its ticket data. Expose it as a page event and include useful error handling.\""
+										},
+										{
+											"id": "ui-specialist-both",
+											"label": "In the page builder: \"While you style this page, also build the data workflow behind it.\""
+										},
+										{
+											"id": "data-studio-page",
+											"label": "To Data Studio: \"You own the ticket data, so design the dashboard page too.\""
+										},
+										{
+											"id": "two-vague",
+											"label": "Two separate prompts, later: \"make a dashboard\" and \"make some data flow\""
+										}
+									],
+									"correct": ["outcome-both"]
+								}
+							},
+							{
+								"id": "challenge-flowpilot-final-empty-body",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "S1: one run finished green, but the customer's reply body arrived empty and no error was logged. What's your first move?",
+								"explanation": "A green check proves the run completed, not that every step produced what you intended — the node-attributed log lines are the evidence trail, and FlowPilot debugs best with that run context attached. Deleting the drafting layer destroys the crime scene (and still needs a confirmed deletion), and Auto mode only changes when things apply — speed was never the problem.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "evidence-first",
+											"label": "Open the run, read the node-attributed log lines around Send Reply, then ask FlowPilot to investigate with the run context attached"
+										},
+										{
+											"id": "reapply-review",
+											"label": "Re-apply the last board review — applying twice usually clears transient issues"
+										},
+										{
+											"id": "rebuild-layer",
+											"label": "Delete the Prepare Support Reply layer and have FlowPilot rebuild it"
+										},
+										{
+											"id": "auto-mode-fix",
+											"label": "Turn Auto mode on so the eventual fix applies faster"
+										}
+									],
+									"correct": ["evidence-first"]
+								}
+							},
+							{
+								"id": "challenge-flowpilot-final-see-do",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Final safety review before Monday: which statements about what FlowPilot can see and do are accurate? Select all that apply.",
+								"explanation": "FlowPilot works from visible context and can operate the platform — including opening the support app's chat inline so you can test the customer experience, and searching public web sources for current information. The file distractor is precise: attachments can be forwarded to a compatible app chat, but FlowPilot does not read arbitrary non-image files itself.",
+								"points": 10,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "visible-context",
+											"label": "It receives the open board, your selections, and run context — not your entire workspace"
+										},
+										{
+											"id": "open-chat-inline",
+											"label": "It can open the support app's chat inline so you can test the assistant without leaving the conversation"
+										},
+										{
+											"id": "web-current",
+											"label": "It can search and read public web sources when a request needs current information"
+										},
+										{
+											"id": "reads-any-file",
+											"label": "It reads arbitrary non-image files itself to build context"
+										},
+										{
+											"id": "forwards-files",
+											"label": "In the global assistant, attached files can be passed on to a compatible app chat"
+										}
+									],
+									"correct": [
+										"visible-context",
+										"open-chat-inline",
+										"web-current",
+										"forwards-files"
+									]
+								}
+							}
+						]
+					}
+				]
+			}
+		]
+	}
+}

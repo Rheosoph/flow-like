@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { cn, useSidebar } from "@flow-like/flow-like-ui";
 import {
 	CompassIcon,
@@ -65,6 +66,7 @@ function NavCell({
  * for everything else (profiles, settings, university, …).
  */
 export function MobileBottomNav() {
+	const { t } = useTranslation("common");
 	const pathname = usePathname();
 	const { toggleSidebar } = useSidebar();
 	const flowpilotActive = pathname === "/chat" || pathname.startsWith("/chat/");
@@ -80,7 +82,7 @@ export function MobileBottomNav() {
 
 				<Link
 					href="/chat"
-					aria-label="FlowPilot"
+					aria-label={t('flowpilot', 'FlowPilot')}
 					aria-current={flowpilotActive ? "page" : undefined}
 					className="flex flex-1 flex-col items-center justify-center gap-0.5 outline-none"
 				>
@@ -100,7 +102,7 @@ export function MobileBottomNav() {
 							flowpilotActive ? "text-primary" : "text-muted-foreground",
 						)}
 					>
-						FlowPilot
+						{t('flowpilot', 'FlowPilot')}
 					</span>
 				</Link>
 
@@ -109,11 +111,11 @@ export function MobileBottomNav() {
 				<button
 					type="button"
 					onClick={toggleSidebar}
-					aria-label="Open menu"
+					aria-label={t('openMenu', 'Open menu')}
 					className="flex flex-1 flex-col items-center justify-center gap-0.5 text-[10.5px] font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-primary"
 				>
 					<MenuIcon className="size-5" strokeWidth={2} aria-hidden />
-					<span className="leading-none">Menu</span>
+					<span className="leading-none">{t('menu', 'Menu')}</span>
 				</button>
 			</div>
 		</nav>

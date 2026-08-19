@@ -1,0 +1,28 @@
+{
+	"name": "@flow-like/locales",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Shared i18next resources and bootstrap for the Flow-Like desktop and web apps.",
+	"exports": {
+		".": "./src/index.ts",
+		"./config": "./locales/config.json",
+		"./locales/*": "./locales/*"
+	},
+	"scripts": {
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"i18next": "^25.3.2",
+		"i18next-browser-languagedetector": "^8.0.2",
+		"i18next-resources-to-backend": "^1.2.3",
+		"react-i18next": "^15.4.0"
+	},
+	"peerDependencies": {
+		"react": ">=18"
+	},
+	"devDependencies": {
+		"typescript": "^5.7.3"
+	}
+}

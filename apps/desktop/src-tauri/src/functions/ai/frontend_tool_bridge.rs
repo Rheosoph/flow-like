@@ -805,7 +805,8 @@ impl FrontendToolBridge {
 /// mutation.
 fn lost_response_recovery_hint(tool_name: &str) -> &'static str {
     match tool_name {
-        "execute_node" | "execute_event" | "call_app_event" | "call_app_chat" => {
+        "execute_node" | "execute_event" | "call_app_event" | "call_app_chat"
+        | "interact_app_page" => {
             "The execution may have started and may still complete after this deadline; treat the outcome as unknown, not failed. Do NOT re-execute immediately. Verify persisted effects first (query_execution_logs for a new run on this board, database/storage state), then retry only if nothing ran."
         }
         "flowpilot_board" | "flowpilot_widget" => {

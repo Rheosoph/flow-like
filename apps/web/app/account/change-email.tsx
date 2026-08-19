@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Alert,
 	AlertDescription,
@@ -31,6 +32,7 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 	open,
 	onOpenChange,
 }) => {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const info = useInvoke(backend.userState.getInfo, backend.userState, []);
 
@@ -129,12 +131,12 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
 						<Mail className="h-5 w-5" />
-						Change Email Address
+						{t('changeEmailAddress', 'Change Email Address')}
 					</DialogTitle>
 					<DialogDescription>
 						{step === "email"
-							? "Enter your new email address"
-							: "Enter the confirmation code sent to your new email"}
+							? `Enter your new email address`
+							: `Enter the confirmation code sent to your new email`}
 					</DialogDescription>
 				</DialogHeader>
 
@@ -148,7 +150,7 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 					{step === "email" ? (
 						<>
 							<div className="space-y-2">
-								<Label htmlFor="current-email">Current Email</Label>
+								<Label htmlFor="current-email">{t('currentEmail', 'Current Email')}</Label>
 								<Input
 									id="current-email"
 									value={info.data?.email}
@@ -158,7 +160,7 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 							</div>
 
 							<div className="space-y-2">
-								<Label htmlFor="new-email">New Email Address</Label>
+								<Label htmlFor="new-email">{t('newEmailAddress', 'New Email Address')}</Label>
 								<Input
 									id="new-email"
 									type="email"
@@ -166,7 +168,7 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 									onChange={(e) =>
 										handleInputChange("newEmail", e.target.value)
 									}
-									placeholder="Enter new email address"
+									placeholder={`Enter new email address`}
 								/>
 							</div>
 
@@ -176,17 +178,17 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 									onClick={handleClose}
 									className="flex-1"
 								>
-									Cancel
+									{t('cancel', 'Cancel')}
 								</Button>
 								<Button onClick={handleEmailSubmit} className="flex-1">
-									Continue
+									{t('continue', 'Continue')}
 								</Button>
 							</div>
 						</>
 					) : (
 						<>
 							<div className="space-y-2">
-								<Label htmlFor="new-email-display">New Email</Label>
+								<Label htmlFor="new-email-display">{t('newEmail', 'New Email')}</Label>
 								<Input
 									id="new-email-display"
 									value={formData.newEmail}
@@ -196,17 +198,17 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 							</div>
 
 							<div className="space-y-2">
-								<Label htmlFor="confirmation-code">Confirmation Code</Label>
+								<Label htmlFor="confirmation-code">{t('confirmationCode', 'Confirmation Code')}</Label>
 								<Input
 									id="confirmation-code"
 									value={formData.confirmationCode}
 									onChange={(e) =>
 										handleInputChange("confirmationCode", e.target.value)
 									}
-									placeholder="Enter confirmation code"
+									placeholder={t('enterConfirmationCode', 'Enter confirmation code')}
 								/>
 								<p className="text-sm text-muted-foreground">
-									Check your email for a confirmation code
+									{t('checkYourEmailForAConfirmationCode', 'Check your email for a confirmation code')}
 								</p>
 							</div>
 
@@ -220,21 +222,21 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 									}}
 									className="flex-1"
 								>
-									Resend
+									{t('resend', 'Resend')}
 								</Button>
 								<Button
 									variant="outline"
 									onClick={handleBack}
 									className="flex-1"
 								>
-									Back
+									{t('back', 'Back')}
 								</Button>
 								<Button
 									onClick={handleVerificationSubmit}
 									disabled={isLoading}
 									className="flex-1"
 								>
-									{isLoading ? "Verifying..." : "Verify & Change"}
+									{isLoading ? "Verifying..." : t('verifyChange', 'Verify & Change')}
 								</Button>
 							</div>
 						</>

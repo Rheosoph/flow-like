@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	AlertTriangleIcon,
@@ -194,6 +195,7 @@ export function AppAiActWizard({
 	onSubmitted,
 	className,
 }: Readonly<AppAiActWizardProps>) {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const profile = useInvoke(
@@ -300,7 +302,7 @@ export function AppAiActWizard({
 				}
 				if (purpose && !hasPurposeAnswer) {
 					next[PURPOSE_KEY] = {
-						rationale: "Derived as the one-sentence summary of the app.",
+						rationale: t('derivedAsTheOnesentenceSummaryOfTheApp', 'Derived as the one-sentence summary of the app.'),
 						model,
 					};
 				}
@@ -310,7 +312,7 @@ export function AppAiActWizard({
 			const appliedCount =
 				suggested.length + (purpose && !hasPurposeAnswer ? 1 : 0);
 			toast.success(
-				`Applied ${appliedCount} suggestion${appliedCount === 1 ? "" : "s"} from ${model}. Please review before submitting.`,
+				t('appliedAppliedcountSuggestionvalFromModelPleaseReviewBeforeSubmitting', 'Applied {{appliedCount}} suggestion{{val}} from {{model}}. Please review before submitting.', { appliedCount, val: appliedCount === 1 ? "" : "s", model }),
 			);
 		},
 		onError: (err: Error) => {
@@ -336,8 +338,8 @@ export function AppAiActWizard({
 			});
 			toast.success(
 				submit
-					? "Assessment submitted. It will be reviewed during publication."
-					: "Draft saved.",
+					? t('assessmentSubmittedItWillBeReviewedDuringPublication', 'Assessment submitted. It will be reviewed during publication.')
+					: t('draftSaved', 'Draft saved.'),
 			);
 			if (submit) onSubmitted?.();
 		},
@@ -402,7 +404,7 @@ export function AppAiActWizard({
 		return (
 			<Alert variant="destructive" className={className}>
 				<AlertTriangleIcon className="h-4 w-4" />
-				<AlertTitle>Could not load the AI Act questionnaire</AlertTitle>
+				<AlertTitle>{t('couldNotLoadTheAiActQuestionnaire', 'Could not load the AI Act questionnaire')}</AlertTitle>
 				<AlertDescription>
 					{questionnaire.error?.message ?? "Unknown error"}
 				</AlertDescription>
@@ -421,10 +423,10 @@ export function AppAiActWizard({
 					<ShieldCheckIcon className="h-5 w-5 text-primary" />
 					<div>
 						<h3 className="text-base font-semibold">
-							EU AI Act Conformity Check
+							{t('euAiActConformityCheck', 'EU AI Act Conformity Check')}
 						</h3>
 						<p className="text-sm text-muted-foreground">
-							Answer the questionnaire to classify this app before publishing.
+							{t('answerTheQuestionnaireToClassifyThisAppBeforePublishing', 'Answer the questionnaire to classify this app before publishing.')}
 						</p>
 					</div>
 				</div>
@@ -439,7 +441,7 @@ export function AppAiActWizard({
 					) : (
 						<SparklesIcon className="h-4 w-4" />
 					)}
-					Help me answer
+					{t('helpMeAnswer', 'Help me answer')}
 				</Button>
 			</div>
 
@@ -452,9 +454,7 @@ export function AppAiActWizard({
 							{typeof preview?.conformityScore === "number" && (
 								<span
 									className={`text-sm font-medium ${bandColor(preview.conformityBand)}`}
-								>
-									Conformity score: {preview.conformityScore}/100
-								</span>
+								>{t('conformityScoreConformityscore100', 'Conformity score: {{conformityScore}}/100', { conformityScore: preview.conformityScore })}</span>
 							)}
 						</div>
 						<p className="text-sm text-muted-foreground mt-2">
@@ -463,7 +463,7 @@ export function AppAiActWizard({
 						{preview && preview.transparencyObligations.length > 0 && (
 							<div className="mt-3">
 								<p className="text-xs font-medium mb-1">
-									Transparency obligations
+									{t('transparencyObligations', 'Transparency obligations')}
 								</p>
 								<ul className="space-y-1">
 									{preview.transparencyObligations.map((o) => (
@@ -481,10 +481,9 @@ export function AppAiActWizard({
 						{preview?.blocked && (
 							<Alert variant="destructive" className="mt-3">
 								<AlertTriangleIcon className="h-4 w-4" />
-								<AlertTitle>Publication blocked</AlertTitle>
+								<AlertTitle>{t('publicationBlocked', 'Publication blocked')}</AlertTitle>
 								<AlertDescription>
-									Remove the prohibited practice declaration to proceed, or keep
-									this app private.
+									{t('removeTheProhibitedPracticeDeclarationToProceedOrKeepThisAppPrivate', "Remove the prohibited practice declaration to proceed, or keep this app private.")}
 								</AlertDescription>
 							</Alert>
 						)}
@@ -496,7 +495,7 @@ export function AppAiActWizard({
 				<Alert className="mb-4">
 					<SparklesIcon className="h-4 w-4" />
 					<AlertTitle>
-						Assistant notes
+						{t('assistantNotes', 'Assistant notes')}
 						{suggestMutation.data?.model
 							? ` · ${suggestMutation.data.model}`
 							: ""}
@@ -544,13 +543,12 @@ export function AppAiActWizard({
 					<ShieldCheckIcon className="h-4 w-4 shrink-0 text-primary" />
 					<div className="min-w-0">
 						<p className="text-sm font-medium">
-							Responsible person:{" "}
-							{responsibleName ?? responsibleEmail ?? "App owner"}
+							{t('responsiblePerson', 'Responsible person:')}{" "}
+							{responsibleName ?? responsibleEmail ?? t('appOwner', 'App owner')}
 						</p>
 						<p className="text-xs text-muted-foreground">
 							{responsibleEmail ? `${responsibleEmail} · ` : ""}
-							Automatically set to the app owner (EU AI Act Art. 26) and shown
-							to reviewers. This cannot be changed.
+							{t('automaticallySetToTheAppOwnerEuAiActArt26AndShownToReviewersThisCannotBeChanged', "Automatically set to the app owner (EU AI Act Art. 26) and shown to reviewers. This cannot be changed.")}
 						</p>
 					</div>
 				</CardContent>
@@ -570,14 +568,11 @@ export function AppAiActWizard({
 				<div className="text-xs text-muted-foreground">
 					{missingRequired.length > 0 ? (
 						<span className="flex items-center gap-1 text-amber-600">
-							<AlertTriangleIcon className="h-3 w-3" />
-							{missingRequired.length} required question
-							{missingRequired.length === 1 ? "" : "s"} remaining
-						</span>
+							<AlertTriangleIcon className="h-3 w-3" />{t('countRequiredQuestionSRemaining', { defaultValue_one: "{{count}} required question remaining", defaultValue_other: "{{count}} required questions remaining", count: missingRequired.length })}</span>
 					) : (
 						<span className="flex items-center gap-1">
 							<HelpCircleIcon className="h-3 w-3" />
-							The risk category and score are always recomputed on the server.
+							{t('theRiskCategoryAndScoreAreAlwaysRecomputedOnTheServer', 'The risk category and score are always recomputed on the server.')}
 						</span>
 					)}
 				</div>
@@ -589,7 +584,7 @@ export function AppAiActWizard({
 						disabled={saveMutation.isPending}
 					>
 						<SaveIcon className="h-4 w-4" />
-						Save draft
+						{t('saveDraft', 'Save draft')}
 					</Button>
 					<Button
 						size="sm"
@@ -601,7 +596,7 @@ export function AppAiActWizard({
 						) : (
 							<SendIcon className="h-4 w-4" />
 						)}
-						Submit assessment
+						{t('submitAssessment', 'Submit assessment')}
 					</Button>
 				</div>
 			</div>
@@ -617,6 +612,7 @@ export function AppAiActWizard({
 function AssistantReasoning({
 	reasoning,
 }: Readonly<{ reasoning: AnswerReasoning }>) {
+	const { t } = useTranslation("settings");
 	const confidencePct =
 		typeof reasoning.confidence === "number"
 			? Math.round(reasoning.confidence * 100)
@@ -629,7 +625,7 @@ function AssistantReasoning({
 			<div className="flex flex-wrap items-center gap-2">
 				<span className="flex items-center gap-1 text-xs font-medium text-primary">
 					<SparklesIcon className="h-3 w-3" />
-					Assistant
+					{t('assistant', 'Assistant')}
 				</span>
 				<Badge variant="secondary" className="text-[10px]">
 					{reasoning.model}
@@ -638,9 +634,7 @@ function AssistantReasoning({
 					<Badge
 						variant={lowConfidence ? "destructive" : "outline"}
 						className="text-[10px]"
-					>
-						{confidencePct}% confidence
-					</Badge>
+					>{t('confidencepctConfidence', '{{confidencePct}}% confidence', { confidencePct })}</Badge>
 				)}
 			</div>
 			{reasoning.rationale && (
@@ -665,6 +659,7 @@ function QuestionField({
 	onChange,
 	reasoning,
 }: Readonly<QuestionFieldProps>) {
+	const { t } = useTranslation("settings");
 	const label = (
 		<div className="mb-2">
 			<Label className="text-sm font-medium">
@@ -683,8 +678,8 @@ function QuestionField({
 		const options = question.options?.length
 			? question.options
 			: [
-					{ value: "yes", label: "Yes" },
-					{ value: "no", label: "No" },
+					{ value: "yes", label: t('yes', 'Yes') },
+					{ value: "no", label: t('no', 'No') },
 				];
 		return (
 			<div>

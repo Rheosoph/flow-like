@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { useState } from "react";
 import { Button } from "../../../components/ui/button";
 import {
@@ -28,6 +29,7 @@ export function FlowNodeCommentMenu({
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const { pushCommand } = useUndoRedo(appId, boardId);
 	const invalidate = useInvalidateInvoke();
 	const backend = useBackend();
@@ -62,7 +64,7 @@ export function FlowNodeCommentMenu({
 		>
 			<DialogContent>
 				<DialogHeader>
-					<DialogTitle>Comment</DialogTitle>
+					<DialogTitle>{t('comment', 'Comment')}</DialogTitle>
 				</DialogHeader>
 				<DialogDescription>
 					<Textarea
@@ -80,7 +82,7 @@ export function FlowNodeCommentMenu({
 						}}
 						variant={"secondary"}
 					>
-						Cancel
+						{t('cancel', 'Cancel')}
 					</Button>
 					<Button onClick={async () => await saveComment()}>Save</Button>
 				</DialogFooter>

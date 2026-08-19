@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import type { TColumnElement } from "platejs";
@@ -95,6 +96,7 @@ export const ColumnElement = withHOC(
 );
 
 const ColumnDragHandle = React.memo(function ColumnDragHandle() {
+	const { t } = useTranslation("common");
 	return (
 		<TooltipProvider>
 			<Tooltip>
@@ -110,7 +112,7 @@ const ColumnDragHandle = React.memo(function ColumnDragHandle() {
 					</Button>
 				</TooltipTrigger>
 
-				<TooltipContent>Drag to move column</TooltipContent>
+				<TooltipContent>{t('dragToMoveColumn', 'Drag to move column')}</TooltipContent>
 			</Tooltip>
 		</TooltipProvider>
 	);

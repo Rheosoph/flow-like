@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowLeft,
@@ -180,12 +181,13 @@ function AdminPagePreview({
 	page: IPage;
 	appId: string;
 }) {
+	const { t } = useTranslation("admin");
 	const surface = useMemo(() => buildPageSurface(page), [page]);
 
 	if (!surface) {
 		return (
 			<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-				No page content to display.
+				{t('noPageContentToDisplay', 'No page content to display.')}
 			</div>
 		);
 	}
@@ -429,14 +431,13 @@ function DetailSkeleton() {
 }
 
 function ReviewTimeline({ logs }: { logs: PublicationLogItem[] }) {
+	const { t } = useTranslation("admin");
 	if (logs.length === 0) return null;
 
 	return (
 		<div className="space-y-3">
 			<div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-				<MessageSquare className="h-4 w-4" />
-				Review History ({logs.length})
-			</div>
+				<MessageSquare className="h-4 w-4" />{t('reviewHistoryLength', 'Review History ({{length}})', { length: logs.length })}</div>
 			<div className="space-y-2 pl-2 border-l-2 border-border/60">
 				{logs.map((log) => (
 					<div key={log.id} className="pl-4 py-1.5">
@@ -464,7 +465,7 @@ function ReviewTimeline({ logs }: { logs: PublicationLogItem[] }) {
 									)}
 								</>
 							) : (
-								<span className="text-muted-foreground">System</span>
+								<span className="text-muted-foreground">{t('system', 'System')}</span>
 							)}
 							{log.visibility && (
 								<Badge variant="outline" className="text-[10px] px-1.5 py-0">
@@ -545,7 +546,7 @@ function formatLogLevel(logLevel: number): string {
 		case 4:
 			return "Fatal";
 		default:
-			return `Level ${logLevel}`;
+			return i18next.t('levelLoglevel', 'Level {{logLevel}}', { logLevel });
 	}
 }
 
@@ -558,6 +559,7 @@ function BoardScoreOverview({
 	scoreDetail?: BoardScoreItem;
 	scoresLoading?: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	const scores = board.scores ?? scoresFromDetail(scoreDetail);
 	const scoredNodeCount = scoreDetail?.scoredNodeCount;
 	const effectiveNodeCount = scoreDetail?.nodeCount ?? board.nodeCount;
@@ -569,14 +571,12 @@ function BoardScoreOverview({
 					<BarChart3 className="h-3.5 w-3.5" />
 					<span>
 						{scoresLoading
-							? "Loading governance scores..."
-							: "No governance scores recorded."}
+							? t('loadingGovernanceScores', 'Loading governance scores...')
+							: t('noGovernanceScoresRecorded', 'No governance scores recorded.')}
 					</span>
 				</div>
 				{typeof scoredNodeCount === "number" && (
-					<p className="mt-1">
-						{scoredNodeCount}/{effectiveNodeCount} nodes scored
-					</p>
+					<p className="mt-1">{`${scoredNodeCount}/${effectiveNodeCount} nodes scored`}</p>
 				)}
 			</div>
 		);
@@ -590,15 +590,13 @@ function BoardScoreOverview({
 			<div className="flex flex-wrap items-center justify-between gap-2">
 				<div className="flex items-center gap-2">
 					<BarChart3 className="h-3.5 w-3.5 text-muted-foreground" />
-					<span className="text-xs font-medium">Governance scores</span>
+					<span className="text-xs font-medium">{t('governanceScores2', 'Governance scores')}</span>
 					{typeof scoredNodeCount === "number" && (
-						<span className="text-[10px] text-muted-foreground">
-							{scoredNodeCount}/{effectiveNodeCount} nodes scored
-						</span>
+						<span className="text-[10px] text-muted-foreground">{`${scoredNodeCount}/${effectiveNodeCount} nodes scored`}</span>
 					)}
 				</div>
 				<div className="flex items-center gap-1.5">
-					<span className="text-[10px] text-muted-foreground">Worst</span>
+					<span className="text-[10px] text-muted-foreground">{t('worst', 'Worst')}</span>
 					<span
 						className={`inline-flex h-6 min-w-6 items-center justify-center rounded-md px-1.5 text-xs font-semibold tabular-nums text-white ${scoreBgColor(
 							worst,
@@ -633,7 +631,7 @@ function BoardScoreOverview({
 								{pattern.score}
 							</span>
 							{(pattern.count ?? 1) > 1 && (
-								<span className="text-muted-foreground">x{pattern.count}</span>
+								<span className="text-muted-foreground">{`x${pattern.count}`}</span>
 							)}
 						</Badge>
 					))}
@@ -661,17 +659,18 @@ function BoardsSection({
 	boardScoresById?: Record<string, BoardScoreItem>;
 	boardScoresLoading?: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	if (boards.length === 0) {
 		return (
 			<Card>
 				<CardHeader>
 					<CardTitle className="text-base flex items-center gap-2">
 						<LayoutGrid className="h-4 w-4" />
-						Boards (0)
+						{t('boards0', 'Boards (0)')}
 					</CardTitle>
 				</CardHeader>
 				<CardContent>
-					<p className="text-sm text-muted-foreground">No boards found.</p>
+					<p className="text-sm text-muted-foreground">{t('noBoardsFound', 'No boards found.')}</p>
 				</CardContent>
 			</Card>
 		);
@@ -681,9 +680,7 @@ function BoardsSection({
 		<Card>
 			<CardHeader>
 				<CardTitle className="text-base flex items-center gap-2">
-					<LayoutGrid className="h-4 w-4" />
-					Boards ({boards.length})
-				</CardTitle>
+					<LayoutGrid className="h-4 w-4" />{t('boardsLength', 'Boards ({{length}})', { length: boards.length })}</CardTitle>
 			</CardHeader>
 			<CardContent className="space-y-4">
 				{boards.map((board) => (
@@ -718,7 +715,7 @@ function BoardsSection({
 									className="text-xs h-7"
 								>
 									<Eye className="h-3 w-3 mr-1" />
-									Preview
+									{t('preview', 'Preview')}
 								</Button>
 								<Badge
 									variant="outline"
@@ -731,31 +728,31 @@ function BoardsSection({
 
 						<div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 lg:grid-cols-6">
 							<div className="rounded-md bg-muted/30 px-2 py-1.5">
-								<p className="text-[10px] text-muted-foreground">Nodes</p>
+								<p className="text-[10px] text-muted-foreground">{t('nodes', 'Nodes')}</p>
 								<p className="font-medium tabular-nums">{board.nodeCount}</p>
 							</div>
 							<div className="rounded-md bg-muted/30 px-2 py-1.5">
-								<p className="text-[10px] text-muted-foreground">Connections</p>
+								<p className="text-[10px] text-muted-foreground">{t('connections', 'Connections')}</p>
 								<p className="font-medium tabular-nums">
 									{board.connectionCount}
 								</p>
 							</div>
 							<div className="rounded-md bg-muted/30 px-2 py-1.5">
-								<p className="text-[10px] text-muted-foreground">Variables</p>
+								<p className="text-[10px] text-muted-foreground">{t('variables', 'Variables')}</p>
 								<p className="font-medium tabular-nums">
 									{board.variableCount}
 								</p>
 							</div>
 							<div className="rounded-md bg-muted/30 px-2 py-1.5">
-								<p className="text-[10px] text-muted-foreground">Layers</p>
+								<p className="text-[10px] text-muted-foreground">{t('layers', 'Layers')}</p>
 								<p className="font-medium tabular-nums">{board.layerCount}</p>
 							</div>
 							<div className="rounded-md bg-muted/30 px-2 py-1.5">
-								<p className="text-[10px] text-muted-foreground">Comments</p>
+								<p className="text-[10px] text-muted-foreground">{t('comments', 'Comments')}</p>
 								<p className="font-medium tabular-nums">{board.commentCount}</p>
 							</div>
 							<div className="rounded-md bg-muted/30 px-2 py-1.5">
-								<p className="text-[10px] text-muted-foreground">Log level</p>
+								<p className="text-[10px] text-muted-foreground">{t('logLevel', 'Log level')}</p>
 								<p className="font-medium">{formatLogLevel(board.logLevel)}</p>
 							</div>
 						</div>
@@ -768,8 +765,7 @@ function BoardsSection({
 
 						{board.pages.length > 0 && (
 							<div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-								<FileText className="h-3 w-3" />
-								{board.pages.length} page{board.pages.length !== 1 ? "s" : ""}:
+								<FileText className="h-3 w-3" />{t('countPages', '{{count}} page', { count: board.pages.length })}:
 								{board.pages.map((pg) => (
 									<button
 										key={pg.pageId}
@@ -791,17 +787,18 @@ function BoardsSection({
 }
 
 function EventsSection({ events }: { events: EventSummary[] }) {
+	const { t } = useTranslation("admin");
 	if (events.length === 0) {
 		return (
 			<Card>
 				<CardHeader>
 					<CardTitle className="text-base flex items-center gap-2">
 						<Zap className="h-4 w-4" />
-						Events (0)
+						{t('events0', 'Events (0)')}
 					</CardTitle>
 				</CardHeader>
 				<CardContent>
-					<p className="text-sm text-muted-foreground">No events found.</p>
+					<p className="text-sm text-muted-foreground">{t('noEventsFound', 'No events found.')}</p>
 				</CardContent>
 			</Card>
 		);
@@ -811,9 +808,7 @@ function EventsSection({ events }: { events: EventSummary[] }) {
 		<Card>
 			<CardHeader>
 				<CardTitle className="text-base flex items-center gap-2">
-					<Zap className="h-4 w-4" />
-					Events ({events.length})
-				</CardTitle>
+					<Zap className="h-4 w-4" />{t('eventsLength', 'Events ({{length}})', { length: events.length })}</CardTitle>
 			</CardHeader>
 			<CardContent>
 				<div className="divide-y">
@@ -837,7 +832,7 @@ function EventsSection({ events }: { events: EventSummary[] }) {
 											variant="default"
 											className="text-[10px] px-1.5 py-0"
 										>
-											Default
+											{t('default', 'Default')}
 										</Badge>
 									)}
 								</div>
@@ -878,15 +873,14 @@ function PagesSection({
 	pages: PageInfo[];
 	onPreview: (page: PageInfo) => void;
 }) {
+	const { t } = useTranslation("admin");
 	if (pages.length === 0) return null;
 
 	return (
 		<Card>
 			<CardHeader>
 				<CardTitle className="text-base flex items-center gap-2">
-					<FileText className="h-4 w-4" />
-					Pages ({pages.length})
-				</CardTitle>
+					<FileText className="h-4 w-4" />{t('pagesLength', 'Pages ({{length}})', { length: pages.length })}</CardTitle>
 			</CardHeader>
 			<CardContent>
 				<div className="divide-y">
@@ -916,7 +910,7 @@ function PagesSection({
 								className="h-7 shrink-0 text-xs"
 							>
 								<Eye className="h-3 w-3 mr-1" />
-								Preview
+								{t('preview', 'Preview')}
 							</Button>
 						</div>
 					))}
@@ -979,6 +973,7 @@ function DetailView({
 	onClosePreview: () => void;
 	approveBlockedReason?: string | null;
 }) {
+	const { t } = useTranslation("admin");
 	const [reviewMessage, setReviewMessage] = useState("");
 	const isActionable = req.status === "pending" || req.status === "on_hold";
 
@@ -988,7 +983,7 @@ function DetailView({
 			<div className="flex items-center gap-3">
 				<Button variant="ghost" size="sm" onClick={onBack}>
 					<ArrowLeft className="h-4 w-4 mr-1" />
-					Back
+					{t('back', 'Back')}
 				</Button>
 				<Separator orientation="vertical" className="h-6" />
 				<h1 className="text-lg font-semibold truncate">
@@ -1002,7 +997,7 @@ function DetailView({
 			{/* App identity card */}
 			<Card>
 				<CardHeader>
-					<CardTitle className="text-base">App Details</CardTitle>
+					<CardTitle className="text-base">{t('appDetails', 'App Details')}</CardTitle>
 				</CardHeader>
 				<CardContent className="space-y-6">
 					<div className="flex items-start gap-6">
@@ -1055,7 +1050,7 @@ function DetailView({
 					<CardContent className="p-4 text-center">
 						<div className="flex items-center justify-center gap-1 text-muted-foreground mb-1">
 							<Download className="h-3.5 w-3.5" />
-							<span className="text-xs">Downloads</span>
+							<span className="text-xs">{t('downloads', 'Downloads')}</span>
 						</div>
 						<p className="text-xl font-bold">
 							{formatDownloadCount(req.downloadCount)}
@@ -1066,7 +1061,7 @@ function DetailView({
 					<CardContent className="p-4 text-center">
 						<div className="flex items-center justify-center gap-1 text-muted-foreground mb-1">
 							<Star className="h-3.5 w-3.5" />
-							<span className="text-xs">Rating</span>
+							<span className="text-xs">{t('rating', 'Rating')}</span>
 						</div>
 						<p className="text-xl font-bold">
 							{(req.ratingCount ?? 0) > 0
@@ -1079,7 +1074,7 @@ function DetailView({
 					<CardContent className="p-4 text-center">
 						<div className="flex items-center justify-center gap-1 text-muted-foreground mb-1">
 							<LayoutGrid className="h-3.5 w-3.5" />
-							<span className="text-xs">Boards</span>
+							<span className="text-xs">{t('boards', 'Boards')}</span>
 						</div>
 						<p className="text-xl font-bold">{req.boardCount ?? 0}</p>
 					</CardContent>
@@ -1088,7 +1083,7 @@ function DetailView({
 					<CardContent className="p-4 text-center">
 						<div className="flex items-center justify-center gap-1 text-muted-foreground mb-1">
 							<Package className="h-3.5 w-3.5" />
-							<span className="text-xs">Packages</span>
+							<span className="text-xs">{t('packages', 'Packages')}</span>
 						</div>
 						<p className="text-xl font-bold">{req.packageCount ?? 0}</p>
 					</CardContent>
@@ -1098,7 +1093,7 @@ function DetailView({
 			{/* Visibility change */}
 			<Card>
 				<CardHeader>
-					<CardTitle className="text-base">Visibility Change</CardTitle>
+					<CardTitle className="text-base">{t('visibilityChange', 'Visibility Change')}</CardTitle>
 				</CardHeader>
 				<CardContent>
 					<div className="flex items-center gap-3 text-sm">
@@ -1112,7 +1107,7 @@ function DetailView({
 					</div>
 					<div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground">
 						<span>
-							Submitted:{" "}
+							{t('submitted', 'Submitted:')}{" "}
 							<RelativeTime
 								value={req.createdAt}
 								fallback={req.createdAt || "Unknown"}
@@ -1120,7 +1115,7 @@ function DetailView({
 						</span>
 						{req.updatedAt !== req.createdAt && (
 							<span>
-								Updated:{" "}
+								{t('updated', 'Updated:')}{" "}
 								<RelativeTime
 									value={req.updatedAt}
 									fallback={req.updatedAt || "Unknown"}
@@ -1158,7 +1153,7 @@ function DetailView({
 			{req.logs.length > 0 && (
 				<Card>
 					<CardHeader>
-						<CardTitle className="text-base">Review History</CardTitle>
+						<CardTitle className="text-base">{t('reviewHistory', 'Review History')}</CardTitle>
 					</CardHeader>
 					<CardContent>
 						<ReviewTimeline logs={req.logs} />
@@ -1170,11 +1165,11 @@ function DetailView({
 			{isActionable && (
 				<Card>
 					<CardHeader>
-						<CardTitle className="text-base">Review Decision</CardTitle>
+						<CardTitle className="text-base">{t('reviewDecision', 'Review Decision')}</CardTitle>
 					</CardHeader>
 					<CardContent className="space-y-4">
 						<Textarea
-							placeholder="Add a review message (optional)..."
+							placeholder={t('addAReviewMessageOptional', 'Add a review message (optional)...')}
 							className="min-h-[80px] text-sm resize-none"
 							value={reviewMessage}
 							onChange={(e) => setReviewMessage(e.target.value)}
@@ -1193,7 +1188,7 @@ function DetailView({
 								disabled={isPending}
 							>
 								<PauseCircle className="h-3 w-3 mr-1" />
-								Hold
+								{t('hold', 'Hold')}
 							</Button>
 							<Button
 								size="sm"
@@ -1202,7 +1197,7 @@ function DetailView({
 								disabled={isPending}
 							>
 								<XCircle className="h-3 w-3 mr-1" />
-								Reject
+								{t('reject', 'Reject')}
 							</Button>
 							<Button
 								size="sm"
@@ -1211,7 +1206,7 @@ function DetailView({
 								title={approveBlockedReason ?? undefined}
 							>
 								<CheckCircle className="h-3 w-3 mr-1" />
-								Approve
+								{t('approve', 'Approve')}
 							</Button>
 						</div>
 					</CardContent>
@@ -1237,7 +1232,7 @@ function DetailView({
 					<div className="flex items-center justify-between px-4 py-2 border-b shrink-0">
 						<DialogTitle className="text-sm font-semibold">
 							{previewPageInfo
-								? `Page Preview: ${previewPageInfo.name}`
+								? t('pagePreviewName', 'Page Preview: {{name}}', { name: previewPageInfo.name })
 								: "Board Preview"}
 						</DialogTitle>
 						<Button
@@ -1254,7 +1249,7 @@ function DetailView({
 							previewPageLoading ? (
 								<div className="flex items-center justify-center h-full">
 									<div className="text-sm text-muted-foreground">
-										Loading page...
+										{t('loadingPage', 'Loading page...')}
 									</div>
 								</div>
 							) : previewPage ? (
@@ -1265,14 +1260,14 @@ function DetailView({
 							) : (
 								<div className="flex items-center justify-center h-full">
 									<div className="text-sm text-muted-foreground">
-										Page not found.
+										{t('pageNotFound', 'Page not found.')}
 									</div>
 								</div>
 							)
 						) : previewBoardLoading ? (
 							<div className="flex items-center justify-center h-full">
 								<div className="text-sm text-muted-foreground">
-									Loading board...
+									{t('loadingBoard', 'Loading board...')}
 								</div>
 							</div>
 						) : previewBoard ? (
@@ -1280,7 +1275,7 @@ function DetailView({
 						) : (
 							<div className="flex items-center justify-center h-full">
 								<div className="text-sm text-muted-foreground">
-									Board not found.
+									{t('boardNotFound', 'Board not found.')}
 								</div>
 							</div>
 						)}
@@ -1300,6 +1295,7 @@ export function AdminAppRequestDetail({
 	requestId,
 	onBack,
 }: AdminAppRequestDetailProps) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 
@@ -1389,17 +1385,17 @@ export function AdminAppRequestDetail({
 
 	const approveBlockedReason = ((): string | null => {
 		if (!aiActEnabled) return null;
-		if (aiActGate.isLoading) return "Loading EU AI Act assessment status…";
+		if (aiActGate.isLoading) return t('loadingEuAiActAssessmentStatus', 'Loading EU AI Act assessment status…');
 		const data = aiActGate.data;
 		if (!data || !data.hasAssessment) {
-			return "The app owner has not submitted an EU AI Act conformity assessment yet.";
+			return t('theAppOwnerHasNotSubmittedAnEuAiActConformityAssessmentYet', 'The app owner has not submitted an EU AI Act conformity assessment yet.');
 		}
 		const status = (data.assessment?.status ?? "").toUpperCase();
 		if (status === "BLOCKED") {
-			return "This app declares a prohibited AI practice and cannot be approved.";
+			return t('thisAppDeclaresAProhibitedAiPracticeAndCannotBeApproved', 'This app declares a prohibited AI practice and cannot be approved.');
 		}
 		if (status === "DRAFT") {
-			return "The EU AI Act assessment is still a draft and must be submitted by the owner.";
+			return t('theEuAiActAssessmentIsStillADraftAndMustBeSubmittedByTheOwner', 'The EU AI Act assessment is still a draft and must be submitted by the owner.');
 		}
 		return null;
 	})();
@@ -1560,10 +1556,10 @@ export function AdminAppRequestDetail({
 	if (!requestQuery.data) {
 		return (
 			<div className="mx-auto flex w-full max-w-4xl flex-col items-center gap-4 px-4 py-12">
-				<p className="text-muted-foreground">Request not found.</p>
+				<p className="text-muted-foreground">{t('requestNotFound', 'Request not found.')}</p>
 				<Button variant="outline" onClick={onBack}>
 					<ArrowLeft className="h-4 w-4 mr-1" />
-					Back
+					{t('back', 'Back')}
 				</Button>
 			</div>
 		);

@@ -70,6 +70,9 @@ impl Command for UpsertPinCommand {
         };
 
         if pin_exists_on_node {
+            // Sensitive literals are write-only: an incoming `None` keeps the stored value.
+            self.pin
+                .keep_sensitive_value_from(node.pins.get(&self.pin.id));
             self.old_pin = node.pins.insert(self.pin.id.clone(), self.pin.clone());
             return Ok(());
         }

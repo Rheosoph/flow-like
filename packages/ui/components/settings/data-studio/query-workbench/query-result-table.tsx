@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type ColumnDef,
 	type SortingState,
@@ -33,6 +34,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../../../ui/dropdown-menu";
+import { RelativeTime } from "../../../ui/relative-time";
 import {
 	type ColumnKind,
 	cellToString,
@@ -75,9 +77,10 @@ function CellContent({
 	value,
 	kind,
 }: Readonly<{ value: unknown; kind: ColumnKind }>) {
+	const { t } = useTranslation("settings");
 	if (isNullish(value)) {
 		return (
-			<span className="select-none italic text-muted-foreground/50">NULL</span>
+			<span className="select-none italic text-muted-foreground/50">{`NULL`}</span>
 		);
 	}
 	if (kind === "boolean") {
@@ -96,6 +99,9 @@ function CellContent({
 	}
 	if (kind === "number") {
 		return <span className="tabular-nums">{formatNumber(value)}</span>;
+	}
+	if (kind === "temporal") {
+		return <RelativeTime value={value} className="min-w-0 truncate" />;
 	}
 	return <span className="min-w-0 truncate">{cellToString(value)}</span>;
 }
@@ -121,6 +127,7 @@ function HeaderCell({
 	onResizeStart: (event: React.MouseEvent | React.TouchEvent) => void;
 	isResizing: boolean;
 }>) {
+	const { t } = useTranslation("settings");
 	const Icon = KIND_ICON[kind];
 	const SortIcon =
 		sorted === "asc" ? ArrowUp : sorted === "desc" ? ArrowDown : ChevronsUpDown;
@@ -152,7 +159,7 @@ function HeaderCell({
 						variant="ghost"
 						size="icon"
 						className="h-6 w-6 shrink-0 text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover/head:opacity-100"
-						aria-label={`${name} column actions`}
+						aria-label={t('nameColumnActions', '{{name}} column actions', { name })}
 					>
 						<MoreHorizontal className="h-3.5 w-3.5" />
 					</Button>
@@ -163,7 +170,7 @@ function HeaderCell({
 					</DropdownMenuLabel>
 					<DropdownMenuSeparator />
 					<DropdownMenuItem onClick={onCopyColumn}>
-						<Copy className="h-3.5 w-3.5" /> Copy column
+						<Copy className="h-3.5 w-3.5" /> {t('copyColumn', 'Copy column')}
 					</DropdownMenuItem>
 				</DropdownMenuContent>
 			</DropdownMenu>
@@ -171,7 +178,7 @@ function HeaderCell({
 				<button
 					type="button"
 					tabIndex={-1}
-					aria-label={`Resize ${name} column`}
+					aria-label={t('resizeNameColumn', 'Resize {{name}} column', { name })}
 					onMouseDown={onResizeStart}
 					onTouchStart={onResizeStart}
 					className={cn(
@@ -191,6 +198,7 @@ export function QueryResultTable({
 	columns: QueryColumn[];
 	rows: ResultRow[];
 }>) {
+	const { t } = useTranslation("settings");
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const [sorting, setSorting] = useState<SortingState>([]);
 	const [inspect, setInspect] = useState<ResultRow | null>(null);
@@ -285,7 +293,7 @@ export function QueryResultTable({
 					className="table-fixed border-separate border-spacing-0 text-sm"
 					style={{ width: totalWidth, minWidth: "100%" }}
 				>
-					<caption className="sr-only">Query results</caption>
+					<caption className="sr-only">{t('queryResults', 'Query results')}</caption>
 					<thead>
 						<tr aria-rowindex={1}>
 							<th
@@ -357,7 +365,7 @@ export function QueryResultTable({
 											type="button"
 											onClick={() => setInspect(row.original)}
 											className="flex h-full w-full items-center justify-end px-2 font-mono text-[11px] tabular-nums text-muted-foreground transition-colors hover:bg-muted-foreground/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-											aria-label={`Inspect row ${virtualRow.index + 1}`}
+											aria-label={t('inspectRowVal', 'Inspect row {{val}}', { val: virtualRow.index + 1 })}
 										>
 											{virtualRow.index + 1}
 										</button>
@@ -393,7 +401,7 @@ export function QueryResultTable({
 															copyText(cellToString(value), "Copied cell")
 														}
 														className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded bg-background/80 text-muted-foreground opacity-0 backdrop-blur-sm transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/cell:opacity-100"
-														aria-label="Copy cell value"
+														aria-label={t('copyCellValue', 'Copy cell value')}
 													>
 														<Copy className="h-3 w-3" />
 													</button>

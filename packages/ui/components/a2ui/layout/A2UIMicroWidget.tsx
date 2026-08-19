@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import type {
 	EventPayload,
 	QueryResultPayload,
@@ -8,7 +9,6 @@ import type {
 	ValueChangedPayload,
 } from "@flow-like/widget-sdk";
 import { validateSchema } from "@flow-like/widget-sdk";
-import i18next from "i18next";
 import { TriangleAlert } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -104,14 +104,13 @@ function MicroWidgetErrorCard({
 	widgetId: string;
 	message: string;
 }) {
+	const { t } = useTranslation("common");
 	return (
 		<Card className="border-destructive/40 bg-destructive/5">
 			<CardContent className="flex items-start gap-2 p-4 text-sm">
 				<TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
 				<div className="min-w-0">
-					<p className="font-medium text-destructive">
-						Widget &quot;{widgetId}&quot; failed to load
-					</p>
+					<p className="font-medium text-destructive">{t('widgetQuotwidgetidquotFailedToLoad', 'Widget "{{widgetId}}" failed to load', { widgetId })}</p>
 					<p className="text-muted-foreground break-words">{message}</p>
 				</div>
 			</CardContent>
@@ -130,6 +129,7 @@ function MicroWidgetFrame({
 	componentId,
 	style,
 }: MicroWidgetFrameProps) {
+	const { t } = useTranslation("common");
 	const {
 		instanceId,
 		packageId,
@@ -360,7 +360,7 @@ function MicroWidgetFrame({
 		const timer = setTimeout(() => {
 			if (readyRef.current) return;
 			setErrorMessage(
-				`The widget did not become ready within ${Math.round(MICRO_WIDGET_READY_TIMEOUT_MS / 1000)}s.`,
+				t('theWidgetDidNotBecomeReadyWithinVals', 'The widget did not become ready within {{val}}s.', { val: Math.round(MICRO_WIDGET_READY_TIMEOUT_MS / 1000) }),
 			);
 			setPhase("error");
 		}, MICRO_WIDGET_READY_TIMEOUT_MS);
@@ -438,7 +438,7 @@ function MicroWidgetFrame({
 				<iframe
 					ref={iframeRef}
 					src={src}
-					title={`Widget ${widgetId}`}
+					title={t('widgetWidgetid', 'Widget {{widgetId}}', { widgetId })}
 					sandbox="allow-scripts"
 					referrerPolicy="no-referrer"
 					onLoad={sendInit}

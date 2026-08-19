@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import type { IVariable } from "../../../lib/schema/flow/board";
 import type { IEvent } from "../../../lib/schema/flow/event";
-import { issuesForSection } from "./use-event-issues";
+import { computeEventIssues, issuesForSection } from "./use-event-issues";
 
 const event = (overrides: Partial<IEvent> = {}): IEvent =>
 	({
@@ -75,5 +76,93 @@ describe("mail credential detection", () => {
 describe("event fixture sanity", () => {
 	test("the mail fixture is a mail event", () => {
 		expect(event().event_type).toBe("email");
+	});
+});
+
+describe("runtime variable coverage", () => {
+	const variable = (overrides: Partial<IVariable> = {}): IVariable =>
+		({
+			id: "var-1",
+			name: "API_KEY",
+			data_type: "String",
+			value_type: "Normal",
+			exposed: false,
+			secret: false,
+			editable: true,
+			runtime_configured: true,
+			...overrides,
+		}) as IVariable;
+
+	const issueIds = (
+		input: Parameters<typeof computeEventIssues>[0],
+	): string[] => computeEventIssues(input).map((issue) => issue.id);
+
+	test("flags a runtime variable a headless trigger cannot supply", () => {
+		const issues = computeEventIssues({
+			event: event({ event_type: "cron" }),
+			config: { expression: "0 * * * *" },
+			boardVariables: { "var-1": variable() },
+		});
+		const found = issues.find((issue) => issue.id === "runtime-vars-unset");
+		expect(found?.section).toBe("variables");
+		expect(found?.detail).toContain("API_KEY");
+	});
+
+	test("treats secrets as runtime configured", () => {
+		expect(
+			issueIds({
+				event: event({ event_type: "rest" }),
+				config: {},
+				boardVariables: {
+					"var-1": variable({ runtime_configured: false, secret: true }),
+				},
+			}),
+		).toContain("runtime-vars-unset");
+	});
+
+	test("stays quiet once the event overrides it", () => {
+		expect(
+			issueIds({
+				event: event({
+					event_type: "cron",
+					variables: { "var-1": variable() },
+				}),
+				config: { expression: "0 * * * *" },
+				boardVariables: { "var-1": variable() },
+			}),
+		).not.toContain("runtime-vars-unset");
+	});
+
+	test("ignores plain and exposed board variables", () => {
+		expect(
+			issueIds({
+				event: event({ event_type: "mcp" }),
+				config: {},
+				boardVariables: {
+					"var-1": variable({ runtime_configured: false }),
+					"var-2": variable({
+						id: "var-2",
+						runtime_configured: false,
+						exposed: true,
+					}),
+				},
+			}),
+		).not.toContain("runtime-vars-unset");
+	});
+
+	test("leaves interactive triggers alone — they prompt the user", () => {
+		expect(
+			issueIds({
+				event: event({ event_type: "simple_chat" }),
+				config: {},
+				boardVariables: { "var-1": variable() },
+			}),
+		).not.toContain("runtime-vars-unset");
+	});
+
+	test("is a no-op when no board is loaded", () => {
+		expect(
+			issueIds({ event: event({ event_type: "cron" }), config: {} }),
+		).not.toContain("runtime-vars-unset");
 	});
 });

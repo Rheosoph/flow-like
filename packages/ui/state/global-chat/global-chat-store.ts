@@ -14,6 +14,7 @@ import type {
 	IPlanStep,
 } from "../../components/interfaces/chat-default/chat-db";
 import { mergeChatWidgets } from "../../components/interfaces/chat-default/event-processor";
+import type { AskUserChoice, AskUserForm } from "../../lib/ask-user";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
 import type { IInteractionRequest } from "../../lib/schema/interaction";
 import {
@@ -235,19 +236,13 @@ export type GlobalToolPromptResolution =
 	| null;
 
 /** One selectable option for an `ask_user` single/multiple-choice question. */
-export interface GlobalToolAskChoice {
-	label: string;
-	value?: unknown;
-	description?: string;
-}
+export type GlobalToolAskChoice = AskUserChoice;
 
-/** Parsed `ask_user` question metadata driving the inline prompt's input controls. */
-export interface GlobalToolAsk {
-	mode: "freeform" | "single_choice" | "multiple_choice";
-	choices: GlobalToolAskChoice[];
-	defaultValue?: unknown;
-	placeholder?: string;
-}
+/**
+ * Parsed `ask_user` payload driving the inline prompt's input controls: one question, or the
+ * batched BUILD intake form answered in a single card.
+ */
+export type GlobalToolAsk = AskUserForm;
 
 /**
  * A pending frontend-tool approval or question from the global assistant, rendered inline in the

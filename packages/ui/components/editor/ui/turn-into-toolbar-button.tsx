@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import type { DropdownMenuProps } from "@radix-ui/react-dropdown-menu";
@@ -102,6 +103,7 @@ export const turnIntoItems = [
 ];
 
 export function TurnIntoToolbarButton(props: Readonly<DropdownMenuProps>) {
+	const { t } = useTranslation("common");
 	const editor = useEditorRef();
 	const [open, setOpen] = React.useState(false);
 
@@ -144,7 +146,7 @@ export function TurnIntoToolbarButton(props: Readonly<DropdownMenuProps>) {
 					onValueChange={(type) => {
 						setBlockType(editor, type);
 					}}
-					label="Turn into"
+					label={t('turnInto', 'Turn into')}
 				>
 					{turnIntoItems.map(({ icon, label, value: itemValue }) => (
 						<DropdownMenuRadioItem

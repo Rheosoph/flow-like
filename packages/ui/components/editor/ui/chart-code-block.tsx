@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { type ComponentType, useEffect, useMemo, useState } from "react";
 import { cn } from "../../../lib/utils";
 import { type ChartInput, parseChartData } from "./chart-data-parser";
@@ -27,9 +28,10 @@ interface ChartCodeBlockProps {
 }
 
 function ChartLoadingFallback() {
+	const { t } = useTranslation("common");
 	return (
 		<div className="flex items-center justify-center h-75 bg-muted/20 rounded-md animate-pulse">
-			<span className="text-muted-foreground text-sm">Loading chart...</span>
+			<span className="text-muted-foreground text-sm">{t('loadingChart', 'Loading chart...')}</span>
 		</div>
 	);
 }
@@ -49,6 +51,7 @@ function ChartModuleFallback({
 	error: string;
 	onRetry: () => void;
 }) {
+	const { t } = useTranslation("common");
 	return (
 		<div className="flex h-50 flex-col items-center justify-center gap-3 rounded-md bg-destructive/10 p-4">
 			<span className="text-center text-sm text-destructive">{error}</span>
@@ -57,7 +60,7 @@ function ChartModuleFallback({
 				onClick={onRetry}
 				className="rounded bg-background/80 px-3 py-1 text-xs text-foreground"
 			>
-				Retry chart load
+				{t('retryChartLoad', 'Retry chart load')}
 			</button>
 		</div>
 	);
@@ -90,6 +93,7 @@ export function ChartCodeBlock({
 	language,
 	className,
 }: ChartCodeBlockProps) {
+	const { t } = useTranslation("common");
 	const [showSource, setShowSource] = useState(false);
 	const [ChartComponent, setChartComponent] =
 		useState<ChartPreviewComponent | null>(null);
@@ -118,7 +122,7 @@ export function ChartCodeBlock({
 				const component = (mod.default ?? null) as ChartPreviewComponent | null;
 				if (!component) {
 					setModuleError(
-						"Chart preview module loaded without a default export.",
+						t('chartPreviewModuleLoadedWithoutADefaultExport', 'Chart preview module loaded without a default export.'),
 					);
 					return;
 				}
@@ -129,7 +133,7 @@ export function ChartCodeBlock({
 				const message =
 					error instanceof Error
 						? error.message
-						: "Failed to load chart preview.";
+						: t('failedToLoadChartPreview', 'Failed to load chart preview.');
 				setModuleError(message);
 			})
 			.finally(() => {
@@ -155,7 +159,7 @@ export function ChartCodeBlock({
 					onClick={() => setShowSource(false)}
 					className={TOGGLE_CLASS}
 				>
-					Show Chart
+					{t('showChart', 'Show Chart')}
 				</button>
 				<pre className="overflow-x-auto p-4 pt-10 font-mono text-sm bg-muted/50 rounded-md">
 					<code>{content}</code>
@@ -176,7 +180,7 @@ export function ChartCodeBlock({
 					"opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
 				)}
 			>
-				View Source
+				{t('viewSource', 'View Source')}
 			</button>
 			{isModuleLoading ? <ChartLoadingFallback /> : null}
 			{!isModuleLoading && moduleError ? (

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	AlertTriangleIcon,
 	ClipboardListIcon,
@@ -180,6 +181,7 @@ export function EventsOverview({
 	onRefreshToken,
 	isOffline,
 }: Readonly<EventsOverviewProps>) {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const [search, setSearch] = useState("");
@@ -203,7 +205,7 @@ export function EventsOverview({
 	);
 
 	const boards = useInvoke(
-		backend.boardState.getBoards,
+		backend.boardState.getBoardSummaries,
 		backend.boardState,
 		[appId],
 		appId !== "",
@@ -448,8 +450,8 @@ export function EventsOverview({
 					<Input
 						value={search}
 						onChange={(e) => setSearch(e.target.value)}
-						placeholder="Search events…"
-						aria-label="Search events"
+						placeholder={t('searchEvents', 'Search events…')}
+						aria-label={t('searchEvents2', 'Search events')}
 						className="h-9 pl-8"
 					/>
 				</div>
@@ -470,7 +472,7 @@ export function EventsOverview({
 
 				<Button onClick={onCreateEvent} className="h-9 gap-2">
 					<PlusIcon className="h-4 w-4" />
-					New event
+					{t('newEvent', 'New event')}
 				</Button>
 			</div>
 
@@ -481,7 +483,7 @@ export function EventsOverview({
 			<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
 				{visible.length === 0 ? (
 					<div className="flex flex-1 flex-col items-center justify-center gap-3 py-12 text-sm text-muted-foreground">
-						{filtersActive ? "No event matches this search." : "No events yet."}
+						{filtersActive ? t('noEventMatchesThisSearch', 'No event matches this search.') : t('noEventsYet', 'No events yet.')}
 						{filtersActive && (
 							<Button
 								variant="outline"
@@ -492,14 +494,14 @@ export function EventsOverview({
 									setTypeFilter(new Set());
 								}}
 							>
-								Clear filters
+								{t('clearFilters', 'Clear filters')}
 							</Button>
 						)}
 					</div>
 				) : (
 					<>
 						<EventGroupSection
-							title="Entry points"
+							title={t('entryPoints', 'Entry points')}
 							blurb="People open these — a chat, a page, a form, a palette command."
 							rows={entryRows}
 							boardsMap={boardsMap}
@@ -530,8 +532,8 @@ export function EventsOverview({
 
 			<PatSelectorDialog
 				{...dialogProps.pat}
-				title="Authorize this change"
-				description="Registering or removing an event sink needs a Personal Access Token."
+				title={t('authorizeThisChange', 'Authorize this change')}
+				description={t('registeringOrRemovingAnEventSinkNeedsAPersonalAccessToken', 'Registering or removing an event sink needs a Personal Access Token.')}
 			/>
 			<OAuthConsentDialog {...dialogProps.consent} />
 		</div>
@@ -547,15 +549,16 @@ function StatusFilterBar({
 	counts: Record<StatusFilter, number>;
 	onChange: (next: StatusFilter) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	const options: Array<{
 		key: StatusFilter;
 		label: string;
 		dot?: string;
 	}> = [
-		{ key: "all", label: "All" },
-		{ key: "live", label: "Live", dot: "bg-emerald-500" },
-		{ key: "paused", label: "Paused", dot: "bg-muted-foreground/50" },
-		{ key: "attention", label: "Needs setup", dot: "bg-destructive" },
+		{ key: "all", label: t('all', 'All') },
+		{ key: "live", label: t('live', 'Live'), dot: "bg-emerald-500" },
+		{ key: "paused", label: t('paused', 'Paused'), dot: "bg-muted-foreground/50" },
+		{ key: "attention", label: t('needsSetup', 'Needs setup'), dot: "bg-destructive" },
 	];
 
 	return (
@@ -601,6 +604,7 @@ function TypeFilterMenu({
 	selected: Set<string>;
 	onChange: (next: Set<string>) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	if (types.length < 2) return null;
 
 	return (
@@ -617,7 +621,7 @@ function TypeFilterMenu({
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-52">
-				<DropdownMenuLabel>Event type</DropdownMenuLabel>
+				<DropdownMenuLabel>{t('eventType', 'Event type')}</DropdownMenuLabel>
 				<DropdownMenuSeparator />
 				{types.map((type) => (
 					<DropdownMenuCheckboxItem
@@ -654,13 +658,12 @@ function AttentionBand({
 	rows: EventRowModel[];
 	onSelect: (event: IEvent) => void;
 }>) {
+	const { t } = useTranslation("settings");
 	return (
 		<div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2">
 			<span className="inline-flex shrink-0 items-center gap-1.5 text-sm font-semibold text-destructive">
 				<AlertTriangleIcon className="h-3.5 w-3.5" />
-				{rows.length === 1
-					? "1 event can't run"
-					: `${rows.length} events can't run`}
+				{t('countEventsCantRun', { defaultValue_one: '1 event can\'t run', defaultValue_other: '{{count}} events can\'t run', count: rows.length })}
 			</span>
 			{rows.map((row) => (
 				<button
@@ -778,6 +781,7 @@ function EventRow({
 		next: string,
 	) => Promise<void>;
 }>) {
+	const { t } = useTranslation("settings");
 	const { event, status, topIssue, glyph } = row;
 	const Icon = TYPE_ICONS[glyph.icon] ?? CogIcon;
 	const boardName = boardsMap.get(event.board_id);
@@ -821,7 +825,7 @@ function EventRow({
 					</span>
 					{row.requiresSink && !row.sinkActive && (
 						<span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">
-							Not running
+							{t('notRunning', 'Not running')}
 						</span>
 					)}
 					{row.requiresSink && row.sinkActive && (
@@ -841,7 +845,7 @@ function EventRow({
 						>
 							<AlertTriangleIcon className="mr-1 inline h-3 w-3 align-[-1px]" />
 							<span className="font-medium">{topIssue.title}</span>
-							<span className="opacity-80"> — {topIssue.detail}</span>
+							<span className="opacity-80">{` — ${topIssue.detail}`}</span>
 						</span>
 					) : (
 						<span className="text-muted-foreground">{event.description}</span>
@@ -909,7 +913,7 @@ function EventRow({
 					size="sm"
 					className="h-7 w-7 p-0"
 					title="Configure"
-					aria-label="Configure event"
+					aria-label={t('configureEvent', 'Configure event')}
 					onClick={() => onEdit(event)}
 				>
 					<SettingsIcon className="h-4 w-4" />
@@ -918,8 +922,8 @@ function EventRow({
 					variant="ghost"
 					size="sm"
 					className="h-7 w-7 p-0"
-					title="Open in flow"
-					aria-label="Open in flow"
+					title={t('openInFlow', 'Open in flow')}
+					aria-label={t('openInFlow', 'Open in flow')}
 					onClick={() => onNavigateToNode(event, event.node_id)}
 				>
 					<ExternalLinkIcon className="h-4 w-4" />
@@ -928,8 +932,8 @@ function EventRow({
 					variant="ghost"
 					size="sm"
 					className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
-					title="Delete"
-					aria-label="Delete event"
+					title={t('delete', 'Delete')}
+					aria-label={t('deleteEvent', 'Delete event')}
 					onClick={() => onDelete(event.id)}
 				>
 					<Trash2Icon className="h-4 w-4" />
@@ -945,7 +949,7 @@ function runs24hLabel(total: number, failed: number) {
 		<span>
 			{total.toLocaleString()}
 			{failed > 0 && (
-				<span className="ml-1 font-semibold text-destructive">{failed}✕</span>
+				<span className="ml-1 font-semibold text-destructive">{`${failed}✕`}</span>
 			)}
 		</span>
 	);
@@ -955,6 +959,7 @@ function RunSparkline({
 	trend,
 	failed,
 }: Readonly<{ trend?: number[]; failed: number }>) {
+	const { t } = useTranslation("settings");
 	const buckets = trend ?? [];
 	const max = Math.max(1, ...buckets);
 	const empty = buckets.length === 0 || buckets.every((v) => v === 0);
@@ -963,7 +968,7 @@ function RunSparkline({
 		<span
 			className="flex h-4 shrink-0 items-end gap-[1.5px]"
 			aria-hidden
-			title={empty ? "No runs in the last 24 hours" : undefined}
+			title={empty ? t('noRunsInTheLast24Hours', 'No runs in the last 24 hours') : undefined}
 		>
 			{(buckets.length > 0 ? buckets : new Array(12).fill(0)).map(
 				(value, index) => (
@@ -999,6 +1004,7 @@ function RouteChip({
 	path?: string;
 	onSave: (next: string) => Promise<void>;
 }>) {
+	const { t } = useTranslation("settings");
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState(path ?? "");
 	const [saving, setSaving] = useState(false);
@@ -1032,7 +1038,7 @@ function RouteChip({
 					}
 				}}
 				placeholder="/route"
-				aria-label="Route path"
+				aria-label={t('routePath2', 'Route path')}
 				disabled={saving}
 				autoFocus
 				className="h-7 w-full font-mono text-xs"
@@ -1044,7 +1050,7 @@ function RouteChip({
 		<button
 			type="button"
 			onClick={() => setEditing(true)}
-			title={path ? `${path} — click to edit` : "Click to set a route"}
+			title={path ? t('pathClickToEdit', '{{path}} — click to edit', { path }) : t('clickToSetARoute', 'Click to set a route')}
 			className={cn(
 				"inline-flex max-w-full items-center gap-1.5 truncate rounded border px-1.5 py-0.5 font-mono text-[11.5px] leading-[1.45] transition-opacity hover:opacity-80",
 				path
@@ -1053,7 +1059,7 @@ function RouteChip({
 			)}
 		>
 			<SlidersHorizontalIcon className="h-3 w-3 shrink-0 opacity-0 group-hover:opacity-60" />
-			<span className="truncate">{path ?? "No route"}</span>
+			<span className="truncate">{path ?? t('noRoute', 'No route')}</span>
 		</button>
 	);
 }

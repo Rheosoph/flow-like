@@ -12,9 +12,13 @@ import {
 	type IApplyFlowIrCommitResponse,
 	type IApplyFlowScriptResponse,
 	type IBoard,
+	type IBoardMutationOptions,
 	type IBoardServerResetResult,
 	type IBoardState,
+	type IBoardSummary,
+	type IBoardSummaryInclude,
 	type IBoardSyncStatus,
+	type IBoardVariables,
 	type ICheckFlowScriptReconcileResponse,
 	ICommentType,
 	IConnectionMode,
@@ -39,6 +43,7 @@ import {
 	type UnifiedChatMessage,
 	type UnifiedCopilotResponse,
 	checkOAuthTokens,
+	dispatchBoardDelivered,
 	dispatchBoardSyncChanged,
 	dispatchBoardSyncRecoveryRequest,
 	extractOAuthRequirementsFromBoard,
@@ -48,8 +53,17 @@ import {
 	showProgressToast,
 } from "@flow-like/flow-like-ui";
 import type { IJwks, IRealtimeAccess } from "@flow-like/flow-like-ui";
-import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
+import type {
+	CanvasSettings,
+	SurfaceComponent,
+} from "@flow-like/flow-like-ui/components/a2ui/types";
+import type { IProfile } from "@flow-like/flow-like-ui";
 import { ApiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
+import {
+	BoardSyncClient,
+	type IBoardSyncRequest,
+	type IBoardSyncResponse,
+} from "@flow-like/flow-like-ui/lib/board-sync";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { flowPilotDebugLog } from "@flow-like/flow-like-ui/lib/flowpilot-debug";
 import { flowIrCommitDeliveryId } from "@flow-like/flow-like-ui/lib/flowpilot/board-edit-job-delivery";
@@ -371,6 +385,61 @@ export class BoardState implements IBoardState {
 		Promise<{ failed: boolean; pushedBatches: number }>
 	>();
 	private readonly boardMutationSequences = new Map<string, Promise<void>>();
+	/** Remote boards are fetched incrementally; this holds the last assembled copy per board. */
+	private readonly remoteBoardSync = new BoardSyncClient();
+	/**
+	 * Local boards cross the Tauri bridge incrementally too: `get_board` serialises the whole
+	 * board on every refetch, and refetches happen after every own or peer edit. Kept separate
+	 * from `remoteBoardSync` because the two sides hold different revisions of the same board.
+	 */
+	private readonly localBoardSync = new BoardSyncClient();
+
+	/** The local board, transferred as a diff against the last one this client assembled. */
+	private fetchLocalBoard(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+	): Promise<IBoard> {
+		return this.localBoardSync.sync(
+			appId,
+			boardId,
+			version,
+			(request: IBoardSyncRequest) =>
+				invoke<IBoardSyncResponse>("sync_board", {
+					appId,
+					boardId,
+					version,
+					request,
+				}),
+		);
+	}
+
+	/**
+	 * The server's current board, transferred as a diff against the last one this client
+	 * assembled. Semantically identical to a full GET, including for `resetBoardFromServer`.
+	 */
+	private fetchRemoteBoard(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+		profile: IProfile | undefined = this.backend.profile,
+		auth = this.backend.auth,
+	): Promise<IBoard> {
+		if (!profile) throw new Error("No profile set for remote board fetch");
+		const params = version ? `?version=${version.join("_")}` : "";
+		return this.remoteBoardSync.sync(
+			appId,
+			boardId,
+			version,
+			(request: IBoardSyncRequest) =>
+				fetcher<IBoardSyncResponse>(
+					profile,
+					`apps/${appId}/board/${boardId}/sync${params}`,
+					{ method: "POST", body: JSON.stringify(request) },
+					auth,
+				),
+		);
+	}
 
 	constructor(private readonly backend: TauriBackend) {}
 
@@ -727,17 +796,107 @@ export class BoardState implements IBoardState {
 
 		return boards;
 	}
+
+	async getBoardSummaries(
+		appId: string,
+		include?: IBoardSummaryInclude[],
+	): Promise<IBoardSummary[]> {
+		const withNodeTypes = include?.includes("node_types") === true;
+		const withMetrics = include?.includes("metrics") === true;
+		const local: IBoardSummary[] = await invoke("get_app_board_summaries", {
+			appId,
+			withNodeTypes,
+			withMetrics,
+		});
+		const byId = new Map(local.map((summary) => [summary.id, summary]));
+
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline || !this.backend.profile || !this.backend.auth) {
+			return Array.from(byId.values());
+		}
+
+		const query = include?.length ? `?include=${include.join(",")}` : "";
+		let remote: IBoardSummary[];
+		try {
+			remote = await fetcher<IBoardSummary[]>(
+				this.backend.profile,
+				`apps/${appId}/board/summaries${query}`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+		} catch (error) {
+			console.warn(
+				"[BoardState] remote board summaries unavailable, using local:",
+				error,
+			);
+			return Array.from(byId.values());
+		}
+
+		// Boards the server has that this device does not, or that changed remotely, are pulled
+		// through `getBoard` — local-first and incremental — instead of the old full-list download.
+		const stale: string[] = [];
+		for (const summary of remote) {
+			const localSummary = byId.get(summary.id);
+			const remoteNanos = systemTimeToNanos(summary.updatedAt);
+			const localNanos = systemTimeToNanos(localSummary?.updatedAt);
+			if (!localSummary || (remoteNanos > 0 && remoteNanos > localNanos)) {
+				stale.push(summary.id);
+			}
+			// Remote metadata is authoritative for the listing; local wins only when the local
+			// copy is the newer one (queued offline edits).
+			byId.set(
+				summary.id,
+				localSummary && localNanos > remoteNanos
+					? { ...summary, ...localSummary, pages: summary.pages }
+					: summary,
+			);
+		}
+		if (stale.length > 0 && this.backend.queryClient) {
+			this.backend.backgroundTaskHandler(
+				Promise.allSettled(
+					stale.map((boardId) => this.getBoard(appId, boardId)),
+				).then(() => undefined),
+			);
+		}
+
+		return Array.from(byId.values());
+	}
+
+	async getBoardVariables(appId: string): Promise<IBoardVariables[]> {
+		const isOffline = await this.backend.isOffline(appId);
+		if (!isOffline && this.backend.profile && this.backend.auth) {
+			try {
+				return await fetcher<IBoardVariables[]>(
+					this.backend.profile,
+					`apps/${appId}/board/variables`,
+					{ method: "GET" },
+					this.backend.auth,
+				);
+			} catch (error) {
+				console.warn(
+					"[BoardState] remote board variables unavailable, using local:",
+					error,
+				);
+			}
+		}
+		return invoke("get_app_board_variables", { appId });
+	}
+
 	async getCatalog(appId: string): Promise<INode[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline && this.backend.profile && this.backend.auth) {
 			try {
-				return await fetcher<INode[]>(
+				const nodes = await fetcher<INode[]>(
 					this.backend.profile,
 					`apps/${appId}/nodes`,
 					{ method: "GET" },
 					this.backend.auth,
 				);
+				// The remote catalog is what the server compares against when it decides which
+				// nodes may ship lean, so only it may feed remote-board hydration.
+				this.remoteBoardSync.setCatalog(appId, nodes);
+				return nodes;
 			} catch (error) {
 				console.warn(
 					"Failed to fetch remote app catalog, falling back to local catalog:",
@@ -759,26 +918,13 @@ export class BoardState implements IBoardState {
 	): Promise<IBoard> {
 		let board: IBoard;
 		try {
-			board = await invoke("get_board", {
-				appId: appId,
-				boardId: boardId,
-				version: version,
-			});
+			board = await this.fetchLocalBoard(appId, boardId, version);
 		} catch {
 			const isOffline = await this.backend.isOffline(appId);
 			if (isOffline || !this.backend.profile || !this.backend.auth) {
 				throw new Error(`Board not found: ${boardId}`);
 			}
-			let url = `apps/${appId}/board/${boardId}`;
-			if (version) {
-				url += `?version=${version.join("_")}`;
-			}
-			const remoteData = await fetcher<IBoard>(
-				this.backend.profile,
-				url,
-				{ method: "GET" },
-				this.backend.auth,
-			);
+			const remoteData = await this.fetchRemoteBoard(appId, boardId, version);
 			if (typeof version === "undefined") {
 				await invoke("upsert_board", {
 					appId: appId,
@@ -826,6 +972,9 @@ export class BoardState implements IBoardState {
 		// before execution begins (used on the /use page and execution paths).
 		if (forceFresh) {
 			try {
+				// Deliver whatever the last interactive edit left in the outbox first, so the remote
+				// snapshot fetched below is not older than the board that was just committed here.
+				await this.settleOutbox(appId, boardId);
 				const pendingSync = await this.backend.getOfflineSyncCommands(
 					appId,
 					boardId,
@@ -843,13 +992,7 @@ export class BoardState implements IBoardState {
 					return board;
 				}
 
-				const url = `apps/${appId}/board/${boardId}`;
-				const remoteData = await fetcher<IBoard>(
-					this.backend.profile,
-					url,
-					{ method: "GET" },
-					this.backend.auth,
-				);
+				const remoteData = await this.fetchRemoteBoard(appId, boardId);
 
 				if (remoteData) {
 					if (
@@ -913,14 +1056,7 @@ export class BoardState implements IBoardState {
 					return board;
 				}
 
-				const remoteData = await fetcher<IBoard>(
-					this.backend.profile!,
-					`apps/${appId}/board/${boardId}`,
-					{
-						method: "GET",
-					},
-					this.backend.auth,
-				);
+				const remoteData = await this.fetchRemoteBoard(appId, boardId);
 
 				if (!remoteData) {
 					throw new Error("Failed to fetch board data");
@@ -1722,6 +1858,9 @@ export class BoardState implements IBoardState {
 					"Profile, auth or query client not set. Cannot push board update.",
 				);
 			}
+			// A background delivery of the last interactive edit must land before the remote undo/redo
+			// executes, or the server would undo a different history than the one on screen.
+			await this.settleOutbox(appId, boardId);
 			await this.assertNoPendingNativeBoardDelivery(appId, boardId);
 
 			// Undo must ship as a single request — a chunked/partial undo would
@@ -1772,6 +1911,9 @@ export class BoardState implements IBoardState {
 					"Profile, auth or query client not set. Cannot push board update.",
 				);
 			}
+			// A background delivery of the last interactive edit must land before the remote undo/redo
+			// executes, or the server would undo a different history than the one on screen.
+			await this.settleOutbox(appId, boardId);
 			await this.assertNoPendingNativeBoardDelivery(appId, boardId);
 
 			// Redo must ship as a single request — a chunked/partial redo would
@@ -1936,6 +2078,8 @@ export class BoardState implements IBoardState {
 	}
 
 	async closeBoard(boardId: string) {
+		this.remoteBoardSync.forget(undefined, boardId);
+		this.localBoardSync.forget(undefined, boardId);
 		await invoke("close_board", {
 			boardId: boardId,
 		});
@@ -2467,10 +2611,11 @@ export class BoardState implements IBoardState {
 			}
 
 			// Fetch before discarding: a transport failure then leaves the queue exactly as it was.
-			const remoteData = await fetcher<IBoard>(
+			const remoteData = await this.fetchRemoteBoard(
+				appId,
+				boardId,
+				undefined,
 				transportProfile,
-				`apps/${appId}/board/${boardId}`,
-				{ method: "GET" },
 				transportAuth,
 			);
 			if (!remoteData) {
@@ -2633,6 +2778,7 @@ export class BoardState implements IBoardState {
 		commands: IGenericCommand[],
 		idempotencyKey?: string,
 		remoteIdentity?: CommandSyncRemoteIdentity,
+		{ awaitDelivery = true }: { awaitDelivery?: boolean } = {},
 	): Promise<{ deliveryComplete: boolean; blockedReason?: string }> {
 		if (commands.length === 0) return { deliveryComplete: true };
 		const durableIdempotencyKey = idempotencyKey ?? `board-sync:${createId()}`;
@@ -2705,9 +2851,23 @@ export class BoardState implements IBoardState {
 			return { deliveryComplete: true };
 		}
 
+		if (!awaitDelivery) {
+			void this.deliverOutbox(appId, boardId).catch((error: unknown) => {
+				console.error("[BoardState] background outbox delivery failed:", error);
+			});
+			return { deliveryComplete: true };
+		}
+		await this.deliverOutbox(appId, boardId);
+		return { deliveryComplete: true };
+	}
+
+	/**
+	 * Drain the outbox to the hub, then once more if a drain that was already running snapshotted
+	 * the queue before the latest journal write. Announces delivery to the window so the canvas
+	 * can tell peers to refetch, and surfaces a failure as the queued-edits toast.
+	 */
+	private async deliverOutbox(appId: string, boardId: string): Promise<void> {
 		let drain = await this.drainOfflineSyncQueue(appId, boardId);
-		// An already-running drain may have snapshotted the queue immediately before this journal
-		// write. Once it settles, run one more pass so the newly appended entry is not deferred.
 		if (!drain.failed) {
 			const remaining = await this.backend.getOfflineSyncCommands(
 				appId,
@@ -2719,53 +2879,50 @@ export class BoardState implements IBoardState {
 		}
 		if (drain.failed) {
 			this.notifyEditsQueued(appId, boardId, drain.failure);
+			return;
 		}
-		return { deliveryComplete: true };
+		dispatchBoardDelivered(appId, boardId);
+	}
+
+	/**
+	 * Wait until nothing is left in the board's outbox that a remote-mutating action could
+	 * overtake. No-op when the outbox is empty; a failed drain leaves the entries queued and the
+	 * caller proceeds against a hub that is behind — the same situation an offline period leaves.
+	 */
+	private async settleOutbox(appId: string, boardId: string): Promise<void> {
+		const pending = await this.backend.getOfflineSyncCommands(appId, boardId);
+		if (!pending.some(commandSyncHasPendingMutation)) return;
+		await this.deliverOutbox(appId, boardId);
 	}
 
 	async executeCommand(
 		appId: string,
 		boardId: string,
 		command: IGenericCommand,
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand> {
-		return await this.sequenceBoardMutation(appId, boardId, async () => {
-			const remoteIdentity = await this.remoteBoardDeliveryIdentity(
-				appId,
-				boardId,
-			);
-			if (remoteIdentity) {
-				// Reject an obviously unsyncable caller payload before committing it locally. Some
-				// commands acquire undo metadata during execution, so the returned command is checked
-				// and durably journaled again below.
-				chunkCommandsForSync([command]);
-			}
-			// The native side returns the executed command plus any node state `on_update` derived
-			// from it. All of it must reach the server as one batch, or a later ConnectPin will
-			// reference a dynamic pin id the Hub never minted.
-			const executedCommands = await invoke<IGenericCommand[]>(
-				"execute_command",
-				{
-					appId,
-					boardId,
-					command,
-				},
-			);
-
-			await this.syncExecutedCommandsToServer(
-				appId,
-				boardId,
-				executedCommands,
-				undefined,
-				remoteIdentity,
-			);
-			return executedCommands[0] ?? command;
-		});
+		const executed = await this.executeCommands(
+			appId,
+			boardId,
+			[command],
+			options,
+		);
+		return executed[0] ?? command;
 	}
 
+	/**
+	 * Local commit first, in one IPC round trip that also returns the board diff against what the
+	 * webview holds (`sync`), so the caller can skip its refetch. Hub delivery is journaled to the
+	 * outbox before returning — that is the durability guarantee — and then drained in the
+	 * background: the outbox is the single ordering source and drains are single-flight per board,
+	 * so a later edit can never overtake this one, and every remote-mutating path settles the
+	 * outbox before it acts (`settleOutbox`).
+	 */
 	async executeCommands(
 		appId: string,
 		boardId: string,
 		commands: IGenericCommand[],
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand[]> {
 		return await this.sequenceBoardMutation(appId, boardId, async () => {
 			const remoteIdentity = await this.remoteBoardDeliveryIdentity(
@@ -2773,16 +2930,44 @@ export class BoardState implements IBoardState {
 				boardId,
 			);
 			if (remoteIdentity) {
+				// Reject an obviously unsyncable caller payload before committing it locally. Some
+				// commands acquire undo metadata during execution, so the returned commands are checked
+				// and durably journaled again below.
 				chunkCommandsForSync(commands);
 			}
-			const executedCommands = await invoke<IGenericCommand[]>(
-				"execute_commands",
-				{
+			const sync = this.localBoardSync.syncRequest(appId, boardId, undefined);
+			// The native side returns the executed commands plus any node state `on_update` derived
+			// from them. All of it must reach the server as one batch, or a later ConnectPin will
+			// reference a dynamic pin id the Hub never minted.
+			const result = await invoke<{
+				commands: IGenericCommand[];
+				sync?: IBoardSyncResponse | null;
+			}>("execute_commands", {
+				appId,
+				boardId,
+				commands,
+				sync,
+			});
+			const executedCommands = result.commands;
+
+			if (sync && result.sync && options?.onBoard) {
+				const board = this.localBoardSync.ingest(
 					appId,
 					boardId,
-					commands,
-				},
-			);
+					undefined,
+					sync,
+					result.sync,
+				);
+				if (board) {
+					await this.presignMediaComments(
+						appId,
+						boardId,
+						board,
+						!remoteIdentity,
+					);
+					options.onBoard(board);
+				}
+			}
 
 			await this.syncExecutedCommandsToServer(
 				appId,
@@ -2790,6 +2975,7 @@ export class BoardState implements IBoardState {
 				executedCommands,
 				undefined,
 				remoteIdentity,
+				{ awaitDelivery: false },
 			);
 			return executedCommands;
 		});
@@ -2971,6 +3157,7 @@ export class BoardState implements IBoardState {
 		catalogNodes: INode[] | undefined,
 		selectedNodeIds: string[],
 		currentSurface: SurfaceComponent[] | null,
+		currentCanvasSettings: CanvasSettings | null,
 		selectedComponentIds: string[],
 		userPrompt: string,
 		history: UnifiedChatMessage[],
@@ -3009,6 +3196,7 @@ export class BoardState implements IBoardState {
 			catalogNodes: appPackageCatalogNodes,
 			selectedNodeIds,
 			currentSurface,
+			currentCanvasSettings,
 			selectedComponentIds,
 			userPrompt,
 			history,
@@ -3254,11 +3442,7 @@ export class BoardState implements IBoardState {
 
 		// Helper to build prerun response from local board
 		const buildLocalPrerun = async (): Promise<IPrerunBoardResponse> => {
-			const board: IBoard = await invoke("get_board", {
-				appId,
-				boardId,
-				version,
-			});
+			const board = await this.fetchLocalBoard(appId, boardId, version);
 
 			const runtimeVariables = Object.values(board.variables)
 				.filter((v) => v.runtime_configured)

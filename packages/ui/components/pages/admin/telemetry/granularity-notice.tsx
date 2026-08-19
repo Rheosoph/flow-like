@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Layers } from "lucide-react";
 import { Badge } from "../../../ui";
 
@@ -48,6 +49,7 @@ export function TelemetryGranularityNotice({
 	readonly response: unknown;
 	readonly className?: string;
 }) {
+	const { t } = useTranslation("admin");
 	if (!isDailyGranularity(response)) return null;
 	return (
 		<Badge
@@ -56,7 +58,7 @@ export function TelemetryGranularityNotice({
 			title={DAILY_GRANULARITY_HINT}
 		>
 			<Layers className="h-3 w-3" />
-			Daily aggregates
+			{t('dailyAggregates', 'Daily aggregates')}
 		</Badge>
 	);
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import type { PlateElementProps } from "platejs/react";
@@ -20,6 +21,7 @@ import {
 } from "./inline-combobox";
 
 export function EmojiInputElement(props: PlateElementProps) {
+	const { t } = useTranslation("common");
 	const { children, editor, element } = props;
 	const data = usePluginOption(EmojiPlugin, "data")!;
 	const [value, setValue] = React.useState("");
@@ -47,7 +49,7 @@ export function EmojiInputElement(props: PlateElementProps) {
 				<InlineComboboxInput />
 
 				<InlineComboboxContent>
-					{!isPending && <InlineComboboxEmpty>No results</InlineComboboxEmpty>}
+					{!isPending && <InlineComboboxEmpty>{t('noResults2', 'No results')}</InlineComboboxEmpty>}
 
 					<InlineComboboxGroup>
 						{filteredEmojis.map((emoji) => (

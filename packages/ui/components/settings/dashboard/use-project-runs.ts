@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import type { IBoard, ILogMetadata } from "../../../lib";
+import type { ILogMetadata } from "../../../lib";
 import { useBackend } from "../../../state/backend-state";
 
 /** Runs carry microsecond epoch timestamps (see `LogMeta` in the core crate). */
@@ -99,7 +99,7 @@ function percentile(sorted: number[], p: number): number | null {
  */
 export function useProjectRuns(
 	appId: string | undefined,
-	boards: IBoard[] | undefined,
+	boards: readonly { id: string; name: string }[] | undefined,
 ): ProjectRunHealth {
 	const backend = useBackend();
 	const boardIds = useMemo(

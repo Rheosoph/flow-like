@@ -3,6 +3,7 @@ pub mod delete_board;
 pub mod execute_commands;
 pub mod flow_ir_commit;
 pub mod get_board;
+pub mod get_board_variables;
 pub mod get_board_versions;
 pub mod get_boards;
 pub mod get_execution_elements;
@@ -17,6 +18,7 @@ pub mod report_run;
 pub mod scoring;
 pub mod secrets;
 pub mod summaries;
+pub mod sync_board;
 pub mod undo_redo_board;
 pub mod upsert_board;
 pub mod version_board;
@@ -54,6 +56,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(get_boards::get_boards))
         .route("/summaries", get(summaries::board_summaries))
+        .route("/variables", get(get_board_variables::get_board_variables))
         .route(
             "/{board_id}",
             get(get_board::get_board)
@@ -63,6 +66,7 @@ pub fn routes() -> Router<AppState> {
                 .delete(delete_board::delete_board)
                 .layer(DefaultBodyLimit::max(BOARD_COMMAND_BODY_LIMIT_BYTES)),
         )
+        .route("/{board_id}/sync", post(sync_board::sync_board))
         .route(
             "/{board_id}/version",
             get(get_board_versions::get_board_versions),

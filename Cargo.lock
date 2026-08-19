@@ -1609,6 +1609,8 @@ dependencies = [
 name = "aws-event-bridge"
 version = "0.1.0"
 dependencies = [
+ "aws-config",
+ "aws-sdk-scheduler",
  "flow-like-types",
  "lambda_runtime 1.1.2",
  "mimalloc",
@@ -2554,6 +2556,112 @@ dependencies = [
 ]
 
 [[package]]
+name = "azure-api"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.8",
+ "azure_core 0.32.0",
+ "azure_identity 0.32.0",
+ "flow-like-api",
+ "flow-like-azure-data",
+ "flow-like-catalog",
+ "flow-like-secrets",
+ "flow-like-storage",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "mimalloc",
+ "opentelemetry 0.27.1",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk 0.27.1",
+ "sea-orm",
+ "serde",
+ "tokio",
+ "tower-http 0.6.8",
+ "tracing",
+ "tracing-opentelemetry 0.28.0",
+ "tracing-subscriber",
+ "url",
+ "uuid 1.23.1",
+]
+
+[[package]]
+name = "azure-executor"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.8",
+ "base64 0.22.1",
+ "flow-like-catalog",
+ "flow-like-executor",
+ "jsonwebtoken 10.3.0",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "mimalloc",
+ "opentelemetry 0.27.1",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk 0.27.1",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry 0.28.0",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "azure-maintenance"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "flow-like-types",
+ "mimalloc",
+ "reqwest 0.12.28",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "azure-queue-worker"
+version = "0.1.0"
+dependencies = [
+ "azure_core 1.1.0",
+ "azure_identity 1.0.0",
+ "azure_storage_queue",
+ "blake3",
+ "chrono",
+ "flow-like",
+ "flow-like-azure-data",
+ "flow-like-catalog",
+ "flow-like-compiler",
+ "flow-like-executor",
+ "flow-like-storage",
+ "flow-like-types",
+ "image",
+ "mimalloc",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid 1.23.1",
+ "webp",
+]
+
+[[package]]
+name = "azure-scheduler"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "flow-like-scheduler-tick",
+ "mimalloc",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid 1.23.1",
+]
+
+[[package]]
 name = "azure_core"
 version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2561,7 +2669,7 @@ checksum = "39d6a5261cefb8d793df91fac2ca2d6b43301b84f4fddd576f94cd4f36fe67a1"
 dependencies = [
  "async-lock",
  "async-trait",
- "azure_core_macros",
+ "azure_core_macros 0.6.0",
  "bytes",
  "futures 0.3.32",
  "pin-project",
@@ -2569,8 +2677,29 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
- "typespec",
- "typespec_client_core",
+ "typespec 0.12.0",
+ "typespec_client_core 0.11.0",
+]
+
+[[package]]
+name = "azure_core"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e41cbd819986ba41904c207d8ffc4106f8f8352a548d773e9554906379bb2fb"
+dependencies = [
+ "async-lock",
+ "async-trait",
+ "azure_core_macros 1.0.0",
+ "bytes",
+ "futures 0.3.32",
+ "pin-project",
+ "rustc_version",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "typespec 1.1.0",
+ "typespec_client_core 1.1.0",
 ]
 
 [[package]]
@@ -2586,6 +2715,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "azure_core_macros"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9b52dba6a345f3ad2d42ff8d0d63df9d0994cfa29657bf18ffdbf149f78a4f5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "tracing",
+]
+
+[[package]]
 name = "azure_identity"
 version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2593,12 +2734,31 @@ checksum = "825f8df144a4dc10dc6e81014906568363ef8e2b94c9234ddb951675161eb972"
 dependencies = [
  "async-lock",
  "async-trait",
- "azure_core",
+ "azure_core 0.32.0",
  "futures 0.3.32",
  "pin-project",
  "serde",
  "serde_json",
  "time",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "azure_identity"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32edf96b356ca7c51d7590c4925cc36efc3947a5da4468e8e0b25c56ecbb3de5"
+dependencies = [
+ "async-lock",
+ "async-trait",
+ "azure_core 1.1.0",
+ "futures 0.3.32",
+ "pin-project",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
  "tracing",
  "url",
 ]
@@ -2611,13 +2771,51 @@ checksum = "c5814852768739262a5f7d689adc98a4ff782a16b86ad871e0936ebf5f38edfc"
 dependencies = [
  "async-lock",
  "async-trait",
- "azure_core",
+ "azure_core 0.32.0",
  "futures 0.3.32",
  "rustc_version",
  "serde",
  "serde_json",
  "time",
  "tokio",
+]
+
+[[package]]
+name = "azure_storage_common"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f8d86465df4adce8ab1246205be0b99165683808701cd6f0f84e382ad7cd504"
+dependencies = [
+ "azure_core 1.1.0",
+ "serde",
+ "time",
+]
+
+[[package]]
+name = "azure_storage_queue"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e3836053722dfa5aa3461e47aebb96e230a87d8d22eb1f866ca704f691b93ae"
+dependencies = [
+ "async-trait",
+ "azure_core 1.1.0",
+ "serde",
+ "time",
+]
+
+[[package]]
+name = "azure_storage_sas"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ab4d6a4713e35009e11b63ca8d19f39fe33552f7b129d469d15367757fa6e35"
+dependencies = [
+ "azure_core 1.1.0",
+ "azure_storage_common",
+ "base64 0.22.1",
+ "hmac 0.12.1",
+ "percent-encoding",
+ "sha2 0.10.9",
+ "time",
 ]
 
 [[package]]
@@ -7539,6 +7737,7 @@ dependencies = [
  "aws-sdk-dynamodb",
  "aws_lambda_events 0.16.1",
  "chrono",
+ "flow-like-secrets",
  "lambda_runtime 0.14.4",
  "sea-orm",
  "serde",
@@ -7736,6 +7935,10 @@ dependencies = [
  "aws-sdk-sts",
  "aws_lambda_events 1.1.2",
  "axum 0.8.8",
+ "azure_core 0.32.0",
+ "azure_identity 0.32.0",
+ "azure_storage_common",
+ "azure_storage_sas",
  "base64 0.22.1",
  "bitflags 2.11.1",
  "blake3",
@@ -7745,7 +7948,9 @@ dependencies = [
  "ed25519-dalek",
  "eventsource-stream",
  "flow-like",
+ "flow-like-azure-data",
  "flow-like-catalog-core",
+ "flow-like-gcp-data",
  "flow-like-secrets",
  "flow-like-sinks",
  "flow-like-storage",
@@ -7768,6 +7973,7 @@ dependencies = [
  "p256",
  "parking_lot",
  "pin-project-lite",
+ "quick-xml 0.39.2",
  "rand 0.9.3",
  "redis",
  "regex",
@@ -7781,6 +7987,7 @@ dependencies = [
  "sourcemap",
  "tempfile",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "tower 0.5.3",
  "tower-http 0.6.8",
@@ -7800,6 +8007,27 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "flow-like-azure-data"
+version = "0.1.0"
+dependencies = [
+ "azure_core 0.32.0",
+ "azure_identity 0.32.0",
+ "bytes",
+ "chrono",
+ "moka",
+ "reqwest 0.12.28",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+ "urlencoding",
+ "uuid 1.23.1",
 ]
 
 [[package]]
@@ -7939,6 +8167,7 @@ dependencies = [
  "datafusion-table-providers",
  "dirs-next",
  "flow-like",
+ "flow-like-ast",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
  "flow-like-catalog-macros",
@@ -8266,6 +8495,7 @@ dependencies = [
  "jsonwebtoken 10.3.0",
  "num_cpus",
  "p256",
+ "percent-encoding",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -8350,7 +8580,6 @@ dependencies = [
  "window-vibrancy",
  "windows 0.61.3",
  "xcap",
- "zbus",
 ]
 
 [[package]]
@@ -8377,6 +8606,24 @@ dependencies = [
  "tokio",
  "tracing",
  "wasmtime",
+]
+
+[[package]]
+name = "flow-like-gcp-data"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "reqwest 0.12.28",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "urlencoding",
+ "uuid 1.23.1",
 ]
 
 [[package]]
@@ -8417,6 +8664,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-scheduler-tick"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "cron",
+ "flow-like-azure-data",
+ "flow-like-gcp-data",
+ "futures 0.3.32",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "flow-like-secrets"
 version = "0.1.0"
 dependencies = [
@@ -8424,8 +8689,8 @@ dependencies = [
  "aws-config",
  "aws-sdk-secretsmanager",
  "aws-sdk-ssm",
- "azure_core",
- "azure_identity",
+ "azure_core 0.32.0",
+ "azure_identity 0.32.0",
  "azure_security_keyvault_secrets",
  "google-cloud-secretmanager-v1",
  "secrecy 0.10.3",
@@ -8510,6 +8775,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "base64 0.22.1",
+ "blake3",
  "bytes",
  "cuid2",
  "dashmap 6.1.0",
@@ -8557,6 +8823,7 @@ dependencies = [
  "flow-like-types",
  "futures 0.3.32",
  "getrandom 0.4.2",
+ "hyper 1.10.1",
  "once_cell",
  "parking_lot",
  "reqwest 0.12.28",
@@ -9016,6 +9283,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "gcp-api"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.8",
+ "flow-like-api",
+ "flow-like-catalog",
+ "flow-like-gcp-data",
+ "flow-like-secrets",
+ "flow-like-storage",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "mimalloc",
+ "opentelemetry 0.27.1",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk 0.27.1",
+ "sea-orm",
+ "sentry",
+ "sentry-tracing",
+ "serde",
+ "tokio",
+ "tonic 0.12.3",
+ "tower-http 0.6.8",
+ "tracing",
+ "tracing-opentelemetry 0.28.0",
+ "tracing-subscriber",
+ "url",
+ "uuid 1.23.1",
+]
+
+[[package]]
 name = "gcp-bigquery-client"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9045,6 +9342,86 @@ dependencies = [
  "tonic-prost-build",
  "url",
  "yup-oauth2",
+]
+
+[[package]]
+name = "gcp-executor"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.8",
+ "base64 0.22.1",
+ "flow-like-catalog",
+ "flow-like-executor",
+ "flow-like-gcp-data",
+ "jsonwebtoken 10.3.0",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "mimalloc",
+ "opentelemetry 0.27.1",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk 0.27.1",
+ "serde",
+ "tokio",
+ "tonic 0.12.3",
+ "tracing",
+ "tracing-opentelemetry 0.28.0",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "gcp-maintenance"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "flow-like-gcp-data",
+ "flow-like-types",
+ "mimalloc",
+ "reqwest 0.12.28",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "gcp-queue-worker"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.8",
+ "base64 0.22.1",
+ "blake3",
+ "chrono",
+ "flow-like-catalog",
+ "flow-like-compiler",
+ "flow-like-executor",
+ "flow-like-gcp-data",
+ "flow-like-storage",
+ "flow-like-types",
+ "image",
+ "jsonwebtoken 10.3.0",
+ "mimalloc",
+ "reqwest 0.12.28",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid 1.23.1",
+ "webp",
+]
+
+[[package]]
+name = "gcp-scheduler"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "flow-like-gcp-data",
+ "flow-like-scheduler-tick",
+ "mimalloc",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -18491,6 +18868,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick-xml"
+version = "0.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
+dependencies = [
+ "memchr",
+ "serde",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -24033,7 +24420,6 @@ dependencies = [
  "signal-hook-registry",
  "socket2 0.6.3",
  "tokio-macros",
- "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -24404,8 +24790,11 @@ dependencies = [
  "percent-encoding",
  "pin-project",
  "prost 0.13.5",
+ "rustls-native-certs 0.8.3",
+ "rustls-pemfile 2.2.0",
  "socket2 0.5.10",
  "tokio",
+ "tokio-rustls 0.26.4",
  "tokio-stream",
  "tower 0.4.13",
  "tower-layer",
@@ -25042,6 +25431,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "typespec"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "753a2fe021e407d4fc9ee6f4f0a33403cc306d5c54c4e4ebe1b8cbde0ca052b9"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures 0.3.32",
+ "quick-xml 0.41.0",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
 name = "typespec_client_core"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -25060,8 +25464,33 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
- "typespec",
- "typespec_macros",
+ "typespec 0.12.0",
+ "typespec_macros 0.11.0",
+ "url",
+ "uuid 1.23.1",
+]
+
+[[package]]
+name = "typespec_client_core"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0373af0f9d4f580b3a1a9d9639cedaabe015ed262b35bfbe13941bfb14fe1ea6"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "dyn-clone",
+ "futures 0.3.32",
+ "pin-project",
+ "rand 0.10.1",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+ "typespec 1.1.0",
+ "typespec_macros 1.0.0",
  "url",
  "uuid 1.23.1",
 ]
@@ -25071,6 +25500,18 @@ name = "typespec_macros"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "38a3604ddfa94cf776cd7e9123451d9efb06d5e2323c9f3aa02fa94d33ad96db"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "typespec_macros"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c608f4427943f8adb211abc95c87672b1b98847152783507d54e3246e502f60"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -28046,7 +28487,6 @@ dependencies = [
  "rustix 1.1.4",
  "serde",
  "serde_repr",
- "tokio",
  "tracing",
  "uds_windows",
  "uuid 1.23.1",

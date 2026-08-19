@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import type { DropdownMenuProps } from "@radix-ui/react-dropdown-menu";
@@ -24,6 +25,7 @@ import { ToolbarButton } from "./toolbar";
 const siteUrl = "https://platejs.org";
 
 export function ExportToolbarButton(props: DropdownMenuProps) {
+	const { t } = useTranslation("common");
 	const editor = useEditorRef();
 	const [open, setOpen] = React.useState(false);
 
@@ -103,37 +105,13 @@ export function ExportToolbarButton(props: DropdownMenuProps) {
 
 		const editorHtml = await serializeHtml(editorStatic, {
 			editorComponent: EditorStatic,
-			props: { style: { padding: "0 calc(50% - 350px)", paddingBottom: "" } },
+			props: { style: { padding: `0 calc(50% - 350px)`, paddingBottom: "" } },
 		});
 
 		const tailwindCss = `<link rel="stylesheet" href="${siteUrl}/tailwind.css">`;
 		const katexCss = `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.18/dist/katex.css" integrity="sha384-9PvLvaiSKCPkFKB1ZsEoTjgnJn+O3KvEwtsz37/XrkYft3DTk2gHdYvd9oWgW3tV" crossorigin="anonymous">`;
 
-		const html = `<!DOCTYPE html>
-    <html lang="en">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <meta name="color-scheme" content="light dark" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400..700&family=JetBrains+Mono:wght@400..700&display=swap"
-          rel="stylesheet"
-        />
-        ${tailwindCss}
-        ${katexCss}
-        <style>
-          :root {
-            --font-sans: 'Inter', 'Inter Fallback';
-            --font-mono: 'JetBrains Mono', 'JetBrains Mono Fallback';
-          }
-        </style>
-      </head>
-      <body>
-        ${editorHtml}
-      </body>
-    </html>`;
+		const html = `<!DOCTYPE html> <html lang="en"> <head> <meta charset="utf-8" /> <meta name="viewport" content="width=device-width, initial-scale=1.0" /> <meta name="color-scheme" content="light dark" /> <link rel="preconnect" href="https://fonts.googleapis.com" /> <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin /> <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..700&family=JetBrains+Mono:wght@400..700&display=swap" rel="stylesheet" /> ${tailwindCss} ${katexCss} <style> :root { --font-sans: 'Inter', 'Inter Fallback'; --font-mono: 'JetBrains Mono', 'JetBrains Mono Fallback'; } </style> </head> <body> ${editorHtml} </body> </html>`;
 
 		const url = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 
@@ -157,16 +135,16 @@ export function ExportToolbarButton(props: DropdownMenuProps) {
 			<DropdownMenuContent align="start">
 				<DropdownMenuGroup>
 					<DropdownMenuItem onSelect={exportToHtml}>
-						Export as HTML
+						{t('exportAsHtml', 'Export as HTML')}
 					</DropdownMenuItem>
 					<DropdownMenuItem onSelect={exportToPdf}>
-						Export as PDF
+						{t('exportAsPdf', 'Export as PDF')}
 					</DropdownMenuItem>
 					<DropdownMenuItem onSelect={exportToImage}>
-						Export as Image
+						{t('exportAsImage', 'Export as Image')}
 					</DropdownMenuItem>
 					<DropdownMenuItem onSelect={exportToMarkdown}>
-						Export as Markdown
+						{t('exportAsMarkdown', 'Export as Markdown')}
 					</DropdownMenuItem>
 				</DropdownMenuGroup>
 			</DropdownMenuContent>

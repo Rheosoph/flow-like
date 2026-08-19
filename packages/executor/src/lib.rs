@@ -40,9 +40,12 @@ pub mod wasm_loader;
 
 pub use config::ExecutorConfig;
 pub use error::ExecutorError;
-pub use execute::execute;
+pub use execute::{execute, report_queue_failure};
 pub use flow_like_types::OAuthTokenInput;
-pub use resolve::{resolve_payload, resolve_payload_from_str, ResolveError};
+pub use resolve::{
+    fetch_bounded, resolve_payload, resolve_payload_from_str, ResolveError,
+    MAX_REMOTE_PAYLOAD_BYTES,
+};
 pub use router::{executor_router, ExecutorState};
 pub use streaming::{execute_streaming, ExecutionStream, StreamEvent};
 pub use types::{BoardVersion, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus};

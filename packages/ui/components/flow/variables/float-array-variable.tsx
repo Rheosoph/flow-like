@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { PlusCircleIcon, XIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Input } from "../../../components/ui/input";
@@ -17,6 +18,7 @@ export function FloatArrayVariable({
 	variable: IVariable;
 	onChange: (variable: IVariable) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const [newValue, setNewValue] = useState("");
 
 	const values = useMemo<number[]>(() => {
@@ -63,7 +65,7 @@ export function FloatArrayVariable({
 					onChange={(e) => setNewValue(e.target.value)}
 					onKeyDown={(e) => e.key === "Enter" && handleAdd()}
 					type={variable.secret ? "password" : "number"}
-					placeholder="Add number..."
+					placeholder={t('addNumber', 'Add number...')}
 					step="any"
 					className="flex-1 min-w-0"
 				/>

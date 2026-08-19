@@ -1,0 +1,967 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-interfaces-and-pages",
+		"name": "Interfaces: Pages, Widgets & Chat",
+		"language": "en",
+		"slug": "interfaces-and-pages",
+		"difficulty": "INTERMEDIATE",
+		"category": "PAGES",
+		"estimatedMinutes": 75,
+		"isPublished": true,
+		"iconUrl": null,
+		"bannerUrl": null,
+		"tags": ["pages", "widgets", "chat", "interfaces", "a2ui"],
+		"position": 9,
+		"description": "Your flows work. Now give them a face — pages, widgets, routes, and chat surfaces your team can actually use.",
+		"longDescription": "The support team is never going to open Studio — so ship them a console instead. Across seven lessons you build the interfaces of a real support app on Flow-Like's A2UI model: design a live operations dashboard in the visual Page Builder, extract a reusable health card into a Widget with exposed properties and page-bound events, brand the built-in Chat UI without losing its AI disclosure, give every surface a route, and wire every click to a flow through Events pinned to safe versions. Ends with a ship-day assessment on the complete console.",
+		"media": {
+			"icon": "media/app-logo.webp",
+			"banner": "assets/course-banner.webp"
+		},
+		"assets": [
+			{
+				"name": "A2uiArchitecture",
+				"file": "assets/a2ui-architecture.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "a2ui-architecture.webp",
+				"replace": true
+			},
+			{
+				"name": "PagesOverview",
+				"file": "assets/PagesOverview.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "PagesOverview.webp",
+				"replace": true
+			},
+			{
+				"name": "PageBuilder",
+				"file": "assets/PageBuilder.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "PageBuilder.webp",
+				"replace": true
+			},
+			{
+				"name": "WidgetsOverview",
+				"file": "assets/WidgetsOverview.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "WidgetsOverview.webp",
+				"replace": true
+			},
+			{
+				"name": "WidgetBuilder",
+				"file": "assets/WidgetBuilder.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "WidgetBuilder.webp",
+				"replace": true
+			},
+			{
+				"name": "ChatUI",
+				"file": "assets/ChatUI.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "ChatUI.webp",
+				"replace": true
+			},
+			{
+				"name": "RoutesOverview",
+				"file": "assets/RoutesOverview.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "RoutesOverview.webp",
+				"replace": true
+			},
+			{
+				"name": "RouteConfiguration",
+				"file": "assets/RouteConfiguration.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "RouteConfiguration.webp",
+				"replace": true
+			},
+			{
+				"name": "AppEvents",
+				"file": "assets/AppEvents.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "AppEvents.webp",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "interfaces-pages.mod-1",
+				"title": "From flows to product",
+				"description": "Meet the A2UI model behind every surface, and give each surface an address.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "interfaces-pages.les-surfaces",
+						"title": "Where does your app meet its users?",
+						"language": "en",
+						"contentFile": "content/where-does-your-app-meet-its-users.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-interfaces-surface-model",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You open the Support Operations Dashboard in the builder and peek at Dev Mode. What are you actually looking at?",
+								"explanation": "An A2UI surface is data: one root component plus a flat, ID-connected list of typed components. The renderer maps that data onto allowlisted React components at display time — which makes 'generated React source' tempting but wrong. There is no code artifact to edit or recompile; Dev Mode shows the interface itself.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "structured-data",
+											"label": "Structured data: a tree of typed components referenced by ID"
+										},
+										{
+											"id": "react-source",
+											"label": "Generated React source code you can edit and recompile"
+										},
+										{
+											"id": "rendered-snapshot",
+											"label": "A rendered snapshot — the real interface lives in the flow"
+										},
+										{
+											"id": "html-export",
+											"label": "HTML markup exported from the canvas"
+										}
+									],
+									"correct": ["structured-data"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-same-model",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which of these render from the same A2UI component model?",
+								"explanation": "Pages, Widgets, and interfaces a flow returns at runtime all render from one declarative component model — that is the point of A2UI. The flow board canvas is Studio's own editor, not an A2UI surface you author, and the Events workspace is part of the app shell.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "pages",
+											"label": "Pages"
+										},
+										{
+											"id": "widgets",
+											"label": "Widgets"
+										},
+										{
+											"id": "flow-returned",
+											"label": "Interfaces a flow returns at runtime"
+										},
+										{
+											"id": "board-canvas",
+											"label": "The flow board canvas in Studio"
+										},
+										{
+											"id": "events-list",
+											"label": "The Events workspace list"
+										}
+									],
+									"correct": ["pages", "widgets", "flow-returned"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-authoring-paths",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You arrange the dashboard visually, ask FlowPilot to restyle it, then fine-tune one property in Dev Mode. What is the result?",
+								"explanation": "All three authoring paths — visual builder, FlowPilot, and Dev Mode — modify the same component model, so edits accumulate on one surface in any order. 'FlowPilot replaces your manual edits' is the tempting one: FlowPilot works with the active builder surface and revises it in place; it does not produce a competing copy, and neither does Dev Mode.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "one-surface",
+											"label": "One surface — all three paths edit the same component model, in any order"
+										},
+										{
+											"id": "pilot-overwrites",
+											"label": "FlowPilot's version replaces your manual edits, so finish by hand"
+										},
+										{
+											"id": "json-fork",
+											"label": "Dev Mode edits a separate JSON copy you must sync back to the canvas"
+										},
+										{
+											"id": "builder-locks",
+											"label": "After a JSON edit, the visual builder becomes read-only for that page"
+										}
+									],
+									"correct": ["one-surface"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "interfaces-pages.les-routes",
+						"title": "Routes: every surface gets an address",
+						"language": "en",
+						"contentFile": "content/routes-every-surface-gets-an-address.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-interfaces-routes-owner",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Who owns the path /support?",
+								"explanation": "Routes are stored as path-to-Event mappings: the UI Event owns the address and decides which interface opens there. The Page is the tempting owner — but a page has no route setting at all. It becomes reachable when a Page-target Event carries the path.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "ui-event",
+											"label": "The UI Event that opens the surface"
+										},
+										{
+											"id": "page-setting",
+											"label": "The Page — the route is a page setting"
+										},
+										{
+											"id": "flow",
+											"label": "The flow that powers the page"
+										},
+										{
+											"id": "nav-menu",
+											"label": "The app's navigation menu"
+										}
+									],
+									"correct": ["ui-event"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-routes-unique",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You create a Page-target Event for the Escalation Console and type /triage as its route. Look at @RoutesOverview — what's the problem?",
+								"explanation": "Routes must be unique within the app, and the screenshot shows /triage already assigned to the Triage selected request Quick Action. 'Quick Actions don't occupy routes' is the tempting out — but a Quick Action is a UI Event like any other, and the badge next to it is exactly that route claim.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "route-taken",
+											"label": "/triage already belongs to the Triage quick action — routes must be unique within the app"
+										},
+										{
+											"id": "quick-actions-free",
+											"label": "Nothing — Quick Actions don't occupy routes, so /triage is free"
+										},
+										{
+											"id": "needs-page-name",
+											"label": "A page route must contain the page's name"
+										},
+										{
+											"id": "flow-conflict",
+											"label": "Two events can't target the same flow"
+										}
+									],
+									"correct": ["route-taken"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-routes-truths",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which statements about routes are true?",
+								"explanation": "Backend-only Events (Cron, API) run without any route, and a red No route badge marks a UI Event that is unreachable by path. The tempting extra is prefix matching — but routes match as configured, so /chat answers /chat and nothing else. And a Page is never openable by path without a UI Event in front of it.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "backend-no-route",
+											"label": "Backend-only Events work without any route"
+										},
+										{
+											"id": "no-route-badge",
+											"label": "A red No route badge means the Event can't be reached by path"
+										},
+										{
+											"id": "page-direct",
+											"label": "A Page can be opened by path without a UI Event"
+										},
+										{
+											"id": "prefix-match",
+											"label": "Paths match by prefix, so /chat also answers /chat/settings"
+										}
+									],
+									"correct": ["backend-no-route", "no-route-badge"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "interfaces-pages.mod-2",
+				"title": "Build the surfaces",
+				"description": "Pages, reusable widgets, and a branded chat — the console takes shape.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "interfaces-pages.les-pages",
+						"title": "Design a page without code",
+						"language": "en",
+						"contentFile": "content/design-a-page-without-code.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-interfaces-inspector",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In @PageBuilder the Open tickets card is selected. Where do you change its Title from \"Open tickets\" to \"Open requests\"?",
+								"explanation": "Selecting a component fills the Inspector, and its Props tab is where the Title lives — you can see it holding 'Open tickets' in the screenshot. Dev Mode could also change it, but the distractor's claim is backwards: the visual builder edits every component property; JSON is the optional path, not the required one.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "inspector",
+											"label": "In the Inspector panel on the right"
+										},
+										{
+											"id": "dev-mode-required",
+											"label": "In Dev Mode — the visual builder can't edit component properties"
+										},
+										{
+											"id": "hierarchy-tab",
+											"label": "In the Hierarchy tab"
+										},
+										{
+											"id": "owning-flow",
+											"label": "In the flow that owns the page"
+										}
+									],
+									"correct": ["inspector"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-literal-vs-bound",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The card's title never changes, but the 24 must track the live queue. How do you configure the two properties?",
+								"explanation": "Fixed presentation stays literal; live facts get bindings, so the flow keeps them fresh. 'Bind both' is the tempting overcorrection — literals render at runtime just fine, and binding a static title adds indirection for nothing. Page Settings → Behavior schedules refresh events; it isn't where a value is stored.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "literal-title-bound-value",
+											"label": "Title as a literal, the number as a bound value the flow keeps fresh"
+										},
+										{
+											"id": "bind-both",
+											"label": "Bind both — properties must be bound to render at runtime"
+										},
+										{
+											"id": "literal-both",
+											"label": "Keep both literal and re-edit the page whenever the numbers change"
+										},
+										{
+											"id": "behavior-value",
+											"label": "Store the number in Page Settings → Behavior"
+										}
+									],
+									"correct": ["literal-title-bound-value"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-page-refresh",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The dashboard should refresh its stats every minute while someone is looking at it. Where does that belong?",
+								"explanation": "Page Settings → Behavior runs Flow events on load, unload, or at an interval — a once-a-minute refresh belongs there, and a cached page can even show its last state while the load event refreshes. Cron is the tempting answer: it does schedule flow runs, but as a backend trigger it fires whether or not anyone has the page open; the page's interval event is scoped to the surface being viewed.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "behavior-interval",
+											"label": "Page Settings → Behavior: run a flow event at an interval"
+										},
+										{
+											"id": "cron-event",
+											"label": "A Cron event on the flow — schedules are backend work"
+										},
+										{
+											"id": "devmode-loop",
+											"label": "A refresh loop added in Dev Mode JSON"
+										},
+										{
+											"id": "autosave",
+											"label": "Nothing — autosave keeps pages current"
+										}
+									],
+									"correct": ["behavior-interval"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "interfaces-pages.les-widgets",
+						"title": "Widgets: build once, reuse everywhere",
+						"language": "en",
+						"contentFile": "content/widgets-build-once-reuse-everywhere.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-interfaces-exposed-props",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "@WidgetsOverview shows one configurable property: Card title. What does that let a page author do?",
+								"explanation": "An exposed property maps an instance-facing option (Card title) to one internal component property, so each placed instance supplies its own value while the definition stays untouched. The tempting reading — that changing the title edits the widget for everyone — is exactly what exposed properties exist to prevent.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "per-instance-heading",
+											"label": "Give each placed instance its own heading without editing the widget"
+										},
+										{
+											"id": "rename-widget",
+											"label": "Rename the widget itself from the page"
+										},
+										{
+											"id": "edits-definition",
+											"label": "Edit the widget's internal text component — changing every instance at once"
+										},
+										{
+											"id": "creates-version",
+											"label": "Change the heading — which records a new widget version each time"
+										}
+									],
+									"correct": ["per-instance-heading"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-widget-version",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You rework the Support Health Card: the progress bar becomes a trend chart and the On target badge disappears. Which version do you create?",
+								"explanation": "Swapping the progress bar for a chart and dropping the badge changes what existing pages display — that's Major: a change in behavior or structure that existing uses should review. Minor is tempting because a chart feels additive, but Minor is for compatible additions; removing the badge makes this a review-worthy change, not an addition.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "major",
+											"label": "Major — existing uses should review the change"
+										},
+										{
+											"id": "minor",
+											"label": "Minor — you added a chart, and additions are minor"
+										},
+										{
+											"id": "patch",
+											"label": "Patch — the widget's job hasn't changed"
+										},
+										{
+											"id": "no-version",
+											"label": "No version needed — pages pick up widget edits either way"
+										}
+									],
+									"correct": ["major"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-widget-events",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The card needs an Acknowledge button that different pages can wire to their own flows. Which steps are part of the correct setup?",
+								"explanation": "The reusable contract has three parts: a named event in Widget Settings → Events, a widget_event action with that actionId on the button, and a binding to a workflow supplied where the widget is placed. Hardcoding workflow_event with a nodeId inside the definition is the tempting shortcut — it welds the widget to one flow, which is exactly the coupling widget events exist to avoid.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "define-named-event",
+											"label": "Define a named event in Widget Settings → Events"
+										},
+										{
+											"id": "widget-event-action",
+											"label": "Give the button a widget_event action carrying that actionId"
+										},
+										{
+											"id": "bind-at-instance",
+											"label": "Bind the event to a workflow where the widget is placed"
+										},
+										{
+											"id": "hardcode-nodeid",
+											"label": "Point the button at the flow's node with workflow_event inside the widget definition"
+										},
+										{
+											"id": "duplicate-per-page",
+											"label": "Duplicate the widget per page so each copy can target its own flow"
+										}
+									],
+									"correct": ["define-named-event", "widget-event-action", "bind-at-instance"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "interfaces-pages.les-chat",
+						"title": "Chat is an interface too",
+						"language": "en",
+						"contentFile": "content/chat-is-an-interface-too.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 2,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-interfaces-disclosure",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Legal asks whether the \"AI assistant — responses may need human review.\" pill in @ChatUI can be swapped for something friendlier. What do you tell them?",
+								"explanation": "The disclosure text is yours to write — keep it direct or give it personality — but the disclosure itself stays visible so people know they're chatting with AI. Hiding it with custom CSS is the tempting route, and it's closed on purpose: chat CSS is sanitized and scoped, and no theme preset ships without the disclosure.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "edit-text",
+											"label": "Yes — the wording is editable, but the disclosure itself stays visible"
+										},
+										{
+											"id": "css-hide",
+											"label": "Yes — hide the pill with custom CSS"
+										},
+										{
+											"id": "fixed-text",
+											"label": "No — both the pill and its wording are fixed by Flow-Like"
+										},
+										{
+											"id": "theme-without",
+											"label": "Yes — pick one of the theme presets that ships without it"
+										}
+									],
+									"correct": ["edit-text"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-theme-custom",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You select Aurora Glass, then change --primary to brand purple. What does the theme selector show now — and what happens if you select Aurora Glass again?",
+								"explanation": "Any edit to the copied CSS immediately flips the selector to Custom, and reselecting a preset replaces the editor contents with that preset's canonical source — your purple is gone. 'The variable merges into the preset' is the tempting mental model, but presets aren't layers: selecting one is a full copy, not a merge.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "custom-then-replace",
+											"label": "Custom — and reselecting the preset replaces the editor with its canonical CSS, discarding your change"
+										},
+										{
+											"id": "merged",
+											"label": "Aurora Glass — your variable merges into the preset"
+										},
+										{
+											"id": "custom-keeps-edit",
+											"label": "Custom — and reselecting the preset re-applies it around your edit, keeping the purple"
+										},
+										{
+											"id": "saved-preset",
+											"label": "A new preset is saved under your app's name"
+										}
+									],
+									"correct": ["custom-then-replace"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-chat-route",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A new hire asks how to open the assistant. What's the address, and why does it work?",
+								"explanation": "The Chat UI Event owns the address: /chat resolves to that Event, and the Event opens the chat interface. Deriving routes from flow names is the tempting guess, but routes are configured on Events, never derived — and chat needs no page: the event type provides the whole interface.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "chat-event-route",
+											"label": "/chat — the Chat UI Event's route resolves to that Event's interface"
+										},
+										{
+											"id": "flow-name-route",
+											"label": "/customer-support-automation — routes derive from the flow name"
+										},
+										{
+											"id": "needs-page-embed",
+											"label": "It has no address until the chat is embedded on a Page"
+										},
+										{
+											"id": "root-by-default",
+											"label": "Chat UIs open at / by default"
+										}
+									],
+									"correct": ["chat-event-route"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "interfaces-pages.mod-3",
+				"title": "Wire and ship",
+				"description": "Connect surfaces to flows with events, pin versions, and ship the console.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "interfaces-pages.les-events",
+						"title": "Connect UI to flows with events",
+						"language": "en",
+						"contentFile": "content/connect-ui-to-flows-with-events.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-interfaces-button-wiring",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "What turns a Page button into \"run the triage flow\"?",
+								"explanation": "Interactive components run flows through the fixed workflow_event action, which identifies the selected Event's node by nodeId. 'Buttons on a flow-owned page trigger that flow' is the tempting assumption — ownership links a page to its flow, but every click still needs an explicit action. Nothing fires by association.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "workflow-event",
+											"label": "A workflow_event action identifying the target event node by nodeId"
+										},
+										{
+											"id": "onclick-code",
+											"label": "An onClick handler written in the button's code panel"
+										},
+										{
+											"id": "navigate-to-flow",
+											"label": "A navigate_page action pointing at the flow"
+										},
+										{
+											"id": "ownership",
+											"label": "Nothing extra — buttons on a flow-owned page trigger that flow"
+										}
+									],
+									"correct": ["workflow-event"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-node-compat",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Customer Support Automation's conversational entry is a Chat Event node. Which Event types can invoke it?",
+								"explanation": "The flow's entry node determines the Event types you can create: a Chat Event node supports Chat UI, Discord, and Telegram. Quick Action is the tempting universal answer, but it pairs with a Simple Event node — Event type and entry node must be compatible.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "chat-set",
+											"label": "Chat UI, Discord, or Telegram"
+										},
+										{
+											"id": "quick-action",
+											"label": "Quick Action — it's the universal UI type"
+										},
+										{
+											"id": "generic-form",
+											"label": "Generic Form — a chat is a form with history"
+										},
+										{
+											"id": "any-ui",
+											"label": "Any UI type — the Event adapts the payload to the node"
+										}
+									],
+									"correct": ["chat-set"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-ship-checks",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The console goes to the whole support team tomorrow. Which are sound pre-ship moves?",
+								"explanation": "Pin production events to numbered, immutable flow versions; test through the real routes end to end; make sure every UI event has a unique route and no red No route badge. Keeping Latest 'so fixes arrive instantly' is the tempting one — that's precisely how a Tuesday draft edit becomes the whole team's Tuesday incident. And backend-only events show no route because they don't need one; deleting them breaks the backend.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "pin-version",
+											"label": "Pin the production events to a numbered, immutable flow version"
+										},
+										{
+											"id": "test-real-path",
+											"label": "Open /triage and /chat and run them end to end through the real events"
+										},
+										{
+											"id": "unique-routes",
+											"label": "Check every UI event has a unique route and no red No route badge"
+										},
+										{
+											"id": "keep-latest",
+											"label": "Keep events on Latest so this week's fixes reach the team instantly"
+										},
+										{
+											"id": "delete-backend",
+											"label": "Delete backend-only events, since they show no route"
+										}
+									],
+									"correct": ["pin-version", "test-real-path", "unique-routes"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "interfaces-pages.les-final",
+						"title": "Ship the support console",
+						"language": "en",
+						"contentFile": "content/final-assessment.md",
+						"videoUrl": null,
+						"estimatedMinutes": 15,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-interfaces-final-root",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Checklist item 1: opening the app must land on the operations dashboard. What do you configure?",
+								"explanation": "Routes live on UI Events, and / is the app's root — so the dashboard's Page-target Event takes route /. Reordering cards on the Pages tab is the tempting UI-first answer, but the Pages tab is a management list: card order affects nothing about navigation, and pages have no route setting of their own.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "root-event",
+											"label": "Give the dashboard's Page-target Event the route /"
+										},
+										{
+											"id": "rename-page",
+											"label": "Rename the page to \"/\" in Page Settings"
+										},
+										{
+											"id": "reorder-pages",
+											"label": "Move the dashboard to the first position on the Pages tab"
+										},
+										{
+											"id": "chat-at-root",
+											"label": "Keep / on the chat and add a dashboard button to it"
+										}
+									],
+									"correct": ["root-event"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-final-reuse",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Checklist item 2: the health card on two pages, saying \"Queue health\" on one and \"Escalation health\" on the other. What's the right structure?",
+								"explanation": "One widget, with the exposed Card title property supplying a different heading per instance — the definition stays shared, so improvements land everywhere. Two separate widgets is the tempting 'safe' answer, but it recreates the copy-paste drift problem widgets exist to solve; and versions are snapshots in time, not per-page variants.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "one-widget-exposed",
+											"label": "One widget; each instance supplies its own Card title value"
+										},
+										{
+											"id": "two-widgets",
+											"label": "Two widgets, one per heading, so the pages stay independent"
+										},
+										{
+											"id": "two-versions",
+											"label": "One widget, two versions — one version per page"
+										},
+										{
+											"id": "edit-between-ships",
+											"label": "One widget; edit the definition's heading depending on which page ships next"
+										}
+									],
+									"correct": ["one-widget-exposed"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-final-escalate",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Checklist item 3: the Escalate button lives inside the health card widget and must run escalation logic in Customer Support Automation when pressed on the console. Which two pieces make that work?",
+								"explanation": "The widget declares a named event its button triggers (widget_event with an actionId), and the console page's instance binds that event to the escalation workflow. Hardcoding the flow's nodeId in the definition is the tempting shortcut — it would make every future instance escalate, on every page, whether that page wants it or not. And navigate_page goes somewhere; it doesn't run anything.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "named-widget-event",
+											"label": "A named widget event the button triggers via widget_event and its actionId"
+										},
+										{
+											"id": "instance-binding",
+											"label": "An action binding on the console's instance connecting that event to the flow"
+										},
+										{
+											"id": "hardcoded-nodeid",
+											"label": "The flow's nodeId hardcoded in the widget definition"
+										},
+										{
+											"id": "navigate-triage",
+											"label": "A navigate_page action pointing at /triage"
+										}
+									],
+									"correct": ["named-widget-event", "instance-binding"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-final-brand",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Checklist item 4: Aurora Glass with brand purple, AI notice kept word for word. Feasible?",
+								"explanation": "Feasible exactly as asked: select Aurora Glass (its full CSS is copied into the editor), change --primary — the selector flips to Custom, which is fine — and the disclosure stays visible with the wording legal approved. The trap is promising CSS can remove the pill later: chat CSS is sanitized and scoped, and the disclosure isn't removable.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "feasible-custom",
+											"label": "Yes — copy the preset, edit --primary (the selector becomes Custom), keep the disclosure text as approved"
+										},
+										{
+											"id": "presets-readonly",
+											"label": "No — preset CSS is read-only, so brand colors need a Page instead of chat"
+										},
+										{
+											"id": "css-can-remove",
+											"label": "Yes — and if legal relents, custom CSS can remove the pill too"
+										},
+										{
+											"id": "rebuild-as-page",
+											"label": "Partly — colors require rebuilding the chat from A2UI components"
+										}
+									],
+									"correct": ["feasible-custom"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-final-stability",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Checklist item 5: you keep improving the flow all week, but nothing the team uses may change before Friday. Which practices deliver that?",
+								"explanation": "Pin the shipped events to a numbered, immutable flow version; keep editing the draft freely, because pinned events don't follow it; repoint the events to the new reviewed version on Friday. 'Latest freezes at publish time' is the tempting misread — Latest means the opposite: it follows the editable draft continuously, which is exactly what the requirement forbids.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "pin-numbered",
+											"label": "Point the shipped events at a numbered flow version"
+										},
+										{
+											"id": "edit-draft-freely",
+											"label": "Keep editing the draft — events pinned to a numbered version don't follow it"
+										},
+										{
+											"id": "repoint-friday",
+											"label": "On Friday, repoint the events to the new reviewed version"
+										},
+										{
+											"id": "latest-freezes",
+											"label": "Ship on Latest — it freezes at publish time"
+										},
+										{
+											"id": "versions-absorb",
+											"label": "Numbered versions absorb draft edits automatically"
+										}
+									],
+									"correct": ["pin-numbered", "edit-draft-freely", "repoint-friday"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-final-unreachable",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Beta report: \"Customer Intake shows on the Pages tab, but nobody can open it.\" Diagnosis?",
+								"explanation": "A page becomes reachable through a UI Event with that page as its target and a unique route path — Customer Intake has none, so it's visible to builders and invisible to users. 'It was never saved' is the tempting explanation, but page changes save automatically after you stop editing; reachability, not persistence, is what's missing.",
+								"points": 10,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "no-page-event",
+											"label": "No UI Event exposes it — it needs a Page-target Event with a unique route"
+										},
+										{
+											"id": "never-saved",
+											"label": "The page was never saved, so it exists half-created"
+										},
+										{
+											"id": "needs-publishing",
+											"label": "Pages need publishing from the Pages tab before use"
+										},
+										{
+											"id": "flow-inactive",
+											"label": "Its flow is deactivated, which hides the page"
+										}
+									],
+									"correct": ["no-page-event"]
+								}
+							},
+							{
+								"id": "challenge-interfaces-final-one-model",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Friday retro — one teammate still wants a second engineer for \"the chat codebase.\" Which statements about the console you shipped are true?",
+								"explanation": "The dashboard, the widget, and any A2UI a flow returns share one component model; the chat needed configuration, not construction; every surface resolves path → Event → interface; and the Escalate behavior stayed out of the widget definition, bound by the page instead. The false one is subpath matching: routes match as configured — /chat doesn't answer /chat/anything. There is no separate chat codebase to staff.",
+								"points": 10,
+								"position": 6,
+								"payload": {
+									"options": [
+										{
+											"id": "one-model",
+											"label": "The dashboard, the health card, and flow-returned interfaces share one component model"
+										},
+										{
+											"id": "chat-configured",
+											"label": "The chat needed no page building — its Event provides the interface"
+										},
+										{
+											"id": "route-resolution",
+											"label": "Every surface the team opens resolves through a path-to-Event mapping"
+										},
+										{
+											"id": "behavior-at-page",
+											"label": "The Escalate behavior stayed out of the widget definition, supplied by the page instead"
+										},
+										{
+											"id": "subpath-auto",
+											"label": "Routes cover their subpaths, so /chat also answers /chat/history"
+										}
+									],
+									"correct": ["one-model", "chat-configured", "route-resolution", "behavior-at-page"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		]
+	}
+}

@@ -1,4 +1,5 @@
 "use client";
+import { i18n as i18next } from "@flow-like/locales";
 import { LayoutTemplate } from "lucide-react";
 import { forwardRef } from "react";
 import { Button } from "../../ui/button";
@@ -31,12 +32,12 @@ export const FlowTemplateButton = forwardRef<
 					>
 						<LayoutTemplate className="h-3.5 w-3.5 text-primary" />
 						<span className="text-xs font-medium hidden sm:inline">
-							Templates
+							{i18next.t('templates', 'Templates')}
 						</span>
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent side="bottom">
-					<p>Browse templates</p>
+					<p>{i18next.t('browseTemplates', 'Browse templates')}</p>
 				</TooltipContent>
 			</Tooltip>
 		</TooltipProvider>

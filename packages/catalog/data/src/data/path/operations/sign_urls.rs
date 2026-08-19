@@ -5,6 +5,7 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
+use flow_like_storage::files::store::LocalUrlMode;
 use flow_like_types::{async_trait, bail, json::json};
 use std::time::Duration;
 
@@ -99,10 +100,11 @@ impl NodeLogic for SignUrlsNode {
             let runtime_path = path.to_runtime(context).await?;
             let signed_url = runtime_path
                 .store
-                .sign(
+                .sign_with_mode(
                     &method,
                     &runtime_path.path,
                     Duration::from_secs(expiration as u64),
+                    LocalUrlMode::Inline,
                 )
                 .await;
 

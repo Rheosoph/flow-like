@@ -12,11 +12,11 @@ export default function Page() {
 
 	const fileToUrl = useCallback(
 		async (file: string) => {
-			// In web mode, download the storage item and get the signed URL
-			const filePath = file.split("/").slice(3).join("/");
+			// Listed locations are app-relative, which is what the download endpoint
+			// expects — it also tolerates raw object-store keys from older listings.
 			const results = await backend.storageState.downloadStorageItems(
 				id ?? "",
-				[filePath],
+				[file],
 			);
 			if (results.length > 0 && results[0].url) {
 				return results[0].url;

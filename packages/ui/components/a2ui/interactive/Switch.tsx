@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { cn } from "../../../lib/utils";
 import { Label } from "../../ui/label";
 import { Switch } from "../../ui/switch";
@@ -7,6 +8,10 @@ import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import {
+	useBoundInputValue,
+	valueRevisionOf,
+} from "../hooks/use-bound-input-value";
 import type { BoundValue, SwitchComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -21,17 +26,19 @@ export function A2UISwitch({
 	componentId,
 	surfaceId,
 }: ComponentProps<SwitchComponent>) {
+	const { t } = useTranslation("common");
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
-	const checked = useResolved<boolean>(component.checked);
+	const [checked, setChecked] = useBoundInputValue<boolean>(
+		component.checked,
+		false,
+		{ revision: valueRevisionOf(component) },
+	);
 	const label = useResolved<string>(component.label);
 	const disabled = useResolved<boolean>(component.disabled);
-	const { setByPath } = useData();
 
 	const handleChange = (newChecked: boolean) => {
-		if (component.checked && "path" in component.checked) {
-			setByPath(component.checked.path, newChecked);
-		}
+		setChecked(newChecked);
 		if (onAction) {
 			onAction({
 				type: "userAction",
@@ -54,7 +61,7 @@ export function A2UISwitch({
 		>
 			<Switch
 				id={id}
-				checked={checked ?? false}
+				checked={checked}
 				disabled={disabled}
 				onCheckedChange={handleChange}
 			/>

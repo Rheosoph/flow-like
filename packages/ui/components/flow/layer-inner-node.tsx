@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { type Node, type NodeProps, useReactFlow } from "@xyflow/react";
 import { ZapIcon } from "lucide-react";
 import {
@@ -45,6 +46,7 @@ export type ILayerInnerNode = Node<
 >;
 
 export function LayerInnerNode(props: NodeProps<ILayerInnerNode>) {
+	const { t } = useTranslation("flow");
 	const divRef = useRef<HTMLDivElement>(null);
 	const { getNodes } = useReactFlow();
 	const [comment, setComment] = useState<string | undefined>();
@@ -63,7 +65,7 @@ export function LayerInnerNode(props: NodeProps<ILayerInnerNode>) {
 
 		if (divRef.current) {
 			divRef.current.style.height = `calc(${height * 15}px + 1.25rem + 0.5rem)`;
-			divRef.current.style.minHeight = "calc(15px + 1.25rem + 0.5rem)";
+			divRef.current.style.minHeight = `calc(15px + 1.25rem + 0.5rem)`;
 		}
 	}, [props.data.hash]);
 
@@ -135,8 +137,7 @@ export function LayerInnerNode(props: NodeProps<ILayerInnerNode>) {
 				)}
 				<div className="header absolute top-0 left-0 right-0 h-4 gap-1 flex flex-row items-center border-b p-1 justify-start rounded-t-md bg-accent! text-accent-foreground!">
 					<ZapIcon className="w-2 h-2" />
-					<small className="font-medium leading-none">
-						"{props.data.layer.name}"{" "}
+					<small className="font-medium leading-none">{`"${props.data.layer.name}"`}{" "}
 						{props.data.type === InnerLayerNodeType.INPUT ? "Start" : "Return"}
 					</small>
 				</div>

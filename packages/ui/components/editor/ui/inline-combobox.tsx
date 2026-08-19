@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import type { Point, TElement } from "platejs";
@@ -80,6 +81,7 @@ const InlineCombobox = ({
 	trigger,
 	value: valueProp,
 }: InlineComboboxProps) => {
+	const { t } = useTranslation("common");
 	const editor = useEditorRef();
 	const inputRef = React.useRef<HTMLInputElement>(null);
 	const cursorState = useHTMLInputCursorState(inputRef);
@@ -132,10 +134,10 @@ const InlineCombobox = ({
 					at: insertPoint?.current ?? undefined,
 				});
 			}
-			if (cause === "arrowLeft" || cause === "arrowRight") {
+			if (cause === `arrowLeft` || cause === "arrowRight") {
 				editor.tf.move({
 					distance: 1,
-					reverse: cause === "arrowLeft",
+					reverse: cause === `arrowLeft`,
 				});
 			}
 		},

@@ -9337,7 +9337,8 @@ pub enum ScopeStrategy {
     /// and visible progress.
     Incremental,
     /// Independent entry points authored onto separate boards. Only legal when no segment needs
-    /// in-memory data from another: boards of one app share app data at rest, nothing else.
+    /// in-memory data from another: boards of one app share app data at rest, nothing else. This is
+    /// the ordinary shape for a multi-page app, where each page owns a board.
     MultiBoard,
 }
 
@@ -9575,7 +9576,7 @@ pub fn accept_scope_plan(args: PlanBoardScopeArgs) -> Result<BoardScopePlan, Sco
             return Err(ScopePlanRejection::new(
                 "SCOPE_PLAN_INVALID_BOARD_REF",
                 format!(
-                    "Segment \"{id}\" allocates a new board, which only strategy \"multi_board\" may do. Boards of one app cannot call each other, so connected logic belongs in one board as function layers."
+                    "Segment \"{id}\" allocates a new board, which only strategy \"multi_board\" may do. Declare \"multi_board\" when these are independent entry points, such as one board per page; otherwise keep connected logic in one board as function layers."
                 ),
             ));
         }
@@ -9684,7 +9685,7 @@ impl BoardScopePlan {
                 "Author, check and commit ONE segment per draft. After a queued commit, stop; the host applies it and starts the next segment on a fresh draft_id."
             }
             ScopeStrategy::MultiBoard => {
-                "Each board_ref is authored on its own board and committed separately. Segments on different boards share only app data at rest — never in-memory values."
+                "Each board_ref is authored on its own board and committed separately. Segments on different boards share only app data at rest — never in-memory values. For per-page boards, author that page's load handler and action handlers together on its board."
             }
         };
         json!({

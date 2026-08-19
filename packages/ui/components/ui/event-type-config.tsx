@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Card,
 	CardContent,
@@ -29,6 +30,7 @@ export function EventTypeConfig({
 	config,
 	onChange,
 }: EventTypeConfigProps) {
+	const { t } = useTranslation("common");
 	const handleConfigChange = (field: string, value: any) => {
 		onChange({ ...config, [field]: value });
 	};
@@ -36,8 +38,8 @@ export function EventTypeConfig({
 	const renderChatConfig = () => (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-lg">Chat Configuration</CardTitle>
-				<CardDescription>Configure chat-specific settings</CardDescription>
+				<CardTitle className="text-lg">{t('chatConfiguration', 'Chat Configuration')}</CardTitle>
+				<CardDescription>{t('configureChatspecificSettings', 'Configure chat-specific settings')}</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-4">
 				<div className="flex items-center space-x-2">
@@ -48,11 +50,11 @@ export function EventTypeConfig({
 							handleConfigChange("allow_file_upload", checked)
 						}
 					/>
-					<Label htmlFor="allow_file_upload">Allow File Upload</Label>
+					<Label htmlFor="allow_file_upload">{t('allowFileUpload', 'Allow File Upload')}</Label>
 				</div>
 
 				<div className="space-y-2">
-					<Label htmlFor="history_elements">History Elements</Label>
+					<Label htmlFor="history_elements">{t('historyElements', 'History Elements')}</Label>
 					<Input
 						id="history_elements"
 						type="number"
@@ -63,7 +65,7 @@ export function EventTypeConfig({
 								Number.parseInt(e.target.value) || null,
 							)
 						}
-						placeholder="Number of history elements to keep"
+						placeholder={t('numberOfHistoryElementsToKeep', 'Number of history elements to keep')}
 					/>
 				</div>
 			</CardContent>
@@ -73,13 +75,13 @@ export function EventTypeConfig({
 	const renderMailConfig = () => (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-lg">Mail Configuration</CardTitle>
-				<CardDescription>Configure email processing settings</CardDescription>
+				<CardTitle className="text-lg">{t('mailConfiguration', 'Mail Configuration')}</CardTitle>
+				<CardDescription>{t('configureEmailProcessingSettings', 'Configure email processing settings')}</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-4">
 				<div className="grid grid-cols-2 gap-4">
 					<div className="space-y-2">
-						<Label htmlFor="imap_server">IMAP Server</Label>
+						<Label htmlFor="imap_server">{t('imapServer', 'IMAP Server')}</Label>
 						<Input
 							id="imap_server"
 							value={config.imap_server || ""}
@@ -91,7 +93,7 @@ export function EventTypeConfig({
 					</div>
 
 					<div className="space-y-2">
-						<Label htmlFor="imap_port">IMAP Port</Label>
+						<Label htmlFor="imap_port">{t('imapPort', 'IMAP Port')}</Label>
 						<Input
 							id="imap_port"
 							type="number"
@@ -108,7 +110,7 @@ export function EventTypeConfig({
 				</div>
 
 				<div className="space-y-2">
-					<Label htmlFor="imap_username">IMAP Username</Label>
+					<Label htmlFor="imap_username">{t('imapUsername', 'IMAP Username')}</Label>
 					<Input
 						id="imap_username"
 						value={config.imap_username || ""}
@@ -121,7 +123,7 @@ export function EventTypeConfig({
 
 				<div className="grid grid-cols-2 gap-4">
 					<div className="space-y-2">
-						<Label htmlFor="smtp_server">SMTP Server</Label>
+						<Label htmlFor="smtp_server">{t('smtpServer', 'SMTP Server')}</Label>
 						<Input
 							id="smtp_server"
 							value={config.smtp_server || ""}
@@ -133,7 +135,7 @@ export function EventTypeConfig({
 					</div>
 
 					<div className="space-y-2">
-						<Label htmlFor="smtp_port">SMTP Port</Label>
+						<Label htmlFor="smtp_port">{t('smtpPort', 'SMTP Port')}</Label>
 						<Input
 							id="smtp_port"
 							type="number"
@@ -150,17 +152,17 @@ export function EventTypeConfig({
 				</div>
 
 				<div className="space-y-2">
-					<Label htmlFor="sender_name">Sender Name</Label>
+					<Label htmlFor="sender_name">{t('senderName', 'Sender Name')}</Label>
 					<Input
 						id="sender_name"
 						value={config.sender_name || ""}
 						onChange={(e) => handleConfigChange("sender_name", e.target.value)}
-						placeholder="Your Name"
+						placeholder={t('yourName', 'Your Name')}
 					/>
 				</div>
 
 				<div className="space-y-2">
-					<Label htmlFor="mail">Email Address</Label>
+					<Label htmlFor="mail">{t('emailAddress', 'Email Address')}</Label>
 					<Input
 						id="mail"
 						type="email"
@@ -176,31 +178,31 @@ export function EventTypeConfig({
 	const renderApiConfig = () => (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-lg">API Configuration</CardTitle>
-				<CardDescription>Configure API endpoint settings</CardDescription>
+				<CardTitle className="text-lg">{t('apiConfiguration', 'API Configuration')}</CardTitle>
+				<CardDescription>{t('configureApiEndpointSettings', 'Configure API endpoint settings')}</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-4">
 				<div className="space-y-2">
-					<Label htmlFor="method">HTTP Method</Label>
+					<Label htmlFor="method">{t('httpMethod', 'HTTP Method')}</Label>
 					<Select
 						value={config.method || ""}
 						onValueChange={(value) => handleConfigChange("method", value)}
 					>
 						<SelectTrigger>
-							<SelectValue placeholder="Select HTTP method" />
+							<SelectValue placeholder={t('selectHttpMethod', 'Select HTTP method')} />
 						</SelectTrigger>
 						<SelectContent>
 							<SelectItem value="GET">GET</SelectItem>
-							<SelectItem value="POST">POST</SelectItem>
+							<SelectItem value="POST">{`POST`}</SelectItem>
 							<SelectItem value="PUT">PUT</SelectItem>
-							<SelectItem value="DELETE">DELETE</SelectItem>
-							<SelectItem value="PATCH">PATCH</SelectItem>
+							<SelectItem value="DELETE">{`DELETE`}</SelectItem>
+							<SelectItem value="PATCH">{`PATCH`}</SelectItem>
 						</SelectContent>
 					</Select>
 				</div>
 
 				<div className="space-y-2">
-					<Label htmlFor="path_suffix">Path Suffix</Label>
+					<Label htmlFor="path_suffix">{t('pathSuffix', 'Path Suffix')}</Label>
 					<Input
 						id="path_suffix"
 						value={config.path_suffix || ""}
@@ -217,7 +219,7 @@ export function EventTypeConfig({
 							handleConfigChange("public_endpoint", checked)
 						}
 					/>
-					<Label htmlFor="public_endpoint">Public Endpoint</Label>
+					<Label htmlFor="public_endpoint">{t('publicEndpoint', 'Public Endpoint')}</Label>
 				</div>
 			</CardContent>
 		</Card>

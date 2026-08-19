@@ -5,7 +5,11 @@ import {
 	type IApplyFlowIrCommitResponse,
 	type IApplyFlowScriptResponse,
 	type IBoard,
+	type IBoardMutationOptions,
 	type IBoardState,
+	type IBoardSummary,
+	type IBoardSummaryInclude,
+	type IBoardVariables,
 	ICommentType,
 	IConnectionMode,
 	type IExecutionMode,
@@ -28,8 +32,16 @@ import {
 	finishAllProgressToasts,
 	showProgressToast,
 } from "@flow-like/flow-like-ui";
-import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
+import type {
+	CanvasSettings,
+	SurfaceComponent,
+} from "@flow-like/flow-like-ui/components/a2ui/types";
 import { apiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
+import {
+	BoardSyncClient,
+	type IBoardSyncRequest,
+	type IBoardSyncResponse,
+} from "@flow-like/flow-like-ui/lib/board-sync";
 import type {
 	ChatImage,
 	CopilotScope,
@@ -40,6 +52,9 @@ import type {
 } from "@flow-like/flow-like-ui/lib/schema/copilot";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import type { IPrerunBoardResponse } from "@flow-like/flow-like-ui/state/backend-state/types";
+import { globalChatTransportRunId } from "@flow-like/flow-like-ui/state/global-chat/global-chat-run-control";
+import { runGlobalChatTool } from "@flow-like/flow-like-ui/state/global-chat/global-chat-tool-registry";
+import { dispatchSpecialistToolRequest } from "@flow-like/flow-like-ui/state/global-chat/global-chat-web-transport";
 import { toast } from "sonner";
 import { oauthConsentStore, oauthTokenStore } from "../oauth-db";
 import { getOAuthApiBaseUrl, getOAuthService } from "../oauth-service";
@@ -53,6 +68,18 @@ import {
 	getApiBaseUrl,
 } from "./api-utils";
 import { executionElementsFromResponse } from "./execution-elements";
+
+/** The request id inside a `tool_request` SSE payload, or undefined for a malformed frame. */
+function toolRequestIdOf(data: string): string | undefined {
+	try {
+		const parsed = JSON.parse(data) as { requestId?: unknown };
+		return typeof parsed.requestId === "string" && parsed.requestId.trim()
+			? parsed.requestId
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 // Hub configuration cache
 let hubCache: IHub | undefined;
@@ -116,9 +143,27 @@ function handleProgressEvent(event: IIntercomEvent): void {
 	showProgressToast(payload);
 }
 
+/**
+ * `POST /board/{id}` answers with a bare command list for requests without `sync`, and with
+ * `{commands, sync}` when the request carried the held manifest. Both are accepted so a client
+ * talking to a hub of either generation keeps working.
+ */
+type ExecuteCommandsWire =
+	| IGenericCommand[]
+	| { commands: IGenericCommand[]; sync?: IBoardSyncResponse | null };
+
+function normalizeExecuteCommandsWire(wire: ExecuteCommandsWire): {
+	commands: IGenericCommand[];
+	sync: IBoardSyncResponse | undefined;
+} {
+	if (Array.isArray(wire)) return { commands: wire, sync: undefined };
+	return { commands: wire.commands ?? [], sync: wire.sync ?? undefined };
+}
+
 export class WebBoardState implements IBoardState {
 	private readonly copilotAbortControllers = new Map<string, AbortController>();
 	private readonly appIdByBoardId = new Map<string, string>();
+	private readonly boardSync = new BoardSyncClient();
 
 	constructor(private readonly backend: WebBackendRef) {}
 
@@ -135,6 +180,28 @@ export class WebBoardState implements IBoardState {
 		} catch {
 			return [];
 		}
+	}
+
+	async getBoardSummaries(
+		appId: string,
+		include?: IBoardSummaryInclude[],
+	): Promise<IBoardSummary[]> {
+		const query = include?.length ? `?include=${include.join(",")}` : "";
+		const summaries = await apiGet<IBoardSummary[]>(
+			`apps/${appId}/board/summaries${query}`,
+			this.backend.auth,
+		);
+		for (const summary of summaries) {
+			this.appIdByBoardId.set(summary.id, appId);
+		}
+		return summaries;
+	}
+
+	async getBoardVariables(appId: string): Promise<IBoardVariables[]> {
+		return apiGet<IBoardVariables[]>(
+			`apps/${appId}/board/variables`,
+			this.backend.auth,
+		);
 	}
 
 	async respondWidgetQuery(
@@ -156,7 +223,13 @@ export class WebBoardState implements IBoardState {
 
 	async getCatalog(appId: string): Promise<INode[]> {
 		try {
-			return await apiGet<INode[]>(`apps/${appId}/nodes`, this.backend.auth);
+			const nodes = await apiGet<INode[]>(
+				`apps/${appId}/nodes`,
+				this.backend.auth,
+			);
+			// Lets subsequent board syncs ship catalog-owned node fields lean.
+			this.boardSync.setCatalog(appId, nodes);
+			return nodes;
 		} catch {
 			return [];
 		}
@@ -169,9 +242,16 @@ export class WebBoardState implements IBoardState {
 		_forceFresh?: boolean,
 	): Promise<IBoard> {
 		const params = version ? `?version=${version.join("_")}` : "";
-		const board = await apiGet<IBoard>(
-			`apps/${appId}/board/${boardId}${params}`,
-			this.backend.auth,
+		const board = await this.boardSync.sync(
+			appId,
+			boardId,
+			version,
+			(request: IBoardSyncRequest) =>
+				apiPost<IBoardSyncResponse>(
+					`apps/${appId}/board/${boardId}/sync${params}`,
+					request,
+					this.backend.auth,
+				),
 		);
 		this.appIdByBoardId.set(boardId, appId);
 
@@ -672,32 +752,59 @@ export class WebBoardState implements IBoardState {
 	}
 
 	async closeBoard(boardId: string): Promise<void> {
-		// No-op in web mode - we don't track open boards
+		const appId = this.appIdByBoardId.get(boardId);
+		if (appId) this.boardSync.forget(appId, boardId);
 	}
 
 	async executeCommand(
 		appId: string,
 		boardId: string,
 		command: IGenericCommand,
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand> {
-		const results = await apiPost<IGenericCommand[]>(
-			`apps/${appId}/board/${boardId}`,
-			{ commands: [command] },
-			this.backend.auth,
+		const results = await this.executeCommands(
+			appId,
+			boardId,
+			[command],
+			options,
 		);
 		return results[0];
 	}
 
+	/**
+	 * One round trip: the batch travels with the held sync manifest and the hub answers with the
+	 * commands plus the diff against the revision it produced. The diff is applied onto the held
+	 * board only if it is still the revision the manifest described (see
+	 * `BoardSyncClient.ingest`); otherwise the caller refetches as before.
+	 */
 	async executeCommands(
 		appId: string,
 		boardId: string,
 		commands: IGenericCommand[],
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand[]> {
-		return apiPost<IGenericCommand[]>(
+		const sync = this.boardSync.syncRequest(appId, boardId, undefined);
+		const wire = await apiPost<ExecuteCommandsWire>(
 			`apps/${appId}/board/${boardId}`,
-			{ commands },
+			sync ? { commands, sync } : { commands },
 			this.backend.auth,
 		);
+		const { commands: results, sync: tail } =
+			normalizeExecuteCommandsWire(wire);
+		if (sync && tail && options?.onBoard) {
+			const board = this.boardSync.ingest(
+				appId,
+				boardId,
+				undefined,
+				sync,
+				tail,
+			);
+			if (board) {
+				await this.presignMediaComments(appId, boardId, board);
+				options.onBoard(board);
+			}
+		}
+		return results;
 	}
 
 	async applyFlowScript(
@@ -816,6 +923,7 @@ export class WebBoardState implements IBoardState {
 		catalogNodes: INode[] | undefined,
 		selectedNodeIds: string[],
 		currentSurface: SurfaceComponent[] | null,
+		currentCanvasSettings: CanvasSettings | null,
 		selectedComponentIds: string[],
 		userPrompt: string,
 		history: UnifiedChatMessage[],
@@ -845,6 +953,11 @@ export class WebBoardState implements IBoardState {
 		}
 		const baseUrl = getApiBaseUrl();
 		const url = `${baseUrl}/api/v1/ai/copilot/chat`;
+		// The server minted the owning chat run's id; callers only hold the client id, so a nested
+		// specialist has to be addressed through the transport's mapping.
+		const specialistRunId = toolContext?.runId
+			? globalChatTransportRunId(toolContext.runId)
+			: undefined;
 
 		const headers: Record<string, string> = {
 			"Content-Type": "application/json",
@@ -873,6 +986,7 @@ export class WebBoardState implements IBoardState {
 					board,
 					selected_node_ids: selectedNodeIds,
 					current_surface: currentSurface,
+					current_canvas_settings: currentCanvasSettings,
 					selected_component_ids: selectedComponentIds,
 					user_prompt: userPrompt,
 					raw_user_prompt: rawUserPrompt,
@@ -886,6 +1000,11 @@ export class WebBoardState implements IBoardState {
 					run_context: runContext,
 					action_context: actionContext,
 					app_id: contextAppId,
+					// Data Studio / Scout specialists run server-side but call their tools in this
+					// browser: they ride the owning chat run so results reach the endpoint the
+					// global chat already posts to, and stopping that run stops them too.
+					run_id: specialistRunId,
+					overlay_id: toolContext?.overlayId,
 					stream: wantsStream,
 				}),
 			});
@@ -905,6 +1024,11 @@ export class WebBoardState implements IBoardState {
 				let buffer = "";
 				let result: UnifiedCopilotResponse | undefined;
 				let streamError: Error | undefined;
+				// A nested Data Studio / Scout specialist runs server-side but owns no tools of its
+				// own: they execute here, exactly like the orchestrator's, and their results go back
+				// over the owning chat run.
+				const toolDispatches = new Set<Promise<void>>();
+				const seenToolRequests = new Set<string>();
 
 				const handleEvent = (rawEvent: string) => {
 					if (!rawEvent.trim()) return;
@@ -926,6 +1050,36 @@ export class WebBoardState implements IBoardState {
 
 					if (eventName === "token" || eventName === "message") {
 						onToken(data);
+						return;
+					}
+
+					if (eventName === "tool_request") {
+						if (!specialistRunId) {
+							streamError = new Error(
+								"Received a specialist tool request without an owning run id; the result cannot be routed.",
+							);
+							return;
+						}
+						// A redelivered frame must not run a mutating tool twice.
+						const requestId = toolRequestIdOf(data);
+						if (requestId) {
+							if (seenToolRequests.has(requestId)) return;
+							seenToolRequests.add(requestId);
+						}
+						const dispatch = dispatchSpecialistToolRequest({
+							baseUrl,
+							token: this.backend.auth?.user?.access_token,
+							runId: specialistRunId,
+							data,
+							onToolRequest: runGlobalChatTool,
+						}).catch((error) => {
+							// The specialist is blocked on this request; failing the stream beats
+							// leaving it to time out with no explanation.
+							streamError ??=
+								error instanceof Error ? error : new Error(String(error));
+						});
+						toolDispatches.add(dispatch);
+						void dispatch.finally(() => toolDispatches.delete(dispatch));
 						return;
 					}
 
@@ -975,6 +1129,11 @@ export class WebBoardState implements IBoardState {
 
 				buffer += decoder.decode();
 				if (buffer.trim()) handleEvent(buffer);
+				// A delivery failure for a tool still in flight when the stream ended belongs to
+				// this run, so wait for the dispatches before deciding the run succeeded.
+				if (toolDispatches.size > 0) {
+					await Promise.allSettled([...toolDispatches]);
+				}
 				if (streamError) throw streamError;
 				if (!result)
 					throw new Error("Copilot stream ended without a final event");

@@ -310,6 +310,7 @@ export default {
 	"v5.footer.link.download": "Download Studio",
 	"v5.footer.link.webapp": "Web App",
 	"v5.footer.link.security": "Security",
+	"v5.footer.link.store": "Store",
 	"v5.footer.link.getStarted": "Get started",
 	"v5.footer.link.selfHosting": "Self-hosting",
 	"v5.footer.link.blog": "Blog",

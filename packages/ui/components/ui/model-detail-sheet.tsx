@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
 	CheckIcon,
@@ -65,6 +66,7 @@ export function ModelDetailSheet({
 	onOpenChange,
 	webMode = false,
 }: Readonly<ModelDetailSheetProps>) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const { hub } = useHub();
 	const download = useDownloadManager((s) => s.download);
@@ -243,7 +245,7 @@ export function ModelDetailSheet({
 						})
 					) {
 						toast.error(
-							`This model requires the ${tierInfo.requiredTier} plan.`,
+							t('thisModelRequiresTheRequiredtierPlan', 'This model requires the {{requiredTier}} plan.', { requiredTier: tierInfo.requiredTier }),
 						);
 					}
 					return;
@@ -258,7 +260,7 @@ export function ModelDetailSheet({
 			console.error("Failed to update profile models:", error);
 			if (handleUpgradeRequiredError(error, "model-tier")) return;
 			toast.error(
-				error instanceof Error ? error.message : "Failed to update profile",
+				error instanceof Error ? error.message : t('failedToUpdateProfile', 'Failed to update profile'),
 			);
 		}
 	}, [
@@ -321,14 +323,12 @@ export function ModelDetailSheet({
 							{isQueuedState ? (
 								<>
 									<ClockIcon className="h-4 w-4 text-primary animate-pulse" />
-									<span className="text-sm">Queued for download...</span>
+									<span className="text-sm">{t('queuedForDownload', 'Queued for download...')}</span>
 								</>
 							) : (
 								<>
 									<Progress value={progress} className="flex-1 h-2" />
-									<span className="text-sm tabular-nums w-12 text-right">
-										{progress}%
-									</span>
+									<span className="text-sm tabular-nums w-12 text-right">{`${progress}%`}</span>
 								</>
 							)}
 						</div>
@@ -338,12 +338,12 @@ export function ModelDetailSheet({
 					<div className="flex flex-wrap gap-2">
 						{isHosted ? (
 							<Badge className="bg-sky-500/10 text-sky-600 border-sky-500/30">
-								Hosted
+								{t('hosted', 'Hosted')}
 							</Badge>
 						) : isInstalled.data ? (
 							<Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30">
 								<CheckIcon className="h-3 w-3 mr-1" />
-								Installed
+								{t('installed', 'Installed')}
 							</Badge>
 						) : (
 							<Badge variant="outline">
@@ -358,24 +358,22 @@ export function ModelDetailSheet({
 						)}
 						{canRunRemotely && (
 							<Badge className="bg-cyan-500/10 text-cyan-700 border-cyan-500/30">
-								Remote
+								{t('remote', 'Remote')}
 							</Badge>
 						)}
 						{isEmbeddingModel && !canRunRemotely && (
 							<Badge className="bg-zinc-500/10 text-zinc-600 border-zinc-500/30">
-								Local only
+								{t('localOnly', 'Local only')}
 							</Badge>
 						)}
 						{tierInfo.isRestricted && tierInfo.requiredTier && (
-							<Badge className="bg-amber-500/10 text-amber-600 border-amber-500/30">
-								{tierInfo.requiredTier} Required
-							</Badge>
+							<Badge className="bg-amber-500/10 text-amber-600 border-amber-500/30">{t('requiredtierRequired', '{{requiredTier}} Required', { requiredTier: tierInfo.requiredTier })}</Badge>
 						)}
 					</div>
 
 					{/* Description */}
 					<div>
-						<h4 className="text-sm font-medium mb-2">Description</h4>
+						<h4 className="text-sm font-medium mb-2">{t('description', 'Description')}</h4>
 						<p className="text-sm text-muted-foreground">{meta.description}</p>
 					</div>
 
@@ -394,15 +392,15 @@ export function ModelDetailSheet({
 					{/* Embedding Parameters */}
 					{embeddingParams?.vector_length && (
 						<div>
-							<h4 className="text-sm font-medium mb-2">Embedding Details</h4>
+							<h4 className="text-sm font-medium mb-2">{t('embeddingDetails', 'Embedding Details')}</h4>
 							<div className="grid grid-cols-2 gap-2 text-sm">
 								<div className="flex justify-between p-2 rounded bg-muted/50">
-									<span className="text-muted-foreground">Vector Length</span>
+									<span className="text-muted-foreground">{t('vectorLength', 'Vector Length')}</span>
 									<span>{embeddingParams.vector_length}</span>
 								</div>
 								{embeddingParams.input_length && (
 									<div className="flex justify-between p-2 rounded bg-muted/50">
-										<span className="text-muted-foreground">Max Input</span>
+										<span className="text-muted-foreground">{t('maxInput', 'Max Input')}</span>
 										<span>{embeddingParams.input_length}</span>
 									</div>
 								)}
@@ -413,7 +411,7 @@ export function ModelDetailSheet({
 					{/* Tags */}
 					{meta.tags.length > 0 && (
 						<div>
-							<h4 className="text-sm font-medium mb-2">Tags</h4>
+							<h4 className="text-sm font-medium mb-2">{t('tags', 'Tags')}</h4>
 							<div className="flex flex-wrap gap-1.5">
 								{meta.tags.map((tag) => (
 									<Badge key={tag} variant="outline" className="text-xs">
@@ -436,7 +434,7 @@ export function ModelDetailSheet({
 								{isInstalled.data ? (
 									<>
 										<TrashIcon className="h-4 w-4 mr-2" />
-										Remove Download
+										{t('removeDownload', 'Remove Download')}
 									</>
 								) : (
 									<>
@@ -454,12 +452,12 @@ export function ModelDetailSheet({
 							{isInProfile ? (
 								<>
 									<XIcon className="h-4 w-4 mr-2" />
-									Remove from Profile
+									{`Remove from Profile`}
 								</>
 							) : (
 								<>
 									<PlusIcon className="h-4 w-4 mr-2" />
-									Add to Profile
+									{t('addToProfile', 'Add to Profile')}
 								</>
 							)}
 						</Button>
@@ -472,7 +470,7 @@ export function ModelDetailSheet({
 								}
 							>
 								<ExternalLinkIcon className="h-4 w-4 mr-2" />
-								View Repository
+								{t('viewRepository', 'View Repository')}
 							</Button>
 						)}
 					</div>
@@ -497,6 +495,7 @@ function capTextColor(pct: number): string {
 function ModelCapabilities({
 	classification,
 }: Readonly<{ classification: IBitModelClassification }>) {
+	const { t } = useTranslation("common");
 	const capabilities = (
 		Object.entries(classification).filter(
 			([_, value]) => typeof value === "number" && value > 0,
@@ -507,7 +506,7 @@ function ModelCapabilities({
 
 	return (
 		<div>
-			<h4 className="text-sm font-medium mb-3">Capabilities</h4>
+			<h4 className="text-sm font-medium mb-3">{t('capabilities', 'Capabilities')}</h4>
 			<div className="grid grid-cols-2 gap-x-4 gap-y-3">
 				{capabilities.map(([key, value]) => {
 					const { icon, label } = getCapabilityIcon(key);
@@ -521,9 +520,7 @@ function ModelCapabilities({
 								</span>
 								<span
 									className={`font-semibold tabular-nums ${capTextColor(pct)}`}
-								>
-									{pct}%
-								</span>
+								>{`${pct}%`}</span>
 							</div>
 							<div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
 								<div

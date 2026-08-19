@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMemo } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { useBackend } from "../../../state/backend-state";
@@ -13,6 +14,7 @@ export function GenericFormConfig({
 	config,
 	onConfigUpdate,
 }: IConfigInterfaceProps) {
+	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
 	const routesQuery = useInvoke<IRouteMapping[], [appId: string]>(
 		backend.routeState.getRoutes,
@@ -55,18 +57,18 @@ export function GenericFormConfig({
 	return (
 		<div className="w-full space-y-6">
 			<div className="space-y-3">
-				<Label>Navigate To</Label>
+				<Label>{t('navigateTo', 'Navigate To')}</Label>
 				{isEditing ? (
 					<div className="rounded-md border border-input bg-background">
 						<ScrollArea className="max-h-48">
 							<div className="p-2 space-y-1">
 								{routesQuery.isLoading ? (
 									<div className="px-2 py-2 text-sm text-muted-foreground">
-										Loading routes…
+										{t('loadingRoutes', 'Loading routes…')}
 									</div>
 								) : routes.length === 0 ? (
 									<div className="px-2 py-2 text-sm text-muted-foreground">
-										No routes configured.
+										{t('noRoutesConfigured', 'No routes configured.')}
 									</div>
 								) : (
 									routes
@@ -110,7 +112,7 @@ export function GenericFormConfig({
 								className="text-xs text-muted-foreground hover:text-foreground"
 								onClick={() => setValue("navigate_to_routes", null)}
 							>
-								Clear selection
+								{t('clearSelection', 'Clear selection')}
 							</button>
 						</div>
 					</div>
@@ -118,11 +120,11 @@ export function GenericFormConfig({
 					<div className="flex min-h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm">
 						{selectedRoutes.length > 0
 							? selectedRoutes.join(", ")
-							: "No destinations"}
+							: t('noDestinations', 'No destinations')}
 					</div>
 				)}
 				<p className="text-sm text-muted-foreground">
-					Optional route destinations this form can navigate to.
+					{t('optionalRouteDestinationsThisFormCanNavigateTo', 'Optional route destinations this form can navigate to.')}
 				</p>
 			</div>
 		</div>

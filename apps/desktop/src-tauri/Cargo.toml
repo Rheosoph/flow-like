@@ -119,8 +119,10 @@ flow-like-catalog = { workspace = true, features = ["all-execute", "tauri", "loc
 
 [target."cfg(target_os = \"linux\")".dependencies]
 rdev = { workspace = true, features = ["x11", "wayland"] }
+# Never enable zbus/tokio here: features unify across the graph, and it switches
+# zbus::block_on to building its own runtime, which panics inside tokio workers
+# (notify-rust notifications, tauri-plugin-opener reveal-in-dir).
 atspi = { version = "0.25", features = ["zbus"] }
-zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [target."cfg(target_os = \"macos\")".dependencies]
 cocoa = "0.26"

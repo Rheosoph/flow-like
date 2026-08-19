@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { ArrowUpCircle, X } from "lucide-react";
 import type { PackageUpdate } from "../../lib/schema/wasm";
 import { Button } from "../ui/button";
@@ -17,6 +18,7 @@ export function PackageUpdateBanner({
 	onReview,
 	onDismiss,
 }: PackageUpdateBannerProps) {
+	const { t } = useTranslation("flow");
 	if (updates.length === 0) return null;
 
 	return (
@@ -24,12 +26,12 @@ export function PackageUpdateBanner({
 			<ArrowUpCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
 			<span className="text-sm text-amber-800 dark:text-amber-200">
 				{updates.length === 1
-					? `Update available for ${updates[0].packageName}`
-					: `${updates.length} package updates available`}
+					? t('updateAvailableForPackagename', 'Update available for {{packageName}}', { packageName: updates[0].packageName })
+					: t('lengthPackageUpdatesAvailable', '{{length}} package updates available', { length: updates.length })}
 			</span>
 			<div className="flex items-center gap-2 ml-auto">
 				<Button variant="outline" size="sm" onClick={onReview}>
-					Review
+					{t('review', 'Review')}
 				</Button>
 				<Button
 					variant="ghost"

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { CloudOffIcon, DownloadIcon, RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -71,6 +72,7 @@ export function BoardSyncStatusPill({
 	boardId: string;
 	onOpenRecovery: () => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const status = useBoardSyncStatus(appId, boardId);
 	if (!status?.supported || status.pendingBatches === 0) return null;
 
@@ -80,31 +82,27 @@ export function BoardSyncStatusPill({
 			onClick={onOpenRecovery}
 			title={
 				status.ownershipMismatch ??
-				"These edits have not reached the server yet."
+				t('theseEditsHaveNotReachedTheServerYet', 'These edits have not reached the server yet.')
 			}
 			className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--destructive)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm hover:bg-[color-mix(in_oklch,var(--background)_85%,transparent)] transition-colors cursor-pointer"
 		>
 			<CloudOffIcon className="h-3.5 w-3.5 text-destructive" />
-			<span className="text-xs font-medium text-destructive">
-				{status.pendingBatches} edit
-				{status.pendingBatches === 1 ? "" : "s"} not synced
-			</span>
+			<span className="text-xs font-medium text-destructive">{t('countEditSNotSynced', { defaultValue_one: "{{count}} edit not synced", defaultValue_other: "{{count}} edits not synced", count: status.pendingBatches })}</span>
 		</button>
 	);
 }
 
 function QueueEntryRow({ entry }: Readonly<{ entry: IBoardSyncQueueEntry }>) {
+	const { t } = useTranslation("flow");
 	const reason =
 		entry.blockedReason ??
 		entry.ownershipMismatch ??
 		entry.lastFailureMessage ??
-		"Not yet accepted by the server.";
+		t('notYetAcceptedByTheServer', 'Not yet accepted by the server.');
 	return (
 		<li className="min-w-0 rounded-md border border-border/60 bg-muted/30 px-3 py-2">
 			<div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-				<span className="text-xs font-medium">
-					{entry.commandCount} command{entry.commandCount === 1 ? "" : "s"}
-				</span>
+				<span className="text-xs font-medium">{t('countCommands', { defaultValue_one: '{{count}} command', defaultValue_other: '{{count}} commands', count: entry.commandCount })}</span>
 				<span className="font-mono text-[11px] tabular-nums text-muted-foreground">
 					{new Date(entry.createdAt).toLocaleString()}
 				</span>
@@ -115,7 +113,7 @@ function QueueEntryRow({ entry }: Readonly<{ entry: IBoardSyncQueueEntry }>) {
 			</p>
 			{entry.partiallyDelivered ? (
 				<p className="mt-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
-					Partially delivered — the server already holds part of this batch.
+					{t('partiallyDeliveredTheServerAlreadyHoldsPartOfThisBatch', 'Partially delivered — the server already holds part of this batch.')}
 				</p>
 			) : null}
 		</li>
@@ -133,6 +131,7 @@ export function BoardSyncRecoveryDialog({
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const status = useBoardSyncStatus(appId, boardId);
 	const [acknowledged, setAcknowledged] = useState(false);
@@ -168,7 +167,7 @@ export function BoardSyncRecoveryDialog({
 				boardId,
 			);
 			if (archive.length === 0) {
-				toast.info("No previously discarded edits are stored for this board.");
+				toast.info(t('noPreviouslyDiscardedEditsAreStoredForThisBoard', 'No previously discarded edits are stored for this board.'));
 				return;
 			}
 			const url = URL.createObjectURL(
@@ -182,13 +181,13 @@ export function BoardSyncRecoveryDialog({
 			link.click();
 			URL.revokeObjectURL(url);
 		} catch (error) {
-			toast.error("Could not export the discarded edits.", {
+			toast.error(t('couldNotExportTheDiscardedEdits', 'Could not export the discarded edits.'), {
 				description: error instanceof Error ? error.message : String(error),
 			});
 		} finally {
 			setBusy(null);
 		}
-	}, [appId, backend.boardState, boardId]);
+	}, [appId, backend.boardState, boardId, t]);
 
 	const handleReset = useCallback(async () => {
 		if (!backend.boardState.resetBoardFromServer) return;
@@ -201,20 +200,18 @@ export function BoardSyncRecoveryDialog({
 			);
 			toast.success(
 				result.discardedBatches > 0
-					? `Board replaced with the server copy — ${result.discardedBatches} unsent edit ${
-							result.discardedBatches === 1 ? "batch" : "batches"
-						} discarded.`
-					: "Board is back in sync with the server.",
+					? t('boardReplacedWithTheServerCopyDiscardedCountUnsentEditBatches', 'Board replaced with the server copy — {{count}} unsent edit batch discarded.', { count: result.discardedBatches })
+					: t('boardIsBackInSyncWithTheServer', 'Board is back in sync with the server.'),
 			);
 			onOpenChange(false);
 		} catch (error) {
-			toast.error("Could not fetch the board from the server.", {
+			toast.error(t('couldNotFetchTheBoardFromTheServer', 'Could not fetch the board from the server.'), {
 				description: error instanceof Error ? error.message : String(error),
 			});
 		} finally {
 			setBusy(null);
 		}
-	}, [appId, backend.boardState, boardId, onOpenChange, pendingBatches]);
+	}, [appId, backend.boardState, boardId, onOpenChange, pendingBatches, t]);
 
 	const destructive = pendingBatches > 0;
 
@@ -224,19 +221,16 @@ export function BoardSyncRecoveryDialog({
 			    row of nowrap buttons widens the single track and pushes all of them past the border. */}
 			<AlertDialogContent className="grid-cols-[minmax(0,1fr)] sm:max-w-xl">
 				<AlertDialogHeader className="min-w-0">
-					<AlertDialogTitle>Fetch this board from the server</AlertDialogTitle>
+					<AlertDialogTitle>{t('fetchThisBoardFromTheServer', 'Fetch this Board from the server')}</AlertDialogTitle>
 					<AlertDialogDescription>
 						{destructive
-							? "The server copy will replace what is on this device. Edits that never reached the server are discarded — they will not appear anywhere afterwards."
-							: "Nothing is queued for this board. Fetching replaces the local copy with the server's."}
+							? t('theServerCopyWillReplaceWhatIsOnThisDeviceEditsThatNeverReachedTheServerAreDiscardedTheyWillNotAppearAnywhereAfterwards', 'The server copy will replace what is on this device. Edits that never reached the server are discarded — they will not appear anywhere afterwards.')
+							: t('nothingIsQueuedForThisBoardFetchingReplacesTheLocalCopyWithTheServers', 'Nothing is queued for this board. Fetching replaces the local copy with the server\'s.')}
 					</AlertDialogDescription>
 				</AlertDialogHeader>
 
 				{status?.ownershipMismatch ? (
-					<p className="min-w-0 rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-xs leading-snug text-muted-foreground wrap-anywhere">
-						{status.ownershipMismatch}. Signing back into the original account
-						and Hub would let these edits sync instead of being discarded.
-					</p>
+					<p className="min-w-0 rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-xs leading-snug text-muted-foreground wrap-anywhere">{t('ownershipMismatchSigningBackIntoTheOriginalAccountAndHubWouldLetTheseEditsSync', '{{message}} Signing back into the original account and Hub would let these edits sync instead of being discarded.', { message: status.ownershipMismatch })}</p>
 				) : null}
 
 				{destructive ? (
@@ -253,11 +247,7 @@ export function BoardSyncRecoveryDialog({
 								onCheckedChange={(value) => setAcknowledged(value === true)}
 								className="mt-0.5"
 							/>
-							<label htmlFor="board-sync-discard-ack">
-								I understand {pendingBatches} unsent edit{" "}
-								{pendingBatches === 1 ? "batch" : "batches"} made on this device
-								will be removed from this board.
-							</label>
+							<label htmlFor="board-sync-discard-ack">{t('iUnderstandCountUnsentEditBatchesWillBeRemovedFromThisBoard', { defaultValue_one: 'I understand that {{count}} unsent edit batch made on this device will be removed from this board.', defaultValue_other: 'I understand that {{count}} unsent edit batches made on this device will be removed from this board.', count: pendingBatches })}</label>
 						</div>
 					</div>
 				) : null}
@@ -273,7 +263,7 @@ export function BoardSyncRecoveryDialog({
 							<RefreshCwIcon
 								className={cn("size-3.5", busy === "retry" && "animate-spin")}
 							/>
-							Retry sync
+							{t('retrySync', 'Retry sync')}
 						</Button>
 						<Button
 							variant="ghost"
@@ -284,7 +274,7 @@ export function BoardSyncRecoveryDialog({
 							onClick={() => void handleExport()}
 						>
 							<DownloadIcon className="size-3.5" />
-							Export
+							{t('export', 'Export')}
 						</Button>
 					</div>
 					<div className="flex min-w-0 flex-wrap gap-2">
@@ -294,7 +284,7 @@ export function BoardSyncRecoveryDialog({
 							disabled={busy !== null}
 							onClick={() => onOpenChange(false)}
 						>
-							Cancel
+							{t('cancel', 'Cancel')}
 						</Button>
 						<Button
 							variant={destructive ? "destructive" : "default"}
@@ -302,7 +292,7 @@ export function BoardSyncRecoveryDialog({
 							disabled={busy !== null || (destructive && !acknowledged)}
 							onClick={() => void handleReset()}
 						>
-							{destructive ? "Discard edits & fetch" : "Fetch from server"}
+							{destructive ? t('discardEditsFetch', 'Discard edits & fetch') : t('fetchFromServer', 'Fetch from server')}
 						</Button>
 					</div>
 				</AlertDialogFooter>

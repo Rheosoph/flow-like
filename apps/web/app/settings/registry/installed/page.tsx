@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -59,6 +60,7 @@ function InstalledPackageCard({
 	onSelect?: (id: string) => void;
 	isLoading: boolean;
 }) {
+	const { t } = useTranslation("common");
 	return (
 		<motion.div
 			initial={{ opacity: 0, y: 10 }}
@@ -77,11 +79,11 @@ function InstalledPackageCard({
 							</CardTitle>
 						</div>
 						<div className="flex items-center gap-1 shrink-0">
-							<Badge variant="outline">v{pkg.version}</Badge>
+							<Badge variant="outline">{`v${pkg.version}`}</Badge>
 							{hasUpdate && (
 								<Badge variant="default" className="gap-1">
 									<AlertTriangle className="h-3 w-3" />
-									Update
+									{t('update', 'Update')}
 								</Badge>
 							)}
 						</div>
@@ -100,7 +102,7 @@ function InstalledPackageCard({
 					</div>
 					<div className="flex items-center justify-between">
 						<span className="text-xs text-muted-foreground">
-							Installed {new Date(pkg.installedAt).toLocaleDateString()}
+							{t('installed', 'Installed')} {new Date(pkg.installedAt).toLocaleDateString()}
 						</span>
 						<div className="flex items-center gap-2">
 							{hasUpdate && (
@@ -117,9 +119,7 @@ function InstalledPackageCard({
 										<Loader2 className="h-4 w-4 animate-spin" />
 									) : (
 										<>
-											<RefreshCw className="h-4 w-4 mr-1" />
-											Update to v{latestVersion}
-										</>
+											<RefreshCw className="h-4 w-4 mr-1" />{t('updateToVlatestversion', 'Update to v{{latestVersion}}', { latestVersion })}</>
 									)}
 								</Button>
 							)}
@@ -152,6 +152,7 @@ function LocalPackageCard({
 	onRemove: (id: string) => void;
 	isLoading: boolean;
 }) {
+	const { t } = useTranslation("common");
 	return (
 		<motion.div
 			initial={{ opacity: 0, y: 10 }}
@@ -169,7 +170,7 @@ function LocalPackageCard({
 						</div>
 						<Badge variant="secondary" className="gap-1">
 							<Check className="h-3 w-3" />
-							Local
+							{t('local', 'Local')}
 						</Badge>
 					</div>
 					<CardDescription className="line-clamp-2">
@@ -178,9 +179,7 @@ function LocalPackageCard({
 				</CardHeader>
 				<CardContent>
 					<div className="flex items-center justify-between">
-						<span className="text-xs text-muted-foreground">
-							v{pkg.version}
-						</span>
+						<span className="text-xs text-muted-foreground">{`v${pkg.version}`}</span>
 						<Button
 							size="sm"
 							variant="destructive"
@@ -229,6 +228,7 @@ function PackageCardSkeleton() {
 }
 
 export default function InstalledPackagesPage() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const auth = useAuth();
 	const [isInitialized, setIsInitialized] = useState(false);
@@ -378,7 +378,7 @@ export default function InstalledPackagesPage() {
 			<div className="flex items-center justify-center h-full">
 				<div className="text-center">
 					<Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
-					<p className="text-muted-foreground">Initializing registry...</p>
+					<p className="text-muted-foreground">{t('initializingRegistry', 'Initializing registry...')}</p>
 				</div>
 			</div>
 		);
@@ -417,9 +417,9 @@ export default function InstalledPackagesPage() {
 		<div className="flex flex-col h-full space-y-4">
 			<div className="flex items-center justify-between">
 				<div>
-					<h1 className="text-2xl font-bold">Installed Packages</h1>
+					<h1 className="text-2xl font-bold">{t('installedPackages', 'Installed Packages')}</h1>
 					<p className="text-sm text-muted-foreground">
-						Manage your installed WASM node packages
+						{t('manageYourInstalledWasmNodePackages', 'Manage your installed WASM node packages')}
 					</p>
 				</div>
 				<div className="flex items-center gap-2">
@@ -432,7 +432,7 @@ export default function InstalledPackagesPage() {
 						<RefreshCw
 							className={`h-4 w-4 mr-1 ${isLoading ? "animate-spin" : ""}`}
 						/>
-						Refresh
+						{t('refresh', 'Refresh')}
 					</Button>
 				</div>
 			</div>
@@ -441,7 +441,7 @@ export default function InstalledPackagesPage() {
 				<div className="relative max-w-sm flex-1">
 					<Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
 					<Input
-						placeholder="Search installed packages..."
+						placeholder={t('searchInstalledPackages', 'Search installed packages...')}
 						value={searchQuery}
 						onChange={(e) => setSearchQuery(e.target.value)}
 						className="pl-9"
@@ -458,15 +458,14 @@ export default function InstalledPackagesPage() {
 					) : (
 						<EyeOff className="h-4 w-4" />
 					)}
-					Disabled
+					{t('disabled', 'Disabled')}
 				</Button>
 			</div>
 
 			{updates.length > 0 && (
 				<div className="flex items-center gap-2 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-md">
 					<AlertTriangle className="h-4 w-4 text-yellow-500" />
-					<span className="text-sm">
-						{updates.length} update{updates.length > 1 ? "s" : ""} available
+					<span className="text-sm">{t('lengthUpdate', '{{length}} update', { length: updates.length })}{updates.length > 1 ? "s" : ""} available
 					</span>
 				</div>
 			)}
@@ -477,7 +476,7 @@ export default function InstalledPackagesPage() {
 					<div className="space-y-3">
 						<h2 className="text-lg font-semibold flex items-center gap-2">
 							<FolderOpen className="h-5 w-5" />
-							Local Development Packages
+							{t('localDevelopmentPackages', 'Local Development Packages')}
 						</h2>
 						<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
 							{filteredLocalPackages.map((pkg) => (
@@ -496,7 +495,7 @@ export default function InstalledPackagesPage() {
 					{localPackages.length > 0 && (
 						<h2 className="text-lg font-semibold flex items-center gap-2">
 							<Package className="h-5 w-5" />
-							Registry Packages
+							{t('registryPackages', 'Registry Packages')}
 						</h2>
 					)}
 					{isLoading ? (
@@ -523,13 +522,13 @@ export default function InstalledPackagesPage() {
 					) : localPackages.length === 0 ? (
 						<div className="flex flex-col items-center justify-center py-12 text-center">
 							<Package className="h-12 w-12 text-muted-foreground mb-4" />
-							<p className="text-muted-foreground">No packages installed</p>
+							<p className="text-muted-foreground">{t('noPackagesInstalled', 'No packages installed')}</p>
 							<p className="text-sm text-muted-foreground mt-2">
-								Browse the registry to find and install custom nodes
+								{t('browseTheRegistryToFindAndInstallCustomNodes', 'Browse the registry to find and install custom nodes')}
 							</p>
 							<div className="flex gap-2 mt-4">
 								<Link href="/settings/registry/explore">
-									<Button variant="outline">Browse Packages</Button>
+									<Button variant="outline">{t('browsePackages', 'Browse Packages')}</Button>
 								</Link>
 							</div>
 						</div>
@@ -540,7 +539,7 @@ export default function InstalledPackagesPage() {
 					<div className="space-y-3">
 						<h2 className="text-lg font-semibold flex items-center gap-2">
 							<Shield className="h-5 w-5" />
-							Not Installed
+							{t('notInstalled', 'Not Installed')}
 						</h2>
 						<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
 							{filteredOwnedPackages.map((pkg) => (
@@ -564,9 +563,9 @@ export default function InstalledPackagesPage() {
 													</CardTitle>
 												</div>
 												<div className="flex items-center gap-1 shrink-0">
-													<Badge variant="outline">v{pkg.latestVersion}</Badge>
+													<Badge variant="outline">{`v${pkg.latestVersion}`}</Badge>
 													{pkg.status === PackageStatus.Disabled && (
-														<Badge variant="destructive">Disabled</Badge>
+														<Badge variant="destructive">{t('disabled', 'Disabled')}</Badge>
 													)}
 													{pkg.visibility && pkg.visibility !== "public" && (
 														<Badge variant="secondary">{pkg.visibility}</Badge>
@@ -607,7 +606,7 @@ export default function InstalledPackagesPage() {
 													) : (
 														<>
 															<Download className="h-4 w-4 mr-1" />
-															Install
+															{t('install', 'Install')}
 														</>
 													)}
 												</Button>

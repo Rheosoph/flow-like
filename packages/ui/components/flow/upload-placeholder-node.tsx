@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { Node, NodeProps } from "@xyflow/react";
 import { ImageIcon, Loader2Icon, VideoIcon } from "lucide-react";
 import { ICommentType } from "../../lib/schema/flow/board";
@@ -13,6 +14,7 @@ export type UploadPlaceholderNode = Node<
 >;
 
 export function UploadPlaceholderNode(props: NodeProps<UploadPlaceholderNode>) {
+	const { t } = useTranslation("flow");
 	const { mediaType, progress } = props.data;
 	const isImage = mediaType === ICommentType.Image;
 
@@ -35,7 +37,7 @@ export function UploadPlaceholderNode(props: NodeProps<UploadPlaceholderNode>) {
 				</div>
 				<div className="text-center">
 					<p className="text-sm font-medium text-foreground/80">
-						Uploading {isImage ? "image" : "video"}...
+						{t('uploading', 'Uploading')} {isImage ? "image" : "video"}{`...`}
 					</p>
 					<p className="text-xs text-muted-foreground">
 						{Math.round(progress)}%

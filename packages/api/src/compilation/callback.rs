@@ -26,9 +26,7 @@ pub async fn handle_compilation_callback(
     headers: axum::http::HeaderMap,
     Json(result): Json<CompilationResult>,
 ) -> Result<Json<CallbackResponse>, (StatusCode, Json<CallbackResponse>)> {
-    let token = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
+    let token = crate::middleware::jwt::viewer_authorization(&headers)
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or_else(|| {
             (

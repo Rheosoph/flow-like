@@ -1,0 +1,733 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-movgelnu-i83b",
+		"name": "Custom Nodes",
+		"language": "en",
+		"slug": "custom-nodes",
+		"difficulty": "ADVANCED",
+		"category": "INTEGRATIONS",
+		"estimatedMinutes": 55,
+		"isPublished": true,
+		"iconUrl": null,
+		"bannerUrl": null,
+		"tags": [
+			"developer",
+			"wasm",
+			"typescript",
+			"packages"
+		],
+		"position": 7,
+		"description": "Build, test, and ship your own WebAssembly node \u2014 from an empty folder to the Flow-Like catalog.",
+		"longDescription": "Acme's support team needs a text normalizer the catalog doesn't have, so you'll build it: a real TypeScript Component Model node called normalize_text. You'll write the definition and run function line by line, prove them with mock-host tests, learn exactly what the sandbox does and doesn't enforce, and publish through the package registry \u2014 privately first, publicly when review says go. Along the way you'll internalize the contracts that keep packages alive: stable identifiers, per-node capabilities, manifest resource tiers, and release gates that catch breaking changes before your users do.",
+		"media": {
+			"icon": "assets/course-icon.webp",
+			"banner": "assets/wasm-sandbox.webp"
+		},
+		"assets": [
+			{
+				"name": "WasmRuntimeModels",
+				"file": "assets/wasm-runtime-models.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "wasm-runtime-models.webp",
+				"replace": true
+			},
+			{
+				"name": "WasmSandbox",
+				"file": "assets/wasm-sandbox.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "wasm-sandbox.webp",
+				"replace": true
+			},
+			{
+				"name": "NodeCatalog",
+				"file": "assets/node-catalog.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "node-catalog.webp",
+				"replace": true
+			},
+			{
+				"name": "DeveloperModeSettings",
+				"file": "assets/developer-mode-settings.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "developer-mode-settings.webp",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "mod-movgfay7-u4l",
+				"title": "Overview",
+				"description": "Choose the right extension model and read a complete node before you write one.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "les-movggbif-wkc",
+						"title": "What is a Custom Node?",
+						"language": "en",
+						"contentFile": "content/what-is-a-custom-node.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-custom-nodes-extension-path",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Acme wants normalize_text as a private integration, versioned on its own schedule, without forking Flow-Like. Which extension path fits?",
+								"explanation": "A WASM package is the independently distributed, independently versioned path \u2014 exactly the private-integration case. A native Rust node is the tempting wrong answer: it would tie every whitespace fix to a Flow-Like build and release cycle. A shared function layer can't be installed as a catalog node at all, and the runtime only adapts between its two supported binary shapes \u2014 an arbitrary .wasm without the expected exports never becomes a node.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "wasm-package",
+											"label": "A WASM package built from a maintained Flow-Like template"
+										},
+										{
+											"id": "native-catalog",
+											"label": "A native Rust node compiled into a custom Flow-Like build"
+										},
+										{
+											"id": "function-layer",
+											"label": "A shared function layer copied into each support board"
+										},
+										{
+											"id": "arbitrary-wasm",
+											"label": "Any WASM binary \u2014 the runtime adapts to whatever it exports"
+										}
+									],
+									"correct": [
+										"wasm-package"
+									]
+								}
+							},
+							{
+								"id": "challenge-custom-nodes-pin-roles",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The support board wires normalize_text between the incoming request and the AI draft. Which statements about its pins are true?",
+								"explanation": "Data pins carry values; execution pins carry control flow \u2014 that split is the whole pin model. A pure calculation can live on data pins alone (normalize_text takes exec pins only so the board can sequence it deliberately between steps). The label option is the classic trap: friendly labels can change freely \u2014 it's the internal pin names that saved boards store.",
+								"points": 15,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "data-typed",
+											"label": "Data pins carry typed values such as strings and booleans"
+										},
+										{
+											"id": "exec-path",
+											"label": "Execution pins decide which downstream path runs"
+										},
+										{
+											"id": "pure-needs-exec",
+											"label": "Every node must expose execution pins, even pure calculations"
+										},
+										{
+											"id": "label-breaks",
+											"label": "Renaming a pin's friendly label breaks saved boards"
+										}
+									],
+									"correct": [
+										"data-typed",
+										"exec-path"
+									]
+								}
+							},
+							{
+								"id": "challenge-custom-nodes-rename-risk",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Monday you rename the template's example node to normalize_text \u2014 nothing is published yet. Six months after shipping 0.1.0, a teammate renames the result pin to output. Which rename breaks saved boards?",
+								"explanation": "Before anyone can save a board containing your node, internal names are free to change \u2014 that's why identity gets settled during setup. Afterward, boards have stored normalize_text and result, so the later rename severs those wires. The version-bump option is the trap: an updated package under the same ID must still honor the stored identifiers, which is exactly why renames are documented breaking changes rather than routine updates.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "post-publish",
+											"label": "Only the later one \u2014 after publication, internal names live inside saved boards"
+										},
+										{
+											"id": "both",
+											"label": "Both \u2014 internal identifiers can never change once written in code"
+										},
+										{
+											"id": "neither-label",
+											"label": "Neither \u2014 boards reconnect pins by friendly label"
+										},
+										{
+											"id": "version-shield",
+											"label": "Neither \u2014 bumping the version number makes any rename safe"
+										}
+									],
+									"correct": [
+										"post-publish"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "les-movggm3i-t18",
+						"title": "The Node Template",
+						"language": "en",
+						"contentFile": "content/the-node-template.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-custom-nodes-discovery-source",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You install com.acme.text-tools. What is the authoritative source for the nodes Flow-Like shows in the catalog?",
+								"explanation": "Discovery reads the compiled artifact: the runtime calls get_nodes and renders exactly what the binary declares. The manifest is the tempting wrong answer \u2014 it identifies and bounds the package (ID, version, memory, timeout) but registers no nodes. The publish wizard only displays what was already extracted from the binary, and the editor needs pins long before any first run.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "binary-export",
+											"label": "The definitions the compiled binary exports through get_nodes"
+										},
+										{
+											"id": "manifest-metadata",
+											"label": "The package metadata section of flow-like.toml"
+										},
+										{
+											"id": "wizard-list",
+											"label": "The node list you confirmed in the publish wizard"
+										},
+										{
+											"id": "first-run",
+											"label": "Types recorded the first time each node executes"
+										}
+									],
+									"correct": [
+										"binary-export"
+									]
+								}
+							},
+							{
+								"id": "challenge-custom-nodes-security-layers",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "normalize_text needs no permissions \u2014 but Acme's next node will make HTTP calls and needs more memory. Which statements about where things are declared are correct?",
+								"explanation": "Two layers, two jobs: capabilities are exported per node from code (addPermission(\"network:http\")), while the manifest carries package-wide resource tiers. The manifest-grants option is the classic layering mistake \u2014 package-level network fields are not what the sandbox enforces per node. And zero capabilities still leaves the baseline contract intact: pins, outputs, and logging all work; only protected host services are gated.",
+								"points": 15,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "node-capabilities",
+											"label": "Protected capabilities like network:http are declared on the node definition, in code"
+										},
+										{
+											"id": "manifest-limits",
+											"label": "Memory and timeout tiers are set in flow-like.toml"
+										},
+										{
+											"id": "manifest-grants",
+											"label": "Enabling HTTP in the manifest's network section is what grants a node HTTP access"
+										},
+										{
+											"id": "no-perm-no-pins",
+											"label": "A node with zero declared capabilities cannot read its input pins"
+										}
+									],
+									"correct": [
+										"node-capabilities",
+										"manifest-limits"
+									]
+								}
+							},
+							{
+								"id": "challenge-custom-nodes-missing-activate",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A teammate refactors run() and deletes the ctx.activateExec(\"exec_out\") line. Tests that only check outputs.result still pass. What happens on the support board?",
+								"explanation": "Execution flow follows activated pins, not produced values \u2014 outputs without activateExec strand every downstream node, silently. ctx.success() is the tempting distractor: it reports that the run finished cleanly, but it activates nothing by itself. That's exactly why behavior tests should assert result.activateExec, not just output values. The catalog is unaffected either way: discovery reads the definition, which never changed.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "downstream-stalls",
+											"label": "result is computed, but nothing after normalize_text ever runs"
+										},
+										{
+											"id": "run-errors",
+											"label": "The run fails with an explicit error"
+										},
+										{
+											"id": "auto-activate",
+											"label": "Nothing \u2014 ctx.success() activates the default execution pin"
+										},
+										{
+											"id": "catalog-gone",
+											"label": "The node disappears from the catalog until it's fixed"
+										}
+									],
+									"correct": [
+										"downstream-stalls"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "mod-movgfgqt-fxc",
+				"title": "Your First Node",
+				"description": "Build the normalize_text package, prove its behavior at every layer, and release it safely.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "les-movgfli0-ots",
+						"title": "Setup",
+						"language": "en",
+						"contentFile": "content/setup.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-custom-nodes-changed-expression",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "In the run skeleton, which expression correctly fills TODO 3 \u2014 the value of the changed output?",
+								"explanation": "changed should report whether normalization actually altered anything, and comparing the final result against the original input is the only expression that does. The option-based answers share one misconception: an enabled option doesn't mean it had an effect \u2014 already-clean text passes through untouched, and changed must say so. The length check misses pure case changes: lowercasing 'FIRE' changes the text but not its length.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "neq",
+											"label": "result !== text"
+										},
+										{
+											"id": "opts-on",
+											"label": "trim || lowercase"
+										},
+										{
+											"id": "len",
+											"label": "result.length !== text.length"
+										},
+										{
+											"id": "always-true",
+											"label": "true, whenever either option is enabled"
+										}
+									],
+									"correct": [
+										"neq"
+									]
+								}
+							},
+							{
+								"id": "challenge-custom-nodes-test-vs-build",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "mise run test is green, but mise run build fails during componentization. What's the correct read of the situation?",
+								"explanation": "Unit tests execute your TypeScript source on a mock host; the build bundles and componentizes it \u2014 different pipelines, different failure classes. That's why both gates run on every loop. The mock-host option is tempting because mocks genuinely do hide things \u2014 but what they hide is enforcement and integration behavior, not bundler failures. No amount of extra test inputs fixes a dependency that componentize-js can't process.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "separate-gate",
+											"label": "Packaging is a separate gate \u2014 a dependency can be un-componentizable even when the logic is correct"
+										},
+										{
+											"id": "tests-wrong",
+											"label": "The tests must be asserting the wrong things"
+										},
+										{
+											"id": "bad-id",
+											"label": "The package ID in flow-like.toml is invalid"
+										},
+										{
+											"id": "mock-hid",
+											"label": "The mock host masked a logic bug; rerun the tests with more inputs"
+										}
+									],
+									"correct": [
+										"separate-gate"
+									]
+								}
+							},
+							{
+								"id": "challenge-custom-nodes-identity-freeze",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Once 0.1.0 is live in saved boards, which changes force a documented breaking change rather than a routine new version?",
+								"explanation": "Saved boards store the package ID, the internal node name, and the pin names \u2014 changing any of them severs existing wires, so each is a breaking change that needs a documented migration. Friendly labels are the deliberate escape hatch: polish them any time. Resource tiers are the other tempting pick, but boards never store them \u2014 raising a tier changes limits, not identity.",
+								"points": 15,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "rename-node",
+											"label": "Renaming the internal node name normalize_text"
+										},
+										{
+											"id": "rename-pin",
+											"label": "Renaming the result pin to output"
+										},
+										{
+											"id": "change-id",
+											"label": "Moving the package to a new package ID"
+										},
+										{
+											"id": "friendly",
+											"label": "Changing the friendly label from 'Normalize Text' to 'Clean Text'"
+										},
+										{
+											"id": "memory-tier",
+											"label": "Raising the memory tier from minimal to light"
+										}
+									],
+									"correct": [
+										"rename-node",
+										"rename-pin",
+										"change-id"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "les-movgfx8g-xzf",
+						"title": "Testing Your Node",
+						"language": "en",
+						"contentFile": "content/testing-your-node.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-custom-nodes-definition-test-catch",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Your contract test asserts def.toDict().name === \"normalize_text\". Which real-world regression does that line catch?",
+								"explanation": "toDict() pins down the serialized definition \u2014 the exact data Flow-Like extracts through get_nodes \u2014 so an innocent-looking rename fails the suite long before it can reach a registry. The other options are real failure classes, but they belong to other gates: behavior tests catch the changed bug, the component build catches bundling, and denial behavior needs the real sandbox or an integration fixture.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "silent-rename",
+											"label": "An accidental rename that would break every saved board after the next release"
+										},
+										{
+											"id": "wrong-changed",
+											"label": "A wrong changed computation for whitespace-only input"
+										},
+										{
+											"id": "componentize-fail",
+											"label": "A dependency that fails componentization"
+										},
+										{
+											"id": "denial-crash",
+											"label": "Unsafe behavior when a permission is denied"
+										}
+									],
+									"correct": [
+										"silent-rename"
+									]
+								}
+							},
+							{
+								"id": "challenge-custom-nodes-mock-host-limits",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The whole Vitest suite is green on MockHostBridge. Which failures can that suite still be hiding?",
+								"explanation": "The mock host runs your source logic \u2014 it never bundles it, never reads your permission list, and never replays an old board's stored wires. Those three failure classes live behind the build gate and the private-install gate. The whitespace case is the odd one out: if the suite explicitly covers it, the mock host is exactly the right tool to catch it \u2014 that's what unit tests are for.",
+								"points": 15,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "componentization",
+											"label": "A dependency that cannot be componentized"
+										},
+										{
+											"id": "enforcement",
+											"label": "Real sandbox permission enforcement behaving differently than the mock"
+										},
+										{
+											"id": "old-board",
+											"label": "An existing saved board failing to resolve renamed identifiers"
+										},
+										{
+											"id": "whitespace-bug",
+											"label": "A wrong result for whitespace-only input that the suite explicitly covers"
+										}
+									],
+									"correct": [
+										"componentization",
+										"enforcement",
+										"old-board"
+									]
+								}
+							},
+							{
+								"id": "challenge-custom-nodes-release-evidence",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which pieces of evidence belong in the release gate before 0.1.0 ships?",
+								"explanation": "Three gates, three failure classes: source-level tests, packaging, and real-board discovery plus persistence. The fresh-board option is the subtle trap \u2014 one run in a scratch board skips persistence entirely; the check that matters is saving, closing, and reopening, and for later updates, loading a board saved under the previous version. Label spotting proves nothing contract-related: friendly labels aren't stored identifiers.",
+								"points": 15,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "unit-tests",
+											"label": "Contract, behavior, and permission-denial tests including boundary cases"
+										},
+										{
+											"id": "component-build",
+											"label": "A successful component build from reviewed source"
+										},
+										{
+											"id": "board-compatibility",
+											"label": "A private install that runs inside a saved board \u2014 and still resolves after closing and reopening it"
+										},
+										{
+											"id": "fresh-board",
+											"label": "A successful run in one freshly created board"
+										},
+										{
+											"id": "label-check",
+											"label": "Confirmation that the catalog shows the friendly label you expected"
+										}
+									],
+									"correct": [
+										"unit-tests",
+										"component-build",
+										"board-compatibility"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "les-movgg3q8-5qi",
+						"title": "Publishing and Sharing",
+						"language": "en",
+						"contentFile": "content/publishing-and-sharing.md",
+						"videoUrl": null,
+						"estimatedMinutes": 15,
+						"position": 2,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "course-movgelnu-i83b.challenge.extension-path",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The support board saved today wires normalize_text's result output into Send Reply. Which identifiers must every future version of the package keep for that wire to survive?",
+								"explanation": "A saved board stores the chain package ID \u2192 node name \u2192 pin names; break any link and the wire dangles. Friendly labels are explicitly outside the contract \u2014 that's what makes them safe to polish at any time. Resource tiers are the tempting extra: they bound execution, but boards never store them, so tuning tiers is a routine version change.",
+								"points": 20,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "package-id",
+											"label": "The package ID com.acme.text-tools"
+										},
+										{
+											"id": "node-name",
+											"label": "The internal node name normalize_text"
+										},
+										{
+											"id": "pin-names",
+											"label": "The internal pin names, including result"
+										},
+										{
+											"id": "friendly-label",
+											"label": "The friendly label 'Normalize Text'"
+										},
+										{
+											"id": "resource-tiers",
+											"label": "The memory and timeout tiers in the manifest"
+										}
+									],
+									"correct": [
+										"package-id",
+										"node-name",
+										"pin-names"
+									]
+								}
+							},
+							{
+								"id": "course-movgelnu-i83b.challenge.stable-contract",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Artifact 1: you merge the 0.2.0 diff as-is (result renamed to output, tests updated, everything green) and publish. What happens to the support board when it moves to 0.2.0?",
+								"explanation": "The board stored the name result; 0.2.0 exports output; nothing maps one to the other \u2014 and the updated tests only prove the new code agrees with itself, not that old boards survive. The wizard can't save you: it validates the artifact and rejects duplicate versions, it doesn't police naming decisions. The added optional input is harmless \u2014 new pins with defaults extend the contract; renames rewrite it.",
+								"points": 15,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "wire-breaks",
+											"label": "The board's stored wire into result no longer resolves \u2014 the rename is a breaking change hiding behind green tests"
+										},
+										{
+											"id": "position-migrate",
+											"label": "Nothing \u2014 Flow-Like migrates connections to the pin in the same position"
+										},
+										{
+											"id": "wizard-rejects",
+											"label": "The publish wizard rejects the upload because pin renames are forbidden"
+										},
+										{
+											"id": "new-input-breaks",
+											"label": "The new strip_punctuation input is what breaks the board \u2014 added pins invalidate saved nodes"
+										}
+									],
+									"correct": [
+										"wire-breaks"
+									]
+								}
+							},
+							{
+								"id": "course-movgelnu-i83b.challenge.discovery-source",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Artifact 2: fetch_greeting calls the HTTP host service but declares no permission, and its MockHostBridge suite is green. Predict the first real board run.",
+								"explanation": "Capability gates sit between the node and every protected host service; an undeclared call hits the gate and fails \u2014 ending that node's run, never the app. The mock result is the trap from the testing lesson: MockHostBridge answers whatever it's scripted to answer and never reads the permission list, so a green HTTP path proves nothing about enforcement. And consent can only grant what a node declares \u2014 this node declared nothing.",
+								"points": 15,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "gate-blocks",
+											"label": "The sandbox refuses the undeclared HTTP call; the node fails safely \u2014 the app and board keep running"
+										},
+										{
+											"id": "consent-covers",
+											"label": "It works \u2014 the user consented to the package at install time, which covers HTTP"
+										},
+										{
+											"id": "mock-proves",
+											"label": "It works \u2014 the mock suite exercised the HTTP path successfully"
+										},
+										{
+											"id": "host-crash",
+											"label": "The undeclared call crashes the executing app"
+										}
+									],
+									"correct": [
+										"gate-blocks"
+									]
+								}
+							},
+							{
+								"id": "course-movgelnu-i83b.challenge.security-layers",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Artifact 3: the 0.2.0 evidence table shows green unit tests, a green component build, and a green run in a brand-new scratch board. Which failure classes are still completely uncovered?",
+								"explanation": "The scratch-board run proves the node executes once \u2014 it never reopens the board, and it carries no stored 0.1.0 identifiers, so both persistence and update compatibility remain untested. Given Artifact 1's rename, that's exactly where 0.2.0 will fail. Logic and packaging look tempting, but they're precisely what the green unit tests and green component build already cover.",
+								"points": 20,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "compat",
+											"label": "A board saved under 0.1.0 failing to resolve against 0.2.0"
+										},
+										{
+											"id": "persistence",
+											"label": "Identifiers failing to resolve after a board is saved, closed, and reopened"
+										},
+										{
+											"id": "logic",
+											"label": "A wrong changed value for a boundary input"
+										},
+										{
+											"id": "packaging",
+											"label": "A dependency that cannot be componentized"
+										}
+									],
+									"correct": [
+										"compat",
+										"persistence"
+									]
+								}
+							},
+							{
+								"id": "course-movgelnu-i83b.challenge.release-evidence",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Artifact 4: a one-line fix, and a teammate suggests re-uploading the corrected binary as 0.1.0 'since only we installed it'. What's actually true?",
+								"explanation": "Published versions are immutable by design \u2014 the backend hashes artifacts and rejects duplicate ID-version pairs, precisely so 'the same version' can never mean two different binaries. The fix ships as a new version, and because private activation is separate from public review, the team gets it immediately. The verified badge is a trust signal, not a bypass \u2014 treating it as one is the misconception worth unlearning.",
+								"points": 20,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "immutable",
+											"label": "The registry refuses it \u2014 a package ID plus version identifies an immutable artifact, so the fix ships as 0.1.1"
+										},
+										{
+											"id": "private-fast",
+											"label": "The support team can move to the fixed private version without any public review"
+										},
+										{
+											"id": "verified-swap",
+											"label": "With a verified badge, administrators could hot-swap the 0.1.0 binary"
+										},
+										{
+											"id": "review-wait",
+											"label": "Even private users must wait for publication review before using the fix"
+										}
+									],
+									"correct": [
+										"immutable",
+										"private-fast"
+									]
+								}
+							},
+							{
+								"id": "course-movgelnu-i83b.challenge.registry-lifecycle",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Roadmap for 0.3.0: normalize_text optionally calls a translation model, and profiling shows the package needs more memory. Where does each change land?",
+								"explanation": "Same two layers as always: capabilities are exported per node in code, resource tiers bound the package in the manifest. 'Both in the manifest' is the persistent trap \u2014 a manifest permission section cannot grant a node a protected capability; users reviewing the package see the capabilities each node itself declares. The reverse split simply swaps the layers' jobs.",
+								"points": 15,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "correct-split",
+											"label": "addPermission(\"models\") on the node definition; a bigger memory tier in flow-like.toml"
+										},
+										{
+											"id": "both-manifest",
+											"label": "Both in flow-like.toml \u2014 permissions and limits are package concerns"
+										},
+										{
+											"id": "both-node",
+											"label": "Both on the node definition \u2014 everything a node needs travels with it"
+										},
+										{
+											"id": "memory-node",
+											"label": "The models capability in the manifest; the memory tier on the node definition"
+										}
+									],
+									"correct": [
+										"correct-split"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		]
+	}
+}

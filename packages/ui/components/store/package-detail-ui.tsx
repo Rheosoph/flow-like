@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	ArrowLeft,
 	Check,
@@ -123,12 +124,15 @@ function VersionRow({
 	version: PackageVersionUI;
 	isLatest: boolean;
 }) {
+	const { t } = useTranslation("store");
 	return (
 		<div className="flex items-center justify-between py-2 border-b last:border-0">
 			<div className="flex items-center gap-2">
 				<code className="text-sm font-mono">{version.version}</code>
-				{isLatest && <Badge variant="secondary">Latest</Badge>}
-				{version.yanked && <Badge variant="destructive">Yanked</Badge>}
+				{isLatest && <Badge variant="secondary">{t("latest", "Latest")}</Badge>}
+				{version.yanked && (
+					<Badge variant="destructive">{t("yanked", "Yanked")}</Badge>
+				)}
 			</div>
 			<RelativeTime
 				className="text-sm text-muted-foreground"
@@ -148,6 +152,7 @@ export function PackageDetailUI({
 	onUninstall,
 	headerExtra,
 }: PackageDetailUIProps) {
+	const { t } = useTranslation("store");
 	const manifest = pkg.manifest;
 	const latestVersion =
 		pkg.versions.find((v) => !v.yanked)?.version ?? pkg.versions[0]?.version;
@@ -161,7 +166,7 @@ export function PackageDetailUI({
 				{/* Back Button */}
 				<Button variant="ghost" onClick={onBack} className="gap-2">
 					<ArrowLeft className="h-4 w-4" />
-					Back
+					{t("back", "Back")}
 				</Button>
 
 				{/* Header Card */}
@@ -178,7 +183,7 @@ export function PackageDetailUI({
 										{pkg.verified && (
 											<Badge variant="secondary" className="gap-1">
 												<Shield className="h-3 w-3" />
-												Verified
+												{t("verified", "Verified")}
 											</Badge>
 										)}
 									</div>
@@ -187,7 +192,8 @@ export function PackageDetailUI({
 									</CardDescription>
 									<div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
 										<span className="flex items-center gap-1">
-											<Tag className="h-4 w-4" />v{latestVersion}
+											<Tag className="h-4 w-4" />
+											{`v${latestVersion}`}
 										</span>
 										<span className="flex items-center gap-1">
 											<Download className="h-4 w-4" />
@@ -202,7 +208,11 @@ export function PackageDetailUI({
 									<>
 										<div className="flex items-center gap-2 text-sm text-muted-foreground">
 											<Check className="h-4 w-4 text-green-500" />
-											Installed v{installedVersion}
+											{t(
+												"installedVinstalledversion",
+												"Installed v{{installedVersion}}",
+												{ installedVersion },
+											)}
 										</div>
 										{hasUpdate && (
 											<Button
@@ -214,7 +224,11 @@ export function PackageDetailUI({
 												) : (
 													<RefreshCw className="mr-2 h-4 w-4" />
 												)}
-												Update to v{latestVersion}
+												{t(
+													"updateToVlatestversion",
+													"Update to v{{latestVersion}}",
+													{ latestVersion },
+												)}
 											</Button>
 										)}
 										<Button
@@ -222,7 +236,7 @@ export function PackageDetailUI({
 											onClick={onUninstall}
 											disabled={isUninstalling}
 										>
-											Uninstall
+											{t("uninstall", "Uninstall")}
 										</Button>
 									</>
 								) : (
@@ -235,7 +249,7 @@ export function PackageDetailUI({
 										) : (
 											<Download className="mr-2 h-4 w-4" />
 										)}
-										Install
+										{t("install", "Install")}
 									</Button>
 								)}
 								{headerExtra}
@@ -247,16 +261,28 @@ export function PackageDetailUI({
 				{/* Main Content */}
 				<Tabs defaultValue="overview" className="w-full">
 					<TabsList className="h-auto flex-wrap justify-start">
-						<TabsTrigger value="overview">Overview</TabsTrigger>
-						<TabsTrigger value="nodes">Nodes ({pkg.nodes.length})</TabsTrigger>
+						<TabsTrigger value="overview">
+							{t("overview", "Overview")}
+						</TabsTrigger>
+						<TabsTrigger value="nodes">
+							{t("nodesLength", "Nodes ({{length}})", {
+								length: pkg.nodes.length,
+							})}
+						</TabsTrigger>
 						{widgets.length > 0 && (
 							<TabsTrigger value="widgets">
-								Widgets ({widgets.length})
+								{t("widgetsLength", "Widgets ({{length}})", {
+									length: widgets.length,
+								})}
 							</TabsTrigger>
 						)}
-						<TabsTrigger value="permissions">Permissions</TabsTrigger>
+						<TabsTrigger value="permissions">
+							{t("permissions", "Permissions")}
+						</TabsTrigger>
 						<TabsTrigger value="versions">
-							Versions ({pkg.versions.length})
+							{t("versionsLength", "Versions ({{length}})", {
+								length: pkg.versions.length,
+							})}
 						</TabsTrigger>
 					</TabsList>
 
@@ -266,14 +292,16 @@ export function PackageDetailUI({
 							<Card className="md:col-span-2">
 								<CardHeader>
 									<CardTitle className="text-base">
-										Package Information
+										{t("packageInformation", "Package Information")}
 									</CardTitle>
 								</CardHeader>
 								<CardContent className="space-y-4">
 									{/* Keywords */}
 									{manifest.keywords.length > 0 && (
 										<div>
-											<h4 className="text-sm font-medium mb-2">Keywords</h4>
+											<h4 className="text-sm font-medium mb-2">
+												{t("keywords", "Keywords")}
+											</h4>
 											<div className="flex flex-wrap gap-1">
 												{manifest.keywords.map((kw) => (
 													<Badge key={kw} variant="outline">
@@ -287,7 +315,9 @@ export function PackageDetailUI({
 									{/* Authors */}
 									{manifest.authors.length > 0 && (
 										<div>
-											<h4 className="text-sm font-medium mb-2">Authors</h4>
+											<h4 className="text-sm font-medium mb-2">
+												{t("authors", "Authors")}
+											</h4>
 											<div className="flex flex-wrap gap-2">
 												{manifest.authors.map((author, idx) => (
 													<div
@@ -316,7 +346,9 @@ export function PackageDetailUI({
 									{/* License */}
 									{manifest.license && (
 										<div>
-											<h4 className="text-sm font-medium mb-2">License</h4>
+											<h4 className="text-sm font-medium mb-2">
+												{t("license", "License")}
+											</h4>
 											<Badge variant="outline">{manifest.license}</Badge>
 										</div>
 									)}
@@ -326,7 +358,9 @@ export function PackageDetailUI({
 							{/* Links Card */}
 							<Card>
 								<CardHeader>
-									<CardTitle className="text-base">Links</CardTitle>
+									<CardTitle className="text-base">
+										{t("links", "Links")}
+									</CardTitle>
 								</CardHeader>
 								<CardContent className="space-y-3">
 									{manifest.repository && (
@@ -337,7 +371,7 @@ export function PackageDetailUI({
 											className="flex items-center gap-2 text-sm hover:underline"
 										>
 											<Github className="h-4 w-4" />
-											Repository
+											{t("repository", "Repository")}
 											<ExternalLink className="h-3 w-3" />
 										</a>
 									)}
@@ -349,13 +383,13 @@ export function PackageDetailUI({
 											className="flex items-center gap-2 text-sm hover:underline"
 										>
 											<Globe className="h-4 w-4" />
-											Homepage
+											{t("homepage", "Homepage")}
 											<ExternalLink className="h-3 w-3" />
 										</a>
 									)}
 									{!manifest.repository && !manifest.homepage && (
 										<p className="text-sm text-muted-foreground">
-											No links available
+											{t("noLinksAvailable", "No links available")}
 										</p>
 									)}
 								</CardContent>
@@ -368,7 +402,10 @@ export function PackageDetailUI({
 							<Card>
 								<CardContent className="pt-6">
 									<p className="text-sm text-muted-foreground">
-										This package doesn&apos;t export any nodes.
+										{t(
+											"thisPackageDoesntExportAnyNodes",
+											"This package doesn't export any nodes.",
+										)}
 									</p>
 								</CardContent>
 							</Card>
@@ -397,28 +434,31 @@ export function PackageDetailUI({
 							<CardHeader>
 								<CardTitle className="text-base flex items-center gap-2">
 									<Shield className="h-5 w-5" />
-									Package Permissions
+									{t("packagePermissions", "Package Permissions")}
 								</CardTitle>
 								<CardDescription>
-									This package requests the following permissions
+									{t(
+										"thisPackageRequestsTheFollowingPermissions",
+										"This package requests the following permissions",
+									)}
 								</CardDescription>
 							</CardHeader>
 							<CardContent>
 								<div className="flex flex-wrap gap-2">
 									<PermissionBadge
-										label="Network"
+										label={t("network", "Network")}
 										enabled={manifest.permissions.network}
 									/>
 									<PermissionBadge
-										label="Filesystem"
+										label={t("filesystem", "Filesystem")}
 										enabled={manifest.permissions.filesystem}
 									/>
 									<PermissionBadge
-										label="Process"
+										label={t("process", "Process")}
 										enabled={manifest.permissions.process}
 									/>
 									<PermissionBadge
-										label="FFI"
+										label={`FFI`}
 										enabled={manifest.permissions.ffi}
 									/>
 								</div>
@@ -429,12 +469,14 @@ export function PackageDetailUI({
 					<TabsContent value="versions">
 						<Card>
 							<CardHeader>
-								<CardTitle className="text-base">Version History</CardTitle>
+								<CardTitle className="text-base">
+									{t("versionHistory", "Version History")}
+								</CardTitle>
 							</CardHeader>
 							<CardContent>
 								{pkg.versions.length === 0 ? (
 									<p className="text-sm text-muted-foreground">
-										No versions available
+										{t("noVersionsAvailable", "No versions available")}
 									</p>
 								) : (
 									<div>

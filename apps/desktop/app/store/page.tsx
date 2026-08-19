@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	AboutSection,
 	AppReviewsSection,
@@ -18,6 +19,7 @@ import { toast } from "sonner";
 import { useApplyForkBundle } from "../../lib/use-apply-fork-bundle";
 
 export default function Page() {
+	const { t } = useTranslation("common");
 	const searchParams = useSearchParams();
 	const router = useRouter();
 	const id = searchParams.get("id") ?? undefined;
@@ -61,7 +63,7 @@ export default function Page() {
 		handledPurchaseRef.current = purchaseStatus;
 
 		if (purchaseStatus === "success") {
-			toast.success("Purchase successful! You now have access to this app.", {
+			toast.success(t('purchaseSuccessfulYouNowHaveAccessToThisApp', 'Purchase successful! You now have access to this app.'), {
 				duration: 5000,
 			});
 			void registerAppInProfile().finally(() => {
@@ -94,11 +96,11 @@ export default function Page() {
 		return (
 			<div className="flex-1 flex items-center justify-center p-6">
 				<StoreEmptyState
-					title={isError ? "Failed to load app" : "App not found"}
+					title={isError ? t('failedToLoadApp', 'Failed to load app') : t('appNotFound', 'App not found')}
 					description={
 						isError
-							? "Something went wrong. Please try again later."
-							: "This app may be private or no longer available."
+							? t('somethingWentWrongPleaseTryAgainLater', 'Something went wrong. Please try again later.')
+							: t('thisAppMayBePrivateOrNoLongerAvailable', 'This app may be private or no longer available.')
 					}
 				/>
 			</div>

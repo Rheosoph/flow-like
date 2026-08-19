@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, MessageSquare, Star } from "lucide-react";
 import { useCallback, useState } from "react";
@@ -71,6 +72,7 @@ function StarRating({
 }
 
 function ReviewItem({ comment }: { comment: AppCommentItem }) {
+	const { t } = useTranslation("store");
 	return (
 		<div className="flex gap-3 py-4">
 			<Avatar className="h-8 w-8 shrink-0">
@@ -84,7 +86,7 @@ function ReviewItem({ comment }: { comment: AppCommentItem }) {
 			<div className="min-w-0 flex-1 space-y-1">
 				<div className="flex flex-wrap items-center gap-2">
 					<span className="text-sm font-medium">
-						{comment.userName ?? "Anonymous"}
+						{comment.userName ?? t("anonymous", "Anonymous")}
 					</span>
 					<StarRating value={comment.rating} readonly />
 					<RelativeTime
@@ -109,6 +111,7 @@ export function AppReviewsSection({
 	appId,
 	onReviewChanged,
 }: AppReviewsSectionProps) {
+	const { t } = useTranslation("store");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const [page, setPage] = useState(0);
@@ -132,7 +135,7 @@ export function AppReviewsSection({
 		mutationFn: (body: UpsertAppCommentRequest) =>
 			backend.appState.upsertAppComment(appId, body),
 		onSuccess: async () => {
-			toast.success("Review submitted");
+			toast.success(t("reviewSubmitted", "Review submitted"));
 			setRating(0);
 			setText("");
 			await queryClient.invalidateQueries({
@@ -142,24 +145,26 @@ export function AppReviewsSection({
 		},
 		onError: (error) => {
 			toast.error(
-				error instanceof Error ? error.message : "Failed to submit review",
+				error instanceof Error
+					? error.message
+					: t("failedToSubmitReview", "Failed to submit review"),
 			);
 		},
 	});
 
 	const handleSubmit = useCallback(() => {
 		if (!appId) {
-			toast.error("App not found");
+			toast.error(t("appNotFound", "App not found"));
 			return;
 		}
 
 		if (rating < 1) {
-			toast.error("Please select a rating");
+			toast.error(t("pleaseSelectARating", "Please select a rating"));
 			return;
 		}
 
 		upsertMutation.mutate({ text, rating });
-	}, [rating, text, upsertMutation]);
+	}, [appId, rating, t, text, upsertMutation]);
 
 	if (offlineQuery.data) {
 		return (
@@ -167,12 +172,15 @@ export function AppReviewsSection({
 				<CardHeader>
 					<CardTitle className="flex items-center gap-2 text-base">
 						<MessageSquare className="h-4 w-4" />
-						Reviews
+						{t("reviews", "Reviews")}
 					</CardTitle>
 				</CardHeader>
 				<CardContent>
 					<p className="text-sm text-muted-foreground">
-						Reviews are available once this app is published online.
+						{t(
+							"reviewsAreAvailableOnceThisAppIsPublishedOnline",
+							"Reviews are available once this app is published online.",
+						)}
 					</p>
 				</CardContent>
 			</Card>
@@ -186,15 +194,22 @@ export function AppReviewsSection({
 		<div className="space-y-4">
 			<Card>
 				<CardHeader>
-					<CardTitle className="text-base">Rate This App</CardTitle>
+					<CardTitle className="text-base">
+						{t("rateThisApp", "Rate This App")}
+					</CardTitle>
 				</CardHeader>
 				<CardContent className="space-y-3">
 					<div className="flex items-center gap-2">
-						<span className="text-sm text-muted-foreground">Rating:</span>
+						<span className="text-sm text-muted-foreground">
+							{t("rating2", "Rating:")}
+						</span>
 						<StarRating value={rating} onChange={setRating} />
 					</div>
 					<Textarea
-						placeholder="Share your experience with this app (optional)"
+						placeholder={t(
+							"shareYourExperienceWithThisAppOptional",
+							"Share your experience with this app (optional)",
+						)}
 						value={text}
 						onChange={(event) => setText(event.target.value)}
 						rows={3}
@@ -207,7 +222,7 @@ export function AppReviewsSection({
 						{upsertMutation.isPending && (
 							<Loader2 className="mr-2 h-4 w-4 animate-spin" />
 						)}
-						Submit Review
+						{t("submitReview", "Submit Review")}
 					</Button>
 				</CardContent>
 			</Card>
@@ -216,11 +231,9 @@ export function AppReviewsSection({
 				<CardHeader>
 					<CardTitle className="flex items-center gap-2 text-base">
 						<MessageSquare className="h-4 w-4" />
-						Reviews
+						{t("reviews", "Reviews")}
 						{data && (
-							<span className="text-sm font-normal text-muted-foreground">
-								({data.total})
-							</span>
+							<span className="text-sm font-normal text-muted-foreground">{`(${data.total})`}</span>
 						)}
 					</CardTitle>
 				</CardHeader>
@@ -232,7 +245,9 @@ export function AppReviewsSection({
 					) : comments.length === 0 ? (
 						<div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
 							<MessageSquare className="mb-2 h-10 w-10" />
-							<p className="text-sm">No reviews yet. Be the first!</p>
+							<p className="text-sm">
+								{t("noReviewsYetBeTheFirst", "No reviews yet. Be the first!")}
+							</p>
 						</div>
 					) : (
 						<div className="divide-y">
@@ -252,10 +267,13 @@ export function AppReviewsSection({
 									disabled={page === 0}
 									onClick={() => setPage((currentPage) => currentPage - 1)}
 								>
-									Previous
+									{t("previous", "Previous")}
 								</Button>
 								<span className="text-sm text-muted-foreground">
-									Page {page + 1} of {totalPages}
+									{t("pageOfTotalPages", "Page {{page}} of {{totalPages}}", {
+										page: page + 1,
+										totalPages,
+									})}
 								</span>
 								<Button
 									variant="outline"
@@ -263,7 +281,7 @@ export function AppReviewsSection({
 									disabled={page >= totalPages - 1}
 									onClick={() => setPage((currentPage) => currentPage + 1)}
 								>
-									Next
+									{t("next", "Next")}
 								</Button>
 							</div>
 						</>

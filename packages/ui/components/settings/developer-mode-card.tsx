@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Code2 } from "lucide-react";
 import { useDeveloperMode } from "../../hooks/use-developer-mode";
 import {
@@ -18,6 +19,7 @@ import { Switch } from "../ui/switch";
  * users only see what they need to use apps; on, everything is visible.
  */
 export function DeveloperModeCard() {
+	const { t } = useTranslation("settings");
 	const { developerMode, setDeveloperMode } = useDeveloperMode();
 
 	return (
@@ -25,19 +27,18 @@ export function DeveloperModeCard() {
 			<CardHeader>
 				<CardTitle className="flex items-center gap-2">
 					<Code2 className="h-5 w-5" />
-					Developer Mode
+					{t('developerMode', 'Developer Mode')}
 				</CardTitle>
 				<CardDescription>
-					Show advanced building tools across the app
+					{t('showAdvancedBuildingToolsAcrossTheApp', 'Show advanced building tools across the app')}
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
 				<div className="flex items-center justify-between">
 					<div className="space-y-0.5">
-						<Label htmlFor="developer-mode">Enable developer mode</Label>
+						<Label htmlFor="developer-mode">{t('enableDeveloperMode', 'Enable developer mode')}</Label>
 						<p className="text-sm text-muted-foreground">
-							Unhides flows, events, data tooling, and package registries.
-							Synced across your devices.
+							{t('unhidesFlowsEventsDataToolingAndPackageRegistriesSyncedAcrossYourDevices', "Unhides flows, events, data tooling, and package registries. Synced across your devices.")}
 						</p>
 					</div>
 					<Switch

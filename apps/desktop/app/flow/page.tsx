@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import { FlowWrapper } from "@flow-like/flow-like-ui/components/flow/flow-wrapper";
 import "@xyflow/react/dist/style.css";
 import { Video } from "lucide-react";
@@ -9,6 +10,7 @@ import { FlowDeepLinkHandler } from "../../components/flow-deep-link-handler";
 import { RecordingDock } from "../../components/rpa";
 
 export default function FlowEditPage() {
+	const { t } = useTranslation("common");
 	const searchParams = useSearchParams();
 	const [showRecording, setShowRecording] = useState(false);
 	const auth = useAuth();
@@ -23,7 +25,7 @@ export default function FlowEditPage() {
 		return { boardId, appId, nodeId, version };
 	}, [searchParams]);
 
-	if (boardId === "") return <p>Board not found...</p>;
+	if (boardId === "") return <p>{t('boardNotFound', 'Board not found...')}</p>;
 
 	return (
 		<>
@@ -38,7 +40,7 @@ export default function FlowEditPage() {
 				extraDockItems={[
 					{
 						icon: <Video className={showRecording ? "text-red-500" : ""} />,
-						title: "Record Actions",
+						title: t('recordActions', 'Record Actions'),
 						separator: "left",
 						onClick: () => setShowRecording((prev) => !prev),
 					},

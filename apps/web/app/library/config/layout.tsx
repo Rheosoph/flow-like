@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Breadcrumb,
 	BreadcrumbItem,
@@ -110,170 +111,236 @@ interface INavigationItem {
 	unlockVisibility?: IAppVisibility;
 }
 
-const navigationItems: INavigationItem[] = [
-	{
-		href: "/library/config",
-		label: "Dashboard",
-		icon: SquarePenIcon,
-		description: "Overview, stats, and getting started",
-		group: "General",
-	},
-	{
-		href: "/library/config/configuration",
-		label: "Configuration",
-		icon: CogIcon,
-		description: "App configuration and environment variables",
-		group: "General",
-	},
-	{
-		href: "/library/config/runtime-vars",
-		label: "Runtime Variables",
-		icon: KeyIcon,
-		description: "User-specific runtime secrets and configurations",
-		group: "General",
-	},
-	{
-		href: "/library/config/flows",
-		label: "Flows",
-		icon: WorkflowIcon,
-		description: "Business logic and workflow definitions",
-		group: "Build",
-		devOnly: true,
-	},
-	{
-		href: "/library/config/pages",
-		label: "Events",
-		icon: SparklesIcon,
-		description: "Events, pages, and path-based navigation",
-		group: "Build",
-		devOnly: true,
-	},
-	{
-		href: "/library/config/templates",
-		label: "Templates",
-		icon: CopyIcon,
-		description: "Reusable Flow templates",
-		group: "Build",
-		devOnly: true,
-	},
-	{
-		href: "/library/config/widgets",
-		label: "Widgets",
-		icon: LayoutGridIcon,
-		description: "Reusable UI components and widgets",
-		group: "Build",
-		devOnly: true,
-	},
-	{
-		href: "/library/config/storage",
-		label: "Storage",
-		icon: FolderClosedIcon,
-		description: "Data storage and file management",
-		group: "Data",
-	},
-	{
-		href: "/library/config/user-storage",
-		label: "User Storage",
-		icon: UserIcon,
-		description: "Browse and search your private app files",
-		group: "Data",
-		devOnly: true,
-	},
-	{
-		href: "/library/config/explore",
-		label: "Data Studio",
-		icon: DatabaseIcon,
-		description: "Model, explore, operate, and share project data",
-		group: "Data",
-		devOnly: true,
-	},
-	{
-		href: "/library/config/packages",
-		label: "Packages",
-		icon: PackageIcon,
-		description: "Manage WASM packages for this app",
-		group: "Data",
-		devOnly: true,
-	},
-	{
-		href: "/library/config/team",
-		label: "Team",
-		icon: UsersRoundIcon,
-		description: "Manage team members and permissions",
-		visibilities: [
-			IAppVisibility.Public,
-			IAppVisibility.Prototype,
-			IAppVisibility.PublicRequestAccess,
-		],
-		lockedVisibilities: [IAppVisibility.Private],
-		lockedReason:
-			"A private project is synced to your account only. Switch to Prototype to invite collaborators, assign roles and share a link.",
-		unlockVisibility: IAppVisibility.Prototype,
-		group: "Collaborate",
-	},
-	{
-		href: "/library/config/suites",
-		label: "Suites",
-		icon: LayersIcon,
-		description: "Bundle this app with related apps into one store listing",
-		// A suite is presentation, not membership — private apps curate them too.
-		visibilities: [
-			IAppVisibility.Public,
-			IAppVisibility.Prototype,
-			IAppVisibility.PublicRequestAccess,
-			IAppVisibility.Private,
-		],
-		group: "Collaborate",
-		devOnly: true,
-	},
-	{
-		href: "/library/config/roles",
-		label: "Roles",
-		icon: CrownIcon,
-		description: "Define user roles and access levels",
-		visibilities: [
-			IAppVisibility.Public,
-			IAppVisibility.Prototype,
-			IAppVisibility.PublicRequestAccess,
-		],
-		group: "Collaborate",
-		devOnly: true,
-	},
-	{
-		href: "/library/config/sales",
-		label: "Sales",
-		icon: DollarSignIcon,
-		description: "Track sales, manage pricing and discounts",
-		visibilities: [IAppVisibility.Public, IAppVisibility.PublicRequestAccess],
-		requiresPaid: true,
-		group: "Insights",
-		devOnly: true,
-	},
-	{
-		href: "/library/config/analytics",
-		label: "Analytics",
-		icon: ChartAreaIcon,
-		description: "Performance metrics and insights",
-		group: "Insights",
-		devOnly: true,
-	},
-	{
-		href: "/library/config/endpoints",
-		label: "Endpoints",
-		icon: GlobeIcon,
-		description: "API endpoints and integrations",
-		group: "Insights",
-		devOnly: true,
-	},
-	{
-		href: "/library/config/publication",
-		label: "Publication",
-		icon: SendIcon,
-		description: "Track publication review status and auditor feedback",
-		group: "Insights",
-		devOnly: true,
-	},
-];
+/** Labels are built per render so a language switch relabels the config nav. */
+function buildNavigationItems(
+	t: (key: string, defaultValue: string) => string,
+): INavigationItem[] {
+	const groups = {
+		general: t("general", "General"),
+		build: t("build", "Build"),
+		data: t("data", "Data"),
+		collaborate: t("collaborate", "Collaborate"),
+		insights: t("insights", "Insights"),
+	};
+
+	return [
+		{
+			href: "/library/config",
+			label: t("dashboard", "Dashboard"),
+			icon: SquarePenIcon,
+			description: t(
+				"overviewStatsAndGettingStarted",
+				"Overview, stats, and getting started",
+			),
+			group: groups.general,
+		},
+		{
+			href: "/library/config/configuration",
+			label: t("configuration", "Configuration"),
+			icon: CogIcon,
+			description: t(
+				"appConfigurationAndEnvironmentVariables",
+				"App configuration and environment variables",
+			),
+			group: groups.general,
+		},
+		{
+			href: "/library/config/runtime-vars",
+			label: t("runtimeVariables", "Runtime Variables"),
+			icon: KeyIcon,
+			description: t(
+				"userspecificRuntimeSecretsAndConfigurations",
+				"User-specific runtime secrets and configurations",
+			),
+			group: groups.general,
+		},
+		{
+			href: "/library/config/flows",
+			label: t("flows", "Flows"),
+			icon: WorkflowIcon,
+			description: t(
+				"businessLogicAndWorkflowDefinitions",
+				"Business logic and workflow definitions",
+			),
+			group: groups.build,
+			devOnly: true,
+		},
+		{
+			href: "/library/config/pages",
+			label: t("events", "Events"),
+			icon: SparklesIcon,
+			description: t(
+				"eventsPagesAndPathbasedNavigation",
+				"Events, pages, and path-based navigation",
+			),
+			group: groups.build,
+			devOnly: true,
+		},
+		{
+			href: "/library/config/templates",
+			label: t("templates", "Templates"),
+			icon: CopyIcon,
+			description: t("reusableFlowTemplates", "Reusable Flow templates"),
+			group: groups.build,
+			devOnly: true,
+		},
+		{
+			href: "/library/config/widgets",
+			label: t("widgets", "Widgets"),
+			icon: LayoutGridIcon,
+			description: t(
+				"reusableUiComponentsAndWidgets",
+				"Reusable UI components and widgets",
+			),
+			group: groups.build,
+			devOnly: true,
+		},
+		{
+			href: "/library/config/storage",
+			label: t("storage", "Storage"),
+			icon: FolderClosedIcon,
+			description: t(
+				"dataStorageAndFileManagement",
+				"Data storage and file management",
+			),
+			group: groups.data,
+		},
+		{
+			href: "/library/config/user-storage",
+			label: t("userStorage", "User Storage"),
+			icon: UserIcon,
+			description: t(
+				"browseAndSearchYourPrivateAppFiles",
+				"Browse and search your private app files",
+			),
+			group: groups.data,
+			devOnly: true,
+		},
+		{
+			href: "/library/config/explore",
+			label: t("dataStudio", "Data Studio"),
+			icon: DatabaseIcon,
+			description: t(
+				"modelExploreOperateAndShareProjectData",
+				"Model, explore, operate, and share project data",
+			),
+			group: groups.data,
+			devOnly: true,
+		},
+		{
+			href: "/library/config/packages",
+			label: t("packages", "Packages"),
+			icon: PackageIcon,
+			description: t(
+				"manageWasmPackagesForThisApp",
+				"Manage WASM packages for this app",
+			),
+			group: groups.data,
+			devOnly: true,
+		},
+		{
+			href: "/library/config/team",
+			label: t("team", "Team"),
+			icon: UsersRoundIcon,
+			description: t(
+				"manageTeamMembersAndPermissions",
+				"Manage team members and permissions",
+			),
+			visibilities: [
+				IAppVisibility.Public,
+				IAppVisibility.Prototype,
+				IAppVisibility.PublicRequestAccess,
+			],
+			lockedVisibilities: [IAppVisibility.Private],
+			lockedReason: t(
+				"aPrivateProjectIsSyncedToYourAccountOnlySwitchToPrototypeToInviteCollaboratorsAssignRolesAndShareALink",
+				"A private project is synced to your account only. Switch to Prototype to invite collaborators, assign roles and share a link.",
+			),
+			unlockVisibility: IAppVisibility.Prototype,
+			group: groups.collaborate,
+		},
+		{
+			href: "/library/config/suites",
+			label: t("suites", "Suites"),
+			icon: LayersIcon,
+			description: t(
+				"bundleThisAppWithRelatedAppsIntoOneStoreListing",
+				"Bundle this app with related apps into one store listing",
+			),
+			// A suite is presentation, not membership — private apps curate them too.
+			visibilities: [
+				IAppVisibility.Public,
+				IAppVisibility.Prototype,
+				IAppVisibility.PublicRequestAccess,
+				IAppVisibility.Private,
+			],
+			group: groups.collaborate,
+			devOnly: true,
+		},
+		{
+			href: "/library/config/roles",
+			label: t("roles", "Roles"),
+			icon: CrownIcon,
+			description: t(
+				"defineUserRolesAndAccessLevels",
+				"Define user roles and access levels",
+			),
+			visibilities: [
+				IAppVisibility.Public,
+				IAppVisibility.Prototype,
+				IAppVisibility.PublicRequestAccess,
+			],
+			group: groups.collaborate,
+			devOnly: true,
+		},
+		{
+			href: "/library/config/sales",
+			label: t("sales", "Sales"),
+			icon: DollarSignIcon,
+			description: t(
+				"trackSalesManagePricingAndDiscounts",
+				"Track sales, manage pricing and discounts",
+			),
+			visibilities: [IAppVisibility.Public, IAppVisibility.PublicRequestAccess],
+			requiresPaid: true,
+			group: groups.insights,
+			devOnly: true,
+		},
+		{
+			href: "/library/config/analytics",
+			label: t("analytics", "Analytics"),
+			icon: ChartAreaIcon,
+			description: t(
+				"performanceMetricsAndInsights",
+				"Performance metrics and insights",
+			),
+			group: groups.insights,
+			devOnly: true,
+		},
+		{
+			href: "/library/config/endpoints",
+			label: t("endpoints", "Endpoints"),
+			icon: GlobeIcon,
+			description: t(
+				"apiEndpointsAndIntegrations",
+				"API endpoints and integrations",
+			),
+			group: groups.insights,
+			devOnly: true,
+		},
+		{
+			href: "/library/config/publication",
+			label: t("publication", "Publication"),
+			icon: SendIcon,
+			description: t(
+				"trackPublicationReviewStatusAndAuditorFeedback",
+				"Track publication review status and auditor feedback",
+			),
+			group: groups.insights,
+			devOnly: true,
+		},
+	];
+}
 
 function isRouteActive(itemHref: string, currentRoute: string): boolean {
 	if (itemHref === "/library/config") {
@@ -285,6 +352,7 @@ function isRouteActive(itemHref: string, currentRoute: string): boolean {
 export default function Id({
 	children,
 }: Readonly<{ children: React.ReactNode }>) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const executionService = useExecutionService();
 	const searchParams = useSearchParams();
@@ -370,7 +438,7 @@ export default function Id({
 	// Items whose visibility gate can be lifted stay in the list as `locked`.
 	const visibleNavItems = useMemo(
 		() =>
-			navigationItems
+			buildNavigationItems(t)
 				.filter(
 					(item) =>
 						(!item.devOnly || developerMode) &&
@@ -385,7 +453,7 @@ export default function Id({
 					locked:
 						!!item.visibilities && !item.visibilities.includes(visibility),
 				})),
-		[developerMode, visibility, app.data?.price],
+		[developerMode, visibility, app.data?.price, t],
 	);
 
 	const openLockedItem = useCallback((item: INavigationItem) => {
@@ -471,7 +539,7 @@ export default function Id({
 					size="sm"
 					className="md:hidden"
 					onClick={() => setMobileNavOpen(true)}
-					aria-label="Open menu"
+					aria-label={t('openMenu', 'Open menu')}
 				>
 					<MenuIcon className="w-4 h-4" />
 				</Button>
@@ -537,16 +605,16 @@ export default function Id({
 					size="sm"
 					className="md:hidden"
 					onClick={() => setMobileNavOpen(true)}
-					aria-label="Open menu"
+					aria-label={t('openMenu', 'Open menu')}
 				>
 					<MenuIcon className="w-4 h-4" />
 				</Button>,
 				...(canUseApp
 					? [
 							<Link key={"use-app"} href={useAppHref} className="md:hidden">
-								<Button variant="default" size="sm" aria-label="Use App">
+								<Button variant="default" size="sm" aria-label={t('useApp', 'Use App')}>
 									<SparklesIcon className="w-4 h-4" />
-									Use App
+									{t('useApp', 'Use App')}
 								</Button>
 							</Link>,
 						]
@@ -570,9 +638,9 @@ export default function Id({
 
 	const handleExport = useCallback(async () => {
 		// Export not supported in web mode - apps are stored remotely
-		toast.info("Export not available", {
+		toast.info(t('exportNotAvailable', 'Export not available'), {
 			description:
-				"App export is only available in the desktop app. Your app is automatically synced to the cloud.",
+				`App export is only available in the desktop app. Your app is automatically synced to the cloud.`,
 		});
 	}, []);
 
@@ -588,7 +656,7 @@ export default function Id({
 		);
 		if (!runMeta) {
 			toastError(
-				"Failed to execute board",
+				t('failedToExecuteBoard', 'Failed to execute board'),
 				<PlayCircleIcon className="w-4 h-4" />,
 			);
 		}
@@ -630,7 +698,7 @@ export default function Id({
 											className="flex items-center gap-1"
 										>
 											<LayoutGridIcon className="w-3 h-3" />
-											Home
+											{t('home', 'Home')}
 										</BreadcrumbLink>
 									</BreadcrumbItem>
 									<BreadcrumbSeparator />
@@ -659,7 +727,7 @@ export default function Id({
 												className="flex items-center gap-2 w-full rounded-full px-4"
 											>
 												<SparklesIcon className="w-4 h-4" />
-												<h4 className="text-sm font-medium">Use App</h4>
+												<h4 className="text-sm font-medium">{t('useApp', 'Use App')}</h4>
 											</Button>
 										</Link>
 									</div>
@@ -668,9 +736,9 @@ export default function Id({
 								{/* Mobile "Use App" quick action */}
 								{useAppHref && (
 									<Link href={useAppHref} className="md:hidden">
-										<Button variant="default" size="sm" aria-label="Use App">
+										<Button variant="default" size="sm" aria-label={t('useApp', 'Use App')}>
 											<SparklesIcon className="w-4 h-4" />
-											Use App
+											{t('useApp', 'Use App')}
 										</Button>
 									</Link>
 								)}
@@ -680,7 +748,7 @@ export default function Id({
 									size="sm"
 									className="md:hidden"
 									onClick={() => setMobileNavOpen(true)}
-									aria-label="Open menu"
+									aria-label={t('openMenu', 'Open menu')}
 								>
 									<MenuIcon className="w-4 h-4" />
 								</Button>
@@ -693,9 +761,9 @@ export default function Id({
 				<Dialog open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
 					<DialogContent className="sm:max-w-[480px] p-0 overflow-hidden">
 						<div className="p-4 border-b">
-							<DialogTitle>Navigation</DialogTitle>
+							<DialogTitle>{t('navigation', 'Navigation')}</DialogTitle>
 							<DialogDescription>
-								Quickly jump to settings sections
+								{t('quicklyJumpToSettingsSections', 'Quickly jump to settings sections')}
 							</DialogDescription>
 						</div>
 						<ScrollArea className="max-h-[70vh]">
@@ -713,7 +781,7 @@ export default function Id({
 												aria-disabled="true"
 											>
 												<Icon className="w-4 h-4 flex-shrink-0" />
-												<span className="truncate">{item.label} (soon)</span>
+												<span className="truncate">{t('labelSoon', '{{label}} (soon)', { label: item.label })}</span>
 											</div>
 										);
 									}
@@ -759,7 +827,7 @@ export default function Id({
 										}}
 									>
 										<DownloadIcon className="w-4 h-4 flex-shrink-0" />
-										<span className="truncate">Export App</span>
+										<span className="truncate">{t('exportApp', 'Export App')}</span>
 									</Button>
 								)}
 							</nav>
@@ -787,9 +855,9 @@ export default function Id({
 				<Dialog open={exportOpen} onOpenChange={setExportOpen}>
 					<DialogContent className="sm:max-w-[520px]">
 						<DialogHeader>
-							<DialogTitle>Export Application</DialogTitle>
+							<DialogTitle>{t('exportApplication', 'Export Application')}</DialogTitle>
 							<DialogDescription>
-								Choose how you want to export your app.
+								{`Choose how you want to export your app.`}
 							</DialogDescription>
 						</DialogHeader>
 
@@ -807,13 +875,13 @@ export default function Id({
 										</p>
 										<p className="text-xs text-muted-foreground">
 											{encrypt
-												? "Protect your export with a password."
-												: "Quick export without encryption."}
+												? `Protect your export with a password.`
+												: `Quick export without encryption.`}
 										</p>
 									</div>
 								</div>
 								<div className="flex items-center gap-2">
-									<span className="text-xs text-muted-foreground">Encrypt</span>
+									<span className="text-xs text-muted-foreground">{t('encrypt', 'Encrypt')}</span>
 									<Switch checked={encrypt} onCheckedChange={setEncrypt} />
 								</div>
 							</div>
@@ -822,7 +890,7 @@ export default function Id({
 								<div className="space-y-3">
 									<div className="grid gap-2">
 										<Label htmlFor="export-password" className="text-xs">
-											Password
+											{t('password', 'Password')}
 										</Label>
 										<div className="relative">
 											<Input
@@ -830,7 +898,7 @@ export default function Id({
 												type={showPassword ? "text" : "password"}
 												value={password}
 												onChange={(e) => setPassword(e.target.value)}
-												placeholder="Enter a strong password"
+												placeholder={t('enterAStrongPassword', 'Enter a strong password')}
 												autoFocus
 											/>
 											<Button
@@ -857,14 +925,14 @@ export default function Id({
 											htmlFor="export-password-confirm"
 											className="text-xs"
 										>
-											Confirm password
+											{t('confirmPassword', 'Confirm password')}
 										</Label>
 										<Input
 											id="export-password-confirm"
 											type={showPassword ? "text" : "password"}
 											value={confirmPassword}
 											onChange={(e) => setConfirmPassword(e.target.value)}
-											placeholder="Re-enter password"
+											placeholder={t('reenterPassword', 'Re-enter password')}
 										/>
 									</div>
 
@@ -890,7 +958,7 @@ export default function Id({
 
 									{!passValid && (
 										<p className="text-xs text-destructive">
-											Passwords must match and be at least 8 characters.
+											{t('passwordsMustMatchAndBeAtLeast8Characters', 'Passwords must match and be at least 8 characters.')}
 										</p>
 									)}
 								</div>
@@ -903,7 +971,7 @@ export default function Id({
 								onClick={() => setExportOpen(false)}
 								disabled={exporting}
 							>
-								Cancel
+								{t('cancel', 'Cancel')}
 							</Button>
 							<Button
 								onClick={handleExport}
@@ -958,9 +1026,7 @@ export default function Id({
 																	side="right"
 																	className="max-w-xs"
 																>
-																	<p className="font-bold">
-																		{item.label} (Coming soon!)
-																	</p>
+																	<p className="font-bold">{t('labelComingSoon', '{{label}} (Coming soon!)', { label: item.label })}</p>
 																	<p className="text-xs mt-1">
 																		{item.description}
 																	</p>
@@ -985,9 +1051,7 @@ export default function Id({
 																	side="right"
 																	className="max-w-xs"
 																>
-																	<p className="font-bold">
-																		{item.label} (locked)
-																	</p>
+																	<p className="font-bold">{t('labelLocked', '{{label}} (locked)', { label: item.label })}</p>
 																	<p className="text-xs mt-1">
 																		{item.lockedReason ?? item.description}
 																	</p>
@@ -1040,14 +1104,13 @@ export default function Id({
 														onClick={() => setExportOpen(true)}
 													>
 														<DownloadIcon className="w-4 h-4 flex-shrink-0" />
-														<span className="truncate">Export App</span>
+														<span className="truncate">{t('exportApp', 'Export App')}</span>
 													</Button>
 												</TooltipTrigger>
 												<TooltipContent side="right" className="max-w-xs">
-													<p className="font-bold">Export Application</p>
+													<p className="font-bold">{t('exportApplication', 'Export Application')}</p>
 													<p className="text-xs mt-1">
-														Export the application to a file for backup or
-														sharing.
+														{t('exportTheApplicationToAFileForBackupOrSharing', "Export the application to a file for backup or sharing.")}
 													</p>
 												</TooltipContent>
 											</Tooltip>
@@ -1059,7 +1122,7 @@ export default function Id({
 									<div className="px-3">
 										<div className="flex items-center gap-2 mb-3">
 											<ZapIcon className="w-4 h-4 text-primary" />
-											<h4 className="text-sm font-medium">Quick Actions</h4>
+											<h4 className="text-sm font-medium">{t('quickActions', 'Quick Actions')}</h4>
 										</div>
 										<div className="flex flex-col gap-2 pb-4">
 											{events.data &&
@@ -1107,7 +1170,7 @@ export default function Id({
 													))
 											) : (
 												<p className="text-xs text-muted-foreground py-2">
-													No quick actions available
+													{t('noQuickActionsAvailable', 'No quick actions available')}
 												</p>
 											)}
 										</div>

@@ -96,6 +96,56 @@ The operational and isolation properties are those of the Lambda function and
 AWS account configuration. Confirm concurrency, retry, timeout, networking,
 and downstream callback behavior for the selected mode.
 
+### Tenant isolation
+
+Lambda runs every execution in a Firecracker microVM, so a run is isolated from
+the host and from the runs beside it. It is not isolated from the runs before
+it: by default a warm execution environment is reused across invocations of the
+same function whoever triggered them, carrying process memory and its `/tmp`
+scratch directory across that reuse.
+
+`LAMBDA_TENANT_ISOLATION=sub` makes the API send a per-subject tenant id with
+each `lambda_invoke` and `lambda_stream` dispatch, and AWS then binds an
+execution environment to a single tenant instead of reusing it for another.
+
+```bash
+LAMBDA_TENANT_ISOLATION=sub
+```
+
+The subject is not transmitted. The tenant id is a domain-separated BLAKE3
+digest of it, so federated subjects containing characters AWS rejects still
+produce a valid id, and no user identifier reaches CloudWatch. The mapping is
+logged by the API at `debug` level, which is the only place a tenant id can be
+traced back to a run.
+
+Accepted values are `sub` (equivalently `user`, `user_id`, `true`, `1`, `on`,
+`enabled`) and `off` (equivalently `false`, `0`, `none`, `disabled`, or unset).
+Unlike `EXECUTION_BACKEND`, an unrecognized value is rejected rather than
+treated as `off` — a typo that silently disabled isolation would leave the
+deployment looking correctly configured.
+
+Before enabling it, confirm all of the following:
+
+- The executor function was **created** with
+  `TenancyConfig.TenantIsolationMode=PER_TENANT`. The property is create-only:
+  it cannot be added to an existing function, so adopting tenant isolation means
+  replacing the function. Enabling the flag against a function without it makes
+  every dispatch fail with `InvalidParameterValueException`.
+- The backend is `lambda_invoke` or `lambda_stream`. The flag has no effect on
+  `http`, and Lambda Function URLs do not support tenant isolation at all.
+- Your run volume fits the quota. AWS caps tenant-bound execution environments
+  at 2,500 per 1,000 configured concurrency and returns `TooManyRequestsException`
+  beyond it. Cardinality follows the subject: runs triggered by sinks or inbound
+  events carry a per-sink or per-event identity rather than a user, and API keys
+  share their creator's identity.
+- You accept the cost profile. Warm capacity is no longer shared, so cold starts
+  rise, each environment creation is billed, and neither provisioned concurrency
+  nor SnapStart can be used to mitigate.
+
+Tenant isolation is defence in depth, not an authorization boundary: AWS
+publishes no IAM condition key for the tenant id, and all tenants share the
+function's execution role. Per-run authorization remains the executor JWT's job.
+
 ## Queue backends
 
 Queue transports decouple API response time from worker execution:
@@ -143,6 +193,10 @@ REDIS_EXECUTION_QUEUE=exec:jobs
 # AWS Lambda SDK
 LAMBDA_EXECUTOR_FUNCTION=arn:aws:lambda:eu-central-1:123456789012:function:flow-like-executor
 AWS_REGION=eu-central-1
+
+# Optional: one execution environment per subject. Requires a function created
+# with TenancyConfig.TenantIsolationMode=PER_TENANT.
+LAMBDA_TENANT_ISOLATION=sub
 ```
 
 Keep credentials in your platform's secret store. Environment-variable names

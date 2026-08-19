@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowLeft,
@@ -372,6 +373,7 @@ function PaginationControls({
 	totalPages: number;
 	onPageChange: (page: number) => void;
 }) {
+	const { t } = useTranslation("admin");
 	if (totalPages <= 1) return null;
 	return (
 		<div className="flex items-center justify-end gap-2 pt-4">
@@ -383,9 +385,7 @@ function PaginationControls({
 			>
 				<ChevronLeft className="h-4 w-4" />
 			</Button>
-			<span className="text-sm text-muted-foreground">
-				Page {page} of {totalPages}
-			</span>
+			<span className="text-sm text-muted-foreground">{t('pagePageOfTotalpages', 'Page {{page}} of {{totalPages}}', { page, totalPages })}</span>
 			<Button
 				variant="outline"
 				size="sm"
@@ -476,6 +476,7 @@ function MemberTile({
 	member: SuiteMemberItem;
 	aiActEnabled: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	const state = aiActState(member.aiActStatus);
 	const isAnchor = member.kind === "PRIMARY";
 
@@ -512,7 +513,7 @@ function MemberTile({
 					{!isPublicVisibility(member.currentVisibility) && (
 						<span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
 							<EyeOff className="h-3 w-3" />
-							Hidden in the store while not public
+							{t('hiddenInTheStoreWhileNotPublic', 'Hidden in the store while not public')}
 						</span>
 					)}
 				</div>
@@ -528,6 +529,7 @@ function MembersSection({
 	request: SuitePublicationRequest;
 	aiActEnabled: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	const hiddenMembers = request.members.filter(
 		(member) => !isPublicVisibility(member.currentVisibility),
 	);
@@ -536,18 +538,15 @@ function MembersSection({
 		<Card>
 			<CardHeader>
 				<CardTitle className="text-base flex items-center gap-2">
-					<Users className="h-4 w-4" />
-					Member Apps ({request.members.length})
-				</CardTitle>
+					<Users className="h-4 w-4" />{t('memberAppsLength', 'Member Apps ({{length}})', { length: request.members.length })}</CardTitle>
 				<CardDescription>
-					A suite is a visual collection. It grants no runtime permissions —
-					every member app keeps its own authority and can leave at any time.
+					{t('aSuiteIsAVisualCollectionItGrantsNoRuntimePermissionsEveryMemberAppKeepsItsOwnAuthorityAndCanLeaveAtAnyTime', "A suite is a visual collection. It grants no runtime permissions — every member app keeps its own authority and can leave at any time.")}
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-3">
 				{request.members.length === 0 ? (
 					<p className="text-sm text-muted-foreground">
-						This suite has no member apps.
+						{t('thisSuiteHasNoMemberApps', 'This suite has no member apps.')}
 					</p>
 				) : (
 					<div className="grid gap-3 sm:grid-cols-2">
@@ -564,19 +563,10 @@ function MembersSection({
 				{hiddenMembers.length > 0 && (
 					<Alert>
 						<EyeOff className="h-4 w-4" />
-						<AlertTitle>
-							{hiddenMembers.length} member app
-							{hiddenMembers.length === 1 ? "" : "s"} will not be listed in the
-							store
-						</AlertTitle>
+						<AlertTitle>{t('countMemberAppSWillNotBeListedInTheStore', { defaultValue_one: "{{count}} member app will not be listed in the store", defaultValue_other: "{{count}} member apps will not be listed in the store", count: hiddenMembers.length })}</AlertTitle>
 						<AlertDescription>
 							<p>
-								{hiddenMembers.map(memberLabel).join(", ")}{" "}
-								{hiddenMembers.length === 1 ? "is" : "are"} not publicly
-								visible, so the store hides{" "}
-								{hiddenMembers.length === 1 ? "it" : "them"} when the suite is
-								browsed. This is informational — it does not block publishing.
-							</p>
+								{hiddenMembers.map(memberLabel).join(", ")}{" "}{t('areNotPubliclyVisibleSoTheStoreHides', { defaultValue_one: "is not publicly visible, so the store hides", defaultValue_other: "are not publicly visible, so the store hides", count: hiddenMembers.length })}{" "}{t('themWhenTheSuiteIsBrowsedThisIsInformationalItDoesNotBlockPublishing', { defaultValue_one: "it when the suite is browsed. This is informational — it does not block publishing.", defaultValue_other: "them when the suite is browsed. This is informational — it does not block publishing.", count: hiddenMembers.length })}</p>
 						</AlertDescription>
 					</Alert>
 				)}
@@ -590,6 +580,7 @@ function AiActReadinessSection({
 }: {
 	request: SuitePublicationRequest;
 }) {
+	const { t } = useTranslation("admin");
 	const outstanding = request.members.filter(
 		(member) => aiActState(member.aiActStatus) !== "clear",
 	);
@@ -602,49 +593,38 @@ function AiActReadinessSection({
 			<CardHeader>
 				<CardTitle className="text-base flex items-center gap-2">
 					<ShieldCheck className="h-4 w-4" />
-					EU AI Act Readiness
+					{t('euAiActReadiness', 'EU AI Act Readiness')}
 				</CardTitle>
 				<CardDescription>
-					A suite carries no assessment of its own. Every active member app
-					needs a submitted, non-blocked assessment before the suite can go
-					public.
+					{t('aSuiteCarriesNoAssessmentOfItsOwnEveryActiveMemberAppNeedsASubmittedNonblockedAssessmentBeforeTheSuiteCanGoPublic', "A suite carries no assessment of its own. Every active member app needs a submitted, non-blocked assessment before the suite can go public.")}
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-3">
 				{request.members.length === 0 ? (
 					<Alert variant="destructive">
 						<CircleAlert className="h-4 w-4" />
-						<AlertTitle>No member apps</AlertTitle>
+						<AlertTitle>{t('noMemberApps', 'No member apps')}</AlertTitle>
 						<AlertDescription>
 							<p>
-								A suite needs at least one member app before it can be
-								published.
+								{t('aSuiteNeedsAtLeastOneMemberAppBeforeItCanBePublished', "A suite needs at least one member app before it can be published.")}
 							</p>
 						</AlertDescription>
 					</Alert>
 				) : outstanding.length === 0 ? (
 					<Alert>
 						<ShieldCheck className="h-4 w-4" />
-						<AlertTitle>Every member app clears the gate</AlertTitle>
+						<AlertTitle>{t('everyMemberAppClearsTheGate', 'Every member app clears the gate')}</AlertTitle>
 						<AlertDescription>
-							<p>
-								All {request.members.length} member app
-								{request.members.length === 1 ? " has" : "s have"} a submitted,
-								non-blocked assessment.
-							</p>
+							<p>{t('allCountMemberAppSHaveASubmittedNonblockedAssessment', { defaultValue_one: "The member app has a submitted, non-blocked assessment.", defaultValue_other: "All {{count}} member apps have a submitted, non-blocked assessment.", count: request.members.length })}</p>
 						</AlertDescription>
 					</Alert>
 				) : (
 					<Alert variant={blocked.length > 0 ? "destructive" : "default"}>
 						<ShieldAlert className="h-4 w-4" />
-						<AlertTitle>
-							{outstanding.length} member app
-							{outstanding.length === 1 ? "" : "s"} outstanding
-						</AlertTitle>
+						<AlertTitle>{t('countMemberAppSOutstanding', { defaultValue_one: "{{count}} member app outstanding", defaultValue_other: "{{count}} member apps outstanding", count: outstanding.length })}</AlertTitle>
 						<AlertDescription>
 							<p>
-								The server re-checks this gate on approval and will reject the
-								decision while these apps are outstanding.
+								{t('theServerRechecksThisGateOnApprovalAndWillRejectTheDecisionWhileTheseAppsAreOutstanding', "The server re-checks this gate on approval and will reject the decision while these apps are outstanding.")}
 							</p>
 							<ul className="mt-1 space-y-1">
 								{outstanding.map((member) => (
@@ -668,14 +648,13 @@ function AiActReadinessSection({
 }
 
 function ReviewTimeline({ logs }: { logs: PublicationLogItem[] }) {
+	const { t } = useTranslation("admin");
 	if (logs.length === 0) return null;
 
 	return (
 		<div className="space-y-3">
 			<div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-				<MessageSquare className="h-4 w-4" />
-				Review History ({logs.length})
-			</div>
+				<MessageSquare className="h-4 w-4" />{t('reviewHistoryLength', 'Review History ({{length}})', { length: logs.length })}</div>
 			<div className="space-y-2 pl-2 border-l-2 border-border/60">
 				{logs.map((log) => (
 					<div key={log.id} className="pl-4 py-1.5">
@@ -703,7 +682,7 @@ function ReviewTimeline({ logs }: { logs: PublicationLogItem[] }) {
 									)}
 								</>
 							) : (
-								<span className="text-muted-foreground">System</span>
+								<span className="text-muted-foreground">{t('system', 'System')}</span>
 							)}
 							{log.visibility && (
 								<Badge variant="outline" className="text-[10px] px-1.5 py-0">
@@ -735,16 +714,17 @@ function DecisionSection({
 	isPending: boolean;
 	lastError?: string | null;
 }) {
+	const { t } = useTranslation("admin");
 	const [reviewMessage, setReviewMessage] = useState("");
 
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-base">Review Decision</CardTitle>
+				<CardTitle className="text-base">{t('reviewDecision', 'Review Decision')}</CardTitle>
 			</CardHeader>
 			<CardContent className="space-y-4">
 				<Textarea
-					placeholder="Add a review message (optional)..."
+					placeholder={t('addAReviewMessageOptional', 'Add a review message (optional)...')}
 					className="min-h-20 text-sm resize-none"
 					value={reviewMessage}
 					onChange={(e) => setReviewMessage(e.target.value)}
@@ -752,7 +732,7 @@ function DecisionSection({
 				{lastError && (
 					<Alert variant="destructive">
 						<CircleAlert className="h-4 w-4" />
-						<AlertTitle>The decision was rejected</AlertTitle>
+						<AlertTitle>{t('theDecisionWasRejected', 'The decision was rejected')}</AlertTitle>
 						<AlertDescription>
 							<p>{lastError}</p>
 						</AlertDescription>
@@ -766,7 +746,7 @@ function DecisionSection({
 						disabled={isPending}
 					>
 						<PauseCircle className="h-3 w-3 mr-1" />
-						Hold
+						{t('hold', 'Hold')}
 					</Button>
 					<Button
 						size="sm"
@@ -775,7 +755,7 @@ function DecisionSection({
 						disabled={isPending}
 					>
 						<XCircle className="h-3 w-3 mr-1" />
-						Reject
+						{t('reject', 'Reject')}
 					</Button>
 					<Button
 						size="sm"
@@ -783,7 +763,7 @@ function DecisionSection({
 						disabled={isPending}
 					>
 						<CheckCircle className="h-3 w-3 mr-1" />
-						Approve
+						{t('approve', 'Approve')}
 					</Button>
 				</div>
 			</CardContent>
@@ -806,6 +786,7 @@ function SuiteDetail({
 	isPending: boolean;
 	lastError?: string | null;
 }) {
+	const { t } = useTranslation("admin");
 	const isActionable =
 		request.status === "pending" || request.status === "on_hold";
 
@@ -814,7 +795,7 @@ function SuiteDetail({
 			<div className="flex items-center gap-3">
 				<Button variant="ghost" size="sm" onClick={onBack}>
 					<ArrowLeft className="h-4 w-4 mr-1" />
-					Back
+					{t('back', 'Back')}
 				</Button>
 				<Separator orientation="vertical" className="h-6" />
 				<h1 className="text-lg font-semibold truncate">
@@ -829,12 +810,12 @@ function SuiteDetail({
 				{request.suiteBanner && (
 					<img
 						src={request.suiteBanner}
-						alt="Suite banner"
+						alt={t('suiteBanner', 'Suite banner')}
 						className="h-40 w-full object-cover"
 					/>
 				)}
 				<CardHeader>
-					<CardTitle className="text-base">Suite Details</CardTitle>
+					<CardTitle className="text-base">{t('suiteDetails', 'Suite Details')}</CardTitle>
 				</CardHeader>
 				<CardContent className="space-y-6">
 					<div className="flex items-start gap-6">
@@ -850,7 +831,7 @@ function SuiteDetail({
 							)}
 							{request.suiteUseCase && (
 								<p className="text-sm">
-									<span className="text-muted-foreground">Use case: </span>
+									<span className="text-muted-foreground">{t('useCase', 'Use case:')} </span>
 									{request.suiteUseCase}
 								</p>
 							)}
@@ -873,9 +854,9 @@ function SuiteDetail({
 					<div className="space-y-3">
 						<VisibilityTransition request={request} size="lg" />
 						<div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
-							<span>Anchor app: {request.ownerAppId}</span>
+							<span>{t('anchorAppOwnerappid', 'Anchor app: {{ownerAppId}}', { ownerAppId: request.ownerAppId })}</span>
 							<span>
-								Submitted:{" "}
+								{t('submitted', 'Submitted:')}{" "}
 								<RelativeTime
 									value={request.createdAt}
 									fallback={request.createdAt || "Unknown"}
@@ -883,7 +864,7 @@ function SuiteDetail({
 							</span>
 							{request.updatedAt !== request.createdAt && (
 								<span>
-									Updated:{" "}
+									{t('updated', 'Updated:')}{" "}
 									<RelativeTime
 										value={request.updatedAt}
 										fallback={request.updatedAt || "Unknown"}
@@ -902,7 +883,7 @@ function SuiteDetail({
 			{request.logs.length > 0 && (
 				<Card>
 					<CardHeader>
-						<CardTitle className="text-base">Review History</CardTitle>
+						<CardTitle className="text-base">{t('reviewHistory', 'Review History')}</CardTitle>
 					</CardHeader>
 					<CardContent>
 						<ReviewTimeline logs={request.logs} />
@@ -922,6 +903,7 @@ function SuiteDetail({
 }
 
 export function AdminSuitePublicationsPage() {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const features = useFeatures();
@@ -1027,14 +1009,12 @@ export function AdminSuitePublicationsPage() {
 					(request) => request.id === selectedId,
 				);
 				toast.success(
-					`Suite ${ACTION_RESULT_LABEL[action]}${
-						updated ? ` — now ${formatStatusLabel(updated.status)}` : ""
-					}`,
+					t('suiteValval2', 'Suite {{val}}{{val2}}', { val: ACTION_RESULT_LABEL[action], val2: updated ? ` — now ${formatStatusLabel(updated.status)}` : "" }),
 				);
 			} catch (error) {
 				const message = errorMessage(error);
 				setLastError(message);
-				toast.error("Failed to update suite request", {
+				toast.error(t('failedToUpdateSuiteRequest', 'Failed to update suite request'), {
 					description: message,
 				});
 			}
@@ -1061,31 +1041,28 @@ export function AdminSuitePublicationsPage() {
 				<CardHeader className="gap-4 sm:flex-row sm:items-end sm:justify-between">
 					<div className="space-y-2">
 						<CardTitle className="text-3xl">
-							Suite Publication Requests
+							{t('suitePublicationRequests', 'Suite Publication Requests')}
 						</CardTitle>
 						<CardDescription className="max-w-3xl text-sm leading-6">
-							Suites bundle existing apps into one store listing. They grant no
-							runtime permissions, so the review covers the suite's branding,
-							its member apps, and whether every active member clears the EU AI
-							Act gate.
+							{t('suitesBundleExistingAppsIntoOneStoreListingTheyGrantNoRuntimePermissionsSoTheReviewCoversTheSuitesBrandingItsMemberAppsAndWhetherEveryActiveMemberClearsTheEuAiActGate', "Suites bundle existing apps into one store listing. They grant no runtime permissions, so the review covers the suite's branding, its member apps, and whether every active member clears the EU AI Act gate.")}
 						</CardDescription>
 					</div>
 					<div className="flex flex-col gap-3 sm:flex-row sm:items-center">
 						<Select value={statusFilter} onValueChange={handleStatusFilter}>
 							<SelectTrigger className="w-full sm:w-40">
-								<SelectValue placeholder="Suite status" />
+								<SelectValue placeholder={t('suiteStatus', 'Suite status')} />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="all">All statuses</SelectItem>
-								<SelectItem value="pending">Pending</SelectItem>
-								<SelectItem value="on_hold">On hold</SelectItem>
-								<SelectItem value="accepted">Accepted</SelectItem>
-								<SelectItem value="rejected">Rejected</SelectItem>
+								<SelectItem value="all">{t('allStatuses', 'All statuses')}</SelectItem>
+								<SelectItem value="pending">{t('pending', 'Pending')}</SelectItem>
+								<SelectItem value="on_hold">{t('onHold', 'On hold')}</SelectItem>
+								<SelectItem value="accepted">{t('accepted', 'Accepted')}</SelectItem>
+								<SelectItem value="rejected">{t('rejected', 'Rejected')}</SelectItem>
 							</SelectContent>
 						</Select>
 						<Button variant="outline" size="sm" onClick={handleRefresh}>
 							<RefreshCw className="mr-2 h-4 w-4" />
-							Refresh
+							{t('refresh', 'Refresh')}
 						</Button>
 					</div>
 				</CardHeader>
@@ -1096,13 +1073,13 @@ export function AdminSuitePublicationsPage() {
 					<Table>
 						<TableHeader>
 							<TableRow>
-								<TableHead>Suite</TableHead>
-								<TableHead>Use case</TableHead>
-								<TableHead>Visibility</TableHead>
-								<TableHead>Status</TableHead>
-								<TableHead>Members</TableHead>
-								<TableHead>Submitted</TableHead>
-								<TableHead className="text-right">Actions</TableHead>
+								<TableHead>{t('suite', 'Suite')}</TableHead>
+								<TableHead>{t('useCase2', 'Use case')}</TableHead>
+								<TableHead>{t('visibility', 'Visibility')}</TableHead>
+								<TableHead>{t('status', 'Status')}</TableHead>
+								<TableHead>{t('members', 'Members')}</TableHead>
+								<TableHead>{t('submitted2', 'Submitted')}</TableHead>
+								<TableHead className="text-right">{t('actions', 'Actions')}</TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
@@ -1114,7 +1091,7 @@ export function AdminSuitePublicationsPage() {
 											colSpan={7}
 											className="text-center text-muted-foreground py-8"
 										>
-											No suite publication requests found.
+											{t('noSuitePublicationRequestsFound', 'No suite publication requests found.')}
 										</TableCell>
 									</TableRow>
 								) : (
@@ -1180,7 +1157,7 @@ export function AdminSuitePublicationsPage() {
 														onClick={() => handleSelect(request.id)}
 													>
 														<Eye className="h-3 w-3 mr-1" />
-														Review
+														{t('review', 'Review')}
 													</Button>
 												</TableCell>
 											</TableRow>

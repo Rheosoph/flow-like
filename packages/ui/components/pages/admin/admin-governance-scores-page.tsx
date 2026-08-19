@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ChevronLeft,
@@ -215,6 +216,7 @@ function PageShell({ children }: { children: ReactNode }) {
 }
 
 export function AdminGovernanceScoresPage() {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const profile = useInvoke(
@@ -254,9 +256,9 @@ export function AdminGovernanceScoresPage() {
 		<PageShell>
 			<div className="flex items-center justify-between gap-3">
 				<div>
-					<h2 className="text-lg font-semibold">Governance Scores</h2>
+					<h2 className="text-lg font-semibold">{t('governanceScores', 'Governance Scores')}</h2>
 					<p className="text-sm text-muted-foreground">
-						Quality and governance scores aggregated per app from board scores.
+						{`Quality and governance scores aggregated per app from board scores.`}
 					</p>
 				</div>
 				<Button
@@ -270,14 +272,14 @@ export function AdminGovernanceScoresPage() {
 							handleRecompute.isPending ? "animate-spin" : ""
 						}`}
 					/>
-					Recompute all
+					{t('recomputeAll', 'Recompute all')}
 				</Button>
 			</div>
 
 			<Tabs defaultValue="apps">
 				<TabsList>
-					<TabsTrigger value="apps">Apps</TabsTrigger>
-					<TabsTrigger value="patterns">Bad Patterns</TabsTrigger>
+					<TabsTrigger value="apps">{t('apps', 'Apps')}</TabsTrigger>
+					<TabsTrigger value="patterns">{t('badPatterns', 'Bad Patterns')}</TabsTrigger>
 				</TabsList>
 				<TabsContent value="apps" className="mt-4">
 					<AppsTab onSelectApp={setSelectedAppId} />
@@ -291,6 +293,7 @@ export function AdminGovernanceScoresPage() {
 }
 
 function AppsTab({ onSelectApp }: { onSelectApp: (appId: string) => void }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -349,7 +352,7 @@ function AppsTab({ onSelectApp }: { onSelectApp: (appId: string) => void }) {
 							setSearch(event.target.value);
 							resetPage();
 						}}
-						placeholder="Search by app name or id..."
+						placeholder={t('searchByAppNameOrId', 'Search by app name or id...')}
 						className="pl-8"
 					/>
 				</div>
@@ -364,7 +367,7 @@ function AppsTab({ onSelectApp }: { onSelectApp: (appId: string) => void }) {
 						<SelectValue placeholder="Category" />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="all">Worst score</SelectItem>
+						<SelectItem value="all">{t('worstScore', 'Worst score')}</SelectItem>
 						{SCORE_CATEGORIES.map((cat) => (
 							<SelectItem key={cat} value={cat} className="capitalize">
 								{cat}
@@ -383,10 +386,10 @@ function AppsTab({ onSelectApp }: { onSelectApp: (appId: string) => void }) {
 						<SelectValue placeholder="Threshold" />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="all">Any score</SelectItem>
-						<SelectItem value="3">≤ 3 (critical)</SelectItem>
-						<SelectItem value="4">≤ 4 (flagged)</SelectItem>
-						<SelectItem value="6">≤ 6 (warning)</SelectItem>
+						<SelectItem value="all">{t('anyScore', 'Any score')}</SelectItem>
+						<SelectItem value="3">{t('3Critical', '≤ 3 (critical)')}</SelectItem>
+						<SelectItem value="4">{t('4Flagged', '≤ 4 (flagged)')}</SelectItem>
+						<SelectItem value="6">{t('6Warning', '≤ 6 (warning)')}</SelectItem>
 					</SelectContent>
 				</Select>
 			</div>
@@ -396,10 +399,10 @@ function AppsTab({ onSelectApp }: { onSelectApp: (appId: string) => void }) {
 					<Table>
 						<TableHeader>
 							<TableRow>
-								<TableHead>App</TableHead>
-								<TableHead className="text-center">Worst</TableHead>
+								<TableHead>{t('app', 'App')}</TableHead>
+								<TableHead className="text-center">{t('worst', 'Worst')}</TableHead>
 								<CategoryHeaderCells />
-								<TableHead className="text-center">Boards</TableHead>
+								<TableHead className="text-center">{t('boards', 'Boards')}</TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
@@ -417,7 +420,7 @@ function AppsTab({ onSelectApp }: { onSelectApp: (appId: string) => void }) {
 											colSpan={10}
 											className="text-center text-muted-foreground py-8"
 										>
-											No scored apps found.
+											{t('noScoredAppsFound', 'No scored apps found.')}
 										</TableCell>
 									</TableRow>
 								) : (
@@ -477,6 +480,7 @@ function AppScoreDetail({
 	appId: string;
 	onBack: () => void;
 }) {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -500,7 +504,7 @@ function AppScoreDetail({
 		<PageShell>
 			<Button variant="ghost" size="sm" onClick={onBack} className="-ml-2">
 				<ChevronLeft className="mr-1 h-4 w-4" />
-				Back to scores
+				{t('backToScores', 'Back to scores')}
 			</Button>
 
 			<div>
@@ -515,7 +519,7 @@ function AppScoreDetail({
 			{!detail.isLoading && !detail.data?.boards?.length && (
 				<Card>
 					<CardContent className="py-8 text-center text-muted-foreground text-sm">
-						No board scores recorded for this app.
+						{t('noBoardScoresRecordedForThisApp', 'No board scores recorded for this app.')}
 					</CardContent>
 				</Card>
 			)}
@@ -528,9 +532,7 @@ function AppScoreDetail({
 								<p className="font-mono text-xs text-muted-foreground truncate">
 									{board.boardId}
 								</p>
-								<p className="text-xs text-muted-foreground">
-									{board.scoredNodeCount}/{board.nodeCount} nodes scored ·
-									updated{" "}
+								<p className="text-xs text-muted-foreground">{`${board.scoredNodeCount}/${board.nodeCount} nodes scored · updated`}{" "}
 									<RelativeTime
 										value={board.updatedAt}
 										fallback={board.updatedAt}
@@ -563,9 +565,7 @@ function AppScoreDetail({
 						{board.flaggedPatterns.length > 0 && (
 							<div className="space-y-1.5 border-t pt-3">
 								<p className="text-xs font-medium flex items-center gap-1.5">
-									<ShieldAlert className="h-3.5 w-3.5 text-red-500" />
-									Flagged nodes ({board.flaggedPatterns.length})
-								</p>
+									<ShieldAlert className="h-3.5 w-3.5 text-red-500" />{t('flaggedNodesLength', 'Flagged nodes ({{length}})', { length: board.flaggedPatterns.length })}</p>
 								<div className="flex flex-wrap gap-1.5">
 									{board.flaggedPatterns.map((pattern, index) => (
 										<Badge
@@ -581,9 +581,7 @@ function AppScoreDetail({
 												{pattern.score}
 											</span>
 											{(pattern.count ?? 1) > 1 && (
-												<span className="ml-1 text-muted-foreground">
-													×{pattern.count}
-												</span>
+												<span className="ml-1 text-muted-foreground">{`×${pattern.count}`}</span>
 											)}
 										</Badge>
 									))}
@@ -598,6 +596,7 @@ function AppScoreDetail({
 }
 
 function PatternsTab() {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -647,7 +646,7 @@ function PatternsTab() {
 						setSearch(event.target.value);
 						setPage(1);
 					}}
-					placeholder="Search by node or category..."
+					placeholder={t('searchByNodeOrCategory', 'Search by node or category...')}
 					className="pl-8"
 				/>
 			</div>
@@ -657,11 +656,11 @@ function PatternsTab() {
 					<Table>
 						<TableHeader>
 							<TableRow>
-								<TableHead>Node</TableHead>
-								<TableHead>Category</TableHead>
-								<TableHead className="text-center">Min score</TableHead>
-								<TableHead className="text-center">Apps</TableHead>
-								<TableHead className="text-center">Occurrences</TableHead>
+								<TableHead>{t('node', 'Node')}</TableHead>
+								<TableHead>{t('category', 'Category')}</TableHead>
+								<TableHead className="text-center">{t('minScore', 'Min score')}</TableHead>
+								<TableHead className="text-center">{t('apps', 'Apps')}</TableHead>
+								<TableHead className="text-center">{t('occurrences', 'Occurrences')}</TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
@@ -679,7 +678,7 @@ function PatternsTab() {
 											colSpan={5}
 											className="text-center text-muted-foreground py-8"
 										>
-											No flagged patterns found.
+											{t('noFlaggedPatternsFound', 'No flagged patterns found.')}
 										</TableCell>
 									</TableRow>
 								) : (
@@ -737,12 +736,11 @@ function Pagination({
 	onNext: () => void;
 	hasMore: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	if (total === 0) return null;
 	return (
 		<div className="flex items-center justify-between">
-			<p className="text-xs text-muted-foreground">
-				Page {page} of {totalPages} · {total} total
-			</p>
+			<p className="text-xs text-muted-foreground">{t('pagePageOfTotalpagesTotalTotal', 'Page {{page}} of {{totalPages}} · {{total}} total', { page, totalPages, total })}</p>
 			<div className="flex items-center gap-2">
 				<Button
 					variant="outline"

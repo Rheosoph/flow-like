@@ -22,6 +22,7 @@ export * from "./telemetry/issues-page";
 export * from "./telemetry/llm-section";
 export * from "./telemetry/llm-types";
 export * from "./telemetry/performance-section";
+export * from "./telemetry/prompt-feedback-page";
 export * from "./telemetry/query-builder-form";
 export * from "./telemetry/query-builder-page";
 export * from "./telemetry/query-result-view";

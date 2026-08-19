@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, i18n as i18next, useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowLeft,
@@ -67,13 +68,13 @@ import { EmptyState, StatTile } from "./telemetry-shared";
 function windowLabel(minutes: number) {
 	if (minutes >= 1440 && minutes % 1440 === 0) {
 		const days = minutes / 1440;
-		return `${days}d window`;
+		return i18next.t('daysdWindow', '{{days}}d window', { days });
 	}
 	if (minutes >= 60 && minutes % 60 === 0) {
 		const hours = minutes / 60;
-		return `${hours}h window`;
+		return i18next.t('hourshWindow', '{{hours}}h window', { hours });
 	}
-	return `${minutes}m window`;
+	return i18next.t('minutesmWindow', '{{minutes}}m window', { minutes });
 }
 
 /** Icon plus label — the channel is never signalled by colour alone. */
@@ -108,6 +109,7 @@ function AlertRuleRow({
 	readonly onDelete: (rule: ITelemetryAlertRule) => void;
 	readonly busy: boolean;
 }) {
+	const { t } = useTranslation("admin");
 	const mismatch = alertSourceMismatch(rule.metric, rule.source);
 	const channels = alertRuleChannels(rule);
 	return (
@@ -138,7 +140,7 @@ function AlertRuleRow({
 					) : null}
 					{rule.enabled ? null : (
 						<Badge variant="outline" className="text-[10px]">
-							Disabled
+							{t('disabled', 'Disabled')}
 						</Badge>
 					)}
 					{channels.length > 0 ? (
@@ -148,9 +150,9 @@ function AlertRuleRow({
 					) : (
 						<span
 							className="text-[11px] text-muted-foreground"
-							title="This rule only writes to the in-app inbox."
+							title={t('thisRuleOnlyWritesToTheInappInbox', 'This rule only writes to the in-app inbox.')}
 						>
-							Inbox only
+							{t('inboxOnly', 'Inbox only')}
 						</span>
 					)}
 					{mismatch ? (
@@ -160,7 +162,7 @@ function AlertRuleRow({
 							title={mismatch}
 						>
 							<TriangleAlert className="mr-1 h-3 w-3" />
-							Never fires
+							{t('neverFires', 'Never fires')}
 						</Badge>
 					) : null}
 				</div>
@@ -173,7 +175,7 @@ function AlertRuleRow({
 					</div>
 				) : null}
 				<div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-					<span>last value</span>
+					<span>{t('lastValue', 'last value')}</span>
 					<span className="font-mono tabular-nums">
 						{formatAlertValue(rule.metric, rule.lastValue)}
 					</span>
@@ -188,11 +190,11 @@ function AlertRuleRow({
 					<span>·</span>
 					{rule.lastTriggeredAt ? (
 						<>
-							<span>last triggered</span>
+							<span>{t('lastTriggered', 'last triggered')}</span>
 							<RelativeTime value={rule.lastTriggeredAt} />
 						</>
 					) : (
-						<span>never triggered</span>
+						<span>{t('neverTriggered', 'never triggered')}</span>
 					)}
 					{rule.lastEvaluatedAt ? (
 						<>
@@ -210,7 +212,7 @@ function AlertRuleRow({
 						checked={rule.enabled}
 						disabled={busy}
 						onCheckedChange={(enabled) => onToggle(rule, enabled)}
-						aria-label={rule.enabled ? "Disable this rule" : "Enable this rule"}
+						aria-label={rule.enabled ? t('disableThisRule', 'Disable this rule') : t('enableThisRule', 'Enable this rule')}
 					/>
 					<span className="text-[11px] text-muted-foreground">
 						{rule.enabled ? "Enabled" : "Disabled"}
@@ -220,7 +222,7 @@ function AlertRuleRow({
 					variant="ghost"
 					size="sm"
 					onClick={() => onEdit(rule)}
-					aria-label={`Edit ${rule.name}`}
+					aria-label={t('editName', 'Edit {{name}}', { name: rule.name })}
 				>
 					<Pencil className="h-3.5 w-3.5" />
 				</Button>
@@ -238,6 +240,7 @@ function AlertRuleRow({
 }
 
 export function AdminTelemetryAlertsPage() {
+	const { t } = useTranslation("admin");
 	const backend = useBackend();
 	const auth = useAuth();
 	const queryClient = useQueryClient();
@@ -322,7 +325,7 @@ export function AdminTelemetryAlertsPage() {
 		onSuccess: async (result) => {
 			await queryClient.invalidateQueries({ queryKey: ALERTS_QUERY_KEY });
 			toast.success(
-				`Evaluated ${result.evaluated} rules — ${result.triggered} triggered, ${result.resolved} resolved`,
+				t('evaluatedEvaluatedRulesTriggeredTriggeredResolvedResolved', 'Evaluated {{evaluated}} rules — {{triggered}} triggered, {{resolved}} resolved', { evaluated: result.evaluated, triggered: result.triggered, resolved: result.resolved }),
 			);
 		},
 		onError: (error: Error) =>
@@ -388,11 +391,9 @@ export function AdminTelemetryAlertsPage() {
 					<CardHeader>
 						<CardTitle className="flex items-center justify-center gap-2 text-base">
 							<Lock className="h-4 w-4" />
-							Insufficient permissions
+							{t('insufficientPermissions', 'Insufficient permissions')}
 						</CardTitle>
-						<CardDescription>
-							You need the <b>Admin</b> permission to manage telemetry alerts.
-						</CardDescription>
+						<CardDescription><Trans i18nKey="youNeedTheBadminbPermissionToManageTelemetryAlerts">You need the <b>Admin</b> permission to manage telemetry alerts.</Trans></CardDescription>
 					</CardHeader>
 				</Card>
 			</main>
@@ -407,19 +408,17 @@ export function AdminTelemetryAlertsPage() {
 						<div>
 							<h1 className="flex items-center gap-2 text-3xl font-bold">
 								<BellRing className="h-7 w-7 text-primary" />
-								Alerts
+								{t('alerts', 'Alerts')}
 							</h1>
 							<p className="text-muted-foreground">
-								Threshold and anomaly rules over anonymous telemetry. Every
-								alert lands in the in-app inbox; a rule can also mail the
-								platform alerting mailbox or push to every platform admin.
+								{t('thresholdAndAnomalyRulesOverAnonymousTelemetryEveryAlertLandsInTheInappInboxARuleCanAlsoMailThePlatformAlertingMailboxOrPushToEveryPlatformAdmin', "Threshold and anomaly rules over anonymous telemetry. Every alert lands in the in-app inbox; a rule can also mail the platform alerting mailbox or push to every platform admin.")}
 							</p>
 						</div>
 						<div className="flex flex-wrap items-center gap-2">
 							<Button asChild variant="ghost" size="sm">
 								<Link href="/admin/telemetry">
 									<ArrowLeft className="mr-1 h-3.5 w-3.5" />
-									Telemetry
+									{t('telemetry', 'Telemetry')}
 								</Link>
 							</Button>
 							<Button
@@ -433,11 +432,11 @@ export function AdminTelemetryAlertsPage() {
 							</Button>
 							<Button variant="outline" size="sm" onClick={refresh}>
 								<RefreshCw className="mr-1 h-3.5 w-3.5" />
-								Refresh
+								{t('refresh', 'Refresh')}
 							</Button>
 							<Button size="sm" onClick={openCreate}>
 								<Plus className="mr-1 h-3.5 w-3.5" />
-								New rule
+								{t('newRule', 'New rule')}
 							</Button>
 						</div>
 					</div>
@@ -447,15 +446,15 @@ export function AdminTelemetryAlertsPage() {
 							label="Rules"
 							value={ruleList.length.toLocaleString()}
 							icon={<Gauge className="h-3.5 w-3.5" />}
-							hint={`${enabledCount.toLocaleString()} enabled`}
+							hint={t('valEnabled', '{{val}} enabled', { val: enabledCount.toLocaleString() })}
 						/>
 						<StatTile
-							label="Anomaly rules"
+							label={t('anomalyRules', 'Anomaly rules')}
 							value={anomalyCount.toLocaleString()}
 							hint="Baseline-relative detection"
 						/>
 						<StatTile
-							label="Threshold rules"
+							label={t('thresholdRules', 'Threshold rules')}
 							value={(ruleList.length - anomalyCount).toLocaleString()}
 							hint="Fixed comparator against a value"
 						/>
@@ -463,10 +462,9 @@ export function AdminTelemetryAlertsPage() {
 
 					<Card>
 						<CardHeader className="pb-3">
-							<CardTitle className="text-base">Rules</CardTitle>
+							<CardTitle className="text-base">{t('rules', 'Rules')}</CardTitle>
 							<CardDescription>
-								Each rule is evaluated over its own window. Anomaly rules never
-								fire before their baseline has enough samples.
+								{t('eachRuleIsEvaluatedOverItsOwnWindowAnomalyRulesNeverFireBeforeTheirBaselineHasEnoughSamples', "Each rule is evaluated over its own window. Anomaly rules never fire before their baseline has enough samples.")}
 							</CardDescription>
 						</CardHeader>
 						<CardContent className="p-0">
@@ -521,18 +519,15 @@ export function AdminTelemetryAlertsPage() {
 				<AlertDialogContent>
 					<AlertDialogHeader>
 						<AlertDialogTitle>
-							Delete “{pendingDelete?.name}” and its alert history?
+							{t('delete2', 'Delete “')}{pendingDelete?.name}{t('andItsAlertHistory', '” and its alert history?')}
 						</AlertDialogTitle>
 						<AlertDialogDescription>
-							The rule stops being evaluated and every alert it ever produced is
-							permanently deleted from the inbox, including acknowledgements.
-							This incident history is not stored anywhere else and cannot be
-							restored.
+							{`The rule stops being evaluated and every alert it ever produced is permanently deleted from the inbox, including acknowledgements. This incident history is not stored anywhere else and cannot be restored.`}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
 						<AlertDialogCancel disabled={deleteRule.isPending}>
-							Cancel
+							{t('cancel', 'Cancel')}
 						</AlertDialogCancel>
 						<AlertDialogAction
 							className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -544,7 +539,7 @@ export function AdminTelemetryAlertsPage() {
 						>
 							{deleteRule.isPending
 								? "Deleting…"
-								: "Delete rule and its history"}
+								: t('deleteRuleAndItsHistory', 'Delete rule and its history')}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>

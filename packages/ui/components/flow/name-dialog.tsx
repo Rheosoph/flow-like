@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Button,
 	Dialog,
@@ -22,6 +23,7 @@ export function NameDialog({
 	name: string;
 	onUpsert: (comment: string) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
@@ -32,7 +34,7 @@ export function NameDialog({
 			>
 				<DialogHeader>
 					<DialogTitle>Name</DialogTitle>
-					<DialogDescription>Name your node.</DialogDescription>
+					<DialogDescription>{t('nameYourNode', 'Name your node.')}</DialogDescription>
 				</DialogHeader>
 				<DialogDescription>
 					<Input
@@ -51,7 +53,7 @@ export function NameDialog({
 							onOpenChange(false);
 						}}
 					>
-						Save
+						{t('save', 'Save')}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

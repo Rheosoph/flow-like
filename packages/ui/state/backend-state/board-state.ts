@@ -1,4 +1,7 @@
-import type { SurfaceComponent } from "../../components/a2ui/types";
+import type {
+	CanvasSettings,
+	SurfaceComponent,
+} from "../../components/a2ui/types";
 import type {
 	IBoard,
 	IConnectionMode,
@@ -29,6 +32,11 @@ import type {
 	UnifiedChatMessage,
 	UnifiedCopilotResponse,
 } from "../../lib/schema/copilot";
+import type {
+	IBoardSummary,
+	IBoardSummaryInclude,
+	IBoardVariables,
+} from "../../lib/schema/flow/board-summary";
 import type { BoardCommand } from "../../lib/schema/flow/copilot";
 import type { IPrerunBoardResponse } from "./types";
 
@@ -105,8 +113,36 @@ export interface IBoardServerResetResult {
 	pushedBatches: number;
 }
 
+/**
+ * Optional hooks for board mutations.
+ *
+ * `onBoard` receives the board as it stands after the mutation when the backend obtained it in
+ * the same round trip (the sync tail of a merged apply, applied onto the held revision). A caller
+ * that gets it can hand it to the query cache and skip its refetch; a backend that cannot produce
+ * it simply never calls back and the caller refetches as before.
+ */
+export interface IBoardMutationOptions {
+	onBoard?: (board: IBoard) => void;
+}
+
 export interface IBoardState {
+	/**
+	 * Every board of the app **in full**, graph included. Roughly a megabyte of JSON per
+	 * medium board, so only reach for this when the nodes themselves are needed.
+	 * @deprecated Use `getBoardSummaries` for lists, names, counts and pages, or
+	 * `getBoardVariables` for variables.
+	 */
 	getBoards(appId: string): Promise<IBoard[]>;
+	/**
+	 * Board metadata, counts, scores and pages for every board of the app, served from a
+	 * database cache. `include: ["node_types"]` adds distinct node types and entry nodes.
+	 */
+	getBoardSummaries(
+		appId: string,
+		include?: IBoardSummaryInclude[],
+	): Promise<IBoardSummary[]>;
+	/** Every board's variables (secret values stripped) without the boards themselves. */
+	getBoardVariables(appId: string): Promise<IBoardVariables[]>;
 	getCatalog(appId: string): Promise<INode[]>;
 	getBoard(
 		appId: string,
@@ -229,12 +265,14 @@ export interface IBoardState {
 		appId: string,
 		boardId: string,
 		command: IGenericCommand,
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand>;
 
 	executeCommands(
 		appId: string,
 		boardId: string,
 		commands: IGenericCommand[],
+		options?: IBoardMutationOptions,
 	): Promise<IGenericCommand[]>;
 
 	applyFlowScript(
@@ -287,6 +325,12 @@ export interface IBoardState {
 		catalogNodes: INode[] | undefined,
 		selectedNodeIds: string[],
 		currentSurface: SurfaceComponent[] | null,
+		/**
+		 * The surface's persisted canvasSettings, customCss included. The UI specialist can only
+		 * edit an existing stylesheet if it can read it — emit_ui replaces customCss wholesale, so
+		 * without this it overwrites a design system it never saw.
+		 */
+		currentCanvasSettings: CanvasSettings | null,
 		selectedComponentIds: string[],
 		userPrompt: string,
 		history: UnifiedChatMessage[],

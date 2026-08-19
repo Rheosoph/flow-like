@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type { SurfaceComponent } from "../../a2ui/types";
 import { FlowPilot } from "../../flowpilot";
 
@@ -39,11 +40,12 @@ export function A2UICopilot({
 	onClose,
 	captureScreenshot,
 }: A2UICopilotProps) {
+	const { t } = useTranslation("flow");
 	return (
 		<FlowPilot
 			agentMode="ui"
 			appId={appId}
-			title="FlowPilot"
+			title={t('flowpilot', 'FlowPilot')}
 			className={className}
 			onClose={onClose}
 			currentComponents={currentComponents}

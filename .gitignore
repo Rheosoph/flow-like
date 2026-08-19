@@ -12,6 +12,11 @@ lerna-debug.log*
 /.cargo/config.toml
 
 api.config.json
+# Deployment-specific cloud build configs (BuildKit secret inputs). Note the
+# tracked repo-root flow-like.config.json is the committed public default that
+# builds require; ignore rules cannot and must not cover it.
+flow-like.azure.config.json
+flow-like.gcp.config.json
 
 node_modules
 dist
@@ -90,3 +95,4 @@ apps/desktop/src-tauri/apple/FlowLikeMLX/.build/
 .codacy/codacy.config.baseline.json
 .codacy/codacy.config.json
 .tmp-nextrepro
+tools/i18n/__pycache__/translate-local.cpython-311.pyc

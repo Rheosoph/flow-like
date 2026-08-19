@@ -4,7 +4,7 @@ use ahash::AHashSet;
 use flow_like::flow::execution::context::ExecutionContext;
 #[cfg(feature = "execute")]
 use flow_like::flow::execution::{
-    LogLevel, context::ExecutionContext, internal_node::InternalNode, log::LogMessage,
+    LogLevel, context::ExecutionContext, egress, internal_node::InternalNode, log::LogMessage,
 };
 
 use flow_like::flow::{
@@ -177,18 +177,42 @@ impl NodeLogic for WebSocketConnectNode {
             }
         }
 
-        let connect_result = if config.tls.secure {
+        // Resolve and connect ourselves so the egress policy vets the address
+        // the socket actually goes to; the request keeps the hostname for
+        // Host / SNI.
+        let uri = request.uri().clone();
+        let host = uri
+            .host()
+            .ok_or_else(|| flow_like_types::anyhow!("WebSocket URL has no host"))?
+            .to_string();
+        let port = uri.port_u16().unwrap_or(match uri.scheme_str() {
+            Some("wss") => 443,
+            _ => 80,
+        });
+        let addrs = match egress::resolve_socket_addrs(context.execution_environment(), &host, port)
+            .await
+        {
+            Ok(addrs) => addrs,
+            Err(e) => {
+                context.log_message(
+                    &format!("WebSocket connection refused: {}", e),
+                    LogLevel::Error,
+                );
+                return Ok(());
+            }
+        };
+        let connector = if config.tls.secure {
             let tls_config = crate::web::tls::client_config(&config.tls)?
                 .ok_or_else(|| flow_like_types::anyhow!("TLS client configuration is required"))?;
-            tokio_tungstenite::connect_async_tls_with_config(
-                request,
-                None,
-                false,
-                Some(tokio_tungstenite::Connector::Rustls(Arc::new(tls_config))),
-            )
-            .await
+            Some(tokio_tungstenite::Connector::Rustls(Arc::new(tls_config)))
         } else {
-            tokio_tungstenite::connect_async(request).await
+            None
+        };
+        let connect_result = match tokio::net::TcpStream::connect(addrs.as_slice()).await {
+            Ok(tcp) => {
+                tokio_tungstenite::client_async_tls_with_config(request, tcp, None, connector).await
+            }
+            Err(e) => Err(tokio_tungstenite::tungstenite::Error::Io(e)),
         };
 
         let (ws_stream, _response) = match connect_result {

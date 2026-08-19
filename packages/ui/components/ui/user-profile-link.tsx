@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	ArrowUpRight,
 	CalendarDays,
@@ -75,6 +76,7 @@ export function UserProfileLink({
 	compact = false,
 	muted = false,
 }: Readonly<UserProfileLinkProps>) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const lookup = useInvoke(
 		backend.userState.lookupUser,
@@ -173,7 +175,7 @@ export function UserProfileLink({
 									href={`/profile?sub=${encodeURIComponent(resolvedUserId)}`}
 									className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
 								>
-									View profile
+									{t('viewProfile', 'View profile')}
 									<ArrowUpRight className="h-3 w-3" />
 								</a>
 							)}
@@ -194,7 +196,7 @@ export function UserProfileLink({
 								<div className="flex items-center justify-between gap-3">
 									<span className="inline-flex items-center gap-1.5 text-muted-foreground">
 										<Mail className="h-3.5 w-3.5" />
-										Email
+										{t('email', 'Email')}
 									</span>
 									<span className="truncate text-right">
 										{lookup.data?.email ?? email}
@@ -205,7 +207,7 @@ export function UserProfileLink({
 								<div className="flex items-center justify-between gap-3">
 									<span className="inline-flex items-center gap-1.5 text-muted-foreground">
 										<CalendarDays className="h-3.5 w-3.5" />
-										Joined
+										{t('joined', 'Joined')}
 									</span>
 									<RelativeTime
 										value={resolvedCreatedAt}
@@ -217,7 +219,7 @@ export function UserProfileLink({
 								<div className="flex items-center justify-between gap-3">
 									<span className="inline-flex items-center gap-1.5 text-muted-foreground">
 										<IdCard className="h-3.5 w-3.5" />
-										User ID
+										{t('userId', 'User ID')}
 									</span>
 									<code className="max-w-44 truncate rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
 										{resolvedUserId}

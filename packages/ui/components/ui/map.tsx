@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import MapLibreGL, { type PopupOptions, type MarkerOptions } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Loader2, Locate, Maximize, Minus, Plus, X } from "lucide-react";
@@ -536,6 +537,7 @@ function MarkerPopup({
 	closeButton = false,
 	...popupOptions
 }: MarkerPopupProps) {
+	const { t } = useTranslation("common");
 	const { marker, map } = useMarkerContext();
 	const container = useMemo(() => document.createElement("div"), []);
 	const prevPopupOptions = useRef(popupOptions);
@@ -592,10 +594,10 @@ function MarkerPopup({
 					type="button"
 					onClick={handleClose}
 					className="absolute top-1 right-1 z-10 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-					aria-label="Close popup"
+					aria-label={t('closePopup', 'Close popup')}
 				>
 					<X className="h-4 w-4" />
-					<span className="sr-only">Close</span>
+					<span className="sr-only">{t('close', 'Close')}</span>
 				</button>
 			)}
 			{children}
@@ -780,6 +782,7 @@ function MapControls({
 	className,
 	onLocate,
 }: MapControlsProps) {
+	const { t } = useTranslation("common");
 	const { map } = useMap();
 	const [waitingForLocation, setWaitingForLocation] = useState(false);
 
@@ -840,10 +843,10 @@ function MapControls({
 		>
 			{showZoom && (
 				<ControlGroup>
-					<ControlButton onClick={handleZoomIn} label="Zoom in">
+					<ControlButton onClick={handleZoomIn} label={t('zoomIn', 'Zoom in')}>
 						<Plus className="size-4" />
 					</ControlButton>
-					<ControlButton onClick={handleZoomOut} label="Zoom out">
+					<ControlButton onClick={handleZoomOut} label={t('zoomOut', 'Zoom out')}>
 						<Minus className="size-4" />
 					</ControlButton>
 				</ControlGroup>
@@ -857,7 +860,7 @@ function MapControls({
 				<ControlGroup>
 					<ControlButton
 						onClick={handleLocate}
-						label="Find my location"
+						label={t('findMyLocation', 'Find my location')}
 						disabled={waitingForLocation}
 					>
 						{waitingForLocation ? (
@@ -870,7 +873,7 @@ function MapControls({
 			)}
 			{showFullscreen && (
 				<ControlGroup>
-					<ControlButton onClick={handleFullscreen} label="Toggle fullscreen">
+					<ControlButton onClick={handleFullscreen} label={t('toggleFullscreen', 'Toggle fullscreen')}>
 						<Maximize className="size-4" />
 					</ControlButton>
 				</ControlGroup>
@@ -880,6 +883,7 @@ function MapControls({
 }
 
 function CompassButton({ onClick }: { onClick: () => void }) {
+	const { t } = useTranslation("common");
 	const { map } = useMap();
 	const compassRef = useRef<SVGSVGElement>(null);
 
@@ -905,7 +909,7 @@ function CompassButton({ onClick }: { onClick: () => void }) {
 	}, [map]);
 
 	return (
-		<ControlButton onClick={onClick} label="Reset bearing to north">
+		<ControlButton onClick={onClick} label={t('resetBearingToNorth', 'Reset bearing to north')}>
 			<svg
 				ref={compassRef}
 				viewBox="0 0 24 24"
@@ -945,6 +949,7 @@ function MapPopup({
 	closeButton = false,
 	...popupOptions
 }: MapPopupProps) {
+	const { t } = useTranslation("common");
 	const { map } = useMap();
 	const popupOptionsRef = useRef(popupOptions);
 	const onCloseRef = useRef(onClose);
@@ -1018,10 +1023,10 @@ function MapPopup({
 					type="button"
 					onClick={handleClose}
 					className="absolute top-1 right-1 z-10 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-					aria-label="Close popup"
+					aria-label={t('closePopup', 'Close popup')}
 				>
 					<X className="h-4 w-4" />
-					<span className="sr-only">Close</span>
+					<span className="sr-only">{t('close', 'Close')}</span>
 				</button>
 			)}
 			{children}

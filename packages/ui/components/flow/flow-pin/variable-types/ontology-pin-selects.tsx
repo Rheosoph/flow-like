@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { useReactFlow, useStore } from "@xyflow/react";
 import { ChevronDown, RefreshCw } from "lucide-react";
 import { type RefObject, useCallback, useEffect, useState } from "react";
@@ -334,6 +335,7 @@ function actionSchemaDrift(
 /** Advisory drift affordance: re-applies the current contract schema to the
  * placed node's typed pins. Never auto-fires — the user clicks to resync. */
 function SchemaSyncButton({ onSync }: Readonly<{ onSync: () => void }>) {
+	const { t } = useTranslation("flow");
 	return (
 		<button
 			type="button"
@@ -341,9 +343,9 @@ function SchemaSyncButton({ onSync }: Readonly<{ onSync: () => void }>) {
 			onPointerDown={(event) => event.stopPropagation()}
 			onClick={onSync}
 			className="ml-1 mt-1 inline-flex w-fit items-center gap-1 rounded-sm border border-border bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-			title="The contract changed since this node was configured. Re-apply the current typed schema."
+			title={t('theContractChangedSinceThisNodeWasConfiguredReapplyTheCurrentTypedSchema', 'The contract changed since this node was configured. Re-apply the current typed schema.')}
 		>
-			<RefreshCw className="h-3 w-3" /> Sync schema
+			<RefreshCw className="h-3 w-3" /> {t('syncSchema', 'Sync schema')}
 		</button>
 	);
 }
@@ -424,6 +426,7 @@ export function OntologySelect({
 	boardRef?: RefObject<IBoard | undefined>;
 	setValue: (value: number[] | undefined) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const [open, setOpen] = useState(false);
 	const selectedId = normalizeStringValue(value);
 	// Fetch eagerly when a value is set so the id resolves to a friendly name
@@ -454,11 +457,11 @@ export function OntologySelect({
 			}
 		>
 			{loading && overlays.length === 0 && (
-				<SelectLabel>Loading ontologies…</SelectLabel>
+				<SelectLabel>{t('loadingOntologies', 'Loading ontologies…')}</SelectLabel>
 			)}
-			{error && <SelectLabel>Could not load ontologies</SelectLabel>}
+			{error && <SelectLabel>{t('couldNotLoadOntologies', 'Could not load ontologies')}</SelectLabel>}
 			{!loading && !error && overlays.length === 0 && (
-				<SelectLabel>No ontologies defined</SelectLabel>
+				<SelectLabel>{t('noOntologiesDefined', 'No ontologies defined')}</SelectLabel>
 			)}
 			{overlays.map((overlay) => (
 				<SelectItem key={overlay.id} value={overlay.id}>
@@ -488,6 +491,7 @@ export function OntologyObjectSelect({
 	boardRef?: RefObject<IBoard | undefined>;
 	setValue: (value: number[] | undefined) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const [open, setOpen] = useState(false);
 	const ontologyId = useSiblingPinValue(nodeId, "ontology_id");
 	const { overlays, loading, error } = useOverlays(
@@ -525,8 +529,8 @@ export function OntologyObjectSelect({
 				});
 			}}
 		>
-			{loading && <SelectLabel>Loading object types…</SelectLabel>}
-			{error && <SelectLabel>Could not load object types</SelectLabel>}
+			{loading && <SelectLabel>{t('loadingObjectTypes', 'Loading object types…')}</SelectLabel>}
+			{error && <SelectLabel>{t('couldNotLoadObjectTypes', 'Could not load object types')}</SelectLabel>}
 			{overlay?.nodes.map((object) => (
 				<SelectItem
 					key={objectIdentifier(object)}
@@ -536,7 +540,7 @@ export function OntologyObjectSelect({
 				</SelectItem>
 			))}
 			{overlay && overlay.nodes.length === 0 && (
-				<SelectLabel>No object types</SelectLabel>
+				<SelectLabel>{t('noObjectTypes', 'No object types')}</SelectLabel>
 			)}
 		</CompactSelect>
 	);
@@ -561,6 +565,7 @@ export function OntologyActionSelect({
 	boardRef?: RefObject<IBoard | undefined>;
 	setValue: (value: number[] | undefined) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const [open, setOpen] = useState(false);
 	const selectedId = normalizeStringValue(value);
 	// Fetch eagerly when a value is already selected so schema drift surfaces
@@ -611,10 +616,10 @@ export function OntologyActionSelect({
 					)
 				}
 			>
-				{loading && <SelectLabel>Loading actions…</SelectLabel>}
-				{error && <SelectLabel>Could not load actions</SelectLabel>}
+				{loading && <SelectLabel>{t('loadingActions', 'Loading actions…')}</SelectLabel>}
+				{error && <SelectLabel>{t('couldNotLoadActions', 'Could not load actions')}</SelectLabel>}
 				{!loading && !error && actions.length === 0 && (
-					<SelectLabel>No enabled actions</SelectLabel>
+					<SelectLabel>{t('noEnabledActions', 'No enabled actions')}</SelectLabel>
 				)}
 				{actions.map((action) => (
 					<SelectItem key={action.id} value={action.id}>
@@ -680,6 +685,7 @@ export function RemoteOntologySelect({
 	boardRef?: RefObject<IBoard | undefined>;
 	setValue: (value: number[] | undefined) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const [open, setOpen] = useState(false);
 	const selectedId = normalizeStringValue(value);
 	const { imports, loading, error } = useImports(
@@ -701,16 +707,16 @@ export function RemoteOntologySelect({
 			open={open}
 			onOpenChange={setOpen}
 			value={selected?.contract.name ?? selectedId}
-			placeholder="Installed ontology"
+			placeholder={t('installedOntology', 'Installed ontology')}
 			label={pin.friendly_name}
 			onChange={(id) => void persist(pin, id, { clearPins: ["object_type"] })}
 		>
 			{loading && imports.length === 0 && (
-				<SelectLabel>Loading installed ontologies…</SelectLabel>
+				<SelectLabel>{t('loadingInstalledOntologies', 'Loading installed ontologies…')}</SelectLabel>
 			)}
-			{error && <SelectLabel>Could not load imports</SelectLabel>}
+			{error && <SelectLabel>{t('couldNotLoadImports', 'Could not load imports')}</SelectLabel>}
 			{!loading && !error && imports.length === 0 && (
-				<SelectLabel>No installed ontologies</SelectLabel>
+				<SelectLabel>{t('noInstalledOntologies', 'No installed ontologies')}</SelectLabel>
 			)}
 			{imports.map((item) => (
 				<SelectItem key={item.id} value={item.id}>
@@ -740,6 +746,7 @@ export function RemoteOntologyObjectSelect({
 	boardRef?: RefObject<IBoard | undefined>;
 	setValue: (value: number[] | undefined) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const [open, setOpen] = useState(false);
 	const bindingId = useSiblingPinValue(nodeId, "binding_id");
 	const { imports, loading, error } = useImports(
@@ -778,8 +785,8 @@ export function RemoteOntologyObjectSelect({
 				});
 			}}
 		>
-			{loading && <SelectLabel>Loading object types…</SelectLabel>}
-			{error && <SelectLabel>Could not load object types</SelectLabel>}
+			{loading && <SelectLabel>{t('loadingObjectTypes', 'Loading object types…')}</SelectLabel>}
+			{error && <SelectLabel>{t('couldNotLoadObjectTypes', 'Could not load object types')}</SelectLabel>}
 			{contract?.nodes.map((object) => (
 				<SelectItem
 					key={objectIdentifier(object)}
@@ -789,7 +796,7 @@ export function RemoteOntologyObjectSelect({
 				</SelectItem>
 			))}
 			{contract && contract.nodes.length === 0 && (
-				<SelectLabel>No object types</SelectLabel>
+				<SelectLabel>{t('noObjectTypes', 'No object types')}</SelectLabel>
 			)}
 		</CompactSelect>
 	);
@@ -814,6 +821,7 @@ export function RemoteOntologyActionSelect({
 	boardRef?: RefObject<IBoard | undefined>;
 	setValue: (value: number[] | undefined) => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const [open, setOpen] = useState(false);
 	const selectedId = normalizeStringValue(value);
 	const { imports, loading, error } = useImports(
@@ -862,10 +870,10 @@ export function RemoteOntologyActionSelect({
 					)
 				}
 			>
-				{loading && <SelectLabel>Loading actions…</SelectLabel>}
-				{error && <SelectLabel>Could not load actions</SelectLabel>}
+				{loading && <SelectLabel>{t('loadingActions', 'Loading actions…')}</SelectLabel>}
+				{error && <SelectLabel>{t('couldNotLoadActions', 'Could not load actions')}</SelectLabel>}
 				{!loading && !error && actions.length === 0 && (
-					<SelectLabel>No enabled actions</SelectLabel>
+					<SelectLabel>{t('noEnabledActions', 'No enabled actions')}</SelectLabel>
 				)}
 				{actions.map((action) => (
 					<SelectItem key={action.id} value={action.id}>

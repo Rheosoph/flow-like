@@ -33,6 +33,7 @@ impl SharedCredentialsTrait for MixedSharedCredentials {
             StoreType::Meta => self.meta.to_store_type(StoreType::Meta).await,
             StoreType::Content => self.content.to_store_type(StoreType::Content).await,
             StoreType::Logs => self.logs.to_store_type(StoreType::Logs).await,
+            StoreType::Tmp => self.content.to_store_type(StoreType::Tmp).await,
         }
     }
 

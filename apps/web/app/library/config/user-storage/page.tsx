@@ -1,10 +1,12 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { StorageSystem, useBackend } from "@flow-like/flow-like-ui";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo } from "react";
 
 export default function Page() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const searchParams = useSearchParams();
 	const id = searchParams.get("id");
@@ -57,7 +59,7 @@ export default function Page() {
 			appId={id ?? ""}
 			prefix={decodeURIComponent(prefix)}
 			fileToUrl={fileToUrl}
-			title="User Storage"
+			title={t('userStorage', 'User Storage')}
 			storageScopeKey="user"
 			operations={operations}
 			updatePrefix={(nextPrefix) => {

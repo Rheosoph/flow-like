@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { ChevronDown, Crown, Shield, Star, User2Icon } from "lucide-react";
 import { useMemo } from "react";
 import { RolePermissions } from "../../../lib/permission/role-permission";
@@ -61,6 +62,7 @@ export function RoleRow({
 	onToggle,
 	children,
 }: Readonly<RoleRowProps>) {
+	const { t } = useTranslation("settings");
 	const permissions = useMemo(
 		() => new RolePermissions(BigInt(role.permissions)),
 		[role.permissions],
@@ -75,8 +77,8 @@ export function RoleRow({
 		memberCount === undefined
 			? undefined
 			: `${memberCount} ${memberCount === 1 ? "member" : "members"}`,
-		`${effectivePermissionCount(permissions)} of ${TOTAL_PERMISSION_COUNT} permissions`,
-		writes > 0 ? `${writes} can change data` : "read-only",
+		t('valOfTotal_permission_countPermissions', '{{val}} of {{TOTAL_PERMISSION_COUNT}} permissions', { val: effectivePermissionCount(permissions), TOTAL_PERMISSION_COUNT }),
+		writes > 0 ? t('writesCanChangeData', '{{writes}} can change data', { writes }) : "read-only",
 	].filter(Boolean);
 
 	return (
@@ -116,7 +118,7 @@ export function RoleRow({
 									className="text-[10px] px-1.5 py-0 border-primary/40 text-primary shrink-0"
 								>
 									<Star className="h-2.5 w-2.5 mr-1" />
-									Default
+									{t('default', 'Default')}
 								</Badge>
 							)}
 							{memberCount === 0 && (
@@ -124,7 +126,7 @@ export function RoleRow({
 									variant="outline"
 									className="text-[10px] px-1.5 py-0 text-muted-foreground shrink-0"
 								>
-									No members
+									{t('noMembers', 'No members')}
 								</Badge>
 							)}
 							{attributes.slice(0, 2).map((attribute) => (

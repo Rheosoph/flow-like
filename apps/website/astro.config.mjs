@@ -23,13 +23,11 @@ export default defineConfig({
 	integrations: [
 		// markdoc(),
 		// robotsTxt(),
-		sitemap({
-			customPages: [
-				"https://flow-like.com/store",
-				"https://flow-like.com/store/packages",
-				"https://flow-like.com/store/apps",
-			],
-		}),
+		// The store hubs are on-demand routes and already reach the sitemap through
+		// the route table (with a trailing slash). Listing them as customPages added
+		// a second, slash-less copy of every URL. Per-item store URLs live in
+		// /sitemap-store.xml, which robots.txt announces separately.
+		sitemap(),
 		// playformCompress(),
 		react(),
 		mdx({

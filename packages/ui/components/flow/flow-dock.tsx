@@ -4,6 +4,7 @@
  * Mobile navbar is better positioned at bottom right.
  **/
 
+import { i18n as i18next } from "@flow-like/locales";
 import {
 	AnimatePresence,
 	type MotionValue,
@@ -161,7 +162,7 @@ const FlowDockMobile = memo(
 				</AnimatePresence>
 				<button
 					onClick={handleToggle}
-					aria-label="Toggle actions"
+					aria-label={i18next.t('toggleActions', 'Toggle actions')}
 					aria-expanded={open}
 					className="h-8 w-8 rounded-full bg-secondary hover:bg-secondary/80 flex items-center justify-center transition-colors"
 				>
@@ -436,11 +437,11 @@ const IconContainer = memo(
 								? {
 										filter: hovered
 											? [
-													"drop-shadow(0 0 8px rgba(255,255,255,0.5))",
-													"drop-shadow(0 0 12px rgba(255,255,255,0.8))",
-													"drop-shadow(0 0 8px rgba(255,255,255,0.5))",
+													`drop-shadow(0 0 8px rgba(255,255,255,0.5))`,
+													`drop-shadow(0 0 12px rgba(255,255,255,0.8))`,
+													`drop-shadow(0 0 8px rgba(255,255,255,0.5))`,
 												]
-											: "drop-shadow(0 0 4px rgba(255,255,255,0.3))",
+											: `drop-shadow(0 0 4px rgba(255,255,255,0.3))`,
 									}
 								: {}
 						}

@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import {
 	ExternalLinkIcon,
 	KeyIcon,
@@ -47,6 +48,7 @@ export function WasmSandboxWarningDialog({
 	onConfirm,
 	onCancel,
 }: WasmSandboxWarningDialogProps) {
+	const { t } = useTranslation("flow");
 	const handleRunOnce = useCallback(() => {
 		onConfirm("none");
 	}, [onConfirm]);
@@ -77,18 +79,17 @@ export function WasmSandboxWarningDialog({
 				<DialogHeader>
 					<div className="flex items-center gap-2">
 						<ShieldAlertIcon className="w-5 h-5 text-amber-500" />
-						<DialogTitle>Sideloaded WASM nodes detected</DialogTitle>
+						<DialogTitle>{t('sideloadedWasmNodesDetected', 'Sideloaded WASM nodes detected')}</DialogTitle>
 					</div>
 					<DialogDescription>
-						This workflow contains externally-loaded WebAssembly nodes. They run
-						inside an isolated sandbox, but you should only run code you trust.{" "}
+						{t('thisWorkflowContainsExternallyloadedWebassemblyNodesTheyRunInsideAnIsolatedSandboxButYouShouldOnlyRunCodeYouTrust', "This workflow contains externally-loaded WebAssembly nodes. They run inside an isolated sandbox, but you should only run code you trust.")}{" "}
 						<a
 							href="https://docs.flow-like.com/dev/wasm-nodes/sandboxing/"
 							target="_blank"
 							rel="noopener noreferrer"
 							className="inline-flex items-center gap-0.5 text-primary underline underline-offset-2 hover:text-primary/80"
 						>
-							Learn more
+							{t('learnMore', 'Learn more')}
 							<ExternalLinkIcon className="w-3 h-3" />
 						</a>
 					</DialogDescription>
@@ -125,7 +126,7 @@ export function WasmSandboxWarningDialog({
 										</div>
 									) : (
 										<span className="text-xs text-muted-foreground">
-											No additional permissions requested
+											{t('noAdditionalPermissionsRequested', 'No additional permissions requested')}
 										</span>
 									)}
 								</div>
@@ -140,8 +141,7 @@ export function WasmSandboxWarningDialog({
 						<div className="flex items-start gap-2 text-xs text-muted-foreground">
 							<KeyIcon className="w-3.5 h-3.5 mt-0.5 shrink-0" />
 							<span>
-								Permissions are declared by each node and enforced by the
-								sandbox at runtime.
+								{t('permissionsAreDeclaredByEachNodeAndEnforcedByTheSandboxAtRuntime', "Permissions are declared by each node and enforced by the sandbox at runtime.")}
 							</span>
 						</div>
 					</>
@@ -150,13 +150,13 @@ export function WasmSandboxWarningDialog({
 				<DialogFooter className="flex-col gap-2 sm:flex-col">
 					<div className="flex flex-wrap gap-2 w-full justify-end">
 						<Button variant="outline" onClick={onCancel}>
-							Cancel
+							{t('cancel', 'Cancel')}
 						</Button>
 						<Button variant="secondary" onClick={handleTrustForBoard}>
-							Trust for this board
+							{t('trustForThisBoard', 'Trust for this board')}
 						</Button>
 						<Button variant="secondary" onClick={handleRunOnce}>
-							Run once
+							{t('runOnce', 'Run once')}
 						</Button>
 						<Button
 							onClick={handleAlwaysTrust}
@@ -164,12 +164,11 @@ export function WasmSandboxWarningDialog({
 							className="gap-1.5"
 						>
 							<ShieldCheckIcon className="w-4 h-4" />
-							Always trust
+							{t('alwaysTrust', 'Always trust')}
 						</Button>
 					</div>
 					<p className="text-xs text-muted-foreground text-right">
-						&quot;Always trust&quot; remembers your choice for these packages
-						across all boards.
+						{t('quotalwaysTrustquotRemembersYourChoiceForThesePackagesAcrossAllBoards', "\"Always trust\" remembers your choice for these packages across all boards.")}
 					</p>
 				</DialogFooter>
 			</DialogContent>

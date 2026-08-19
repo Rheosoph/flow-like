@@ -1,4 +1,5 @@
 "use client";
+import { i18n as i18next } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { useDebounce } from "@uidotdev/usehooks";
 import {
@@ -7,7 +8,7 @@ import {
 	type NodeProps,
 	Position,
 	useReactFlow,
-	useUpdateNodeInternals,
+	useStoreApi,
 } from "@xyflow/react";
 import {
 	BanIcon,
@@ -138,6 +139,42 @@ export type FlowNode = Node<
 	"node"
 >;
 
+type FlowStoreApi = ReturnType<typeof useStoreApi>;
+type NodeInternalsUpdates = Parameters<
+	ReturnType<FlowStoreApi["getState"]>["updateNodeInternals"]
+>[0];
+
+const pendingInternalsUpdates = new WeakMap<FlowStoreApi, Set<string>>();
+
+/**
+ * React Flow's own hook schedules one animation frame per call, and each
+ * store update re-runs every subscriber selector, so N nodes re-measuring in
+ * the same tick cost O(N²). Collect the ids and flush them in one store call.
+ */
+function scheduleNodeInternalsUpdate(store: FlowStoreApi, nodeId: string) {
+	const pending = pendingInternalsUpdates.get(store);
+	if (pending) {
+		pending.add(nodeId);
+		return;
+	}
+	const ids = new Set([nodeId]);
+	pendingInternalsUpdates.set(store, ids);
+	requestAnimationFrame(() => {
+		pendingInternalsUpdates.delete(store);
+		const { domNode, updateNodeInternals } = store.getState();
+		const updates: NodeInternalsUpdates = new Map();
+		for (const id of ids) {
+			const nodeElement = domNode?.querySelector<HTMLDivElement>(
+				`.react-flow__node[data-id="${id}"]`,
+			);
+			if (nodeElement) updates.set(id, { id, nodeElement, force: true });
+		}
+		if (updates.size > 0) {
+			updateNodeInternals(updates, { triggerFitView: false });
+		}
+	});
+}
+
 const FlowNodeInner = memo(
 	({
 		props,
@@ -183,7 +220,7 @@ const FlowNodeInner = memo(
 		const div = useRef<HTMLDivElement>(null);
 		const reactFlow = useReactFlow();
 		const { getNode } = useReactFlow();
-		const updateNodeInternals = useUpdateNodeInternals();
+		const flowStore = useStoreApi();
 		const remoteSelections = props.data.remoteSelections ?? [];
 		const displayedRemoteSelections = useMemo(
 			() => remoteSelections.slice(0, 3),
@@ -504,10 +541,20 @@ const FlowNodeInner = memo(
 			[parsePins, visiblePins],
 		);
 
+		const pinLayoutKey = useMemo(
+			() =>
+				visiblePins.map((p) => `${p.id}:${p.index}:${p.pin_type}`).join("|"),
+			[visiblePins],
+		);
+		const measuredPinLayout = useRef<string | null>(null);
 		useEffect(() => {
-			// Update React Flow internals when pins change (handles may have changed)
-			updateNodeInternals(props.id);
-		}, [visiblePins, props.id, updateNodeInternals]);
+			// React Flow measures handles itself when the node mounts (its
+			// ResizeObserver); only later pin layout changes need a re-measure.
+			if (measuredPinLayout.current === pinLayoutKey) return;
+			const isMount = measuredPinLayout.current === null;
+			measuredPinLayout.current = pinLayoutKey;
+			if (!isMount) scheduleNodeInternalsUpdate(flowStore, props.id);
+		}, [pinLayoutKey, props.id, flowStore]);
 
 		useEffect(() => {
 			if (isReroute) return;
@@ -759,7 +806,7 @@ const FlowNodeInner = memo(
 							<button
 								className="bg-background hover:bg-card group/play transition-all rounded-md hover:rounded-lg border p-1"
 								onClick={() => handleLocalExecute()}
-								title="Execute locally"
+								title={i18next.t('executeLocally', 'Execute locally')}
 							>
 								<PlayCircleIcon className="w-3 h-3 group-hover/play:scale-110" />
 							</button>
@@ -768,7 +815,7 @@ const FlowNodeInner = memo(
 							<button
 								className="bg-background hover:bg-card group/play transition-all rounded-md hover:rounded-lg border p-1 relative"
 								onClick={() => handleRemoteExecute()}
-								title="Execute on server"
+								title={i18next.t('executeOnServer', 'Execute on server')}
 							>
 								<CloudCog className="w-3 h-3 group-hover/play:scale-110" />
 							</button>
@@ -786,7 +833,7 @@ const FlowNodeInner = memo(
 							<button
 								className="bg-background hover:bg-card group/play transition-all rounded-md hover:rounded-lg border p-1"
 								title={
-									canLocalExecute ? "Execute locally" : "Execute on server"
+									canLocalExecute ? "Execute locally" : i18next.t('executeOnServer', 'Execute on server')
 								}
 							>
 								{canLocalExecute ? (
@@ -799,9 +846,9 @@ const FlowNodeInner = memo(
 					</DialogTrigger>
 					<DialogContent className="max-w-lg">
 						<DialogHeader>
-							<DialogTitle>Execute {props.data.node.friendly_name}</DialogTitle>
+							<DialogTitle>{i18next.t('executeFriendly_name', 'Execute {{friendly_name}}', { friendly_name: props.data.node.friendly_name })}</DialogTitle>
 							<DialogDescription>
-								Provide input values for the event payload.
+								{i18next.t('provideInputValuesForTheEventPayload', 'Provide input values for the event payload.')}
 							</DialogDescription>
 						</DialogHeader>
 						<EventPayloadForm
@@ -899,9 +946,7 @@ const FlowNodeInner = memo(
 							})}
 						</div>
 						{extraRemoteSelections > 0 && (
-							<div className="rounded-full border border-border bg-background/95 px-1.5 py-0.5 text-[0.5625rem] font-medium leading-none shadow-md">
-								+{extraRemoteSelections}
-							</div>
+							<div className="rounded-full border border-border bg-background/95 px-1.5 py-0.5 text-[0.5625rem] font-medium leading-none shadow-md">{`+${extraRemoteSelections}`}</div>
 						)}
 					</div>
 				)}
@@ -917,7 +962,7 @@ const FlowNodeInner = memo(
 				{props.data.node.only_offline && (
 					<div
 						className="absolute bottom-0 z-10 translate-y-[calc(50%)] translate-x-[calc(-50%)] left-0 text-center bg-background rounded-full"
-						title="This node can only run locally"
+						title={i18next.t('thisNodeCanOnlyRunLocally', 'This node can only run locally')}
 					>
 						<MonitorIcon className="w-2 h-2 text-blue-500" />
 					</div>
@@ -925,7 +970,7 @@ const FlowNodeInner = memo(
 				{isWasmNode && !isReroute && (
 					<div
 						className="absolute bottom-0 z-10 translate-y-[calc(50%)] translate-x-[calc(50%)] right-0 text-center bg-background rounded-full"
-						title={`WASM sandbox node — package: ${props.data.node.wasm?.package_id}`}
+						title={i18next.t('wasmSandboxNodePackageVal', 'WASM sandbox node — package: {{val}}', { val: props.data.node.wasm?.package_id })}
 					>
 						<BoxIcon className="w-2 h-2 text-amber-500" />
 					</div>
@@ -933,7 +978,7 @@ const FlowNodeInner = memo(
 				{props.data.isUnavailable && !isReroute && (
 					<div
 						className="absolute top-0 z-10 translate-y-[calc(-50%)] translate-x-[calc(-50%)] left-1/2 text-center bg-destructive rounded-full p-0.5"
-						title="This node's package is no longer available"
+						title={i18next.t('thisNodesPackageIsNoLongerAvailable', 'This node\'s package is no longer available')}
 					>
 						<TriangleAlertIcon className="w-2 h-2 text-destructive-foreground" />
 					</div>
@@ -963,15 +1008,23 @@ const FlowNodeInner = memo(
 						/>
 						<div
 							className="absolute bottom-0 left-0 z-10 flex translate-y-[calc(50%)] translate-x-[calc(-30%)] items-center gap-1"
-							title={`${nodeHeat.visits} ${nodeHeat.visits === 1 ? "run" : "runs"} visited this node${nodeHeat.errors > 0 ? ` · ${nodeHeat.errors} with errors` : ""}`}
+							title={i18next.t('countRunsVisitedThisNode', {
+								defaultValue_one: '{{count}} run visited this Node{{errors}}',
+								defaultValue_other: '{{count}} runs visited this Node{{errors}}',
+								count: nodeHeat.visits,
+								errors:
+									nodeHeat.errors > 0
+										? ` · ${i18next.t('countRunsWithErrors', {
+												defaultValue_one: '{{count}} with an error',
+												defaultValue_other: '{{count}} with errors',
+												count: nodeHeat.errors,
+											})}`
+										: '',
+							})}
 						>
-							<span className="rounded-full bg-primary px-1.5 py-0.5 text-[8px] font-semibold leading-none tabular-nums text-primary-foreground">
-								{nodeHeat.visits}×
-							</span>
+							<span className="rounded-full bg-primary px-1.5 py-0.5 text-[8px] font-semibold leading-none tabular-nums text-primary-foreground">{`${nodeHeat.visits}×`}</span>
 							{nodeHeat.errors > 0 && (
-								<span className="rounded-full bg-destructive px-1.5 py-0.5 text-[8px] font-semibold leading-none tabular-nums text-destructive-foreground">
-									{nodeHeat.errors}!
-								</span>
+								<span className="rounded-full bg-destructive px-1.5 py-0.5 text-[8px] font-semibold leading-none tabular-nums text-destructive-foreground">{`${nodeHeat.errors}!`}</span>
 							)}
 						</div>
 					</>
@@ -1159,7 +1212,7 @@ function FlowNode(props: NodeProps<FlowNode>) {
 
 		const newPin: IPin = {
 			name: "auto_handle_error",
-			description: "Handles Node Errors for you.",
+			description: i18next.t("handlesNodeErrorsForYou", "Handles Node Errors for you.", { ns: "flow" }),
 			pin_type: IPinType.Output,
 			value_type: IValueType.Normal,
 			data_type: IVariableType.Execution,
@@ -1173,7 +1226,7 @@ function FlowNode(props: NodeProps<FlowNode>) {
 
 		const stringPin: IPin = {
 			name: "auto_handle_error_string",
-			description: "Handles Node Errors for you.",
+			description: i18next.t("handlesNodeErrorsForYou", "Handles Node Errors for you.", { ns: "flow" }),
 			pin_type: IPinType.Output,
 			value_type: IValueType.Normal,
 			data_type: IVariableType.String,
@@ -1249,7 +1302,7 @@ function FlowNode(props: NodeProps<FlowNode>) {
 					parent_id: (selectedNodes[0].data.node as INode).layer,
 					coordinates: [minX, minY, 0],
 					in_coordinates: undefined,
-					name: "Collapsed",
+					name: i18next.t("collapsed", "Collapsed", { ns: "flow" }),
 					type: ILayerType.Collapsed,
 					variables: {},
 				},

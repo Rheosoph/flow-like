@@ -1,4 +1,4 @@
-import type { IBoard, IEvent } from "@flow-like/flow-like-ui";
+import type { IBoardListing, IEvent } from "@flow-like/flow-like-ui";
 import { IAppType } from "@flow-like/flow-like-ui";
 import {
 	appTypeMeta,
@@ -6,10 +6,8 @@ import {
 } from "@flow-like/flow-like-ui/lib/app-type";
 import { describe, expect, it } from "vitest";
 
-function board(nodeCount: number): IBoard {
-	const nodes: Record<string, unknown> = {};
-	for (let i = 0; i < nodeCount; i++) nodes[`n${i}`] = {};
-	return { id: "b", name: "Board", nodes } as unknown as IBoard;
+function board(nodeCount: number): IBoardListing {
+	return { id: "b", name: "Board", description: "", nodeCount };
 }
 
 function event(type: string, active = true): IEvent {

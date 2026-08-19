@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import { ExternalLink } from "lucide-react";
 import type React from "react";
 import { useMemo, useState } from "react";
@@ -50,11 +51,11 @@ function getCloudflareInstallCommand(
 ): string {
 	switch (platform) {
 		case "windows":
-			return "winget install --id Cloudflare.cloudflared";
+			return `winget install --id Cloudflare.cloudflared`;
 		case "linux":
 			return "curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb\nsudo dpkg -i cloudflared.deb";
 		default:
-			return "brew install cloudflare/cloudflare/cloudflared";
+			return `brew install cloudflare/cloudflare/cloudflared`;
 	}
 }
 
@@ -63,11 +64,11 @@ function getNgrokInstallCommand(
 ): string {
 	switch (platform) {
 		case "windows":
-			return "choco install ngrok";
+			return `choco install ngrok`;
 		case "linux":
 			return 'curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null\necho "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list\nsudo apt update && sudo apt install ngrok';
 		default:
-			return "brew install ngrok";
+			return `brew install ngrok`;
 	}
 }
 
@@ -90,6 +91,7 @@ export function HttpConfig({
 	eventExecutionMode,
 	section,
 }: IConfigInterfaceProps) {
+	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -134,7 +136,7 @@ export function HttpConfig({
 	}, [hub?.domain, hub?.environment, profile.data, appId, path]);
 
 	const pathError =
-		path && !path.startsWith("/") ? "Path must start with '/'" : null;
+		path && !path.startsWith("/") ? t('pathMustStartWith', 'Path must start with \'/\'') : null;
 
 	const CurlExample = ({
 		url,
@@ -155,9 +157,9 @@ export function HttpConfig({
 		<div className="w-full space-y-6">
 			{!section && (
 				<div className="space-y-1">
-					<h3 className="text-lg font-semibold">HTTP Event Sink</h3>
+					<h3 className="text-lg font-semibold">{t('httpEventSink', 'HTTP Event Sink')}</h3>
 					<p className="text-sm text-muted-foreground">
-						Trigger this event via HTTP requests.
+						{t('triggerThisEventViaHttpRequests', 'Trigger this event via HTTP requests.')}
 					</p>
 				</div>
 			)}
@@ -166,14 +168,14 @@ export function HttpConfig({
 				<>
 					{/* Method Selection */}
 					<div className="space-y-2">
-						<Label htmlFor="http_method">HTTP Method</Label>
+						<Label htmlFor="http_method">{t('httpMethod', 'HTTP Method')}</Label>
 						<Select
 							value={method}
 							onValueChange={(value) => setValue("method", value)}
 							disabled={!isEditing}
 						>
 							<SelectTrigger id="http_method" className="w-full">
-								<SelectValue placeholder="Select HTTP method" />
+								<SelectValue placeholder={t('selectHttpMethod', 'Select HTTP method')} />
 							</SelectTrigger>
 							<SelectContent>
 								{HTTP_METHODS.map((m) => (
@@ -191,13 +193,13 @@ export function HttpConfig({
 							</SelectContent>
 						</Select>
 						<p className="text-sm text-muted-foreground">
-							The HTTP method that will trigger this event.
+							{t('theHttpMethodThatWillTriggerThisEvent', 'The HTTP method that will trigger this event.')}
 						</p>
 					</div>
 
 					{/* Path */}
 					<div className="space-y-2">
-						<Label htmlFor="http_path">Path</Label>
+						<Label htmlFor="http_path">{t('path', 'Path')}</Label>
 						<div className="flex items-center gap-2">
 							<div className="shrink-0 text-sm text-muted-foreground">
 								/{appId}
@@ -214,16 +216,14 @@ export function HttpConfig({
 						{pathError && (
 							<p className="text-sm text-destructive">{pathError}</p>
 						)}
-						<p className="text-sm text-muted-foreground">
-							The path for this endpoint. Must start with <code>/</code>.
-						</p>
+						<p className="text-sm text-muted-foreground"><Trans i18nKey="thePathForThisEndpointMustStartWithCodecode">The path for this endpoint. Must start with <code>/</code>.</Trans></p>
 					</div>
 
 					{/* URL Preview — tied to the event's execution mode, not to platform
 			    capabilities. Remote events show the server endpoint; Local events
 			    show the desktop localhost URL plus tunnel instructions. */}
 					<div className="space-y-2">
-						<Label>Endpoint URL</Label>
+						<Label>{t('endpointUrl', 'Endpoint URL')}</Label>
 						{isRemote ? (
 							remoteUrl ? (
 								<div className="space-y-3">
@@ -235,18 +235,14 @@ export function HttpConfig({
 										CurlExample={CurlExample}
 									/>
 									<p className="text-xs text-muted-foreground">
-										This is a public, server-hosted endpoint. It's always
-										available — no tunneling required. Point external services
-										at this URL to trigger the event.
+										{t('thisIsAPublicServerhostedEndpointItsAlwaysAvailableNoTunnelingRequiredPointExternalServicesAtThisUrlToTriggerTheEvent', "This is a public, server-hosted endpoint. It's always available — no tunneling required. Point external services at this URL to trigger the event.")}
 									</p>
 								</div>
 							) : (
 								<Alert variant="destructive">
-									<AlertTitle>Server endpoint unavailable</AlertTitle>
+									<AlertTitle>{t('serverEndpointUnavailable', 'Server endpoint unavailable')}</AlertTitle>
 									<AlertDescription>
-										This event is configured to run remotely, but no hub domain
-										is available. Sign in to a hub that supports HTTP sinks, or
-										switch the event to run locally.
+										{t('thisEventIsConfiguredToRunRemotelyButNoHubDomainIsAvailableSignInToAHubThatSupportsHttpSinksOrSwitchTheEventToRunLocally', "This event is configured to run remotely, but no hub domain is available. Sign in to a hub that supports HTTP sinks, or switch the event to run locally.")}
 									</AlertDescription>
 								</Alert>
 							)
@@ -260,11 +256,9 @@ export function HttpConfig({
 									CurlExample={CurlExample}
 								/>
 								<Alert>
-									<AlertTitle>Local endpoint</AlertTitle>
+									<AlertTitle>{t('localEndpoint', 'Local endpoint')}</AlertTitle>
 									<AlertDescription>
-										This URL is only reachable while the desktop app is running
-										on this machine. To expose it to the public internet, use a
-										tunnel (instructions below).
+										{t('thisUrlIsOnlyReachableWhileTheDesktopAppIsRunningOnThisMachineToExposeItToThePublicInternetUseATunnelInstructionsBelow', "This URL is only reachable while the desktop app is running on this machine. To expose it to the public internet, use a tunnel (instructions below).")}
 									</AlertDescription>
 								</Alert>
 								<LocalTunnelGuide path={path} platform={platform} />
@@ -278,9 +272,9 @@ export function HttpConfig({
 				<div className="space-y-4">
 					<div className="flex items-center justify-between">
 						<div className="space-y-0.5">
-							<Label>Authentication</Label>
+							<Label>{t('authentication', 'Authentication')}</Label>
 							<p className="text-sm text-muted-foreground">
-								Optional Bearer token to secure this endpoint
+								{t('optionalBearerTokenToSecureThisEndpoint', 'Optional Bearer token to secure this endpoint')}
 							</p>
 						</div>
 						<Switch
@@ -299,7 +293,7 @@ export function HttpConfig({
 					{authToken && (
 						<div className="space-y-2">
 							<div className="flex items-center justify-between">
-								<Label htmlFor="http_auth_token">Bearer Token</Label>
+								<Label htmlFor="http_auth_token">{`Bearer Token`}</Label>
 								<Button
 									type="button"
 									variant="ghost"
@@ -315,7 +309,7 @@ export function HttpConfig({
 									type={showToken ? "text" : "password"}
 									value={authToken}
 									onChange={(e) => setValue("auth_token", e.target.value)}
-									placeholder="Enter token or generate one"
+									placeholder={t('enterTokenOrGenerateOne', 'Enter token or generate one')}
 									disabled={!isEditing}
 									className="font-mono text-xs"
 								/>
@@ -325,12 +319,12 @@ export function HttpConfig({
 									onClick={() => setValue("auth_token", generateToken())}
 									disabled={!isEditing}
 								>
-									Generate
+									{t('generate', 'Generate')}
 								</Button>
 							</div>
 							<p className="text-sm text-muted-foreground">
-								Include this token as{" "}
-								<code>Authorization: Bearer {"{token}"}</code> in your requests.
+								{t('includeThisTokenAs', 'Include this token as')}{" "}
+								<code>{`Authorization: Bearer`} {"{token}"}</code> {t('inYourRequests', 'in your requests.')}
 							</p>
 						</div>
 					)}
@@ -340,11 +334,9 @@ export function HttpConfig({
 			{/* Conflict Warning */}
 			{shows("endpoint") && !pathError && (
 				<Alert>
-					<AlertTitle>Route Conflicts</AlertTitle>
+					<AlertTitle>{t('routeConflicts', 'Route Conflicts')}</AlertTitle>
 					<AlertDescription>
-						If multiple events use the same app ID, path, and method, only the
-						most recently registered event will be triggered. The system will
-						log warnings if conflicts occur.
+						{t('ifMultipleEventsUseTheSameAppIdPathAndMethodOnlyTheMostRecentlyRegisteredEventWillBeTriggeredTheSystemWillLogWarningsIfConflictsOccur', "If multiple events use the same app ID, path, and method, only the most recently registered event will be triggered. The system will log warnings if conflicts occur.")}
 					</AlertDescription>
 				</Alert>
 			)}
@@ -365,6 +357,7 @@ function UrlPreview({
 	authToken: string | null;
 	CurlExample: (props: { url: string; withAuth: boolean }) => React.ReactNode;
 }) {
+	const { t } = useTranslation("interfaces");
 	return (
 		<>
 			<div className="relative">
@@ -385,7 +378,7 @@ function UrlPreview({
 				</Button>
 			</div>
 			<Alert>
-				<AlertTitle>Example Request</AlertTitle>
+				<AlertTitle>{t('exampleRequest', 'Example Request')}</AlertTitle>
 				<AlertDescription>
 					<CurlExample url={url} withAuth={!!authToken} />
 				</AlertDescription>
@@ -409,6 +402,7 @@ function LocalTunnelGuide({
 	path: string;
 	platform: ReturnType<typeof getPlatform>;
 }) {
+	const { t } = useTranslation("interfaces");
 	const platformLabel =
 		platform === "windows"
 			? "Windows"
@@ -417,39 +411,33 @@ function LocalTunnelGuide({
 				: "macOS";
 	return (
 		<div className="space-y-3">
-			<Label className="text-base">Expose this endpoint publicly</Label>
-			<p className="text-sm text-muted-foreground">
-				Local events are only reachable on this machine. If you need an external
+			<Label className="text-base">{t('exposeThisEndpointPublicly', 'Expose this endpoint publicly')}</Label>
+			<p className="text-sm text-muted-foreground"><Trans i18nKey="localEventsAreOnlyReachableOnThisMachineIfYouNeedAnExternalServiceWebhookProviderPartnerSystemEtcToCallThisEndpointRunATunnelInFrontOfPortCode9657code">Local events are only reachable on this machine. If you need an external
 				service (webhook provider, partner system, etc.) to call this endpoint,
-				run a tunnel in front of port <code>9657</code>.
-			</p>
+				run a tunnel in front of port <code>9657</code>.</Trans></p>
 			<Tabs defaultValue="cloudflare" className="w-full">
 				<TabsList className="grid w-full grid-cols-2">
 					<TabsTrigger value="cloudflare" className="gap-2">
-						Cloudflare Tunnel
-						<Badge className="px-2 py-0.5 text-xs">Recommended</Badge>
+						{t('cloudflareTunnel', 'Cloudflare Tunnel')}
+						<Badge className="px-2 py-0.5 text-xs">{t('recommended', 'Recommended')}</Badge>
 					</TabsTrigger>
 					<TabsTrigger value="ngrok">ngrok</TabsTrigger>
 				</TabsList>
 				<TabsContent value="cloudflare" className="space-y-4 mt-4">
 					<ol className="space-y-3 text-sm list-decimal list-inside">
-						<li>
-							Install <code>cloudflared</code> on{" "}
+						<li><Trans i18nKey="installCodecloudflaredcodeOn">Install <code>cloudflared</code> on</Trans>{" "}
 							<strong>{platformLabel}</strong>:
 							<pre className="mt-2 p-3 bg-muted rounded-md text-xs whitespace-pre-wrap overflow-x-auto">
 								{getCloudflareInstallCommand(platform)}
 							</pre>
 						</li>
-						<li>
-							Start a free Quick Tunnel:
+						<li><Trans i18nKey="startAFreeQuickTunnelPreClassnamemt2P3BgmutedRoundedmdTextxsOverflowxautoCloudflaredTunnelUrlHttplocalhost9657Pre">Start a free Quick Tunnel:
 							<pre className="mt-2 p-3 bg-muted rounded-md text-xs overflow-x-auto">
 								cloudflared tunnel --url http://localhost:9657
-							</pre>
-						</li>
+							</pre></Trans></li>
 						<li>
-							Use the generated{" "}
-							<code>https://*****.trycloudflare.com{path}</code> URL in your
-							external system.
+							{t('useTheGenerated', 'Use the generated')}{" "}
+							<code>https://*****.trycloudflare.com{path}</code> {t('urlInYourExternalSystem', "URL in your external system.")}
 						</li>
 					</ol>
 					<a
@@ -458,29 +446,25 @@ function LocalTunnelGuide({
 						rel="noopener noreferrer"
 						className="text-xs text-primary hover:underline inline-flex items-center gap-1"
 					>
-						Installation docs <ExternalLink className="h-3 w-3" />
+						{t('installationDocs', 'Installation docs')} <ExternalLink className="h-3 w-3" />
 					</a>
 				</TabsContent>
 				<TabsContent value="ngrok" className="space-y-4 mt-4">
 					<ol className="space-y-3 text-sm list-decimal list-inside">
 						<li>
-							Install ngrok on <strong>{platformLabel}</strong>:
+							{t('installNgrokOn', 'Install ngrok on')} <strong>{platformLabel}</strong>:
 							<pre className="mt-2 p-3 bg-muted rounded-md text-xs whitespace-pre-wrap overflow-x-auto">
 								{getNgrokInstallCommand(platform)}
 							</pre>
 						</li>
-						<li>
-							Authenticate (requires a free ngrok account):
+						<li><Trans i18nKey="authenticateRequiresAFreeNgrokAccountPreClassnamemt2P3BgmutedRoundedmdTextxsOverflowxautoNgrokConfigAddauthtokenYour_token_herePre">Authenticate (requires a free ngrok account):
 							<pre className="mt-2 p-3 bg-muted rounded-md text-xs overflow-x-auto">
 								ngrok config add-authtoken YOUR_TOKEN_HERE
-							</pre>
-						</li>
-						<li>
-							Start the tunnel:
+							</pre></Trans></li>
+						<li><Trans i18nKey="startTheTunnelPreClassnamemt2P3BgmutedRoundedmdTextxsOverflowxautoNgrokHttp9657Pre">Start the tunnel:
 							<pre className="mt-2 p-3 bg-muted rounded-md text-xs overflow-x-auto">
 								ngrok http 9657
-							</pre>
-						</li>
+							</pre></Trans></li>
 					</ol>
 					<a
 						href="https://dashboard.ngrok.com/get-started/setup"
@@ -488,7 +472,7 @@ function LocalTunnelGuide({
 						rel="noopener noreferrer"
 						className="text-xs text-primary hover:underline inline-flex items-center gap-1"
 					>
-						ngrok docs <ExternalLink className="h-3 w-3" />
+						{t('ngrokDocs', 'ngrok docs')} <ExternalLink className="h-3 w-3" />
 					</a>
 				</TabsContent>
 			</Tabs>

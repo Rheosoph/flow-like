@@ -74,7 +74,7 @@
 	"region": "eu-west-1",
 	"signaling": ["wss://signaling.flow-like.com"],
 	"terms_of_service": "https://great-co.de/eula/",
-	"legal_notice": "https://great-co.de/legal-notice/",
+	"legal_notice": "https://flow-like.com/legal-notice",
 	"privacy_policy": "https://great-co.de/privacy-policy/",
 	"contact": {
 		"name": "Support Team",

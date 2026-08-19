@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type Node,
 	type NodeProps,
@@ -35,6 +36,7 @@ export type CommentNode = Node<
 >;
 
 export function CommentNode(props: NodeProps<CommentNode>) {
+	const { t } = useTranslation("flow");
 	const { getNodes, setNodes } = useReactFlow();
 	const [edit, setEdit] = useState({
 		open: false,
@@ -190,9 +192,9 @@ export function CommentNode(props: NodeProps<CommentNode>) {
 					>
 						<DialogContent className="max-w-(--breakpoint-xl) min-w-[95dvw] w-full min-h-[90vh] max-h-[90vh] overflow-hidden flex flex-col">
 							<DialogHeader>
-								<DialogTitle>Edit Comment</DialogTitle>
+								<DialogTitle>{t('editComment', 'Edit Comment')}</DialogTitle>
 								<DialogDescription>
-									Edit the text content of the comment.
+									{t('editTheTextContentOfTheComment', 'Edit the text content of the comment.')}
 								</DialogDescription>
 							</DialogHeader>
 							<div className="flex flex-col grow max-h-full overflow-auto relative">

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useCallback, useId, useMemo } from "react";
 import type { BoardVersion } from "../../lib/schema/flow/board-version";
 import { cn } from "../../lib/utils";
@@ -123,6 +124,8 @@ export interface A2UIRendererProps {
 		dialogId?: string,
 	) => void;
 	closeDialog?: (dialogId?: string) => void;
+	/** Mounted inside the ActionProvider; used by pages to register the FlowPilot live-page handle. */
+	agentBridge?: React.ReactNode;
 }
 
 export function A2UIRenderer({
@@ -138,7 +141,9 @@ export function A2UIRenderer({
 	isPreviewMode = false,
 	openDialog,
 	closeDialog,
+	agentBridge,
 }: A2UIRendererProps) {
+	const { t } = useTranslation("common");
 	const canvasId = useId();
 	const components = useMemo(
 		() => surface.components ?? {},
@@ -210,7 +215,7 @@ export function A2UIRenderer({
 		return (
 			<div className={className}>
 				<div className="text-muted-foreground text-sm">
-					No content to display
+					{t("noContentToDisplay", "No content to display")}
 				</div>
 			</div>
 		);
@@ -232,6 +237,7 @@ export function A2UIRenderer({
 					openDialog={openDialog}
 					closeDialog={closeDialog}
 				>
+					{agentBridge}
 					<ScopedCustomCss
 						css={customCss}
 						scopeSelector={`[data-surface-canvas-id="${canvasId}"]`}

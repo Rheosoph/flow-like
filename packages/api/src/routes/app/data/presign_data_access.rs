@@ -9,6 +9,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    routes::app::data::paths,
     state::AppState,
 };
 use axum::{
@@ -201,62 +202,17 @@ pub async fn presign_user_data_access(
 }
 
 fn build_upload_path(app_id: &str, prefix: Option<&str>) -> FlowPath {
-    let mut base = FlowPath::from("apps").child(app_id).child("upload");
-
-    let Some(prefix) = prefix else {
-        return base;
-    };
-
-    if prefix.starts_with("apps/") {
-        let segments: Vec<&str> = prefix.split('/').collect();
-        if segments.len() > 3 {
-            for segment in segments.iter().skip(3) {
-                if !segment.is_empty() {
-                    base = base.child(*segment);
-                }
-            }
-        }
-        return base;
+    match prefix {
+        Some(prefix) => paths::resolve_app_upload(app_id, prefix),
+        None => paths::app_upload_base(app_id),
     }
-
-    for segment in prefix.split('/') {
-        if !segment.is_empty() {
-            base = base.child(segment);
-        }
-    }
-
-    base
 }
 
 fn build_user_upload_path(sub: &str, app_id: &str, prefix: Option<&str>) -> FlowPath {
-    let mut base = FlowPath::from("users")
-        .child(sub)
-        .child("apps")
-        .child(app_id);
-
-    let Some(prefix) = prefix else {
-        return base;
-    };
-
-    if prefix.starts_with("users/") {
-        let segments: Vec<&str> = prefix.split('/').collect();
-        if segments.len() > 4 {
-            for segment in segments.iter().skip(4) {
-                if !segment.is_empty() {
-                    base = base.child(*segment);
-                }
-            }
-        }
-        return base;
+    match prefix {
+        Some(prefix) => paths::resolve_user_upload(sub, app_id, prefix),
+        None => paths::user_upload_base(sub, app_id),
     }
-
-    for segment in prefix.split('/') {
-        if !segment.is_empty() {
-            base = base.child(segment);
-        }
-    }
-
-    base
 }
 
 fn get_credentials_expiration(

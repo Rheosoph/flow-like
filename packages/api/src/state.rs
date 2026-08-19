@@ -9,6 +9,7 @@ use flow_like::flow_like_storage::Path;
 use flow_like::flow_like_storage::files::store::FlowLikeStore;
 use flow_like::hub::{Environment, Hub};
 use flow_like::state::{FlowLikeState, FlowNodeRegistryInner};
+use flow_like::utils::compression::ConditionalRead;
 use flow_like_secrets::{
     EnvProviderConfig, ExposeSecret, ProviderConfig, SecretRef, SecretStore, SecretStoreConfig,
 };
@@ -19,17 +20,19 @@ use hyper_util::{
     rt::TokioExecutor,
 };
 use jsonwebtoken::{
-    DecodingKey, Validation, decode,
-    jwk::{AlgorithmParameters, JwkSet},
+    Algorithm, DecodingKey, Validation, decode,
+    jwk::{
+        AlgorithmParameters, EllipticCurve, Jwk, JwkSet, KeyAlgorithm, KeyOperations, PublicKeyUse,
+    },
 };
 use sea_orm::{
     ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection,
     DatabaseTransaction, IsolationLevel, Statement, TransactionTrait,
 };
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     sync::{Arc, Weak},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::compilation::{CompilationDispatchConfig, CompilationDispatcher};
@@ -62,6 +65,58 @@ pub(crate) fn flow_ir_draft_store_key(sub: &str, app_id: &str, board_id: &str) -
 /// collaborators still mutate the same canonical app board and must take the same mutex.
 pub(crate) fn board_mutation_lock_key(app_id: &str, board_id: &str) -> String {
     format!("{}\u{1f}{}", app_id.trim(), board_id.trim())
+}
+
+/// Cache key for one board revision. Versioned snapshots and the floating draft are different
+/// objects with different ETags, so they never share an entry.
+fn board_cache_key(app_id: &str, board_id: &str, version: Option<(u32, u32, u32)>) -> String {
+    match version {
+        Some((maj, min, pat)) => format!(
+            "{}\u{1f}{}\u{1f}{maj}.{min}.{pat}",
+            app_id.trim(),
+            board_id.trim()
+        ),
+        None => format!("{}\u{1f}{}\u{1f}", app_id.trim(), board_id.trim()),
+    }
+}
+
+/// Boards are large (a few MB hydrated); bound the count rather than trying to weigh them.
+const BOARD_CACHE_MAX_ENTRIES: u64 = 64;
+/// Total nodes retained across all indexed segment bases (see `State::board_segment_bases`).
+const BOARD_SEGMENT_BASE_MAX_NODES: u64 = 200_000;
+
+/// Key of a segment in `State::board_segment_bases`.
+pub(crate) fn segment_base_key(app_id: &str, board_id: &str, token: &str) -> String {
+    format!("{}\u{1f}{}\u{1f}{token}", app_id.trim(), board_id.trim())
+}
+
+/// A hydrated board together with the storage identity it is known to reproduce.
+///
+/// `board` is what `Board::load` produced for the object that carried `e_tag`: `node_updates`
+/// and `cleanup` already applied, per-app WASM metadata and secret filtering **not** applied. It
+/// is shared read-only; every consumer clones before mutating.
+pub struct CachedBoard {
+    pub e_tag: String,
+    pub board: Arc<Board>,
+}
+
+/// A registry of per-key process-local mutexes that forget themselves once nobody holds them.
+fn keyed_local_lock(
+    locks: &parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
+    key: String,
+) -> Arc<flow_like_types::tokio::sync::Mutex<()>> {
+    let mut locks = locks.lock();
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    // Weak entries make cleanup safe: a mutex can disappear only when no holder or waiter has
+    // an Arc, so eviction can never create a second live lock for the same key.
+    if locks.len() >= 4_096 {
+        locks.retain(|_, lock| lock.strong_count() > 0);
+    }
+    let lock = Arc::new(flow_like_types::tokio::sync::Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
 }
 
 const ENSURE_MUTATION_LOCK_SQL: &str =
@@ -181,12 +236,21 @@ impl BoardMutationGuard {
 
 const CONFIG: &str = include_str!("../../../flow-like.config.json");
 const JWKS: &str = include_str!(concat!(env!("OUT_DIR"), "/jwks.json"));
+const JWKS_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30);
+const JWKS_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const JWKS_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+const JWKS_MAX_KEYS: usize = 64;
+/// Clock-skew tolerance applied to `exp`/`nbf`. Matches the historical
+/// `jsonwebtoken` default so IdPs and clients with slightly offset clocks keep
+/// working; override with `authentication.openid.leeway_seconds`.
+const DEFAULT_OPENID_LEEWAY_SECONDS: u64 = 60;
 
 /// Cached auth result for JWT/PAT/API key
 #[derive(Clone, Debug)]
 pub enum CachedAuth {
-    /// OpenID user with sub
-    OpenID { sub: String },
+    /// OpenID user with sub and the token's own expiration. Cache hits must
+    /// never extend an access token beyond this timestamp.
+    OpenID { sub: String, exp: i64 },
     /// PAT user with sub
     PAT { sub: String },
     /// API key with key_id, app_id, and the creator user that owns tier/billing.
@@ -221,10 +285,59 @@ pub enum CachedAuth {
     Invalid,
 }
 
+#[derive(Debug, Default)]
+struct JwksRefreshState {
+    last_attempt: Option<Instant>,
+}
+
+#[derive(Debug)]
+struct OpenIdValidationSettings {
+    issuer: String,
+    /// Every app client that may mint tokens for this deployment. Contains the
+    /// configured `client_id` plus any `additional_client_ids`, so a user pool
+    /// with more than one app client keeps working.
+    client_ids: BTreeSet<String>,
+    audience: String,
+    jwks_url: String,
+    tenant_id: Option<uuid::Uuid>,
+    leeway: u64,
+}
+
+/// Additive OpenID validation settings read from the embedded deployment
+/// config. Every field defaults to the historical behaviour, so configs that
+/// do not declare them validate exactly as before.
+#[derive(Debug, serde::Deserialize)]
+struct OpenIdValidationOverrides {
+    #[serde(default = "default_openid_leeway_seconds")]
+    leeway_seconds: u64,
+    #[serde(default)]
+    additional_client_ids: Vec<String>,
+}
+
+impl Default for OpenIdValidationOverrides {
+    fn default() -> Self {
+        Self {
+            leeway_seconds: DEFAULT_OPENID_LEEWAY_SECONDS,
+            additional_client_ids: Vec::new(),
+        }
+    }
+}
+
+fn default_openid_leeway_seconds() -> u64 {
+    DEFAULT_OPENID_LEEWAY_SECONDS
+}
+
+#[derive(Debug)]
+pub(crate) struct ValidatedOpenIdToken {
+    pub(crate) claims: HashMap<String, Value>,
+    pub(crate) expires_at: i64,
+}
+
 pub struct State {
     pub platform_config: Hub,
     pub db: DatabaseConnection,
-    pub jwks: JwkSet,
+    jwks: flow_like_types::tokio::sync::RwLock<JwkSet>,
+    jwks_refresh: flow_like_types::tokio::sync::Mutex<JwksRefreshState>,
     pub client: Client<HttpConnector, Body>,
     pub stripe_client: Option<stripe::Client>,
     pub mail_client: Option<DynMailClient>,
@@ -245,6 +358,32 @@ pub struct State {
     /// Process-local half of canonical app+board serialization. `board_mutation_guard` pairs each
     /// mutex with a database lock row so API replicas enter the same mutation lane.
     board_mutation_locks:
+        parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
+    /// Hydrated boards pinned to the object identity they were loaded from. See
+    /// [`State::master_board`] for the validation contract.
+    board_cache: moka::sync::Cache<String, Arc<CachedBoard>>,
+    /// Tokenised board parts per (board revision, WASM catalog); answers sync polls without
+    /// re-serialising. Keyed by the ETag, so it never needs explicit invalidation.
+    pub board_sync_cache:
+        moka::sync::Cache<String, Arc<flow_like::flow::board::sync::BoardSyncSnapshot>>,
+    /// The most recent snapshot built for a board on this instance, keyed like `board_cache`.
+    /// Only ever the *starting point* of the next build (`from_board_incremental` reuses tokens
+    /// by payload comparison), so a stale or foreign entry costs hashing time, never correctness.
+    pub board_snapshot_heads:
+        moka::sync::Cache<String, Arc<flow_like::flow::board::sync::BoardSyncSnapshot>>,
+    /// Segments of recently built snapshots by `(app, board, token)`, so a client's segment token
+    /// can be resolved to the payload it denotes and answered with a node-level patch. Fed by every
+    /// snapshot build on this instance; a miss ships the whole segment. Scoped by app and board so
+    /// a token can never address another tenant's data even in theory.
+    pub board_segment_bases:
+        moka::sync::Cache<String, Arc<flow_like::flow::board::sync::SyncSegment>>,
+    /// Per-app WASM node catalog; see `app_wasm_nodes_cached`.
+    pub app_wasm_nodes_cache:
+        moka::sync::Cache<String, Arc<crate::routes::app::wasm_catalog::AppWasmNodes>>,
+    /// Serialises concurrent cold loads of one board on this instance so the second reader waits
+    /// for the first hydration instead of repeating it. Distinct from `board_mutation_locks`,
+    /// which a writer already holds while it calls `master_board`.
+    board_load_locks:
         parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
     pub content_bucket: Arc<FlowLikeStore>,
     pub cdn_bucket: Arc<FlowLikeStore>,
@@ -297,19 +436,10 @@ impl State {
         app_id: &str,
         board_id: &str,
     ) -> Arc<flow_like_types::tokio::sync::Mutex<()>> {
-        let key = board_mutation_lock_key(app_id, board_id);
-        let mut locks = self.board_mutation_locks.lock();
-        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
-            return lock;
-        }
-        // Weak entries make cleanup safe: a mutex can disappear only when no holder or waiter has
-        // an Arc, so eviction can never create a second live lock for the same board.
-        if locks.len() >= 4_096 {
-            locks.retain(|_, lock| lock.strong_count() > 0);
-        }
-        let lock = Arc::new(flow_like_types::tokio::sync::Mutex::new(()));
-        locks.insert(key, Arc::downgrade(&lock));
-        lock
+        keyed_local_lock(
+            &self.board_mutation_locks,
+            board_mutation_lock_key(app_id, board_id),
+        )
     }
 
     /// Open a transaction and acquire one durable, database-backed mutation lock.
@@ -360,6 +490,30 @@ impl State {
         catalog: Arc<Vec<Arc<dyn NodeLogic>>>,
         cdn_bucket: Arc<FlowLikeStore>,
         secret_store_config: Option<SecretStoreConfig>,
+    ) -> Self {
+        Self::new_inner(catalog, cdn_bucket, secret_store_config, None).await
+    }
+
+    /// Construct API state around a caller-managed database connection.
+    ///
+    /// Cloud targets that use short-lived, identity-backed database credentials
+    /// must create the pool themselves so the access token never has to be stored
+    /// in `DATABASE_URL`. The standard constructor intentionally retains its
+    /// existing `DATABASE_URL` behavior for all other deployment targets.
+    pub async fn new_with_database(
+        catalog: Arc<Vec<Arc<dyn NodeLogic>>>,
+        cdn_bucket: Arc<FlowLikeStore>,
+        secret_store_config: Option<SecretStoreConfig>,
+        database: DatabaseConnection,
+    ) -> Self {
+        Self::new_inner(catalog, cdn_bucket, secret_store_config, Some(database)).await
+    }
+
+    async fn new_inner(
+        catalog: Arc<Vec<Arc<dyn NodeLogic>>>,
+        cdn_bucket: Arc<FlowLikeStore>,
+        secret_store_config: Option<SecretStoreConfig>,
+        database: Option<DatabaseConnection>,
     ) -> Self {
         let secrets = {
             let config = secret_store_config.unwrap_or_else(|| {
@@ -459,8 +613,17 @@ impl State {
 
         let platform_config: Hub =
             serde_json::from_str(CONFIG).expect("Failed to parse config file");
+        if platform_config
+            .authentication
+            .as_ref()
+            .is_some_and(|authentication| authentication.variant.eq_ignore_ascii_case("openid"))
+        {
+            openid_validation_settings_for_hub(&platform_config)
+                .expect("OpenID validation configuration must be complete and exact");
+        }
 
         let jwks = flow_like_types::json::from_str::<JwkSet>(JWKS).expect("Failed to parse JWKS");
+        validate_jwks_set(&jwks).expect("Embedded OpenID JWKS must be safe and unambiguous");
 
         // Create content + meta buckets from master credentials (same mechanism
         // that board/storage already uses — works with IAM roles, STS, etc.)
@@ -480,23 +643,28 @@ impl State {
                 .expect("Failed to create meta store from master credentials"),
         );
 
-        let db_url = secrets
-            .get_secret_string(&SecretRef::new("DATABASE_URL"))
-            .await
-            .expect("DATABASE_URL must be set");
-        let mut opt = ConnectOptions::new(db_url.expose_secret().to_owned());
         let client: Client<HttpConnector, Body> =
             hyper_util::client::legacy::Client::<(), ()>::builder(TokioExecutor::new())
                 .build(HttpConnector::new());
-        opt.max_connections(10)
-            .min_connections(1)
-            .connect_timeout(Duration::from_secs(8))
-            .connect_lazy(true)
-            .sqlx_logging(platform_config.environment == Environment::Development);
+        let db = match database {
+            Some(database) => database,
+            None => {
+                let db_url = secrets
+                    .get_secret_string(&SecretRef::new("DATABASE_URL"))
+                    .await
+                    .expect("DATABASE_URL must be set");
+                let mut opt = ConnectOptions::new(db_url.expose_secret().to_owned());
+                opt.max_connections(10)
+                    .min_connections(1)
+                    .connect_timeout(Duration::from_secs(8))
+                    .connect_lazy(true)
+                    .sqlx_logging(platform_config.environment == Environment::Development);
 
-        let db = Database::connect(opt)
-            .await
-            .expect("Failed to connect to database");
+                Database::connect(opt)
+                    .await
+                    .expect("Failed to connect to database")
+            }
+        };
 
         if let Err(error) = crate::db_backfills::run_startup_backfills(&db).await {
             tracing::warn!("Failed to run startup database backfills: {error}");
@@ -664,7 +832,8 @@ impl State {
             platform_config,
             db,
             client,
-            jwks,
+            jwks: flow_like_types::tokio::sync::RwLock::new(jwks),
+            jwks_refresh: flow_like_types::tokio::sync::Mutex::new(JwksRefreshState::default()),
             stripe_client,
             mail_client,
             #[cfg(feature = "aws")]
@@ -687,6 +856,34 @@ impl State {
                 .time_to_idle(Duration::from_secs(2 * 60 * 60))
                 .build(),
             board_mutation_locks: parking_lot::Mutex::new(HashMap::new()),
+            board_cache: moka::sync::Cache::builder()
+                .max_capacity(BOARD_CACHE_MAX_ENTRIES)
+                .time_to_idle(Duration::from_secs(30 * 60))
+                .build(),
+            board_sync_cache: moka::sync::Cache::builder()
+                .max_capacity(BOARD_CACHE_MAX_ENTRIES)
+                .time_to_idle(Duration::from_secs(30 * 60))
+                .build(),
+            board_snapshot_heads: moka::sync::Cache::builder()
+                .max_capacity(BOARD_CACHE_MAX_ENTRIES)
+                .time_to_idle(Duration::from_secs(30 * 60))
+                .build(),
+            board_segment_bases: moka::sync::Cache::builder()
+                // Weighed by node count: a handful of 1000-node boards' worth of recent
+                // revisions, not a handful of entries.
+                .weigher(
+                    |_key, segment: &Arc<flow_like::flow::board::sync::SyncSegment>| {
+                        u32::try_from(segment.nodes.len().max(1)).unwrap_or(u32::MAX)
+                    },
+                )
+                .max_capacity(BOARD_SEGMENT_BASE_MAX_NODES)
+                .time_to_idle(Duration::from_secs(30 * 60))
+                .build(),
+            app_wasm_nodes_cache: moka::sync::Cache::builder()
+                .max_capacity(1_000)
+                .time_to_live(Duration::from_secs(5 * 60))
+                .build(),
+            board_load_locks: parking_lot::Mutex::new(HashMap::new()),
             credentials_cache: cache,
             content_bucket,
             cdn_bucket,
@@ -727,22 +924,86 @@ impl State {
     /// when the app's package list changes (add/update/delete).
     pub fn invalidate_wasm_resolve(&self, app_id: &str) {
         self.wasm_resolve_cache.invalidate(app_id);
+        self.app_wasm_nodes_cache.invalidate(app_id);
     }
 
-    pub fn validate_token(&self, token: &str) -> Result<HashMap<String, Value>> {
+    fn openid_validation_settings(&self) -> Result<OpenIdValidationSettings> {
+        openid_validation_settings_for_hub(&self.platform_config)
+    }
+
+    async fn configured_jwk(&self, kid: &str) -> Result<Jwk> {
+        {
+            let jwks = self.jwks.read().await;
+            if let Some(jwk) = find_unique_jwk(&*jwks, kid)? {
+                return Ok(jwk);
+            }
+        }
+
+        // A public JWKS endpoint needs no client secret. Refresh only the fixed,
+        // reviewed URL from the embedded deployment config, serialize refreshes,
+        // and rate-limit failed/attacker-triggered unknown-kid requests.
+        let mut refresh = self.jwks_refresh.lock().await;
+        {
+            let jwks = self.jwks.read().await;
+            if let Some(jwk) = find_unique_jwk(&*jwks, kid)? {
+                return Ok(jwk);
+            }
+        }
+        if refresh
+            .last_attempt
+            .is_some_and(|last| last.elapsed() < JWKS_REFRESH_MIN_INTERVAL)
+        {
+            bail!("OpenID signing key is unknown and JWKS refresh is rate limited");
+        }
+        refresh.last_attempt = Some(Instant::now());
+
+        let settings = self.openid_validation_settings()?;
+        let refreshed = fetch_jwks(&settings.jwks_url).await?;
+        let jwk = find_unique_jwk(&refreshed, kid)?
+            .ok_or_else(|| flow_like_types::anyhow!("OpenID signing key is not published"))?;
+        *self.jwks.write().await = refreshed;
+        Ok(jwk)
+    }
+
+    pub(crate) async fn validate_token(&self, token: &str) -> Result<ValidatedOpenIdToken> {
+        let settings = self.openid_validation_settings()?;
         let header = jsonwebtoken::decode_header(token)?;
-        let Some(kid) = header.kid else {
-            return Err(flow_like_types::anyhow!("Missing kid in token header"));
-        };
-        let Some(jwk) = self.jwks.find(&kid) else {
-            return Err(flow_like_types::anyhow!("JWK not found for kid: {}", kid));
-        };
-        let alg = decoding_key_for_algorithm(&jwk.algorithm)?;
+        ensure_allowed_oidc_algorithm(header.alg)?;
+        let kid = header
+            .kid
+            .as_deref()
+            .filter(|kid| !kid.is_empty() && kid.len() <= 256)
+            .ok_or_else(|| flow_like_types::anyhow!("OpenID token has no valid kid"))?;
+        let jwk = self.configured_jwk(kid).await?;
+        validate_jwk_for_header(&jwk, kid, header.alg)?;
+
+        let decoding_key = decoding_key_for_algorithm(&jwk.algorithm)?;
         let mut validation = Validation::new(header.alg);
+        validation.algorithms = vec![header.alg];
+        validation.leeway = settings.leeway;
+        validation.validate_exp = true;
+        validation.validate_nbf = true;
+        // Cognito access tokens use `client_id` rather than `aud`. Validate
+        // both target-claim forms explicitly below without weakening either.
         validation.validate_aud = false;
-        let decoded = decode::<HashMap<String, Value>>(token, &alg, &validation)?;
-        let claims = decoded.claims;
-        Ok(claims)
+        validation.set_issuer(&[&settings.issuer]);
+        validation.set_required_spec_claims(&["exp", "iss", "sub"]);
+
+        let decoded = decode::<HashMap<String, Value>>(token, &decoding_key, &validation)?;
+        let expires_at = validate_openid_claims(
+            &decoded.claims,
+            &settings.issuer,
+            &settings.client_ids,
+            &settings.audience,
+            settings.tenant_id,
+            chrono::Utc::now().timestamp(),
+            settings.leeway,
+        )?;
+
+        Ok(ValidatedOpenIdToken {
+            claims: decoded.claims,
+            expires_at,
+        })
     }
 
     #[tracing::instrument(
@@ -797,21 +1058,8 @@ impl State {
         app_id: &str,
         state: &AppState,
     ) -> flow_like_types::Result<App> {
-        let credentials = self.master_credentials().await?;
-
-        let app_state = self.state_cache.get("master");
-
-        let app_state = match app_state {
-            Some(state) => state,
-            None => {
-                let state = Arc::new(credentials.to_state(state.clone()).await?);
-                self.state_cache.insert("master".to_string(), state.clone());
-                state
-            }
-        };
-
-        let app = App::load(app_id.to_string(), app_state.clone()).await?;
-
+        let app_state = self.master_state(state).await?;
+        let app = App::load(app_id.to_string(), app_state).await?;
         Ok(app)
     }
 
@@ -851,23 +1099,146 @@ impl State {
         state: &AppState,
         version: Option<(u32, u32, u32)>,
     ) -> flow_like_types::Result<Board> {
+        let app_state = self.master_state(state).await?;
+        let cached = self
+            .master_board_shared_with(app_id, board_id, app_state.clone(), version)
+            .await?;
+        let mut board = (*cached.board).clone();
+        // The cached hydration may predate a master-state rotation; hand out the live one so
+        // `save(None)` and command execution never run on retired credentials.
+        board.app_state = Some(app_state);
+        Ok(board)
+    }
+
+    /// The process-wide master `FlowLikeState`, built lazily and rotated by `state_cache`'s TTL.
+    async fn master_state(&self, state: &AppState) -> flow_like_types::Result<Arc<FlowLikeState>> {
+        if let Some(app_state) = self.state_cache.get("master") {
+            return Ok(app_state);
+        }
         let credentials = self.master_credentials().await?;
+        let app_state = Arc::new(credentials.to_state(state.clone()).await?);
+        self.state_cache
+            .insert("master".to_string(), app_state.clone());
+        Ok(app_state)
+    }
 
-        let app_state = self.state_cache.get("master");
+    /// Load a board on master credentials, validated against storage but served from memory.
+    ///
+    /// The cache is keyed by object identity, not by who wrote last: every call issues one
+    /// `If-None-Match` GET carrying the cached ETag. Storage answering `NotModified` proves the
+    /// cached hydration is still what a fresh load would produce, regardless of which replica,
+    /// fork job, CLI, or publish path wrote the object. A changed object arrives in that same
+    /// round trip, so a miss costs exactly what the old unconditional load did.
+    ///
+    /// The returned board is shared. Callers that mutate (WASM hydration, secret filtering,
+    /// commands) must clone first — [`State::master_board`] does that for them.
+    #[tracing::instrument(
+        name = "master_board_shared",
+        skip(self, state),
+        level = "debug",
+        fields(app_id, board_id, version)
+    )]
+    pub async fn master_board_shared(
+        &self,
+        app_id: &str,
+        board_id: &str,
+        state: &AppState,
+        version: Option<(u32, u32, u32)>,
+    ) -> flow_like_types::Result<Arc<CachedBoard>> {
+        let app_state = self.master_state(state).await?;
+        self.master_board_shared_with(app_id, board_id, app_state, version)
+            .await
+    }
 
-        let app_state = match app_state {
-            Some(state) => state,
-            None => {
-                let state = Arc::new(credentials.to_state(state.clone()).await?);
-                self.state_cache.insert("master".to_string(), state.clone());
-                state
+    async fn master_board_shared_with(
+        &self,
+        app_id: &str,
+        board_id: &str,
+        app_state: Arc<FlowLikeState>,
+        version: Option<(u32, u32, u32)>,
+    ) -> flow_like_types::Result<Arc<CachedBoard>> {
+        let cache_key = board_cache_key(app_id, board_id, version);
+        let load_lock = keyed_local_lock(&self.board_load_locks, cache_key.clone());
+        let _single_flight = load_lock.lock().await;
+
+        let cached = self.board_cache.get(&cache_key);
+        let store = Board::meta_store(&app_state).await?;
+        let storage_root = Path::from("apps").child(app_id.to_string());
+        let read = Board::load_proto_if_changed(
+            store,
+            &storage_root,
+            board_id,
+            version,
+            cached.as_ref().map(|entry| entry.e_tag.as_str()),
+        )
+        .await?;
+
+        let (proto, meta) = match read {
+            ConditionalRead::NotModified => {
+                return cached.ok_or_else(|| {
+                    flow_like_types::anyhow!(
+                        "storage reported NotModified for {app_id}/{board_id} without a cached ETag"
+                    )
+                });
             }
+            ConditionalRead::Fresh(proto, meta) => (proto, meta),
         };
 
-        let storage_root = Path::from("apps").child(app_id.to_string());
-        let board = Board::load(storage_root, board_id, app_state, version).await?;
+        let board = Board::from_loaded_proto(proto, storage_root, app_state).await;
+        let entry = Arc::new(CachedBoard {
+            e_tag: meta.e_tag.clone().unwrap_or_default(),
+            board: Arc::new(board),
+        });
+        // An object without an ETag can never be validated, so it is never cached.
+        if meta.e_tag.is_some() {
+            self.board_cache.insert(cache_key, entry.clone());
+        }
+        Ok(entry)
+    }
 
-        Ok(board)
+    /// Pin an in-memory board to the object identity its writer just persisted.
+    ///
+    /// The writer's board is post-`execute_commands`, which ends with the same `node_updates`
+    /// + `cleanup` normalisation `Board::load` applies, so it is what the next load of `put`
+    /// would produce. Seeding makes the read that follows every edit a `NotModified` memory hit
+    /// instead of a decode + hydration. Skipping this is always safe (the next read reloads);
+    /// seeding a board that does **not** match `put` is not, so only call it with the exact
+    /// board whose `save` returned `put`.
+    ///
+    /// Returns the seeded entry so the writer can build the revision's sync snapshot from the
+    /// very board it just persisted (see `routes::app::board::sync_board::seed_board_revision`).
+    /// `None` when the object carried no ETag and therefore cannot be validated later.
+    pub fn seed_board_cache(
+        &self,
+        app_id: &str,
+        board_id: &str,
+        board: Board,
+        put: &flow_like::flow_like_storage::object_store::PutResult,
+    ) -> Option<Arc<CachedBoard>> {
+        let e_tag = put.e_tag.clone()?;
+        let entry = Arc::new(CachedBoard {
+            e_tag,
+            board: Arc::new(board),
+        });
+        self.board_cache
+            .insert(board_cache_key(app_id, board_id, None), entry.clone());
+        Some(entry)
+    }
+
+    /// Key under which `board_snapshot_heads` remembers the last snapshot built for a board.
+    pub fn board_snapshot_head_key(
+        app_id: &str,
+        board_id: &str,
+        version: Option<(u32, u32, u32)>,
+    ) -> String {
+        board_cache_key(app_id, board_id, version)
+    }
+
+    /// Drop the cached floating draft. Only needed by writers that produce a board the seed
+    /// contract cannot vouch for; ordinary readers self-heal through the ETag check.
+    pub fn invalidate_board_cache(&self, app_id: &str, board_id: &str) {
+        self.board_cache
+            .invalidate(&board_cache_key(app_id, board_id, None));
     }
 
     /// Load a template on master credentials, for callers that were authorized
@@ -886,20 +1257,9 @@ impl State {
         state: &AppState,
         version: Option<(u32, u32, u32)>,
     ) -> flow_like_types::Result<Board> {
-        let credentials = self.master_credentials().await?;
-
-        let app_state = match self.state_cache.get("master") {
-            Some(state) => state,
-            None => {
-                let state = Arc::new(credentials.to_state(state.clone()).await?);
-                self.state_cache.insert("master".to_string(), state.clone());
-                state
-            }
-        };
-
+        let app_state = self.master_state(state).await?;
         let storage_root = Path::from("apps").child(app_id.to_string());
         let board = Board::load_template(storage_root, template_id, app_state, version).await?;
-
         Ok(board)
     }
 
@@ -1035,6 +1395,386 @@ impl State {
     }
 }
 
+fn openid_validation_settings_for_hub(hub: &Hub) -> Result<OpenIdValidationSettings> {
+    let authentication = hub
+        .authentication
+        .as_ref()
+        .ok_or_else(|| flow_like_types::anyhow!("OpenID authentication is not configured"))?;
+    if !authentication.variant.eq_ignore_ascii_case("openid") {
+        bail!("OpenID authentication is not enabled");
+    }
+
+    let config = authentication
+        .openid
+        .as_ref()
+        .ok_or_else(|| flow_like_types::anyhow!("OpenID configuration is missing"))?;
+    let issuer = match config.issuer.as_deref() {
+        Some(issuer) => exact_nonempty_str("authentication.openid.issuer", issuer)?,
+        None => exact_nonempty_setting(
+            "authentication.openid.issuer or authentication.openid.authority",
+            &config.authority,
+        )?,
+    };
+    let client_id = exact_nonempty_setting("authentication.openid.client_id", &config.client_id)?;
+    let audience = match config.audience.as_deref() {
+        Some(audience) => exact_nonempty_str("authentication.openid.audience", audience)?,
+        None => client_id,
+    };
+    let jwks_url = exact_nonempty_str("authentication.openid.jwks_url", &config.jwks_url)?;
+    validate_jwks_url(jwks_url)?;
+
+    let overrides = openid_validation_overrides();
+    let mut client_ids = BTreeSet::new();
+    client_ids.insert(client_id.to_string());
+    for additional in &overrides.additional_client_ids {
+        let additional =
+            exact_nonempty_str("authentication.openid.additional_client_ids", additional)?;
+        client_ids.insert(additional.to_string());
+    }
+
+    Ok(OpenIdValidationSettings {
+        tenant_id: entra_tenant_from_issuer(issuer),
+        issuer: issuer.to_string(),
+        client_ids,
+        audience: audience.to_string(),
+        jwks_url: jwks_url.to_string(),
+        leeway: overrides.leeway_seconds,
+    })
+}
+
+/// `OpenIdConfig` ignores unknown keys, so the additive validation settings are
+/// read from the same embedded config document that produced the `Hub`.
+fn openid_validation_overrides() -> OpenIdValidationOverrides {
+    serde_json::from_str::<Value>(CONFIG)
+        .ok()
+        .and_then(|config| {
+            config
+                .get("authentication")
+                .and_then(|authentication| authentication.get("openid"))
+                .cloned()
+        })
+        .and_then(|openid| serde_json::from_value(openid).ok())
+        .unwrap_or_default()
+}
+
+fn exact_nonempty_setting<'a>(name: &str, value: &'a Option<String>) -> Result<&'a str> {
+    let value = value
+        .as_deref()
+        .ok_or_else(|| flow_like_types::anyhow!("{name} must be configured"))?;
+    exact_nonempty_str(name, value)
+}
+
+fn exact_nonempty_str<'a>(name: &str, value: &'a str) -> Result<&'a str> {
+    if value.is_empty() || value.trim() != value {
+        bail!("{name} must be a non-empty exact value without surrounding whitespace");
+    }
+    Ok(value)
+}
+
+fn validate_jwks_url(raw: &str) -> Result<reqwest::Url> {
+    let url = reqwest::Url::parse(raw)?;
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.host_str().is_none()
+        || url.fragment().is_some()
+    {
+        bail!("OpenID jwks_url must be an absolute HTTPS URL without credentials or fragment");
+    }
+    Ok(url)
+}
+
+fn entra_tenant_from_issuer(issuer: &str) -> Option<uuid::Uuid> {
+    let url = reqwest::Url::parse(issuer).ok()?;
+    let host = url.host_str()?.to_ascii_lowercase();
+    let is_entra = matches!(
+        host.as_str(),
+        "login.microsoftonline.com"
+            | "login.microsoftonline.us"
+            | "login.microsoftonline.de"
+            | "login.partner.microsoftonline.cn"
+            | "sts.windows.net"
+    ) || host.ends_with(".ciamlogin.com");
+    if !is_entra {
+        return None;
+    }
+
+    url.path_segments()?
+        .find_map(|segment| uuid::Uuid::parse_str(segment).ok())
+}
+
+async fn fetch_jwks(raw_url: &str) -> Result<JwkSet> {
+    let url = validate_jwks_url(raw_url)?;
+    let client = reqwest::Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(JWKS_REQUEST_TIMEOUT)
+        .build()?;
+    let mut response = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        bail!("OpenID JWKS endpoint returned a non-success status");
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > JWKS_MAX_RESPONSE_BYTES as u64)
+    {
+        bail!("OpenID JWKS response exceeds the configured size limit");
+    }
+
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len().saturating_add(chunk.len()) > JWKS_MAX_RESPONSE_BYTES {
+            bail!("OpenID JWKS response exceeds the configured size limit");
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let jwks: JwkSet = serde_json::from_slice(&body)?;
+    validate_jwks_set(&jwks)?;
+    Ok(jwks)
+}
+
+fn validate_jwks_set(jwks: &JwkSet) -> Result<()> {
+    if jwks.keys.is_empty() || jwks.keys.len() > JWKS_MAX_KEYS {
+        bail!("OpenID JWKS contains an invalid number of keys");
+    }
+    let mut seen = std::collections::HashSet::with_capacity(jwks.keys.len());
+    for key in &jwks.keys {
+        let kid = key
+            .common
+            .key_id
+            .as_deref()
+            .filter(|kid| !kid.is_empty() && kid.len() <= 256)
+            .ok_or_else(|| flow_like_types::anyhow!("OpenID JWK has no valid kid"))?;
+        if !seen.insert(kid) {
+            bail!("OpenID JWKS contains duplicate kid values");
+        }
+    }
+    Ok(())
+}
+
+fn find_unique_jwk(jwks: &JwkSet, kid: &str) -> Result<Option<Jwk>> {
+    let mut matches = jwks
+        .keys
+        .iter()
+        .filter(|key| key.common.key_id.as_deref() == Some(kid));
+    let result = matches.next().cloned();
+    if matches.next().is_some() {
+        bail!("OpenID JWKS contains duplicate kid values");
+    }
+    Ok(result)
+}
+
+fn ensure_allowed_oidc_algorithm(algorithm: Algorithm) -> Result<()> {
+    match algorithm {
+        Algorithm::RS256
+        | Algorithm::RS384
+        | Algorithm::RS512
+        | Algorithm::PS256
+        | Algorithm::PS384
+        | Algorithm::PS512
+        | Algorithm::ES256
+        | Algorithm::ES384
+        | Algorithm::EdDSA => Ok(()),
+        _ => bail!("OpenID token uses a disallowed signing algorithm"),
+    }
+}
+
+fn jwk_algorithm(algorithm: KeyAlgorithm) -> Result<Algorithm> {
+    match algorithm {
+        KeyAlgorithm::RS256 => Ok(Algorithm::RS256),
+        KeyAlgorithm::RS384 => Ok(Algorithm::RS384),
+        KeyAlgorithm::RS512 => Ok(Algorithm::RS512),
+        KeyAlgorithm::PS256 => Ok(Algorithm::PS256),
+        KeyAlgorithm::PS384 => Ok(Algorithm::PS384),
+        KeyAlgorithm::PS512 => Ok(Algorithm::PS512),
+        KeyAlgorithm::ES256 => Ok(Algorithm::ES256),
+        KeyAlgorithm::ES384 => Ok(Algorithm::ES384),
+        KeyAlgorithm::EdDSA => Ok(Algorithm::EdDSA),
+        _ => bail!("OpenID JWK uses a disallowed or unsupported algorithm"),
+    }
+}
+
+fn validate_jwk_for_header(jwk: &Jwk, kid: &str, header_algorithm: Algorithm) -> Result<()> {
+    ensure_allowed_oidc_algorithm(header_algorithm)?;
+    if jwk.common.key_id.as_deref() != Some(kid) {
+        bail!("OpenID JWK kid does not match the token header");
+    }
+    if let Some(public_key_use) = &jwk.common.public_key_use
+        && public_key_use != &PublicKeyUse::Signature
+    {
+        bail!("OpenID JWK is not designated for signatures");
+    }
+    if let Some(operations) = &jwk.common.key_operations
+        && !operations.contains(&KeyOperations::Verify)
+    {
+        bail!("OpenID JWK is not designated for signature verification");
+    }
+
+    // Entra ID JWKS omit `alg`; the header algorithm is still bound by the
+    // allowlist above and the key-type match below.
+    if let Some(key_algorithm) = jwk.common.key_algorithm
+        && jwk_algorithm(key_algorithm)? != header_algorithm
+    {
+        bail!("OpenID JWK alg does not match the token header");
+    }
+    let compatible_key_type = matches!(
+        (&jwk.algorithm, header_algorithm),
+        (
+            AlgorithmParameters::RSA(_),
+            Algorithm::RS256
+                | Algorithm::RS384
+                | Algorithm::RS512
+                | Algorithm::PS256
+                | Algorithm::PS384
+                | Algorithm::PS512
+        ) | (
+            AlgorithmParameters::EllipticCurve(jsonwebtoken::jwk::EllipticCurveKeyParameters {
+                curve: EllipticCurve::P256,
+                ..
+            }),
+            Algorithm::ES256
+        ) | (
+            AlgorithmParameters::EllipticCurve(jsonwebtoken::jwk::EllipticCurveKeyParameters {
+                curve: EllipticCurve::P384,
+                ..
+            }),
+            Algorithm::ES384
+        ) | (
+            AlgorithmParameters::OctetKeyPair(jsonwebtoken::jwk::OctetKeyPairParameters {
+                curve: EllipticCurve::Ed25519,
+                ..
+            }),
+            Algorithm::EdDSA
+        )
+    );
+    if !compatible_key_type {
+        bail!("OpenID JWK key type does not match its signing algorithm");
+    }
+    Ok(())
+}
+
+fn numeric_date(claims: &HashMap<String, Value>, name: &str) -> Result<i64> {
+    let value = claims
+        .get(name)
+        .ok_or_else(|| flow_like_types::anyhow!("OpenID token is missing {name}"))?;
+    if let Some(value) = value.as_i64() {
+        return Ok(value);
+    }
+    if let Some(value) = value.as_u64() {
+        return i64::try_from(value)
+            .map_err(|_| flow_like_types::anyhow!("OpenID token has an invalid {name}"));
+    }
+    bail!("OpenID token has an invalid {name}")
+}
+
+fn validate_openid_claims(
+    claims: &HashMap<String, Value>,
+    expected_issuer: &str,
+    expected_client_ids: &BTreeSet<String>,
+    expected_audience: &str,
+    expected_tenant: Option<uuid::Uuid>,
+    now: i64,
+    leeway: u64,
+) -> Result<i64> {
+    let leeway = i64::try_from(leeway).unwrap_or(i64::MAX);
+    let is_expected_client_id =
+        |value: Option<&str>| value.is_some_and(|value| expected_client_ids.contains(value));
+    let issuer = claims
+        .get("iss")
+        .and_then(Value::as_str)
+        .ok_or_else(|| flow_like_types::anyhow!("OpenID token has no string issuer"))?;
+    if issuer != expected_issuer {
+        bail!("OpenID token issuer does not match the configured issuer");
+    }
+    let subject = claims
+        .get("sub")
+        .and_then(Value::as_str)
+        .filter(|subject| !subject.is_empty())
+        .ok_or_else(|| flow_like_types::anyhow!("OpenID token has no valid subject"))?;
+    let _ = subject;
+
+    let expires_at = numeric_date(claims, "exp")?;
+    if expires_at.saturating_add(leeway) <= now {
+        bail!("OpenID token is expired");
+    }
+    if let Some(not_before) = claims.get("nbf") {
+        let not_before = not_before
+            .as_i64()
+            .or_else(|| {
+                not_before
+                    .as_u64()
+                    .and_then(|value| i64::try_from(value).ok())
+            })
+            .ok_or_else(|| flow_like_types::anyhow!("OpenID token has an invalid nbf"))?;
+        if not_before > now.saturating_add(leeway) {
+            bail!("OpenID token is not valid yet");
+        }
+    }
+
+    let mut has_target_claim = false;
+    if let Some(audience) = claims.get("aud") {
+        has_target_claim = true;
+        let audience_matches = match audience {
+            Value::String(value) => value == expected_audience,
+            Value::Array(values) => {
+                if values.is_empty() || values.iter().any(|value| !value.is_string()) {
+                    bail!("OpenID token has an invalid audience");
+                }
+                let matches = values
+                    .iter()
+                    .any(|value| value.as_str() == Some(expected_audience));
+                if values.len() > 1
+                    && !is_expected_client_id(claims.get("azp").and_then(Value::as_str))
+                {
+                    bail!("OpenID token with multiple audiences has an invalid azp");
+                }
+                matches
+            }
+            _ => bail!("OpenID token has an invalid audience"),
+        };
+        if !audience_matches {
+            bail!("OpenID token audience does not match the configured audience");
+        }
+    }
+    if let Some(client_id) = claims.get("client_id") {
+        has_target_claim = true;
+        if !is_expected_client_id(client_id.as_str()) {
+            bail!("OpenID token client_id does not match a configured client_id");
+        }
+    }
+    for authorized_party_claim in ["azp", "appid"] {
+        if let Some(authorized_party) = claims.get(authorized_party_claim)
+            && !is_expected_client_id(authorized_party.as_str())
+        {
+            bail!("OpenID token {authorized_party_claim} does not match a configured client_id");
+        }
+    }
+    if !has_target_claim {
+        bail!("OpenID token has neither an audience nor a client_id");
+    }
+
+    if let Some(expected_tenant) = expected_tenant {
+        let tenant = claims
+            .get("tid")
+            .and_then(Value::as_str)
+            .and_then(|tenant| uuid::Uuid::parse_str(tenant).ok())
+            .ok_or_else(|| flow_like_types::anyhow!("Entra token has no valid tid"))?;
+        if tenant != expected_tenant {
+            bail!("Entra token tid does not match the issuer tenant");
+        }
+    }
+
+    Ok(expires_at)
+}
+
+pub(crate) fn cached_openid_is_current(exp: i64, now: i64) -> bool {
+    exp > now
+}
+
 fn decoding_key_for_algorithm(alg: &AlgorithmParameters) -> flow_like_types::Result<DecodingKey> {
     let key = match alg {
         AlgorithmParameters::RSA(rsa) => DecodingKey::from_rsa_components(&rsa.n, &rsa.e),
@@ -1049,8 +1789,370 @@ fn decoding_key_for_algorithm(alg: &AlgorithmParameters) -> flow_like_types::Res
 mod tests {
     use super::{
         ACQUIRE_MUTATION_LOCK_SQL, ENSURE_MUTATION_LOCK_SQL, board_mutation_lock_id,
-        board_mutation_lock_key, course_attempt_lock_id, flow_ir_draft_store_key,
+        board_mutation_lock_key, cached_openid_is_current, course_attempt_lock_id,
+        entra_tenant_from_issuer, flow_ir_draft_store_key, validate_jwk_for_header,
+        validate_jwks_set, validate_openid_claims,
     };
+    use flow_like_types::Value;
+    use jsonwebtoken::{
+        Algorithm,
+        jwk::{Jwk, JwkSet},
+    };
+    use std::collections::{BTreeSet, HashMap};
+
+    fn claims(values: &[(&str, Value)]) -> HashMap<String, Value> {
+        values
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), value.clone()))
+            .collect()
+    }
+
+    fn client_ids(values: &[&str]) -> BTreeSet<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    fn rsa_jwk(algorithm: &str, kid: &str) -> Jwk {
+        serde_json::from_value(serde_json::json!({
+            "kty": "RSA",
+            "use": "sig",
+            "key_ops": ["verify"],
+            "alg": algorithm,
+            "kid": kid,
+            "n": "sXchvX3L7MdCKMImnlUiVDXQ4x_8OmtkPL3MyT9c6nr8YjC-rf1W_gKVVdQVrWjQxw",
+            "e": "AQAB"
+        }))
+        .expect("valid test JWK")
+    }
+
+    #[test]
+    fn openid_claims_require_exact_issuer_and_client_target() {
+        let valid = claims(&[
+            ("iss", Value::String("https://issuer.example/tenant".into())),
+            ("sub", Value::String("user".into())),
+            ("aud", Value::String("client".into())),
+            ("exp", Value::from(2_000_i64)),
+            ("nbf", Value::from(900_i64)),
+        ]);
+        assert_eq!(
+            validate_openid_claims(
+                &valid,
+                "https://issuer.example/tenant",
+                &client_ids(&["client"]),
+                "client",
+                None,
+                1_000,
+                0,
+            )
+            .unwrap(),
+            2_000
+        );
+
+        let mut wrong_issuer = valid.clone();
+        wrong_issuer.insert(
+            "iss".into(),
+            Value::String("https://attacker.example".into()),
+        );
+        assert!(
+            validate_openid_claims(
+                &wrong_issuer,
+                "https://issuer.example/tenant",
+                &client_ids(&["client"]),
+                "client",
+                None,
+                1_000,
+                0,
+            )
+            .is_err()
+        );
+
+        let mut wrong_audience = valid.clone();
+        wrong_audience.insert("aud".into(), Value::String("other-client".into()));
+        assert!(
+            validate_openid_claims(
+                &wrong_audience,
+                "https://issuer.example/tenant",
+                &client_ids(&["client"]),
+                "client",
+                None,
+                1_000,
+                0,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn openid_claims_enforce_time_tenant_and_authorized_party() {
+        let tenant = uuid::Uuid::parse_str("11111111-2222-4333-8444-555555555555").unwrap();
+        let issuer = format!("https://login.microsoftonline.com/{tenant}/v2.0");
+        assert_eq!(entra_tenant_from_issuer(&issuer), Some(tenant));
+
+        let base = claims(&[
+            ("iss", Value::String(issuer.clone())),
+            ("sub", Value::String("user".into())),
+            ("aud", serde_json::json!(["client", "another-audience"])),
+            ("azp", Value::String("client".into())),
+            ("tid", Value::String(tenant.to_string())),
+            ("exp", Value::from(2_000_i64)),
+            ("nbf", Value::from(900_i64)),
+        ]);
+        let accepted = client_ids(&["client"]);
+        assert!(
+            validate_openid_claims(&base, &issuer, &accepted, "client", Some(tenant), 1_000, 0)
+                .is_ok()
+        );
+
+        let mut future = base.clone();
+        future.insert("nbf".into(), Value::from(1_001_i64));
+        assert!(
+            validate_openid_claims(
+                &future,
+                &issuer,
+                &accepted,
+                "client",
+                Some(tenant),
+                1_000,
+                0
+            )
+            .is_err()
+        );
+        assert!(
+            validate_openid_claims(
+                &future,
+                &issuer,
+                &accepted,
+                "client",
+                Some(tenant),
+                1_000,
+                60
+            )
+            .is_ok()
+        );
+
+        let mut expired = base.clone();
+        expired.insert("exp".into(), Value::from(1_000_i64));
+        assert!(
+            validate_openid_claims(
+                &expired,
+                &issuer,
+                &accepted,
+                "client",
+                Some(tenant),
+                1_000,
+                0
+            )
+            .is_err()
+        );
+        assert!(
+            validate_openid_claims(
+                &expired,
+                &issuer,
+                &accepted,
+                "client",
+                Some(tenant),
+                1_040,
+                60
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_openid_claims(
+                &expired,
+                &issuer,
+                &accepted,
+                "client",
+                Some(tenant),
+                1_100,
+                60
+            )
+            .is_err()
+        );
+
+        let mut wrong_azp = base.clone();
+        wrong_azp.insert("azp".into(), Value::String("attacker-client".into()));
+        assert!(
+            validate_openid_claims(
+                &wrong_azp,
+                &issuer,
+                &accepted,
+                "client",
+                Some(tenant),
+                1_000,
+                0,
+            )
+            .is_err()
+        );
+
+        let mut wrong_tenant = base;
+        wrong_tenant.insert(
+            "tid".into(),
+            Value::String("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee".into()),
+        );
+        assert!(
+            validate_openid_claims(
+                &wrong_tenant,
+                &issuer,
+                &accepted,
+                "client",
+                Some(tenant),
+                1_000,
+                0,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn openid_accepts_cognito_client_id_and_rejects_conflicts() {
+        let mut access_token = claims(&[
+            ("iss", Value::String("https://cognito.example/pool".into())),
+            ("sub", Value::String("user".into())),
+            ("client_id", Value::String("client".into())),
+            ("exp", Value::from(2_000_i64)),
+        ]);
+        assert!(
+            validate_openid_claims(
+                &access_token,
+                "https://cognito.example/pool",
+                &client_ids(&["client"]),
+                "client",
+                None,
+                1_000,
+                0,
+            )
+            .is_ok()
+        );
+
+        access_token.insert("aud".into(), Value::String("different-client".into()));
+        assert!(
+            validate_openid_claims(
+                &access_token,
+                "https://cognito.example/pool",
+                &client_ids(&["client"]),
+                "client",
+                None,
+                1_000,
+                0,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn openid_accepts_every_configured_client_id_and_rejects_unknown_ones() {
+        let access_token = |client: &str| {
+            claims(&[
+                ("iss", Value::String("https://cognito.example/pool".into())),
+                ("sub", Value::String("user".into())),
+                ("client_id", Value::String(client.into())),
+                ("exp", Value::from(2_000_i64)),
+            ])
+        };
+        let accepted = client_ids(&["client", "second-app-client"]);
+
+        for client in ["client", "second-app-client"] {
+            assert!(
+                validate_openid_claims(
+                    &access_token(client),
+                    "https://cognito.example/pool",
+                    &accepted,
+                    "client",
+                    None,
+                    1_000,
+                    0,
+                )
+                .is_ok()
+            );
+        }
+
+        assert!(
+            validate_openid_claims(
+                &access_token("attacker-client"),
+                "https://cognito.example/pool",
+                &accepted,
+                "client",
+                None,
+                1_000,
+                0,
+            )
+            .is_err()
+        );
+
+        let mut authorized_party = access_token("client");
+        authorized_party.insert("azp".into(), Value::String("second-app-client".into()));
+        assert!(
+            validate_openid_claims(
+                &authorized_party,
+                "https://cognito.example/pool",
+                &accepted,
+                "client",
+                None,
+                1_000,
+                0,
+            )
+            .is_ok()
+        );
+
+        authorized_party.insert("azp".into(), Value::String("attacker-client".into()));
+        assert!(
+            validate_openid_claims(
+                &authorized_party,
+                "https://cognito.example/pool",
+                &accepted,
+                "client",
+                None,
+                1_000,
+                0,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn openid_jwk_must_match_kid_algorithm_and_signature_use() {
+        let key = rsa_jwk("RS256", "key-1");
+        assert!(validate_jwk_for_header(&key, "key-1", Algorithm::RS256).is_ok());
+        assert!(validate_jwk_for_header(&key, "key-1", Algorithm::RS512).is_err());
+        assert!(validate_jwk_for_header(&key, "other-key", Algorithm::RS256).is_err());
+        assert!(validate_jwk_for_header(&key, "key-1", Algorithm::HS256).is_err());
+
+        let encryption_key: Jwk = serde_json::from_value(serde_json::json!({
+            "kty": "RSA",
+            "use": "enc",
+            "alg": "RS256",
+            "kid": "key-1",
+            "n": "sXchvX3L7MdCKMImnlUiVDXQ4x_8OmtkPL3MyT9c6nr8YjC-rf1W_gKVVdQVrWjQxw",
+            "e": "AQAB"
+        }))
+        .unwrap();
+        assert!(validate_jwk_for_header(&encryption_key, "key-1", Algorithm::RS256).is_err());
+    }
+
+    #[test]
+    fn openid_jwk_without_alg_accepts_compatible_header_algorithms_only() {
+        let entra_key: Jwk = serde_json::from_value(serde_json::json!({
+            "kty": "RSA",
+            "use": "sig",
+            "kid": "entra-key",
+            "n": "sXchvX3L7MdCKMImnlUiVDXQ4x_8OmtkPL3MyT9c6nr8YjC-rf1W_gKVVdQVrWjQxw",
+            "e": "AQAB"
+        }))
+        .expect("valid test JWK");
+        assert!(validate_jwk_for_header(&entra_key, "entra-key", Algorithm::RS256).is_ok());
+        assert!(validate_jwk_for_header(&entra_key, "entra-key", Algorithm::ES256).is_err());
+        assert!(validate_jwk_for_header(&entra_key, "entra-key", Algorithm::HS256).is_err());
+    }
+
+    #[test]
+    fn jwks_rejects_duplicate_key_ids_and_cache_never_extends_expiry() {
+        let duplicate = JwkSet {
+            keys: vec![rsa_jwk("RS256", "same"), rsa_jwk("RS256", "same")],
+        };
+        assert!(validate_jwks_set(&duplicate).is_err());
+        assert!(cached_openid_is_current(1_001, 1_000));
+        assert!(!cached_openid_is_current(1_000, 1_000));
+        assert!(!cached_openid_is_current(999, 1_000));
+    }
 
     #[test]
     fn retained_flow_ir_key_is_scoped_by_user_app_and_board() {

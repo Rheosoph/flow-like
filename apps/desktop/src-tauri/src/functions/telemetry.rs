@@ -16,6 +16,8 @@ const DEFAULT_DRAIN_LIMIT: u32 = 100;
 const DEFAULT_ERROR_DRAIN_LIMIT: u32 = 20;
 const MAX_EVENT_NAME_LEN: usize = 128;
 const MAX_ERROR_VALUE_LEN: usize = 8192;
+const MAX_UPDATER_VERSION_LEN: usize = 128;
+const MAX_UPDATER_ATTEMPT_AGE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 const MAX_STACKTRACE_FRAMES: usize = 100;
 const ACK_CHUNK_SIZE: usize = 500;
 /// Upper bound for the settings file the early crash-reporting bootstrap reads.
@@ -691,6 +693,93 @@ pub async fn queue_telemetry_event(
         return Ok(());
     };
     insert_event(&db_path, &name, props.as_ref())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdaterInterruptionAttempt {
+    current_version: String,
+    target_version: String,
+    running_version: String,
+    attempt_phase: String,
+    check_trigger: String,
+    started_at_ms: i64,
+    network_online: bool,
+}
+
+fn valid_updater_version(version: &str) -> bool {
+    !version.is_empty()
+        && version.len() <= MAX_UPDATER_VERSION_LEN
+        && version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'+' | b'_' | b'-'))
+}
+
+/// Persists a fixed, bounded updater interruption diagnostic in the
+/// crash-report buffer. Keeping this command updater-specific prevents an IPC
+/// caller from placing arbitrary frontend values or JSON in error telemetry.
+#[tauri::command(async)]
+pub async fn queue_updater_interruption(
+    app_handle: AppHandle,
+    attempt: UpdaterInterruptionAttempt,
+) -> Result<(), TauriFunctionError> {
+    if !valid_updater_version(&attempt.current_version)
+        || !valid_updater_version(&attempt.target_version)
+        || !valid_updater_version(&attempt.running_version)
+    {
+        return Err(TauriFunctionError::new("Invalid updater version"));
+    }
+    if !matches!(
+        attempt.attempt_phase.as_str(),
+        "starting" | "downloading" | "verifying_or_installing" | "restart_pending"
+    ) {
+        return Err(TauriFunctionError::new("Invalid updater attempt phase"));
+    }
+    if !matches!(
+        attempt.check_trigger.as_str(),
+        "automatic" | "manual" | "retry" | "tray"
+    ) {
+        return Err(TauriFunctionError::new("Invalid updater check trigger"));
+    }
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    if attempt.started_at_ms <= 0
+        || attempt.started_at_ms > now_ms.saturating_add(60_000)
+        || now_ms.saturating_sub(attempt.started_at_ms) > MAX_UPDATER_ATTEMPT_AGE_MS
+    {
+        return Err(TauriFunctionError::new("Invalid updater attempt timestamp"));
+    }
+    let Some(db_path) = crash_buffer_path(&app_handle).await? else {
+        return Ok(());
+    };
+    if attempt.running_version == attempt.target_version {
+        return Ok(());
+    }
+
+    let interrupted = attempt.running_version == attempt.current_version;
+    let kind = if interrupted {
+        "UpdaterInterrupted"
+    } else {
+        "UpdaterOutcomeInconclusive"
+    };
+    let value = if interrupted {
+        "The previous updater install did not complete"
+    } else {
+        "The running version does not match either updater version"
+    };
+    let level = if interrupted { "error" } else { "warning" };
+    let context = serde_json::json!({
+        "subsystem": "updater",
+        "updater_stage": "interrupted",
+        "check_source": if attempt.check_trigger == "automatic" { "automatic" } else { "manual" },
+        "check_trigger": attempt.check_trigger,
+        "current_version": attempt.current_version,
+        "running_version": attempt.running_version,
+        "target_version": attempt.target_version,
+        "attempt_phase": attempt.attempt_phase,
+        "duration_ms": now_ms.saturating_sub(attempt.started_at_ms),
+        "network_online": attempt.network_online,
+    });
+    insert_error(&db_path, kind, value, level, None, Some(&context))
 }
 
 #[tauri::command(async)]

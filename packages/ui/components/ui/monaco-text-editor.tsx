@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next } from "@flow-like/locales";
 import Editor, { type Monaco } from "@monaco-editor/react";
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -12,62 +13,7 @@ function injectMonacoStyles() {
 
 	const style = document.createElement("style");
 	style.id = styleId;
-	style.textContent = `
-		.monaco-text-editor-wrapper {
-			background: linear-gradient(to bottom, hsl(var(--muted) / 0.3), hsl(var(--muted) / 0.1));
-		}
-
-		.monaco-text-editor-wrapper .monaco-editor {
-			border-radius: 0.5rem;
-		}
-
-		.monaco-text-editor-wrapper .monaco-editor .margin,
-		.monaco-text-editor-wrapper .monaco-editor-background,
-		.monaco-text-editor-wrapper .monaco-editor .inputarea.ime-input {
-			background-color: transparent !important;
-		}
-
-		.monaco-text-editor-wrapper .monaco-editor .view-line {
-			color: var(--foreground) !important;
-			font-weight: 400;
-			letter-spacing: 0.01em;
-		}
-
-		.monaco-text-editor-wrapper .monaco-editor .margin {
-			background: transparent !important;
-		}
-
-		.monaco-text-editor-wrapper .monaco-editor .line-numbers {
-			color: hsl(var(--muted-foreground) / 0.6) !important;
-			font-size: 0.75rem;
-		}
-
-		.monaco-text-editor-wrapper .monaco-editor .current-line {
-			border: none !important;
-		}
-
-		.monaco-text-editor-wrapper .monaco-editor .selected-text {
-			background-color: hsl(var(--accent) / 0.3) !important;
-		}
-
-		.monaco-text-editor-wrapper .monaco-editor .view-overlays .current-line {
-			background: linear-gradient(to right, hsl(var(--accent) / 0.05), transparent) !important;
-		}
-
-		.monaco-text-editor-wrapper .monaco-editor .cursors-layer .cursor {
-			background-color: hsl(var(--primary)) !important;
-			width: 2px !important;
-		}
-
-		.monaco-text-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider {
-			background: hsl(var(--muted-foreground) / 0.3) !important;
-			border-radius: 4px;
-		}
-
-		.monaco-text-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider:hover {
-			background: hsl(var(--muted-foreground) / 0.5) !important;
-		}
-	`;
+	style.textContent = `.monaco-text-editor-wrapper { background: linear-gradient(to bottom, hsl(var(--muted) / 0.3), hsl(var(--muted) / 0.1)); } .monaco-text-editor-wrapper .monaco-editor { border-radius: 0.5rem; } .monaco-text-editor-wrapper .monaco-editor .margin, .monaco-text-editor-wrapper .monaco-editor-background, .monaco-text-editor-wrapper .monaco-editor .inputarea.ime-input { background-color: transparent !important; } .monaco-text-editor-wrapper .monaco-editor .view-line { color: var(--foreground) !important; font-weight: 400; letter-spacing: 0.01em; } .monaco-text-editor-wrapper .monaco-editor .margin { background: transparent !important; } .monaco-text-editor-wrapper .monaco-editor .line-numbers { color: hsl(var(--muted-foreground) / 0.6) !important; font-size: 0.75rem; } .monaco-text-editor-wrapper .monaco-editor .current-line { border: none !important; } .monaco-text-editor-wrapper .monaco-editor .selected-text { background-color: hsl(var(--accent) / 0.3) !important; } .monaco-text-editor-wrapper .monaco-editor .view-overlays .current-line { background: linear-gradient(to right, hsl(var(--accent) / 0.05), transparent) !important; } .monaco-text-editor-wrapper .monaco-editor .cursors-layer .cursor { background-color: hsl(var(--primary)) !important; width: 2px !important; } .monaco-text-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider { background: hsl(var(--muted-foreground) / 0.3) !important; border-radius: 4px; } .monaco-text-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider:hover { background: hsl(var(--muted-foreground) / 0.5) !important; }`;
 	document.head.appendChild(style);
 }
 
@@ -79,7 +25,7 @@ export function MonacoTextEditor({
 	value,
 	onChange,
 	disabled = false,
-	placeholder = "Enter text...",
+	placeholder = i18next.t('enterText', 'Enter text...'),
 	height = "400px",
 }: Readonly<{
 	value: string;

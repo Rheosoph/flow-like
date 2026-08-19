@@ -11,6 +11,7 @@ pub mod issues;
 pub mod llm;
 pub mod overview;
 pub mod performance;
+pub mod prompt_feedback;
 pub mod query;
 pub mod release_health;
 pub mod rollup;

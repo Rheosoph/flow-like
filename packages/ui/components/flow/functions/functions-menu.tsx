@@ -1,4 +1,5 @@
 "use client";
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { useDraggable } from "@dnd-kit/core";
 import { createId } from "@paralleldrive/cuid2";
 import {
@@ -55,7 +56,7 @@ export function useCreateFunction(
 		const id = createId();
 		const layer: ILayer = {
 			id,
-			name: "New Function",
+			name: i18next.t('newFunction', 'New Function'),
 			type: ILayerType.Function,
 			coordinates: [0, 0, 0],
 			nodes: {},
@@ -83,6 +84,7 @@ export function FunctionsList({
 	pushLayer: (layer: ILayer) => Promise<void>;
 	boardRef?: RefObject<IBoard | undefined>;
 }>) {
+	const { t } = useTranslation("flow");
 	const [editingLayer, setEditingLayer] = useState<ILayer | null>(null);
 	const [movingLayer, setMovingLayer] = useState<ILayer | null>(null);
 
@@ -155,7 +157,7 @@ export function FunctionsList({
 
 	if (functions.length === 0) {
 		return (
-			<p className="text-xs text-muted-foreground py-1">No functions yet.</p>
+			<p className="text-xs text-muted-foreground py-1">{t('noFunctionsYet', 'No functions yet.')}</p>
 		);
 	}
 
@@ -233,6 +235,7 @@ function FunctionItem({
 	onMove: () => void;
 	onDelete: () => void;
 }>) {
+	const { t } = useTranslation("flow");
 	const [isRenaming, setIsRenaming] = useState(false);
 	const [nameValue, setNameValue] = useState(layer.name);
 
@@ -303,9 +306,7 @@ function FunctionItem({
 						{layer.name}
 					</span>
 					{(inputCount > 0 || outputCount > 0) && (
-						<span className="text-xs text-muted-foreground">
-							{inputCount} in / {outputCount} out
-						</span>
+						<span className="text-xs text-muted-foreground">{t('inputcountInOutputcountOut', '{{inputCount}} in / {{outputCount}} out', { inputCount, outputCount })}</span>
 					)}
 				</button>
 			)}
@@ -326,7 +327,7 @@ function FunctionItem({
 					variant="ghost"
 					size="icon"
 					className="h-6 w-6"
-					title="Move to folder"
+					title={t('moveToFolder', 'Move to folder')}
 					onClick={onMove}
 				>
 					<FolderInputIcon className="w-3 h-3" />
@@ -365,6 +366,7 @@ function MoveToFolderDialog({
 	folders: string[];
 	onMove: (category?: string) => Promise<void>;
 }>) {
+	const { t } = useTranslation("flow");
 	const [draft, setDraft] = useState(layer.category ?? "");
 
 	const commit = useCallback(() => {
@@ -376,11 +378,9 @@ function MoveToFolderDialog({
 			<DialogContent className="sm:max-w-md">
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
-						<FolderInputIcon className="h-4 w-4 text-primary" />
-						Move “{layer.name}”
-					</DialogTitle>
+						<FolderInputIcon className="h-4 w-4 text-primary" />{`Move “${layer.name}”`}</DialogTitle>
 					<DialogDescription>
-						Use “/” to create nested folders. Leave empty for top-level.
+						{t('useToCreateNestedFoldersLeaveEmptyForToplevel', 'Use “/” to create nested folders. Leave empty for top-level.')}
 					</DialogDescription>
 				</DialogHeader>
 
@@ -391,7 +391,7 @@ function MoveToFolderDialog({
 					onKeyDown={(e) => {
 						if (e.key === "Enter") commit();
 					}}
-					placeholder="e.g. Utils/Math"
+					placeholder={t('egUtilsmath', 'e.g. Utils/Math')}
 				/>
 
 				{folders.length > 0 && (
@@ -402,7 +402,7 @@ function MoveToFolderDialog({
 							className="h-6 text-xs"
 							onClick={() => setDraft("")}
 						>
-							Top level
+							{t('topLevel', 'Top level')}
 						</Button>
 						{folders.map((folder) => (
 							<Button
@@ -420,9 +420,9 @@ function MoveToFolderDialog({
 
 				<DialogFooter className="gap-2">
 					<Button variant="secondary" onClick={() => onOpenChange(false)}>
-						Cancel
+						{t('cancel', 'Cancel')}
 					</Button>
-					<Button onClick={commit}>Move</Button>
+					<Button onClick={commit}>{t('move', 'Move')}</Button>
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>

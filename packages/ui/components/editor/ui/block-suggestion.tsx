@@ -1,5 +1,6 @@
 "use client";
 
+import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import type { TResolvedSuggestion } from "@platejs/suggestion";
@@ -68,7 +69,7 @@ const TYPE_TEXT_MAP: Record<string, (node?: TElement) => string> = {
 		return "Paragraph";
 	},
 	[KEYS.table]: () => "Table",
-	[KEYS.toc]: () => "Table of Contents",
+	[KEYS.toc]: () => i18next.t('tableOfContents', 'Table of Contents'),
 	[KEYS.toggle]: () => "Toggle",
 	[KEYS.video]: () => "Video",
 };
@@ -100,6 +101,7 @@ export function BlockSuggestionCard({
 	isLast: boolean;
 	suggestion: ResolvedSuggestion;
 }) {
+	const { t } = useTranslation("common");
 	const { api, editor } = useEditorPlugin(SuggestionPlugin);
 
 	const userInfo = usePluginOption(discussionPlugin, "user", suggestion.userId);
@@ -157,7 +159,7 @@ export function BlockSuggestionCard({
 								{suggestionText2Array(suggestion.text!).map((text, index) => (
 									<div key={index} className="flex items-center gap-2">
 										<span className="text-sm text-muted-foreground">
-											Delete:
+											{t('delete3', 'Delete:')}
 										</span>
 
 										<span key={index} className="text-sm">
@@ -174,7 +176,7 @@ export function BlockSuggestionCard({
 									(text, index) => (
 										<div key={index} className="flex items-center gap-2">
 											<span className="text-sm text-muted-foreground">
-												Add:
+												{t('add2', 'Add:')}
 											</span>
 
 											<span key={index} className="text-sm">
@@ -195,7 +197,7 @@ export function BlockSuggestionCard({
 												key={index}
 												className="flex items-start gap-2 text-brand/80"
 											>
-												<span className="text-sm">with:</span>
+												<span className="text-sm">{t('with', 'with:')}</span>
 												<span className="text-sm">{text || "line breaks"}</span>
 											</div>
 										</React.Fragment>
@@ -206,7 +208,7 @@ export function BlockSuggestionCard({
 									<React.Fragment key={index}>
 										<div key={index} className="flex items-start gap-2">
 											<span className="text-sm text-muted-foreground">
-												{index === 0 ? "Replace:" : "Delete:"}
+												{t('delete3', { defaultValue_zero: 'Replace:', defaultValue_other: 'Delete:', count: index })}
 											</span>
 											<span className="text-sm">{text || "line breaks"}</span>
 										</div>
@@ -219,7 +221,7 @@ export function BlockSuggestionCard({
 							<div className="flex items-center gap-2">
 								<span className="text-sm text-muted-foreground">
 									{Object.keys(suggestion.properties).map((key) => (
-										<span key={key}>Un{key}</span>
+										<span key={key}>{`Un${key}`}</span>
 									))}
 
 									{Object.keys(suggestion.newProperties).map((key) => (

@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import { ListStyleType, someList, toggleList } from "@platejs/list";
@@ -67,10 +68,8 @@ export function BulletedListToolbarButton() {
 								})
 							}
 						>
-							<div className="flex items-center gap-2">
-								<div className="size-2 rounded-full border border-current bg-current" />
-								Default
-							</div>
+							<div className="flex items-center gap-2"><Trans i18nKey="divClassnamesize2RoundedfullBorderBordercurrentBgcurrentDefault"><div className="size-2 rounded-full border border-current bg-current" />
+								Default</Trans></div>
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onClick={() =>
@@ -79,10 +78,8 @@ export function BulletedListToolbarButton() {
 								})
 							}
 						>
-							<div className="flex items-center gap-2">
-								<div className="size-2 rounded-full border border-current" />
-								Circle
-							</div>
+							<div className="flex items-center gap-2"><Trans i18nKey="divClassnamesize2RoundedfullBorderBordercurrentCircle"><div className="size-2 rounded-full border border-current" />
+								Circle</Trans></div>
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onClick={() =>
@@ -91,10 +88,8 @@ export function BulletedListToolbarButton() {
 								})
 							}
 						>
-							<div className="flex items-center gap-2">
-								<div className="size-2 border border-current bg-current" />
-								Square
-							</div>
+							<div className="flex items-center gap-2"><Trans i18nKey="divClassnamesize2BorderBordercurrentBgcurrentSquare"><div className="size-2 border border-current bg-current" />
+								Square</Trans></div>
 						</DropdownMenuItem>
 					</DropdownMenuGroup>
 				</DropdownMenuContent>
@@ -104,6 +99,7 @@ export function BulletedListToolbarButton() {
 }
 
 export function NumberedListToolbarButton() {
+	const { t } = useTranslation("common");
 	const editor = useEditorRef();
 	const [open, setOpen] = React.useState(false);
 
@@ -147,7 +143,7 @@ export function NumberedListToolbarButton() {
 								})
 							}
 						>
-							Decimal (1, 2, 3)
+							{t('decimal123', 'Decimal (1, 2, 3)')}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onSelect={() =>
@@ -156,7 +152,7 @@ export function NumberedListToolbarButton() {
 								})
 							}
 						>
-							Lower Alpha (a, b, c)
+							{t('lowerAlphaABC', 'Lower Alpha (a, b, c)')}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onSelect={() =>
@@ -165,7 +161,7 @@ export function NumberedListToolbarButton() {
 								})
 							}
 						>
-							Upper Alpha (A, B, C)
+							{t('upperAlphaABC', 'Upper Alpha (A, B, C)')}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onSelect={() =>
@@ -174,7 +170,7 @@ export function NumberedListToolbarButton() {
 								})
 							}
 						>
-							Lower Roman (i, ii, iii)
+							{t('lowerRomanIIiIii', 'Lower Roman (i, ii, iii)')}
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							onSelect={() =>
@@ -183,7 +179,7 @@ export function NumberedListToolbarButton() {
 								})
 							}
 						>
-							Upper Roman (I, II, III)
+							{t('upperRomanIIiIii', 'Upper Roman (I, II, III)')}
 						</DropdownMenuItem>
 					</DropdownMenuGroup>
 				</DropdownMenuContent>

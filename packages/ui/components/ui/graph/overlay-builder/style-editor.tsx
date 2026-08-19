@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import type {
 	LabelStyle,
 	NodeSize,
@@ -28,12 +29,13 @@ function formatIconName(key: string): string {
 }
 
 export function StyleEditor({ style, onChange }: StyleEditorProps) {
+	const { t } = useTranslation("common");
 	const iconKeys = Object.keys(GRAPH_ICONS) as IconKey[];
 
 	return (
 		<div className="grid grid-cols-2 gap-3">
 			<div className="space-y-1.5">
-				<Label className="text-xs">Color</Label>
+				<Label className="text-xs">{t('color', 'Color')}</Label>
 				<div className="flex items-center gap-2">
 					<input
 						type="color"
@@ -45,13 +47,13 @@ export function StyleEditor({ style, onChange }: StyleEditorProps) {
 						value={style.color}
 						onChange={(e) => onChange({ ...style, color: e.target.value })}
 						className="h-8 text-xs font-mono flex-1"
-						placeholder="#3b82f6"
+						placeholder={`#3b82f6`}
 					/>
 				</div>
 			</div>
 
 			<div className="space-y-1.5">
-				<Label className="text-xs">Icon</Label>
+				<Label className="text-xs">{t('icon', 'Icon')}</Label>
 				<Select
 					value={style.icon}
 					onValueChange={(v) => onChange({ ...style, icon: v })}
@@ -68,7 +70,7 @@ export function StyleEditor({ style, onChange }: StyleEditorProps) {
 								);
 							})()
 						) : (
-							<SelectValue placeholder="Select icon" />
+							<SelectValue placeholder={t('selectIcon', 'Select icon')} />
 						)}
 					</SelectTrigger>
 					<SelectContent position="popper" className="max-h-60">
@@ -90,7 +92,7 @@ export function StyleEditor({ style, onChange }: StyleEditorProps) {
 			</div>
 
 			<div className="space-y-1.5">
-				<Label className="text-xs">Size Mode</Label>
+				<Label className="text-xs">{t('sizeMode', 'Size Mode')}</Label>
 				<Select
 					value={style.size.mode}
 					onValueChange={(v) =>
@@ -105,13 +107,13 @@ export function StyleEditor({ style, onChange }: StyleEditorProps) {
 					</SelectTrigger>
 					<SelectContent>
 						<SelectItem value="fixed" className="text-xs">
-							Fixed
+							{t('fixed', 'Fixed')}
 						</SelectItem>
 						<SelectItem value="by-degree" className="text-xs">
-							By Degree
+							{t('byDegree', 'By Degree')}
 						</SelectItem>
 						<SelectItem value="by-column" className="text-xs">
-							By Column
+							{t('byColumn', 'By Column')}
 						</SelectItem>
 					</SelectContent>
 				</Select>
@@ -119,7 +121,7 @@ export function StyleEditor({ style, onChange }: StyleEditorProps) {
 
 			{style.size.mode === "fixed" && (
 				<div className="space-y-1.5">
-					<Label className="text-xs">Size</Label>
+					<Label className="text-xs">{t('size', 'Size')}</Label>
 					<Input
 						type="number"
 						value={style.size.value ?? 10}
@@ -138,7 +140,7 @@ export function StyleEditor({ style, onChange }: StyleEditorProps) {
 
 			{style.size.mode === "by-column" && (
 				<div className="space-y-1.5">
-					<Label className="text-xs">Size Column</Label>
+					<Label className="text-xs">{t('sizeColumn', 'Size Column')}</Label>
 					<Input
 						value={style.size.column ?? ""}
 						onChange={(e) =>
@@ -154,7 +156,7 @@ export function StyleEditor({ style, onChange }: StyleEditorProps) {
 			)}
 
 			<div className="space-y-1.5">
-				<Label className="text-xs">Edge Width</Label>
+				<Label className="text-xs">{t('edgeWidth', 'Edge Width')}</Label>
 				<Input
 					type="number"
 					value={style.width ?? 2}

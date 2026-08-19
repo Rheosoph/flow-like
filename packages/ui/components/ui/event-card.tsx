@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Activity,
 	Calendar,
@@ -35,6 +36,7 @@ export function EventCard({
 	onDelete,
 	navigateToNode,
 }: Readonly<EventCardProps>) {
+	const { t } = useTranslation("common");
 	const formatDate = (systemTime: { secs_since_epoch: number }) => {
 		return new Date(systemTime.secs_since_epoch * 1000).toLocaleDateString();
 	};
@@ -94,7 +96,7 @@ export function EventCard({
 						{event.name}
 					</CardTitle>
 					<CardDescription className="leading-relaxed text-muted-foreground/90">
-						{event.description || "No description provided"}
+						{event.description || t('noDescriptionProvided', 'No description provided')}
 					</CardDescription>
 				</CardHeader>
 
@@ -127,7 +129,7 @@ export function EventCard({
 									className="gap-2 hover:bg-primary/10 hover:border-primary/30 hover:text-primary transition-all duration-200"
 								>
 									<Edit2 className="h-3 w-3" />
-									Edit
+									{t('edit', 'Edit')}
 								</Button>
 								<Button
 									variant="destructive"
@@ -136,7 +138,7 @@ export function EventCard({
 									className="gap-2"
 								>
 									<Trash2 className="h-3 w-3" />
-									Delete
+									{t('delete', 'Delete')}
 								</Button>
 							</div>
 							<Button

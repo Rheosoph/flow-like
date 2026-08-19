@@ -1,0 +1,19 @@
+[package]
+name = "gcp-scheduler"
+version = "0.1.0"
+edition = "2024"
+description = "Flow-Like GCP scheduler tick: run-once Cloud Run job that dispatches due cron sinks through the API, with Firestore as the claim store"
+
+[dependencies]
+# The whole algorithm lives in the shared crate; this binary contributes the
+# GCP environment guard, the Firestore store selection and the exit code. The
+# `gcp` feature is what links flow-like-gcp-data's Firestore client into the
+# tick store — the Azure image builds the same crate with `azure` instead and
+# never links this client.
+flow-like-scheduler-tick = { workspace = true, features = ["gcp"] }
+flow-like-gcp-data.workspace = true
+chrono.workspace = true
+mimalloc.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

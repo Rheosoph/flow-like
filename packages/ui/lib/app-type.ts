@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import type { CSSProperties } from "react";
 import { IAppType } from "./schema/app/app";
-import type { IBoard } from "./schema/flow/board";
+import type { IBoardListing } from "./schema/flow/board-summary";
 import type { IEvent } from "./schema/flow/event";
 
 export interface AppTypeMeta {
@@ -129,16 +129,14 @@ const HEADLESS_EVENTS = new Set([
  * offered a free choice instead of being labelled at random.
  */
 export function detectAppType(
-	boards: IBoard[] | undefined,
+	boards: readonly Pick<IBoardListing, "nodeCount">[] | undefined,
 	events: IEvent[] | undefined,
 	pageCount: number,
 	tableCount = 0,
 ): IAppType | null {
 	const activeEvents = (events ?? []).filter((event) => event.active);
 	const eventTypes = new Set(activeEvents.map((event) => event.event_type));
-	const hasLogic = (boards ?? []).some(
-		(board) => Object.keys(board.nodes).length > 0,
-	);
+	const hasLogic = (boards ?? []).some((board) => board.nodeCount > 0);
 
 	if (!hasLogic && pageCount === 0 && tableCount === 0) return null;
 

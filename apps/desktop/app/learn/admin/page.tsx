@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Button,
@@ -34,6 +35,7 @@ import { toast } from "sonner";
 import { learnApi } from "../../../lib/learn-api";
 
 export default function AdminCoursesPage() {
+	const { t } = useTranslation("common");
 	const auth = useAuth();
 	const router = useRouter();
 	const queryClient = useQueryClient();
@@ -140,18 +142,18 @@ export default function AdminCoursesPage() {
 	if (!canViewAdmin) {
 		const requiredPermissions = [
 			{
-				label: "ReadCourses",
-				description: "Review public courses and drafts.",
+				label: t('readcourses', 'ReadCourses'),
+				description: t('reviewPublicCoursesAndDrafts', 'Review public courses and drafts.'),
 				icon: Eye,
 			},
 			{
-				label: "WriteCourses",
-				description: "Create and maintain course content.",
+				label: t('writecourses', 'WriteCourses'),
+				description: t('createAndMaintainCourseContent', 'Create and maintain course content.'),
 				icon: Pencil,
 			},
 			{
-				label: "Admin (1)",
-				description: "Global administrator access.",
+				label: t('admin1', 'Admin (1)'),
+				description: t('globalAdministratorAccess', 'Global administrator access.'),
 				icon: ShieldCheck,
 			},
 		];
@@ -165,16 +167,14 @@ export default function AdminCoursesPage() {
 							<div className="max-w-2xl space-y-4">
 								<div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/50 px-3 py-1 text-xs font-medium text-muted-foreground">
 									<LockKeyhole className="h-3.5 w-3.5" />
-									Course admin
+									{t('courseAdmin', 'Course admin')}
 								</div>
 								<div className="space-y-2">
 									<h1 className="text-3xl font-semibold tracking-tight">
-										Course access needed
+										{t('courseAccessNeeded', 'Course access needed')}
 									</h1>
 									<p className="text-sm leading-6 text-muted-foreground">
-										University admin opens for users with ReadCourses,
-										WriteCourses, or the Admin permission. Ask an admin to grant
-										one of these global permissions.
+										{t('universityAdminOpensForUsersWithReadcoursesWritecoursesOrTheAdminPermissionAskAnAdminToGrantOneOfTheseGlobalPermissions', "University admin opens for users with ReadCourses, WriteCourses, or the Admin permission. Ask an admin to grant one of these global permissions.")}
 									</p>
 								</div>
 							</div>
@@ -182,13 +182,13 @@ export default function AdminCoursesPage() {
 								<Button asChild variant="outline">
 									<Link href="/learn">
 										<ArrowLeft className="mr-2 h-4 w-4" />
-										University
+										{t('university', 'University')}
 									</Link>
 								</Button>
 								<Button asChild variant="secondary">
 									<Link href="/admin">
 										<ShieldCheck className="mr-2 h-4 w-4" />
-										Admin Dashboard
+										{t('adminDashboard', 'Admin Dashboard')}
 									</Link>
 								</Button>
 							</div>
@@ -227,33 +227,32 @@ export default function AdminCoursesPage() {
 						<div className="max-w-2xl space-y-4">
 							<div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/50 px-3 py-1 text-xs font-medium text-muted-foreground">
 								<GraduationCap className="h-3.5 w-3.5" />
-								FlowLike University
+								{t('flowlikeUniversity2', 'FlowLike University')}
 							</div>
 							<div className="space-y-2">
 								<h1 className="text-3xl font-semibold tracking-tight">
-									Course admin
+									{t('courseAdmin', 'Course admin')}
 								</h1>
 								<p className="text-sm leading-6 text-muted-foreground">
-									Shape the course library, review drafts, and keep published
-									learning paths calm and useful.
+									{t('shapeTheCourseLibraryReviewDraftsAndKeepPublishedLearningPathsCalmAndUseful', "Shape the course library, review drafts, and keep published learning paths calm and useful.")}
 								</p>
 							</div>
 							<div className="flex flex-wrap gap-2">
 								<Badge variant={canRead || isAdmin ? "secondary" : "outline"}>
 									<Eye className="mr-1.5 h-3 w-3" />
-									ReadCourses
+									{t('readcourses', 'ReadCourses')}
 								</Badge>
 								<Badge
 									variant={canManageCourses ? "secondary" : "outline"}
 									className={canManageCourses ? "bg-emerald-500/15" : undefined}
 								>
 									<Pencil className="mr-1.5 h-3 w-3" />
-									WriteCourses
+									{t('writecourses', 'WriteCourses')}
 								</Badge>
 								{isAdmin && (
 									<Badge className="bg-amber-500/15 text-amber-700 hover:bg-amber-500/20 dark:text-amber-300">
 										<ShieldCheck className="mr-1.5 h-3 w-3" />
-										Admin
+										{t('admin', 'Admin')}
 									</Badge>
 								)}
 							</div>
@@ -262,13 +261,13 @@ export default function AdminCoursesPage() {
 							<Button asChild variant="outline">
 								<Link href="/learn">
 									<ArrowLeft className="mr-2 h-4 w-4" />
-									University
+									{t('university', 'University')}
 								</Link>
 							</Button>
 							<Button asChild variant="secondary">
 								<Link href="/admin">
 									<ShieldCheck className="mr-2 h-4 w-4" />
-									Admin
+									{t('admin', 'Admin')}
 								</Link>
 							</Button>
 						</div>
@@ -280,11 +279,10 @@ export default function AdminCoursesPage() {
 						<CardHeader>
 							<CardTitle className="flex items-center gap-2 text-base">
 								<Sparkles className="h-4 w-4 text-sky-400" />
-								Create a new course
+								{`Create a new course`}
 							</CardTitle>
 							<CardDescription>
-								New courses start as drafts and appear to course admins before
-								they are published.
+								{t('newCoursesStartAsDraftsAndAppearToCourseAdminsBeforeTheyArePublished', "New courses start as drafts and appear to course admins before they are published.")}
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
@@ -300,7 +298,7 @@ export default function AdminCoursesPage() {
 										htmlFor="new-course-id"
 										className="text-xs font-medium text-muted-foreground"
 									>
-										ID (optional)
+										{t('idOptional', 'ID (optional)')}
 									</label>
 									<Input
 										id="new-course-id"
@@ -314,18 +312,18 @@ export default function AdminCoursesPage() {
 										htmlFor="new-course-title"
 										className="text-xs font-medium text-muted-foreground"
 									>
-										Title
+										{t('title', 'Title')}
 									</label>
 									<Input
 										id="new-course-title"
 										value={newTitle}
 										onChange={(e) => setNewTitle(e.target.value)}
-										placeholder="Build your first chat agent"
+										placeholder={t('buildYourFirstChatAgent', 'Build your first chat agent')}
 									/>
 								</div>
 								<Button type="submit" disabled={createMutation.isPending}>
 									<Plus className="mr-2 h-4 w-4" />
-									Create
+									{t('create', 'Create')}
 								</Button>
 							</form>
 						</CardContent>
@@ -335,11 +333,10 @@ export default function AdminCoursesPage() {
 						<CardHeader>
 							<CardTitle className="flex items-center gap-2 text-base">
 								<Eye className="h-4 w-4 text-sky-400" />
-								Read-only course access
+								{t('readonlyCourseAccess', 'Read-only course access')}
 							</CardTitle>
 							<CardDescription>
-								You can review public and draft courses. Creating or editing
-								courses requires WriteCourses or Admin.
+								{t('youCanReviewPublicAndDraftCoursesCreatingOrEditingCoursesRequiresWritecoursesOrAdmin', "You can review public and draft courses. Creating or editing courses requires WriteCourses or Admin.")}
 							</CardDescription>
 						</CardHeader>
 					</Card>
@@ -356,26 +353,23 @@ export default function AdminCoursesPage() {
 				<div className="space-y-3">
 					<div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
 						<div>
-							<h2 className="text-lg font-semibold">Course library</h2>
-							<p className="text-sm text-muted-foreground">
-								{filteredCourses.length} course
-								{filteredCourses.length === 1 ? "" : "s"} available
-							</p>
+							<h2 className="text-lg font-semibold">{t('courseLibrary', 'Course library')}</h2>
+							<p className="text-sm text-muted-foreground">{t('countCourseSAvailable', { defaultValue_one: "{{count}} course available", defaultValue_other: "{{count}} courses available", count: filteredCourses.length })}</p>
 						</div>
 						<Badge variant="outline" className="w-fit">
 							<BookOpenCheck className="mr-1.5 h-3 w-3" />
-							Drafts included
+							{t('draftsIncluded', 'Drafts included')}
 						</Badge>
 					</div>
 
 					{filteredCourses.length === 0 ? (
 						<Card className="border-dashed bg-card/60">
 							<CardHeader>
-								<CardTitle className="text-base">No courses yet</CardTitle>
+								<CardTitle className="text-base">{t('noCoursesYet', 'No courses yet')}</CardTitle>
 								<CardDescription>
 									{canManageCourses
-										? "Create the first draft above."
-										: "Course drafts and published courses will appear here."}
+										? t('createTheFirstDraftAbove', 'Create the first draft above.')
+										: t('courseDraftsAndPublishedCoursesWillAppearHere', 'Course drafts and published courses will appear here.')}
 								</CardDescription>
 							</CardHeader>
 						</Card>
@@ -425,7 +419,7 @@ export default function AdminCoursesPage() {
 											}
 										>
 											<Pencil className="mr-1.5 h-3.5 w-3.5" />
-											Edit
+											{t('edit', 'Edit')}
 										</Button>
 									)}
 								</CardHeader>

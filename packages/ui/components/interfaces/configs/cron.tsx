@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, i18n as i18next, useTranslation } from "@flow-like/locales";
 import { CronExpressionParser } from "cron-parser";
 import { useEffect, useMemo, useState } from "react";
 
@@ -92,7 +93,7 @@ const range = (s: string) => {
 const joinList = (items: string[]) =>
 	items.length <= 1
 		? items[0] || ""
-		: `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+		: i18next.t('valAndVal2', '{{val}} and {{val2}}', { val: items.slice(0, -1).join(", "), val2: items[items.length - 1] });
 const dowName = (n: number) => DOW[(n === 7 ? 0 : n) % 7] ?? String(n);
 const monName = (n: number) => MON[(n - 1) % 12] ?? String(n);
 const domToText = (s: string) => {
@@ -141,7 +142,7 @@ function humanizeCron(expr: string, opts?: { tz?: string }) {
 		mon === "*" &&
 		dow === "*"
 	)
-		return `Every second${tz}`;
+		return i18next.t('everySecondtz', 'Every second{{tz}}', { tz });
 	if (
 		sStep &&
 		min === "*" &&
@@ -150,7 +151,7 @@ function humanizeCron(expr: string, opts?: { tz?: string }) {
 		mon === "*" &&
 		dow === "*"
 	)
-		return `Every ${sStep} seconds${tz}`;
+		return i18next.t('everySstepSecondstz', 'Every {{sStep}} seconds{{tz}}', { sStep, tz });
 	if (
 		sExact !== null &&
 		min === "*" &&
@@ -159,7 +160,7 @@ function humanizeCron(expr: string, opts?: { tz?: string }) {
 		mon === "*" &&
 		dow === "*"
 	)
-		return `At :${pad2(sExact)} of every minute${tz}`;
+		return i18next.t('atValOfEveryMinutetz', 'At :{{val}} of every minute{{tz}}', { val: pad2(sExact), tz });
 	if (
 		sec === "0" &&
 		min === "*" &&
@@ -168,7 +169,7 @@ function humanizeCron(expr: string, opts?: { tz?: string }) {
 		mon === "*" &&
 		dow === "*"
 	)
-		return `Every minute${tz}`;
+		return i18next.t('everyMinutetz', 'Every minute{{tz}}', { tz });
 	if (
 		sec === "0" &&
 		mStep &&
@@ -177,7 +178,7 @@ function humanizeCron(expr: string, opts?: { tz?: string }) {
 		mon === "*" &&
 		dow === "*"
 	)
-		return `Every ${mStep} minutes${tz}`;
+		return i18next.t('everyMstepMinutestz', 'Every {{mStep}} minutes{{tz}}', { mStep, tz });
 	if (
 		sec === "0" &&
 		mExact !== null &&
@@ -186,7 +187,7 @@ function humanizeCron(expr: string, opts?: { tz?: string }) {
 		mon === "*" &&
 		dow === "*"
 	)
-		return `At :${pad2(mExact)} past every hour${tz}`;
+		return i18next.t('atValPastEveryHourtz', 'At :{{val}} past every hour{{tz}}', { val: pad2(mExact), tz });
 	if (
 		sec === "0" &&
 		mExact !== null &&
@@ -195,7 +196,7 @@ function humanizeCron(expr: string, opts?: { tz?: string }) {
 		mon === "*" &&
 		dow === "*"
 	)
-		return `At ${pad2(hExact)}:${pad2(mExact)} every day${tz}`;
+		return i18next.t('atValval2EveryDaytz', 'At {{val}}:{{val2}} every day{{tz}}', { val: pad2(hExact), val2: pad2(mExact), tz });
 	if (
 		sec === "0" &&
 		mExact !== null &&
@@ -204,7 +205,7 @@ function humanizeCron(expr: string, opts?: { tz?: string }) {
 		mon === "*" &&
 		dow === "*"
 	)
-		return `Every ${hStep} hours at :${pad2(mExact)}${tz}`;
+		return i18next.t('everyHstepHoursAtValtz', 'Every {{hStep}} hours at :{{val}}{{tz}}', { hStep, val: pad2(mExact), tz });
 
 	// With specific seconds
 	if (
@@ -215,7 +216,7 @@ function humanizeCron(expr: string, opts?: { tz?: string }) {
 		mon === "*" &&
 		dow === "*"
 	) {
-		return `At ${pad2(hExact)}:${pad2(mExact)}:${pad2(sExact)} every day${tz}`;
+		return i18next.t('atValval2val3EveryDaytz', 'At {{val}}:{{val2}}:{{val3}} every day{{tz}}', { val: pad2(hExact), val2: pad2(mExact), val3: pad2(sExact), tz });
 	}
 
 	// DOW / monthly / monthly+day
@@ -228,7 +229,7 @@ function humanizeCron(expr: string, opts?: { tz?: string }) {
 		dow !== "*"
 	) {
 		const when = dowToText(dow);
-		if (when) return `At ${pad2(hExact)}:${pad2(mExact)} on ${when}${tz}`;
+		if (when) return i18next.t('atValval2OnWhentz', 'At {{val}}:{{val2}} on {{when}}{{tz}}', { val: pad2(hExact), val2: pad2(mExact), when, tz });
 	}
 	if (
 		sec === "0" &&
@@ -240,7 +241,7 @@ function humanizeCron(expr: string, opts?: { tz?: string }) {
 	) {
 		const days = domToText(dom);
 		if (days)
-			return `At ${pad2(hExact)}:${pad2(mExact)} on the ${days} of every month${tz}`;
+			return i18next.t('atValval2OnTheDaysOfEveryMonthtz', 'At {{val}}:{{val2}} on the {{days}} of every month{{tz}}', { val: pad2(hExact), val2: pad2(mExact), days, tz });
 	}
 	if (
 		sec === "0" &&
@@ -252,10 +253,10 @@ function humanizeCron(expr: string, opts?: { tz?: string }) {
 		const months = monToText(mon);
 		if (months) {
 			if (dom === "*")
-				return `At ${pad2(hExact)}:${pad2(mExact)} in ${months}${tz}`;
+				return i18next.t('atValval2InMonthstz', 'At {{val}}:{{val2}} in {{months}}{{tz}}', { val: pad2(hExact), val2: pad2(mExact), months, tz });
 			const days = domToText(dom);
 			if (days)
-				return `At ${pad2(hExact)}:${pad2(mExact)} on the ${days} of ${months}${tz}`;
+				return i18next.t('atValval2OnTheDaysOfMonthstz', 'At {{val}}:{{val2}} on the {{days}} of {{months}}{{tz}}', { val: pad2(hExact), val2: pad2(mExact), days, months, tz });
 		}
 	}
 	if (
@@ -268,10 +269,10 @@ function humanizeCron(expr: string, opts?: { tz?: string }) {
 		const months = monToText(mon);
 		const when = dowToText(dow);
 		if (months && when)
-			return `At ${pad2(hExact)}:${pad2(mExact)} on ${when} in ${months}${tz}`;
+			return i18next.t('atValval2OnWhenInMonthstz', 'At {{val}}:{{val2}} on {{when}} in {{months}}{{tz}}', { val: pad2(hExact), val2: pad2(mExact), when, months, tz });
 	}
 
-	return `Cron: ${expr}${tz}`;
+	return i18next.t('cronExprtz', 'Cron: {{expr}}{{tz}}', { expr, tz });
 }
 
 /* -----------------------------------------------------------------------------
@@ -443,6 +444,7 @@ export function CronJobConfig({
 	canExecuteLocally,
 	section,
 }: IConfigInterfaceProps) {
+	const { t } = useTranslation("interfaces");
 	const browserTZ =
 		typeof Intl !== "undefined"
 			? Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
@@ -604,10 +606,9 @@ export function CronJobConfig({
 		<div className="w-full space-y-6">
 			{!section && (
 				<div className="space-y-1">
-					<h3 className="text-lg font-semibold">Cron Job</h3>
+					<h3 className="text-lg font-semibold">{t('cronJob', 'Cron Job')}</h3>
 					<p className="text-sm text-muted-foreground">
-						One-time schedule or recurring cron. Stored as simple strings; your
-						Rust runtime resolves timezone and UTC safely.
+						{t('onetimeScheduleOrRecurringCronStoredAsSimpleStringsYourRustRuntimeResolvesTimezoneAndUtcSafely', "One-time schedule or recurring cron. Stored as simple strings; your Rust runtime resolves timezone and UTC safely.")}
 					</p>
 				</div>
 			)}
@@ -615,44 +616,44 @@ export function CronJobConfig({
 			{/* Execution Target */}
 			{shows("runtime") && supportsBoth && (
 				<div className="space-y-2">
-					<Label htmlFor="sink_execution">Execution Target</Label>
+					<Label htmlFor="sink_execution">{t('executionTarget', 'Execution Target')}</Label>
 					<Select
 						value={effectiveExecution}
 						onValueChange={(value) => setValue("sink_execution", value)}
 						disabled={!isEditing}
 					>
 						<SelectTrigger id="sink_execution" className="w-full">
-							<SelectValue placeholder="Select execution target" />
+							<SelectValue placeholder={t('selectExecutionTarget', 'Select execution target')} />
 						</SelectTrigger>
 						<SelectContent>
 							<SelectItem value="REMOTE">
 								<div className="flex items-center gap-2">
-									<Badge variant="default">Remote</Badge>
+									<Badge variant="default">{t('remote', 'Remote')}</Badge>
 									<span className="text-muted-foreground text-xs">
-										Server only — available 24/7
+										{t('serverOnlyAvailable247', 'Server only — available 24/7')}
 									</span>
 								</div>
 							</SelectItem>
 							<SelectItem value="LOCAL">
 								<div className="flex items-center gap-2">
-									<Badge variant="secondary">Local</Badge>
+									<Badge variant="secondary">{t('local', 'Local')}</Badge>
 									<span className="text-muted-foreground text-xs">
-										Desktop app only
+										{t('desktopAppOnly', 'Desktop app only')}
 									</span>
 								</div>
 							</SelectItem>
 							<SelectItem value="HYBRID">
 								<div className="flex items-center gap-2">
-									<Badge variant="outline">Both</Badge>
+									<Badge variant="outline">{t('both', 'Both')}</Badge>
 									<span className="text-muted-foreground text-xs">
-										Server + desktop app
+										{t('serverDesktopApp', 'Server + desktop app')}
 									</span>
 								</div>
 							</SelectItem>
 						</SelectContent>
 					</Select>
 					<p className="text-sm text-muted-foreground">
-						Where this cron job should be registered and executed.
+						{t('whereThisCronJobShouldBeRegisteredAndExecuted', 'Where this cron job should be registered and executed.')}
 					</p>
 				</div>
 			)}
@@ -661,7 +662,7 @@ export function CronJobConfig({
 				<>
 					{/* Mode */}
 					<div className="space-y-2">
-						<Label>Scheduling Mode</Label>
+						<Label>{t('schedulingMode', 'Scheduling Mode')}</Label>
 						<RadioGroup
 							value={mode}
 							onValueChange={handleModeChange}
@@ -673,7 +674,7 @@ export function CronJobConfig({
 									id="mode_one_time"
 									disabled={!isEditing}
 								/>
-								<Label htmlFor="mode_one_time">One-time (scheduled)</Label>
+								<Label htmlFor="mode_one_time">{t('onetimeScheduled', 'One-time (scheduled)')}</Label>
 							</div>
 							<div className="flex items-center space-x-2">
 								<RadioGroupItem
@@ -681,14 +682,14 @@ export function CronJobConfig({
 									id="mode_recurring"
 									disabled={!isEditing}
 								/>
-								<Label htmlFor="mode_recurring">Recurring (cron)</Label>
+								<Label htmlFor="mode_recurring">{t('recurringCron', 'Recurring (cron)')}</Label>
 							</div>
 						</RadioGroup>
 					</div>
 
 					{/* Timezone */}
 					<div className="space-y-2">
-						<Label htmlFor="cron_tz">Timezone</Label>
+						<Label htmlFor="cron_tz">{t('timezone', 'Timezone')}</Label>
 						<div className="flex gap-2">
 							<Popover open={tzOpen} onOpenChange={setTzOpen}>
 								<PopoverTrigger asChild>
@@ -703,19 +704,19 @@ export function CronJobConfig({
 										)}
 										disabled={!isEditing}
 									>
-										{timezone || "Select timezone..."}
+										{timezone || t('selectTimezone', 'Select timezone...')}
 										<ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
 									</Button>
 								</PopoverTrigger>
 								<PopoverContent className="w-75 p-0">
 									<Command shouldFilter={false}>
 										<CommandInput
-											placeholder="Search timezone..."
+											placeholder={t('searchTimezone', 'Search timezone...')}
 											value={tzSearch}
 											onValueChange={setTzSearch}
 										/>
 										<CommandList>
-											<CommandEmpty>No timezone found.</CommandEmpty>
+											<CommandEmpty>{t('noTimezoneFound', 'No timezone found.')}</CommandEmpty>
 											<CommandGroup>
 												{IANA_TIMEZONES.filter((tz) =>
 													tz.toLowerCase().includes(tzSearch.toLowerCase()),
@@ -756,12 +757,12 @@ export function CronJobConfig({
 								}
 								disabled={!isEditing}
 							>
-								Use my timezone
+								{t('useMyTimezone', 'Use my timezone')}
 							</Button>
 						</div>
 						{!tzValid && timezone && (
 							<p className="text-sm text-destructive">
-								Unknown timezone. Please select a valid IANA timezone.
+								{t('unknownTimezonePleaseSelectAValidIanaTimezone', 'Unknown timezone. Please select a valid IANA timezone.')}
 							</p>
 						)}
 					</div>
@@ -773,7 +774,7 @@ export function CronJobConfig({
 						<div className="space-y-4">
 							<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 								<div className="space-y-2">
-									<Label>Date</Label>
+									<Label>{t('date', 'Date')}</Label>
 									<Popover>
 										<PopoverTrigger asChild>
 											<Button
@@ -782,7 +783,7 @@ export function CronJobConfig({
 												className="w-full justify-start"
 												disabled={!isEditing}
 											>
-												{scheduledFor?.date ?? "Pick a date"}
+												{scheduledFor?.date ?? t('pickADate', 'Pick a date')}
 											</Button>
 										</PopoverTrigger>
 										<PopoverContent className="p-0">
@@ -795,12 +796,12 @@ export function CronJobConfig({
 										</PopoverContent>
 									</Popover>
 									<p className="text-sm text-muted-foreground">
-										Select the calendar day.
+										{t('selectTheCalendarDay', 'Select the calendar day.')}
 									</p>
 								</div>
 
 								<div className="space-y-2">
-									<Label htmlFor="cron_time">Time</Label>
+									<Label htmlFor="cron_time">{t('time', 'Time')}</Label>
 									<Input
 										id="cron_time"
 										type="time"
@@ -809,29 +810,34 @@ export function CronJobConfig({
 										disabled={!isEditing}
 									/>
 									<p className="text-sm text-muted-foreground">
-										24-hour format (HH:MM).
+										{t('24hourFormatHhmm', '24-hour format (HH:MM).')}
 									</p>
 								</div>
 							</div>
 
 							{/* Preview + past/future */}
 							<div className="space-y-2">
-								<Label>Scheduled (local)</Label>
+								<Label>{t('scheduledLocal', 'Scheduled (local)')}</Label>
 								<div className="flex items-center gap-2">
 									<div className="flex-1 h-10 rounded-md border border-input bg-muted px-3 py-2 text-sm flex items-center">
 										{formatLocalDisplay(scheduledFor, timezone)}
 									</div>
 									{alreadyHappened === true && (
-										<Badge variant="destructive">In the past</Badge>
+										<Badge variant="destructive">{t('inThePast', 'In the past')}</Badge>
 									)}
-									{alreadyHappened === false && <Badge>Upcoming</Badge>}
+									{alreadyHappened === false && <Badge>{t('upcoming', 'Upcoming')}</Badge>}
 								</div>
 								{alreadyHappened === true && (
 									<Alert variant="destructive" className="mt-2">
-										<AlertTitle>Already happened</AlertTitle>
+										<AlertTitle>{t('alreadyHappened', 'Already happened')}</AlertTitle>
 										<AlertDescription>
-											This time is in the past for <strong>{timezone}</strong>.
-											Please pick a future time.
+											<Trans
+												i18nKey="thisTimeIsInThePastForTimezonePleasePickAFutureTime"
+												values={{ timezone }}
+												components={{ strong: <strong /> }}
+											>
+												This time is in the past for <strong>{"{{timezone}}"}</strong>. Please pick a future time.
+											</Trans>
 										</AlertDescription>
 									</Alert>
 								)}
@@ -843,12 +849,12 @@ export function CronJobConfig({
 					{mode === "recurring" && (
 						<div className="space-y-4">
 							<div className="space-y-2">
-								<Label htmlFor="cron_expression">Cron Expression</Label>
+								<Label htmlFor="cron_expression">{t('cronExpression', 'Cron Expression')}</Label>
 								<Input
 									id="cron_expression"
 									value={expression}
 									onChange={(e) => setValue("expression", e.target.value)}
-									placeholder="0 */5 * * * *"
+									placeholder={`0 */5 * * * *`}
 									disabled={!isEditing}
 									aria-invalid={
 										!isCronValid || remoteCronUnsupportedSeconds != null
@@ -858,32 +864,28 @@ export function CronJobConfig({
 											"border-destructive",
 									)}
 								/>
-								<p className="text-sm text-muted-foreground">
-									6-field cron (<code>sec min hour dom mon dow</code>) or
-									5-field (<code>min hour dom mon dow</code>). Timezone applied:{" "}
+								<p className="text-sm text-muted-foreground"><Trans i18nKey="6fieldCronCodesecMinHourDomMonDowcodeOr5fieldCodeminHourDomMonDowcodeTimezoneApplied">6-field cron (<code>sec min hour dom mon dow</code>) or
+									5-field (<code>min hour dom mon dow</code>). Timezone applied:</Trans>{" "}
 									<strong>{timezone}</strong>.
 								</p>
 								{remoteCronUnsupportedSeconds && (
 									<Alert variant="destructive">
 										<AlertTitle>
-											Remote cron is minute-precision only
+											{t('remoteCronIsMinuteprecisionOnly', 'Remote cron is minute-precision only')}
 										</AlertTitle>
 										<AlertDescription>
 											{effectiveExecution === "HYBRID"
-												? "Hybrid execution still registers this schedule remotely. "
-												: "Remote execution uses EventBridge Scheduler. "}
-											Use 5-field cron, or keep the seconds field at{" "}
-											<strong>0</strong> or <strong>*</strong>. Current seconds
-											field: <strong>{remoteCronUnsupportedSeconds}</strong>.
-											Switch to local execution if you need sub-minute
-											schedules.
+												? t('hybridExecutionStillRegistersThisScheduleRemotely', "Hybrid execution still registers this schedule remotely.")
+												: t('remoteExecutionUsesEventbridgeScheduler', "Remote execution uses EventBridge Scheduler.")}
+											{t('use5fieldCronOrKeepTheSecondsFieldAt', 'Use 5-field cron, or keep the seconds field at')}{" "}<Trans i18nKey="strong0strongOrStrongstrongCurrentSecondsField"><strong>0</strong> or <strong>*</strong>. Current seconds
+											field:</Trans><strong>{remoteCronUnsupportedSeconds}</strong>{t('switchToLocalExecutionIfYouNeedSubminuteSchedules', ". Switch to local execution if you need sub-minute schedules.")}
 										</AlertDescription>
 									</Alert>
 								)}
 							</div>
 
 							<div className="space-y-2">
-								<Label>Quick presets</Label>
+								<Label>{t('quickPresets', 'Quick presets')}</Label>
 								<div className="flex flex-wrap gap-2">
 									{QUICK_CRON_PRESETS.map((p) => (
 										<Button
@@ -907,13 +909,13 @@ export function CronJobConfig({
 							/>
 
 							<div className="space-y-2">
-								<Label>Readable</Label>
+								<Label>{t('readable', 'Readable')}</Label>
 								<div className="h-10 rounded-md border border-input bg-muted px-3 py-2 text-sm flex items-center">
-									{isCronValid ? cronHuman || "—" : "Invalid cron expression"}
+									{isCronValid ? cronHuman || "—" : t('invalidCronExpression', 'Invalid cron expression')}
 								</div>
 
 								<div className="space-y-2">
-									<Label>Next runs (preview)</Label>
+									<Label>{t('nextRunsPreview', 'Next runs (preview)')}</Label>
 									{isCronValid ? (
 										<ul className="text-sm text-muted-foreground list-disc pl-5">
 											{cronNextRuns.map((iso, i) => {
@@ -937,9 +939,9 @@ export function CronJobConfig({
 										</ul>
 									) : (
 										<Alert variant="destructive">
-											<AlertTitle>Invalid cron</AlertTitle>
+											<AlertTitle>{t('invalidCron', 'Invalid cron')}</AlertTitle>
 											<AlertDescription>
-												Adjust the expression to see upcoming runs.
+												{t('adjustTheExpressionToSeeUpcomingRuns', 'Adjust the expression to see upcoming runs.')}
 											</AlertDescription>
 										</Alert>
 									)}
@@ -955,9 +957,9 @@ export function CronJobConfig({
 							<div className="flex items-center gap-2 text-sm text-muted-foreground">
 								<Clock className="h-4 w-4" />
 								<span>
-									Last ran{" "}
+									{t('lastRan', 'Last ran')}{" "}
 									<strong>{formatRelativeTime(config.last_fired)}</strong>
-									{" — "}
+									{` — `}
 									{new Intl.DateTimeFormat("en-GB", {
 										timeZone: timezone,
 										year: "numeric",
@@ -991,6 +993,7 @@ function GuidedCronBuilder({
 	onChange: (v: string) => void;
 	disabled?: boolean;
 }) {
+	const { t } = useTranslation("interfaces");
 	const parts = (value || "").trim().split(/\s+/);
 
 	// Support both 5-field and 6-field cron
@@ -1016,16 +1019,16 @@ function GuidedCronBuilder({
 		["Second", sec, (v) => setPart(0, v), ["0", "*/10", "*/15", "*/30", "*"]],
 		["Minute", min, (v) => setPart(1, v), ["0", "*/5", "*/10", "*/15", "*"]],
 		["Hour", hour, (v) => setPart(2, v), ["*", "0", "8", "9", "12", "18"]],
-		["Day of Month", dom, (v) => setPart(3, v), ["*", "1", "15", "28"]],
+		[t('dayOfMonth', 'Day of Month'), dom, (v) => setPart(3, v), ["*", "1", "15", "28"]],
 		["Month", mon, (v) => setPart(4, v), ["*", "1", "4", "7", "10"]],
-		["Day of Week", dow, (v) => setPart(5, v), ["*", "1-5", "0", "6"]],
+		[t('dayOfWeek', 'Day of Week'), dow, (v) => setPart(5, v), ["*", "1-5", "0", "6"]],
 	];
 
 	return (
 		<div className="rounded-lg border p-4 space-y-3">
 			<div className="flex items-center justify-between">
-				<Label>Guided builder</Label>
-				<Badge variant="secondary">sec min hour dom mon dow</Badge>
+				<Label>{t('guidedBuilder', 'Guided builder')}</Label>
+				<Badge variant="secondary">{t('secMinHourDomMonDow', 'sec min hour dom mon dow')}</Badge>
 			</div>
 			<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
 				{fields.map(([label, val, cb, sugg], idx) => (
@@ -1054,10 +1057,7 @@ function GuidedCronBuilder({
 					</div>
 				))}
 			</div>
-			<p className="text-xs text-muted-foreground">
-				Use <code>*</code> for “every”, ranges like <code>1-5</code>, lists like{" "}
-				<code>1,15</code>, and steps like <code>*/10</code>.
-			</p>
+			<p className="text-xs text-muted-foreground"><Trans i18nKey="useCodecodeForEveryRangesLikeCode15codeListsLike">Use <code>*</code> for “every”, ranges like <code>1-5</code>, lists like</Trans>{" "}<Trans i18nKey="code115codeAndStepsLikeCode10code"><code>1,15</code>, and steps like <code>*/10</code>.</Trans></p>
 		</div>
 	);
 }

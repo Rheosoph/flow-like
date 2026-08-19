@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	CheckIcon,
 	ClockIcon,
@@ -40,6 +41,7 @@ import {
 } from "./team-shared";
 
 export function TeamJoinManagement({ appId }: Readonly<{ appId: string }>) {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const {
 		data: requestsPages,
@@ -57,17 +59,17 @@ export function TeamJoinManagement({ appId }: Readonly<{ appId: string }>) {
 		<TeamSection>
 			<SectionHeading
 				icon={ClockIcon}
-				title="Join requests"
+				title={t('joinRequests', 'Join requests')}
 				count={requests.length}
 				countTone={requests.length > 0 ? "attention" : "neutral"}
-				description="People who asked to join. Approving adds them with the default role."
+				description={t('peopleWhoAskedToJoinApprovingAddsThemWithTheDefaultRole', 'People who asked to join. Approving adds them with the default role.')}
 			/>
 
 			{requests.length === 0 ? (
 				<EmptyState
 					className="max-w-full"
-					title="No pending requests"
-					description="All join requests have been processed"
+					title={t('noPendingRequests', 'No pending requests')}
+					description={t('allJoinRequestsHaveBeenProcessed', 'All join requests have been processed')}
 					icons={[UsersIcon, ClockIcon, UserCheckIcon]}
 				/>
 			) : (
@@ -89,7 +91,7 @@ export function TeamJoinManagement({ appId }: Readonly<{ appId: string }>) {
 							onClick={() => fetchNextPage()}
 							disabled={isLoading}
 						>
-							{isLoading ? "Loading..." : "Load More Requests"}
+							{isLoading ? "Loading..." : t('loadMoreRequests', 'Load More Requests')}
 						</Button>
 					)}
 				</div>
@@ -103,6 +105,7 @@ function RequestRow({
 	request,
 	refresh,
 }: Readonly<{ appId: string; request: IJoinRequest; refresh: () => void }>) {
+	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const user = useInvoke(backend.userState.lookupUser, backend.userState, [
 		request.user_id,
@@ -147,7 +150,7 @@ function RequestRow({
 
 	const evaluatedName = userDisplayName(userData, "Unknown User");
 	const contact =
-		userData.email ?? userHandle(userData) ?? "No contact details";
+		userData.email ?? userHandle(userData) ?? t('noContactDetails', 'No contact details');
 
 	return (
 		<div className={teamRowClass({ attention: true, align: "start" })}>
@@ -163,13 +166,13 @@ function RequestRow({
 					<span className="truncate">{evaluatedName}</span>
 					<span className={`${TEAM_ROW_HANDLE} truncate`}>{contact}</span>
 					<StatusChip tone="attention" pip>
-						Wants to join
+						{t('wantsToJoin', 'Wants to join')}
 					</StatusChip>
 				</div>
 
 				<div className={TEAM_ROW_META}>
 					<span>
-						Asked{" "}
+						{t('asked', 'Asked')}{" "}
 						{new Date(Date.parse(request.created_at)).toLocaleDateString(
 							"en-US",
 							{
@@ -187,11 +190,11 @@ function RequestRow({
 			<TeamRowActions always>
 				<Button size="sm" onClick={acceptRequest}>
 					<CheckIcon className="size-3.5" />
-					Approve
+					{t('approve', 'Approve')}
 				</Button>
 				<Button size="sm" variant="outline" onClick={declineRequest}>
 					<XIcon className="size-3.5" />
-					Decline
+					{t('decline', 'Decline')}
 				</Button>
 			</TeamRowActions>
 		</div>

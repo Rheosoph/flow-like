@@ -1,0 +1,838 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-rpa-automation",
+		"name": "Browser & Desktop Automation",
+		"language": "en",
+		"slug": "rpa-automation",
+		"difficulty": "INTERMEDIATE",
+		"category": "INTEGRATIONS",
+		"estimatedMinutes": 65,
+		"isPublished": true,
+		"iconUrl": null,
+		"bannerUrl": null,
+		"tags": ["rpa", "browser", "desktop", "selectors", "vision"],
+		"position": 16,
+		"description": "When there's no API, automate the app itself — browsers, desktops, selectors, and vision, with guardrails.",
+		"longDescription": "A legacy supplier portal, no API, and a 45-minute morning ritual: automate it end to end. Pick the right surface, target elements deterministically with selectors and accessibility, fall back to vision without fooling yourself, and survive banners, redesigns, and display-scaling changes with waits, bounded retries, and assertions. Then draw the line that matters: automate the reading, gate every consequential click behind a human. Scenario challenges in every lesson, and a dry-run week of real failures to diagnose in the final.",
+		"media": {
+			"icon": "media/app-logo.webp",
+			"banner": "assets/course-banner.webp"
+		},
+		"assets": [
+			{
+				"name": "DesktopAutomationOverview",
+				"file": "assets/course-banner.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "course-banner.webp",
+				"replace": true
+			},
+			{
+				"name": "NodeCatalog",
+				"file": "assets/NodeCatalog.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "NodeCatalog.webp",
+				"replace": true
+			},
+			{
+				"name": "FlowLikeStudio",
+				"file": "assets/FlowLikeStudio.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "FlowLikeStudio.webp",
+				"replace": true
+			},
+			{
+				"name": "RunsAndLogs",
+				"file": "assets/RunsAndLogs.webp",
+				"kind": "IMAGE",
+				"mimeType": "image/webp",
+				"filename": "RunsAndLogs.webp",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "module-rpa-automation-aim",
+				"title": "When RPA — and How to Aim It",
+				"description": "Decide when UI automation is the right tool, then drive the browser deterministically with selectors.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "lesson-rpa-automation-two-questions",
+						"title": "No API? Ask These Two Questions First",
+						"language": "en",
+						"contentFile": "content/no-api-two-questions.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-rpa-first-question",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Dana wants the morning ritual automated. Before you touch a board, what do you check first?",
+								"explanation": "An API is a machine contract; a UI is a picture built for people — when a reliable API exists, the docs say to use it, and the whole RPA question dissolves. Surface choice feels like the natural first step, but it's premature: it only matters once you know the UI is the only interface, and that you're authorized to automate it.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "api-first",
+											"label": "Whether Kestrel exposes an API you could call instead"
+										},
+										{
+											"id": "fastest-surface",
+											"label": "Which automation surface can click through the portal fastest"
+										},
+										{
+											"id": "record-coordinates",
+											"label": "Whether you can record Dana's clicks as coordinates in one session"
+										},
+										{
+											"id": "pick-model",
+											"label": "Which vision-capable model should watch the screen"
+										}
+									],
+									"correct": ["api-first"]
+								}
+							},
+							{
+								"id": "challenge-rpa-pick-surface",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Kestrel's portal is a web app running in a browser. Which surface do you reach for first?",
+								"explanation": "Prefer the most deterministic surface available — for a web page that's Browser, where selectors describe elements directly. \"Vision works on anything\" is the tempting trap: it's true, and that universality is exactly why it's a fallback. Templates break on every visual change, while a selector survives anything that keeps the element's identity.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "browser-surface",
+											"label": "Browser — drive the page through selectors and page state"
+										},
+										{
+											"id": "vision-default",
+											"label": "Vision — template matching works on anything visible, so it's the safest default"
+										},
+										{
+											"id": "computer-surface",
+											"label": "Computer — the portal runs on a desktop machine, so desktop nodes apply"
+										},
+										{
+											"id": "llm-decide",
+											"label": "LLM planning — let a model decide each click as it goes"
+										}
+									],
+									"correct": ["browser-surface"]
+								}
+							},
+							{
+								"id": "challenge-rpa-green-light",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which of these actually clear the way for automating the Kestrel portal?",
+								"explanation": "RPA needs all three: no better interface, explicit authorization, and an execution environment where the interface actually lives. \"Credentials imply permission\" is the classic slip — being able to log in says nothing about the terms, which is why you get authorization in writing. And an API would still win the moment it exists: contracts beat pictures.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "no-api-lane",
+											"label": "Kestrel offers no API, so the portal UI is the only interface to automate"
+										},
+										{
+											"id": "written-ok",
+											"label": "Kestrel confirmed in writing that automated read-only status checks are within the agreement"
+										},
+										{
+											"id": "local-env",
+											"label": "The flow will run on the ops workstation, where the portal and a compatible local environment are available"
+										},
+										{
+											"id": "login-is-permission",
+											"label": "Dana's credentials log in successfully, which implies automation is permitted"
+										},
+										{
+											"id": "rpa-forever",
+											"label": "Once the RPA flow works, a future API would add nothing worth migrating to"
+										}
+									],
+									"correct": ["no-api-lane", "written-ok", "local-env"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-rpa-automation-browser-selectors",
+						"title": "Drive the Portal Like a User — Deterministically",
+						"language": "en",
+						"contentFile": "content/browser-and-selectors.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-rpa-wait-first",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The status table renders a beat after login. What does the flow do before reading it?",
+								"explanation": "Wait For Selector watches the actual readiness signal — the element existing in the DOM — so it's exact on fast days and patient on slow ones. The generous fixed delay is the tempting option: it's still a guess, too short on the portal's worst day and pure waste on every other. The robustness lesson shows how exactly that guess silently corrupted a Friday run.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "wait-selector",
+											"label": "Wait For Selector on the table, then extract"
+										},
+										{
+											"id": "generous-delay",
+											"label": "Add a 10-second Wait Delay — generous enough for slow days"
+										},
+										{
+											"id": "click-until",
+											"label": "Click the table repeatedly until text comes back"
+										},
+										{
+											"id": "reload-fast",
+											"label": "Reload the page until it renders instantly"
+										}
+									],
+									"correct": ["wait-selector"]
+								}
+							},
+							{
+								"id": "challenge-rpa-banner-shift",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Tuesday's maintenance banner pushed the page down eighty pixels and the coordinate-click flow typed a password into a checkbox. Why would a selector have survived?",
+								"explanation": "A selector describes the element itself — name, id, attributes — so the layout can move and the lookup still lands. \"Smarter coordinates\" is the misconception to bury: a selector stores no position at all, which is precisely why position changes can't hurt it. Coordinates break whenever anything moves — banner, resize, zoom, or redesign.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "selector-follows",
+											"label": "A selector resolves the element wherever the layout puts it"
+										},
+										{
+											"id": "smart-coords",
+											"label": "Selectors store smarter coordinates that shift along with the page"
+										},
+										{
+											"id": "banner-blocked",
+											"label": "The browser session suppresses banners, so the layout never moves under a selector"
+										},
+										{
+											"id": "resize-only",
+											"label": "Coordinates only break when the window is resized, not when content changes"
+										}
+									],
+									"correct": ["selector-follows"]
+								}
+							},
+							{
+								"id": "challenge-rpa-form-recipe",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which steps belong in the reliable login-and-extract recipe for the portal?",
+								"explanation": "Wait before you touch, wait again for the result, and clean up on every path — that's the recipe's skeleton. The screenshot option is the subtle one: Take Screenshot is excellent evidence, but it proves what the page looked like, not that your extraction was right. It complements verification; it never replaces it.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "wait-before-touch",
+											"label": "Wait For Selector before typing into the login fields"
+										},
+										{
+											"id": "wait-result",
+											"label": "After submitting, wait for the result selector or Wait For Network Idle before reading"
+										},
+										{
+											"id": "close-both-paths",
+											"label": "Close Page and Close Browser on the cleanup path, success and failure alike"
+										},
+										{
+											"id": "standard-delay",
+											"label": "Use a fixed five-second delay as the standard readiness signal"
+										},
+										{
+											"id": "screenshot-instead",
+											"label": "End with Take Screenshot instead of checking the extracted values"
+										}
+									],
+									"correct": ["wait-before-touch", "wait-result", "close-both-paths"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "module-rpa-automation-production",
+				"title": "Beyond the Browser, Into Production",
+				"description": "Automate native apps with accessibility and vision, survive change with waits and retries, and gate consequential actions behind humans.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "lesson-rpa-automation-desktop-vision",
+						"title": "The App With No DOM",
+						"language": "en",
+						"contentFile": "content/desktop-and-vision.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-rpa-native-target",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The flow needs the Export button in a native desktop app. What's your first targeting choice?",
+								"explanation": "Accessibility metadata is the native equivalent of a selector — it names controls and can stay stable through window moves and display-scaling changes, so it's the preferred start. Templates feel like the obvious desktop tool, but they're the fallback for apps whose accessibility tree is empty: a template is a photograph, and photographs go stale with every visual change.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "accessibility-first",
+											"label": "Find Accessibility Element, using the tree the app exposes"
+										},
+										{
+											"id": "template-default",
+											"label": "Find Template — image matching is the native-app default"
+										},
+										{
+											"id": "coords-recorded",
+											"label": "A coordinate recorded once while watching Dana work"
+										},
+										{
+											"id": "llm-each-run",
+											"label": "LLM Find Element on every run, so the flow adapts automatically"
+										}
+									],
+									"correct": ["accessibility-first"]
+								}
+							},
+							{
+								"id": "challenge-rpa-template-hygiene",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "The label client's accessibility tree turns out nearly empty, so you fall back to templates. Which practices keep that honest?",
+								"explanation": "Small distinctive crops, bounded search regions, and refreshed templates are what keep image matching close to deterministic. \"Capture the whole window so nothing is missed\" is the intuitive mistake — a big template embeds everything that can change, so it breaks on anything. The tighter the crop, the fewer reasons to mismatch.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "tight-crop",
+											"label": "Crop the template tightly around a distinctive, stable control"
+										},
+										{
+											"id": "region-search",
+											"label": "Search a captured region instead of the whole display"
+										},
+										{
+											"id": "recreate-on-change",
+											"label": "Recreate templates when the app's theme, scaling, or design changes"
+										},
+										{
+											"id": "whole-screen",
+											"label": "Capture the whole window as the template so nothing is missed"
+										},
+										{
+											"id": "fuzzy-forever",
+											"label": "Trust the match tolerance to absorb redesigns without recreating anything"
+										}
+									],
+									"correct": ["tight-crop", "region-search", "recreate-on-change"]
+								}
+							},
+							{
+								"id": "challenge-rpa-session-frame",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Where do Start Automation Session and Stop Automation Session belong in the label-export flow?",
+								"explanation": "The session frames the whole automation, and stopping it on both exits keeps resource ownership and cleanup visible on the board. Keeping failed sessions open \"for inspection\" is the tempting one — that's what Take Snapshot and Capture Window are for: capture the evidence, then still clean up.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "both-exits",
+											"label": "Start at the beginning; Stop on the success path and the failure path"
+										},
+										{
+											"id": "success-only",
+											"label": "Stop only after success, keeping failed sessions open for inspection"
+										},
+										{
+											"id": "optional-bookkeeping",
+											"label": "Nowhere — sessions are optional bookkeeping for desktop automation"
+										},
+										{
+											"id": "per-action",
+											"label": "Around each individual click, so every action owns a fresh session"
+										}
+									],
+									"correct": ["both-exits"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-rpa-automation-robustness",
+						"title": "The 6 a.m. Rule: Signals, Retries, Evidence",
+						"language": "en",
+						"contentFile": "content/robustness-signals-retries-evidence.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-rpa-silent-danger",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Thursday's run failed loudly; Friday's went green with stale data. Which is the bigger danger?",
+								"explanation": "A loud failure announces itself and gets fixed; a silent success skips the announcement and ships wrong numbers with a green checkmark on top. That's why assertions exist — they convert would-be silent corruptions into loud, fixable failures. \"A failure is a failure\" misses that the two have opposite costs: attention versus trust.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "silent-green",
+											"label": "Friday's — a \"successful\" run with wrong data flows straight into decisions"
+										},
+										{
+											"id": "loud-fail",
+											"label": "Thursday's — a failed run means lost time and a manual morning"
+										},
+										{
+											"id": "equal-bad",
+											"label": "Both are equally bad; a failure is a failure"
+										},
+										{
+											"id": "neither-retries",
+											"label": "Neither, as long as the flow retries automatically"
+										}
+									],
+									"correct": ["silent-green"]
+								}
+							},
+							{
+								"id": "challenge-rpa-retry-safe",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which steps are safe to wrap in a bounded Retry Loop exactly as they are?",
+								"explanation": "Reads and waits are idempotent — run them five times and the world is unchanged, so bounded retries with backoff fit perfectly. The two click options are the trap: a timeout doesn't mean the click failed, it means you don't know. Retrying a consequential action without verifying whether it already succeeded is how one acknowledgment becomes two.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "reread-table",
+											"label": "Re-reading the status table after a slow render"
+										},
+										{
+											"id": "rewait-dialog",
+											"label": "Waiting again for the Export dialog's template to appear"
+										},
+										{
+											"id": "confirm-until",
+											"label": "Clicking the portal's Confirm button until it stops erroring"
+										},
+										{
+											"id": "ack-timeout",
+											"label": "Re-clicking Acknowledge after a timeout, without checking whether it landed"
+										}
+									],
+									"correct": ["reread-table", "rewait-dialog"]
+								}
+							},
+							{
+								"id": "challenge-rpa-ladder",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A target drifted and you're designing fallbacks. What's the first rung of the ladder?",
+								"explanation": "The ladder runs most-deterministic first: stable selector or accessibility element, then alternate selectors or fingerprints, then templates, then coordinates, with LLM assistance last. \"Most adaptive should lead\" inverts the logic — adaptivity is exactly what you save for when determinism has run out, and even then its output gets validated.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "stable-first",
+											"label": "A stable selector or accessibility element"
+										},
+										{
+											"id": "template-first-rung",
+											"label": "A template match — visual truth beats markup"
+										},
+										{
+											"id": "coordinate-fast",
+											"label": "A coordinate — it's the fastest to execute"
+										},
+										{
+											"id": "llm-adaptive",
+											"label": "LLM resolution — the most adaptive option should lead"
+										}
+									],
+									"correct": ["stable-first"]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-rpa-automation-guardrails",
+						"title": "Automate the Reading, Gate the Writing",
+						"language": "en",
+						"contentFile": "content/guardrails-and-human-review.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 2,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-rpa-gate-writes",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Which Kestrel actions stay behind a human checkpoint?",
+								"explanation": "Both are writes with business meaning — statements to the supplier that no re-run can unsay, and both sit outside the written read-only authorization. Reading and evidence capture are exactly what the automation is for; gating those would just reinvent Dana's 45-minute morning with extra steps.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "ack-delay",
+											"label": "Clicking Acknowledge on a delayed purchase order"
+										},
+										{
+											"id": "confirm-change",
+											"label": "Confirming an order change in the portal"
+										},
+										{
+											"id": "read-column",
+											"label": "Reading the status column into the spreadsheet"
+										},
+										{
+											"id": "capture-evidence",
+											"label": "Capturing the evidence screenshot for the run log"
+										}
+									],
+									"correct": ["ack-delay", "confirm-change"]
+								}
+							},
+							{
+								"id": "challenge-rpa-llm-proposal",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "What's the working relationship between the flow and the LLM automation nodes?",
+								"explanation": "LLM nodes earn their keep when deterministic signal runs out — but their output is a proposal: validate the resolved target, bound the fallback, and keep consequential actions gated. \"A streak earns trust\" is the seductive one; a model that's been right twice has a track record, not a guarantee, and unattended is exactly where guarantees matter.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "propose-validate",
+											"label": "They propose — observe, plan, heal — and the flow validates before anything acts"
+										},
+										{
+											"id": "replace-maintenance",
+											"label": "They replace selector maintenance, so targets never need updating"
+										},
+										{
+											"id": "earned-trust",
+											"label": "After a streak of correct calls, their output can run unattended"
+										},
+										{
+											"id": "required-desktop",
+											"label": "Desktop automation requires a vision-capable model to function"
+										}
+									],
+									"correct": ["propose-validate"]
+								}
+							},
+							{
+								"id": "challenge-rpa-capture-care",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A healing step sends a screen capture to a configured vision model when a template fails. What has to be true about that capture?",
+								"explanation": "Captures can carry personal, confidential, or regulated data — Kestrel order pages include names and addresses — and once content goes to a model or external service, provider, connection, and organizational policies govern where it's processed. Minimize the region, redact, and know those policies. Dropping evidence entirely overcorrects: the fix is capturing carefully, not flying blind.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "minimal-redacted",
+											"label": "It's minimized to the relevant region, sensitive values are redacted, and you've checked the policies that govern it"
+										},
+										{
+											"id": "internal-ok",
+											"label": "Nothing special — captures are safe as long as your ticket system is internal"
+										},
+										{
+											"id": "no-evidence",
+											"label": "It shouldn't exist; diagnostic captures are a liability to eliminate"
+										},
+										{
+											"id": "stays-local",
+											"label": "Nothing to check — configured models never process content off the machine"
+										}
+									],
+									"correct": ["minimal-redacted"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			},
+			{
+				"id": "module-rpa-automation-assessment",
+				"title": "Final Assessment",
+				"description": "Diagnose a week of dry-run failures and make the calls that ship the daily Kestrel run.",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "lesson-rpa-automation-final",
+						"title": "The Daily Kestrel Run",
+						"language": "en",
+						"contentFile": "content/final-assessment.md",
+						"videoUrl": null,
+						"estimatedMinutes": 15,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-rpa-final-api-beta",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Next quarter, Kestrel ships its status API beta. What happens to your automation?",
+								"explanation": "APIs beat UI automation wherever they exist — a contract for machines versus a picture for people — so the status checks migrate once the beta proves reliable. But the label client offers no API, so its automation stays: the lesson-one decision applies per interface, not per project. \"It already works\" undersells how much banner-and-redesign fragility the API retires.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "migrate-split",
+											"label": "Move status checks to the API once it proves reliable; keep UI automation only for the label client, which has no API"
+										},
+										{
+											"id": "keep-rpa",
+											"label": "Keep the RPA flow — it already works, and rewrites add risk"
+										},
+										{
+											"id": "all-api",
+											"label": "Move everything to the API, including the label export"
+										},
+										{
+											"id": "parallel-forever",
+											"label": "Run both paths against the portal permanently and compare results"
+										}
+									],
+									"correct": ["migrate-split"]
+								}
+							},
+							{
+								"id": "challenge-rpa-final-tuesday",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Diagnose Tuesday: the maintenance banner appeared, the flow copied the wrong column, and the run reported green. What's the durable fix?",
+								"explanation": "Two defects, two lessons: coordinates broke because they track pixels, not elements — selectors fix that — and the wrong data shipped because nothing verified the page's shape before extraction, which a landmark assertion turns into a loud stop. The delay option misreads the failure: the banner didn't make the page slow, it made it different.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "selector-plus-assert",
+											"label": "Target by selector instead of coordinates, and assert a known landmark before extracting"
+										},
+										{
+											"id": "longer-delay",
+											"label": "Lengthen the delay so banners have time to disappear"
+										},
+										{
+											"id": "ask-supplier",
+											"label": "Ask Kestrel to announce maintenance banners in advance"
+										},
+										{
+											"id": "rerun-manually",
+											"label": "Re-run the flow manually whenever the portal looks unusual"
+										}
+									],
+									"correct": ["selector-plus-assert"]
+								}
+							},
+							{
+								"id": "challenge-rpa-final-scaling",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Wednesday, the Export template stopped matching after display scaling changed to 125%. Which moves fix the label export durably?",
+								"explanation": "A template is a photograph of the UI, and the scaling change altered the photograph's subject — so you recreate it under production conditions and keep the search region tight. Loosening tolerance is the tempting fix: it may make this template pass, and it makes every future false match more likely. Reverting the workstation's scaling pins the environment — a symptom treatment that breaks the next time anything changes.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "recreate-scaling",
+											"label": "Recreate the Export template from a capture taken at the workstation's actual 125% scaling, and re-test after future display changes"
+										},
+										{
+											"id": "region-bound",
+											"label": "Search a bounded Screenshot Region around the toolbar instead of the whole display"
+										},
+										{
+											"id": "loosen-threshold",
+											"label": "Loosen the match tolerance until the old 100% template passes again"
+										},
+										{
+											"id": "new-coords",
+											"label": "Hard-code the button's new coordinates for 125% and move on"
+										},
+										{
+											"id": "revert-scaling",
+											"label": "Have IT revert the workstation to 100% so the old template stays valid"
+										}
+									],
+									"correct": ["recreate-scaling", "region-bound"]
+								}
+							},
+							{
+								"id": "challenge-rpa-final-thursday",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Thursday's slow portal beat the five-second delay, the extraction came back empty, and the run went green. Which changes close this out?",
+								"explanation": "The fix is the robustness trio: wait on the real readiness signal, assert what you extracted, and retry the safe-to-repeat read with a bound. Twenty seconds is the honest-looking trap — it's still a guess, still loses the race on the worst day, and now wastes twenty seconds on every good one. And \"Friday passed\" is survivorship, not evidence.",
+								"points": 10,
+								"position": 3,
+								"payload": {
+									"options": [
+										{
+											"id": "signal-wait",
+											"label": "Replace the fixed delay with Wait For Selector on the status table"
+										},
+										{
+											"id": "assert-nonempty",
+											"label": "Assert the landmark and the extraction, so an empty table fails the run instead of filling the spreadsheet"
+										},
+										{
+											"id": "bounded-retry",
+											"label": "Wrap the read in a bounded Retry Loop with backoff for the portal's slow days"
+										},
+										{
+											"id": "delay-twenty",
+											"label": "Raise the delay to twenty seconds to cover the worst day yet observed"
+										},
+										{
+											"id": "one-off",
+											"label": "Log it as a one-off — Friday's run passed with no changes"
+										}
+									],
+									"correct": ["signal-wait", "assert-nonempty", "bounded-retry"]
+								}
+							},
+							{
+								"id": "challenge-rpa-final-friday",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "Friday, an experimental branch clicked Acknowledge, retried after a timeout, and one PO was acknowledged twice. Which responses actually close the incident?",
+								"explanation": "The incident stacks two violations: a write outside the read-only authorization, and a retry of a non-idempotent action without checking whether it already succeeded. So: pull the write, put a human at the checkpoint, and — if writes are ever authorized — verify before retrying. Backoff is the seductive non-fix: it changes the rhythm of duplicates, not their existence, and logging documents a violation without preventing it.",
+								"points": 10,
+								"position": 4,
+								"payload": {
+									"options": [
+										{
+											"id": "remove-write",
+											"label": "Remove auto-acknowledge entirely — it's outside the written read-only authorization"
+										},
+										{
+											"id": "human-checkpoint",
+											"label": "Route delay findings to a human checkpoint that presents the evidence and lets a person act"
+										},
+										{
+											"id": "verify-before-retry",
+											"label": "If a write is ever authorized later, verify whether the first attempt landed before any retry"
+										},
+										{
+											"id": "backoff-writes",
+											"label": "Keep auto-acknowledge but retry with exponential backoff so duplicates spread out"
+										},
+										{
+											"id": "log-writes",
+											"label": "Keep auto-acknowledge and log every click so the audit trail explains duplicates"
+										}
+									],
+									"correct": [
+										"remove-write",
+										"human-checkpoint",
+										"verify-before-retry"
+									]
+								}
+							},
+							{
+								"id": "challenge-rpa-final-capture",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Saturday's diagnostic ticket carried a full-screen capture with a customer's name and delivery address. What's the correct correction?",
+								"explanation": "Captures are evidence, and evidence is good — but the region should be minimal, sensitive values redacted, and the governing policies known before content moves. \"Internal-only\" is the tempting shortcut: internal distribution is still processing personal data, and the full screen was never necessary for diagnosing a template miss. Dropping captures entirely swaps a privacy problem for a debugging one.",
+								"points": 10,
+								"position": 5,
+								"payload": {
+									"options": [
+										{
+											"id": "minimize-redact-policy",
+											"label": "Capture the smallest useful region, redact sensitive values, and confirm which policies govern where captures travel"
+										},
+										{
+											"id": "internal-only",
+											"label": "Keep full-screen captures but restrict tickets to internal viewers"
+										},
+										{
+											"id": "drop-captures",
+											"label": "Stop attaching captures to diagnostics altogether"
+										},
+										{
+											"id": "blur-later",
+											"label": "Attach as before and blur images retroactively if someone objects"
+										}
+									],
+									"correct": ["minimize-redact-policy"]
+								}
+							},
+							{
+								"id": "challenge-rpa-final-evidence",
+								"kind": "MULTIPLE_CHOICE",
+								"prompt": "What makes the 6 a.m. run defensible when someone asks \"did it actually work?\" three weeks later?",
+								"explanation": "Defensible means you can show what happened and prove the outcome: an audit trail, diagnostics from the runs that failed, and a durable check that the business result exists. A green streak is the trap this course keeps springing — Tuesday and Thursday were green; green proves the run finished, not that it was right. And blanket full-screen captures collide with Saturday's lesson: evidence should be minimal and deliberate, not maximal.",
+								"points": 10,
+								"position": 6,
+								"payload": {
+									"options": [
+										{
+											"id": "audit-log",
+											"label": "Log Action entries tracing what the flow did, step by step"
+										},
+										{
+											"id": "snapshot-fail",
+											"label": "Checkpoints and snapshots captured on the failure paths"
+										},
+										{
+											"id": "durable-check",
+											"label": "A verified outcome — the spreadsheet's rows match the POs checked — not just a green status"
+										},
+										{
+											"id": "green-week",
+											"label": "A week of green run statuses in the Runs panel"
+										},
+										{
+											"id": "full-captures",
+											"label": "Full-screen captures of every step, kept forever"
+										}
+									],
+									"correct": ["audit-log", "snapshot-fail", "durable-check"]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		]
+	}
+}

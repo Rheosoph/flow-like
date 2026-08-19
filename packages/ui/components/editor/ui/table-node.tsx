@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import type * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
@@ -350,6 +351,7 @@ function TableFloatingToolbar({
 function TableBordersDropdownMenuContent(
 	props: React.ComponentProps<typeof DropdownMenuPrimitive.Content>,
 ) {
+	const { t } = useTranslation("common");
 	const editor = useEditorRef();
 	const {
 		getOnSelectTableBorder,
@@ -379,28 +381,28 @@ function TableBordersDropdownMenuContent(
 					onCheckedChange={getOnSelectTableBorder("top")}
 				>
 					<BorderTopIcon />
-					<div>Top Border</div>
+					<div>{t('topBorder', 'Top Border')}</div>
 				</DropdownMenuCheckboxItem>
 				<DropdownMenuCheckboxItem
 					checked={hasRightBorder}
 					onCheckedChange={getOnSelectTableBorder("right")}
 				>
 					<BorderRightIcon />
-					<div>Right Border</div>
+					<div>{t('rightBorder', 'Right Border')}</div>
 				</DropdownMenuCheckboxItem>
 				<DropdownMenuCheckboxItem
 					checked={hasBottomBorder}
 					onCheckedChange={getOnSelectTableBorder("bottom")}
 				>
 					<BorderBottomIcon />
-					<div>Bottom Border</div>
+					<div>{t('bottomBorder', 'Bottom Border')}</div>
 				</DropdownMenuCheckboxItem>
 				<DropdownMenuCheckboxItem
 					checked={hasLeftBorder}
 					onCheckedChange={getOnSelectTableBorder("left")}
 				>
 					<BorderLeftIcon />
-					<div>Left Border</div>
+					<div>{t('leftBorder', 'Left Border')}</div>
 				</DropdownMenuCheckboxItem>
 			</DropdownMenuGroup>
 
@@ -410,14 +412,14 @@ function TableBordersDropdownMenuContent(
 					onCheckedChange={getOnSelectTableBorder("none")}
 				>
 					<BorderNoneIcon />
-					<div>No Border</div>
+					<div>{t('noBorder', 'No Border')}</div>
 				</DropdownMenuCheckboxItem>
 				<DropdownMenuCheckboxItem
 					checked={hasOuterBorders}
 					onCheckedChange={getOnSelectTableBorder("outer")}
 				>
 					<BorderAllIcon />
-					<div>Outside Borders</div>
+					<div>{t('outsideBorders', 'Outside Borders')}</div>
 				</DropdownMenuCheckboxItem>
 			</DropdownMenuGroup>
 		</DropdownMenuContent>
@@ -431,6 +433,7 @@ function ColorDropdownMenu({
 	children: React.ReactNode;
 	tooltip: string;
 }) {
+	const { t } = useTranslation("common");
 	const [open, setOpen] = React.useState(false);
 
 	const editor = useEditorRef();
@@ -469,7 +472,7 @@ function ColorDropdownMenu({
 				<DropdownMenuGroup>
 					<DropdownMenuItem className="p-2" onClick={onClearColor}>
 						<EraserIcon />
-						<span>Clear</span>
+						<span>{t('clear', 'Clear')}</span>
 					</DropdownMenuItem>
 				</DropdownMenuGroup>
 			</DropdownMenuContent>

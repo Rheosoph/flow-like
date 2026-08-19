@@ -31,13 +31,27 @@ uniform float u_sat;      // orbiting satellite bubbles
 uniform float u_pop;      // 1 → 0 acknowledge shockwave
 uniform float u_spin_mix; // how much the iridescence rides along with u_spin
 
-// ── satellite steering ──
-// Lets a caller fly the three satellites to fixed targets instead of leaving them on their
-// orbit. Same no-op-at-0 contract as the block above: every default reproduces the free orbit.
-uniform float u_sat_orbit;      // orbit radius; 0 keeps the built-in one
-uniform vec2 u_sat_pos[3];      // per-satellite destination, film space
-uniform float u_sat_dock[3];    // 0 free orbit … 1 parked on u_sat_pos
-uniform float u_sat_shrink[3];  // 0 present … 1 collapsed away
+// ── blob field ──
+// A constellation of droplets, positioned from JS every frame and merged into the body with a
+// polynomial smooth minimum rather than a hard union — so a droplet necks out of the skin and the
+// thread snaps on its own, and two droplets fuse when they meet, with no keyframe for either.
+// Same no-op-at-0 contract: presence 0 is what an unset uniform is, and costs nothing.
+uniform vec4 u_blob[8];      // xy centre (film space), z radius, w presence
+uniform float u_blob_k[8];   // smooth-min radius; 0 is a hard union
+uniform float u_blob_uv[8];  // 0 wobble space … 1 screen space
+// A switch, not a fade: the body's whole field is pushed away, so it disappears as soon as this
+// clears about u_box.y/8. Shrink u_box if you want the body to leave gradually.
+uniform float u_body_off;    // 1 removes the body and its satellites, leaving only blobs
+
+// The light branch's saturation punch (see filmL) was tuned against the 72px launcher, and reads
+// as hot magenta on a mark several times that size. 0 keeps the launcher's value.
+uniform float u_sat_l;
+
+// The mark's nominal half-extent, for the directional grade and the window streak. u_box stops
+// meaning "the mark" as soon as the body shrinks and blobs carry the silhouette: dividing by a
+// collapsing box saturates the grade into a hard edge straight down the middle of the field.
+// 0 uses u_box, which is exactly right for every caller whose body is the whole mark.
+uniform vec2 u_grade;
 
 float hash(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -61,6 +75,13 @@ mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
 float sdRoundBox(vec2 p, vec2 b, float r) {
 	vec2 q = abs(p) - b + r;
 	return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+// Polynomial smooth minimum. Exactly min() outside the k band, so a blob far from the body costs
+// nothing and can never shrink it — which a naive blend would, everywhere, by k/4.
+float smin(float a, float b, float k) {
+	if (k <= 0.0) return min(a, b);
+	float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+	return mix(b, a, h) - k * h * (1.0 - h);
 }
 void main() {
 	vec2 uv = (gl_FragCoord.xy * 2.0 - u_res) / u_res.y;
@@ -96,25 +117,28 @@ void main() {
 	// phase and each satellite swelling as it swings toward the viewer. Shell radii stay clear
 	// of the rim at every point of the cycle, so a satellite never merges into the nucleus.
 	float dsat = 8.0;
-	float orbitR = u_sat_orbit > 0.0 ? u_sat_orbit : 0.63;
 	for (int i = 0; i < 3; i++) {
 		float fi = float(i);
 		float oa = u_time * 1.15 + fi * 2.0944;
-		// Breathing scales with the orbit, so closing the orbit really does stack the satellites
-		// on the nucleus. At the default radius this is the same 0.05 amplitude as before.
-		float rad = orbitR * (1.0 + 0.0794 * sin(u_time * 0.9 + fi * 2.1));
-		vec2 o = mix(vec2(cos(oa), sin(oa)) * rad, u_sat_pos[i], u_sat_dock[i]);
+		float rad = 0.63 * (1.0 + 0.0794 * sin(u_time * 0.9 + fi * 2.1));
+		vec2 o = vec2(cos(oa), sin(oa)) * rad;
 		float depth = 1.0 + 0.32 * sin(u_time * 1.3 + fi * 2.4);
-		// Collapsing shrinks the shell, then drops it once it is a couple of pixels across.
-		// Letting the radius reach exactly 0 would leave a singular bright point on the target.
-		float shrink = clamp(u_sat_shrink[i], 0.0, 1.0);
-		float rsat = 0.046 * depth * (1.0 - shrink);
-		// A docking satellite crosses out of the film's wobble field into plain screen space, or
-		// the organic displacement baked into p would land it tens of pixels off its target.
-		vec2 psat = mix(p, uv, u_sat_dock[i]);
-		dsat = min(dsat, length(psat - o) - rsat + step(0.9, shrink) * 6.0);
+		dsat = min(dsat, length(p - o) - 0.046 * depth);
 	}
 	d = min(d, dsat + (1.0 - clamp(u_sat, 0.0, 1.0)) * 6.0);
+	d += clamp(u_body_off, 0.0, 1.0) * 8.0;
+
+	// blobs: everything the body itself cannot be. Merged with a smooth minimum, so a droplet
+	// budding off the rim stretches a real thread that thins and snaps, and two droplets that
+	// meet become one. A blob whose destination is a DOM rectangle crosses into uv space — the
+	// wobble field baked into p would otherwise land it tens of pixels off its target.
+	for (int i = 0; i < 8; i++) {
+		vec4 b = u_blob[i];
+		if (b.w <= 0.001) continue;
+		vec2 bp = mix(p, uv, clamp(u_blob_uv[i], 0.0, 1.0));
+		float db = length(bp - b.xy) - max(b.z, 0.0012) + (1.0 - b.w) * 8.0;
+		d = smin(d, db, u_blob_k[i]);
+	}
 
 	// cursor physics: the film bulges toward the pointer and ripples around it
 	// (only a whisper of it remains in composer mode)
@@ -135,14 +159,20 @@ void main() {
 	// and the interference pattern shifts under the cursor
 	// The cog can turn without dragging the iridescence around with it, and vice versa.
 	vec2 pf = mix(p, pr, clamp(u_spin_mix, 0.0, 1.0));
-	float phase = -d * 5.0 + fbm(pf * 1.3 + vec2(t * 0.25, -t * 0.2)) * 1.6 + t * 0.5 + mnear * 0.9;
+	float base = fbm(pf * 1.3 + vec2(t * 0.25, -t * 0.2)) * 1.6 + t * 0.5 + mnear * 0.9;
+	// Dispersion. The three fixed hue offsets below are a palette: they slide the rainbow without
+	// ever separating it. Real thin film separates because n varies with wavelength, so blue counts
+	// more fringes across the same thickness than red — which is a per-channel scale on the depth
+	// term, not an offset. Strongest where the film is thinnest, exactly as it is in glass.
+	vec3 phase = -d * 5.0 * mix(vec3(1.0), vec3(0.87, 1.0, 1.18), 0.35 + 0.65 * fres) + base;
 	vec3 film = 0.5 + 0.5 * cos(6.2831 * (phase * 0.22 + vec3(0.0, 0.21, 0.42)));
 	film = mix(film, vec3(0.62, 0.66, 1.0), 0.3);
 
 	// directional grade: cyan crown, violet left, and the app's --primary (warm
 	// ember) sweeping the lower-right so the film harmonizes with the brand scheme
-	float top = clamp(p.y / u_box.y, -1.0, 1.0) * 0.5 + 0.5;
-	float left = clamp(-p.x / u_box.x, -1.0, 1.0) * 0.5 + 0.5;
+	vec2 grade = u_grade.x > 0.0 ? u_grade : u_box;
+	float top = clamp(p.y / grade.y, -1.0, 1.0) * 0.5 + 0.5;
+	float left = clamp(-p.x / grade.x, -1.0, 1.0) * 0.5 + 0.5;
 	vec3 warm = u_primary * 1.15 + vec3(0.05);           // brighten so it reads in the film
 	film = mix(film, vec3(0.55, 0.85, 1.0), top * 0.38);
 	film = mix(film, vec3(0.62, 0.42, 1.0), left * 0.42);
@@ -152,8 +182,14 @@ void main() {
 	float swirl = fbm(pf * 1.1 + vec2(t * 0.12, -t * 0.09) + n1);
 	float swirl2 = fbm(pf * 2.1 - vec2(t * 0.07, t * 0.1) + n2);
 	// window-light streak, hugging the upper-left rim away from the text
-	vec2 hlp = (p - vec2(-u_box.x * 0.55 + sin(t * 0.4) * 0.05, u_box.y * 0.8)) * vec2(1.4, 3.0);
+	vec2 hlp = (p - vec2(-grade.x * 0.55 + sin(t * 0.4) * 0.05, grade.y * 0.8)) * vec2(1.4, 3.0);
 	float streak = exp(-dot(hlp, hlp) * 4.5);
+
+	// absorption trough: every colour term below is additive, so brightness climbs monotonically
+	// toward the silhouette and the film reads as glowing plastic. Real glass and real soap go
+	// dark first — a narrow absorbing band just inside the rim, under the bright core, is what
+	// makes the rim read as a surface turning away rather than as a stroke drawn around a shape.
+	float band = exp(-abs(d + 0.026) * 46.0) * fill;
 
 	// ————— DARK: iridescent film glowing over black —————
 	float rimCoreD = exp(-abs(d) * 80.0) * 1.05 * boost * (1.0 + 1.2 * mnear) * mix(1.0, 0.55, m);
@@ -163,6 +199,7 @@ void main() {
 	intD += vec3(0.05, 0.055, 0.09);
 	intD = mix(intD, vec3(0.07, 0.075, 0.115), m * 0.85);
 	vec3 colD = intD * fill;
+	colD *= 1.0 - band * 0.62;
 	colD += (film * 0.85 + vec3(0.22)) * rimCoreD;
 	colD += film * rimAuraD;
 	colD += film * glowOutD;
@@ -174,7 +211,11 @@ void main() {
 	// ————— LIGHT: translucent iridescent soap film over the light page —————
 	// punch saturation so thin-film hues read as colour when composited on white
 	vec3 grayF = vec3(dot(film, vec3(0.3333)));
-	vec3 filmL = clamp(mix(grayF, film, 2.45), 0.0, 1.0);   // punchier iridescence
+	// 2.45 was tuned against the launcher, where the film is ~72px across and the thin-film hues
+	// would otherwise wash out to grey on white. On a mark two or three times that size the same
+	// punch reads as hot magenta, so a caller rendering the film large passes its own value.
+	float satL = u_sat_l > 0.0 ? u_sat_l : 2.45;
+	vec3 filmL = clamp(mix(grayF, film, satL), 0.0, 1.0);   // punchier iridescence
 	// tint darkens the white page in interference bands (rainbow), denser at rim
 	vec3 tintL = filmL * (0.54 + 0.28 * swirl + 0.22 * swirl2);
 	tintL = mix(tintL, filmL * 0.78, fres * 0.62);
@@ -183,6 +224,7 @@ void main() {
 	float rimCoreL = exp(-abs(d) * 70.0) * (1.0 + 1.0 * mnear) * mix(1.0, 0.62, m);
 	float sheenL = exp(-abs(d) * 15.0) * 0.5 * boost * (1.0 + 0.8 * mnear) * mix(1.0, 0.6, m) * fill;
 	vec3 colL = tintL;
+	colL *= 1.0 - band * 0.34;
 	colL += filmL * sheenL;
 	colL += clamp(filmL * 1.3, 0.0, 1.0) * rimCoreL * 0.55;
 	colL = mix(colL, vec3(1.0), spec * 0.8);        // white specular hotspot
@@ -194,6 +236,12 @@ void main() {
 	// cool bubble border survives the straighten-out (fill gates it from blooming out)
 	float edgeLine = exp(-abs(d) * 80.0) * fill;
 	colL = mix(colL, clamp(filmL * 0.95, 0.0, 1.0), edgeLine * m * 0.9);
+	// A film rendered large on a white page wants a pale wash with a thin coloured edge, not a fat
+	// coloured ring — and how far the caller has already backed satL off is exactly how large it
+	// is. At the launcher's default this is zero, so the small film is untouched.
+	float relax = clamp((2.45 - satL) / 1.55, 0.0, 1.0);
+	colL = mix(colL, vec3(dot(colL, vec3(0.2126, 0.7152, 0.0722))), relax * 0.46);
+
 	// alpha = translucent film body + a crisp thin rim line ONLY — no broad outer
 	// halo, so the canvas stays transparent over the heading text behind it
 	float rimLineL = exp(-abs(d) * 60.0) * (1.0 + 0.6 * mnear) * mix(1.0, 0.7, m);

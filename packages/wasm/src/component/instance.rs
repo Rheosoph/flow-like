@@ -142,6 +142,8 @@ fn cli_child_host_state(parent: &HostState) -> HostState {
     let mut child = HostState::new(parent.capabilities);
     child.model_context = parent.model_context.clone();
     child.model_usage_context = parent.model_usage_context.clone();
+    // The child runs where the parent runs; the egress policy keys off this.
+    child.metadata.execution_environment = parent.metadata.execution_environment;
     child
 }
 
@@ -217,12 +219,7 @@ impl WasmComponentInstance {
         let child_host_state = cli_child_host_state(&self.store.data().host_state);
         let mut store = Store::new(
             &self.engine,
-            ComponentStoreData {
-                host_state: child_host_state,
-                wasi_ctx: builder.build(),
-                http_ctx: wasmtime_wasi_http::WasiHttpCtx::new(),
-                resource_table: wasmtime::component::ResourceTable::new(),
-            },
+            ComponentStoreData::with_host_state(child_host_state, builder.build(), &self.security),
         );
 
         let command = wasmtime_wasi::p2::bindings::Command::instantiate_async(

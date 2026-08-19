@@ -45,6 +45,7 @@ use std::{
 use trace::Trace;
 
 pub mod context;
+pub mod egress;
 pub mod internal_node;
 pub mod internal_pin;
 pub mod log;
@@ -182,6 +183,46 @@ impl ExecutionEnvironment {
 
     pub fn is_local(self) -> bool {
         !matches!(self, Self::Server)
+    }
+
+    /// The environment a server-side entry point should run under: the
+    /// operator override if one is set, otherwise [`Self::Server`].
+    pub fn server_default() -> Self {
+        Self::from_env().unwrap_or(Self::Server)
+    }
+
+    /// Refuses credential modes that resolve the host process's own cloud
+    /// identity (env vars, IMDS / metadata server, workload identity, CLI
+    /// token caches, application-default credentials) when the flow runs in
+    /// the shared server executor. There, those credentials belong to the
+    /// platform, never to the flow author — and the host's role typically
+    /// reaches every tenant's storage.
+    pub fn ensure_no_ambient_credentials(
+        self,
+        provider: &str,
+        mode: &str,
+    ) -> flow_like_types::Result<()> {
+        if self == Self::Server {
+            return Err(flow_like_types::anyhow!(
+                "{provider}: auth mode '{mode}' resolves the host's ambient credentials, which \
+                 is not permitted in server-side execution. Provide explicit credentials \
+                 (static keys, service-account key, SAS token, bearer token) instead."
+            ));
+        }
+        Ok(())
+    }
+
+    /// Refuses flow-supplied host filesystem paths when the flow runs in the
+    /// shared server executor, where the process filesystem (env files,
+    /// mounted tokens, credential caches) belongs to the platform.
+    pub fn ensure_host_filesystem_access(self, what: &str) -> flow_like_types::Result<()> {
+        if self == Self::Server {
+            return Err(flow_like_types::anyhow!(
+                "{what}: access to the host filesystem is not permitted in server-side \
+                 execution. Use a store-backed path instead."
+            ));
+        }
+        Ok(())
     }
 
     pub fn from_env() -> Option<Self> {
@@ -903,6 +944,41 @@ pub struct RunPayload {
     pub filter_secrets: Option<bool>,
 }
 
+/// Pick the value a variable runs with: caller-supplied runtime vars > event
+/// overrides > the board default.
+///
+/// The two override channels layer rather than exclude each other. A
+/// runtime_configured variable the caller did not supply still picks up the value
+/// configured on the event, which is the only way a headless trigger (cron, rest,
+/// mcp) can populate one — it has no user session to prompt.
+///
+/// Callers are untrusted, so with `filter_secrets` set they may only override
+/// runtime_configured vars; secrets from them are ignored to prevent injection.
+/// Event overrides are authored with WriteEvents permission, so they may
+/// additionally carry secrets.
+fn resolve_variable_override<'a>(
+    variable_id: &str,
+    board_variable: &'a Variable,
+    runtime_variables: &'a std::collections::HashMap<String, Variable>,
+    event_variables: &'a std::collections::HashMap<String, Variable>,
+    filter_secrets: bool,
+) -> &'a Variable {
+    let allow_runtime_override =
+        board_variable.runtime_configured || (board_variable.secret && !filter_secrets);
+    let allow_event_override =
+        board_variable.exposed || board_variable.runtime_configured || board_variable.secret;
+
+    allow_runtime_override
+        .then(|| runtime_variables.get(variable_id))
+        .flatten()
+        .or_else(|| {
+            allow_event_override
+                .then(|| event_variables.get(variable_id))
+                .flatten()
+        })
+        .unwrap_or(board_variable)
+}
+
 impl InternalRun {
     pub async fn new(
         app_id: &str,
@@ -1022,18 +1098,13 @@ impl InternalRun {
         let variables = Arc::new(Mutex::new({
             let mut map = AHashMap::with_capacity(board.variables.len());
             for (variable_id, board_variable) in &board.variables {
-                // Priority: runtime_configured/secret vars > event vars (for exposed) > board vars
-                // When filter_secrets is true, only runtime_configured vars may be overridden;
-                // secrets from untrusted callers are ignored to prevent injection.
-                let allow_runtime_override =
-                    board_variable.runtime_configured || (board_variable.secret && !filter_secrets);
-                let variable = if allow_runtime_override {
-                    runtime_variables.get(variable_id).unwrap_or(board_variable)
-                } else if board_variable.exposed {
-                    event_variables.get(variable_id).unwrap_or(board_variable)
-                } else {
-                    board_variable
-                };
+                let variable = resolve_variable_override(
+                    variable_id,
+                    board_variable,
+                    &runtime_variables,
+                    &event_variables,
+                    filter_secrets,
+                );
 
                 let value = match &variable.default_value {
                     Some(bytes) => {
@@ -1310,7 +1381,11 @@ impl InternalRun {
                 board_dir: board.board_dir.clone(),
                 sub: sub_value.clone(),
                 stream_state,
-                environment: ExecutionEnvironment::Local,
+                // Inherit the state's environment so a run built on a
+                // server-side state is `Server` even if the entry point never
+                // calls `set_execution_environment` — the gates in nodes and
+                // host functions must not fail open by omission.
+                environment: handler.execution_environment,
                 execution_mode,
                 log_spill_threshold: DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
                 log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
@@ -2070,14 +2145,13 @@ async fn step_core(
         return Ok((Vec::new(), traces));
     }
 
-    if USE_DEPENDENCY_GRAPH {
-        if let Err(err) =
-            InternalNode::trigger_with_dependencies(&mut context, &mut None, false, dependencies)
-                .await
-        {
-            eprintln!("[Error] executing node: {:?}", err);
-        }
-    } else if let Err(err) = InternalNode::trigger(&mut context, &mut None, false).await {
+    let outcome = if USE_DEPENDENCY_GRAPH {
+        InternalNode::trigger_with_dependencies(&mut context, &mut None, false, dependencies).await
+    } else {
+        InternalNode::trigger(&mut context, &mut None, false).await
+    };
+
+    if let Err(err) = &outcome {
         eprintln!("[Error] executing node: {:?}", err);
     }
 
@@ -2097,6 +2171,12 @@ async fn step_core(
             connected_nodes.push(connected_node);
         }
         return Ok((connected_nodes, traces));
+    }
+
+    // The node errored but the board handled it: `handle_error` already ran the whole
+    // `On Error` branch, so there is nothing left to queue and the run has not failed.
+    if outcome.is_ok() {
+        return Ok((Vec::new(), traces));
     }
 
     // Flag this run as having node errors so RunStatus reflects the failure
@@ -2214,6 +2294,147 @@ mod tests {
         }
     }
 
+    mod variable_overrides {
+        use super::*;
+        use crate::flow::pin::ValueType;
+        use crate::flow::variable::VariableType;
+        use std::collections::HashMap;
+
+        fn var(name: &str, value: &str) -> Variable {
+            let mut variable = Variable::new(name, VariableType::String, ValueType::Normal);
+            variable.default_value =
+                Some(flow_like_types::json::to_vec(&flow_like_types::json::json!(value)).unwrap());
+            variable
+        }
+
+        fn resolved(
+            board_variable: &Variable,
+            runtime: &HashMap<String, Variable>,
+            event: &HashMap<String, Variable>,
+            filter_secrets: bool,
+        ) -> String {
+            let picked =
+                resolve_variable_override("v1", board_variable, runtime, event, filter_secrets);
+            String::from_utf8(picked.default_value.clone().unwrap()).unwrap()
+        }
+
+        fn map(variable: Variable) -> HashMap<String, Variable> {
+            HashMap::from([("v1".to_string(), variable)])
+        }
+
+        /// The regression this whole feature rests on: before layering, a
+        /// runtime_configured variable took the runtime branch and never looked at
+        /// the event, so cron/rest/mcp overrides were silently dead.
+        #[test]
+        fn runtime_configured_var_falls_back_to_the_event_override() {
+            let mut board_variable = var("API_KEY", "board");
+            board_variable.runtime_configured = true;
+
+            assert_eq!(
+                resolved(
+                    &board_variable,
+                    &HashMap::new(),
+                    &map(var("API_KEY", "event")),
+                    true,
+                ),
+                "\"event\""
+            );
+        }
+
+        #[test]
+        fn caller_supplied_runtime_var_beats_the_event_override() {
+            let mut board_variable = var("API_KEY", "board");
+            board_variable.runtime_configured = true;
+
+            assert_eq!(
+                resolved(
+                    &board_variable,
+                    &map(var("API_KEY", "runtime")),
+                    &map(var("API_KEY", "event")),
+                    true,
+                ),
+                "\"runtime\""
+            );
+        }
+
+        #[test]
+        fn board_default_stands_when_neither_channel_supplies_one() {
+            let mut board_variable = var("API_KEY", "board");
+            board_variable.runtime_configured = true;
+
+            assert_eq!(
+                resolved(&board_variable, &HashMap::new(), &HashMap::new(), true),
+                "\"board\""
+            );
+        }
+
+        /// Desktop runs with filter_secrets off, which used to route every secret
+        /// down the runtime branch and drop its event override too.
+        #[test]
+        fn trusted_local_secret_still_falls_back_to_the_event_override() {
+            let mut board_variable = var("TOKEN", "board");
+            board_variable.secret = true;
+
+            assert_eq!(
+                resolved(
+                    &board_variable,
+                    &HashMap::new(),
+                    &map(var("TOKEN", "event")),
+                    false,
+                ),
+                "\"event\""
+            );
+        }
+
+        #[test]
+        fn untrusted_caller_cannot_inject_a_secret() {
+            let mut board_variable = var("TOKEN", "board");
+            board_variable.secret = true;
+
+            assert_eq!(
+                resolved(
+                    &board_variable,
+                    &map(var("TOKEN", "injected")),
+                    &HashMap::new(),
+                    true,
+                ),
+                "\"board\""
+            );
+        }
+
+        #[test]
+        fn exposed_var_keeps_taking_its_event_override() {
+            let mut board_variable = var("LIMIT", "board");
+            board_variable.exposed = true;
+
+            assert_eq!(
+                resolved(
+                    &board_variable,
+                    &HashMap::new(),
+                    &map(var("LIMIT", "event")),
+                    true,
+                ),
+                "\"event\""
+            );
+        }
+
+        /// A plain internal variable is not addressable from either channel.
+        #[test]
+        fn plain_var_ignores_both_channels() {
+            let board_variable = var("INTERNAL", "board");
+
+            assert_eq!(
+                resolved(
+                    &board_variable,
+                    &map(var("INTERNAL", "runtime")),
+                    &map(var("INTERNAL", "event")),
+                    false,
+                ),
+                "\"board\""
+            );
+        }
+    }
+
     #[tokio::test]
     async fn background_flush_wait_is_interrupted_by_cancellation() {
         let cancel = CancellationToken::new();
@@ -2232,6 +2453,83 @@ mod tests {
             .expect("flush wait should stop promptly")
             .expect("flush wait task should complete");
         assert!(!ticked);
+    }
+
+    /// The gates in nodes and host functions key off the run's environment,
+    /// whose default is the permissive `Local`. A run built on a server-side
+    /// state must therefore be `Server` even when the entry point never calls
+    /// `set_execution_environment` — otherwise a forgotten call fails open.
+    #[tokio::test]
+    async fn run_inherits_server_environment_from_state_without_explicit_set() {
+        let mut state =
+            FlowLikeState::new(FlowLikeConfig::new(), HTTPClient::new_without_refetch());
+        state.execution_environment = ExecutionEnvironment::Server;
+        let state = Arc::new(state);
+        let board = Board::new_detached(Some("env-inherit".to_string()), Path::default());
+        let payload = RunPayload {
+            id: "unused-entry".to_string(),
+            payload: None,
+            runtime_variables: None,
+            filter_secrets: Some(true),
+        };
+        let intercom = BufferedInterComHandler::new(
+            Arc::new(|_events| Box::pin(async { Ok(()) })),
+            Some(100),
+            Some(400),
+            Some(false),
+        );
+        let run = InternalRun::new(
+            "test-app",
+            Arc::new(board),
+            None,
+            &state,
+            &Profile::default(),
+            &payload,
+            false,
+            intercom.into_callback(),
+            None,
+            None,
+            std::collections::HashMap::new(),
+        )
+        .await
+        .expect("build run");
+
+        assert_eq!(run.meta.environment, ExecutionEnvironment::Server);
+        assert!(
+            run.meta
+                .environment
+                .ensure_no_ambient_credentials("test", "environment")
+                .is_err(),
+            "server runs must refuse ambient credentials"
+        );
+
+        let local_state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let local_board = Board::new_detached(Some("env-local".to_string()), Path::default());
+        let local_run = InternalRun::new(
+            "test-app",
+            Arc::new(local_board),
+            None,
+            &local_state,
+            &Profile::default(),
+            &payload,
+            false,
+            BufferedInterComHandler::new(
+                Arc::new(|_events| Box::pin(async { Ok(()) })),
+                Some(100),
+                Some(400),
+                Some(false),
+            )
+            .into_callback(),
+            None,
+            None,
+            std::collections::HashMap::new(),
+        )
+        .await
+        .expect("build run");
+        assert_eq!(local_run.meta.environment, ExecutionEnvironment::Local);
     }
 
     #[tokio::test]

@@ -288,6 +288,7 @@ impl PackagePermissions {
             } else {
                 Some(self.network.allowed_hosts.clone())
             },
+            execution_environment: Default::default(),
         }
     }
 
@@ -336,6 +337,44 @@ impl PackagePermissions {
         }
 
         perms
+    }
+
+    /// Stable machine-readable capability tags for listing surfaces.
+    ///
+    /// Ordered most-sensitive first — anything that lets a package reach the
+    /// network, spend model budget, act on the user's behalf or touch
+    /// user-scoped storage comes before the sandbox-local capabilities — so a
+    /// consumer that only renders the first few tags still shows the ones that
+    /// matter. Keys are stable API surface: `net.http`, `net.ws`, `net.tcp`,
+    /// `net.udp`, `net.dns`, `oauth`, `models`, `storage.user`, `storage.node`,
+    /// `storage.uploads`, `storage.cache`, `variables`, `cache`, `streaming`,
+    /// `a2ui`.
+    pub fn capability_tags(&self) -> Vec<String> {
+        let mut tags: Vec<String> = Vec::new();
+
+        let mut push = |enabled: bool, tag: &str| {
+            if enabled {
+                tags.push(tag.to_string());
+            }
+        };
+
+        push(self.network.http_enabled, "net.http");
+        push(self.network.websocket_enabled, "net.ws");
+        push(self.network.tcp_enabled, "net.tcp");
+        push(self.network.udp_enabled, "net.udp");
+        push(self.network.dns_enabled, "net.dns");
+        push(!self.oauth_scopes.is_empty(), "oauth");
+        push(self.models, "models");
+        push(self.filesystem.user_storage, "storage.user");
+        push(self.filesystem.node_storage, "storage.node");
+        push(self.filesystem.upload_dir, "storage.uploads");
+        push(self.filesystem.cache_dir, "storage.cache");
+        push(self.variables, "variables");
+        push(self.cache, "cache");
+        push(self.streaming, "streaming");
+        push(self.a2ui, "a2ui");
+
+        tags
     }
 }
 
@@ -739,5 +778,54 @@ mod tests {
         manifest.widgets[0].contract.id = "other-id".into();
         let errors = manifest.validate().unwrap_err();
         assert!(errors.iter().any(|e| e.contains("does not match")));
+    }
+
+    #[test]
+    fn capability_tags_are_empty_without_permissions() {
+        assert!(PackagePermissions::default().capability_tags().is_empty());
+    }
+
+    #[test]
+    fn capability_tags_list_sensitive_access_first() {
+        let permissions = PackagePermissions {
+            network: NetworkPermissions {
+                http_enabled: true,
+                ..Default::default()
+            },
+            filesystem: FileSystemPermissions {
+                node_storage: true,
+                user_storage: true,
+                ..Default::default()
+            },
+            cache: true,
+            models: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            permissions.capability_tags(),
+            vec![
+                "net.http".to_string(),
+                "models".to_string(),
+                "storage.user".to_string(),
+                "storage.node".to_string(),
+                "cache".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn capability_tags_report_any_oauth_requirement() {
+        let permissions = PackagePermissions {
+            oauth_scopes: vec![OAuthScopeRequirement {
+                provider: "google".into(),
+                scopes: vec!["drive.readonly".into()],
+                reason: "read the source spreadsheet".into(),
+                required: true,
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(permissions.capability_tags(), vec!["oauth".to_string()]);
     }
 }

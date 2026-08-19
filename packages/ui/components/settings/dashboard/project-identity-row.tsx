@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { PencilIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import type { IApp, IMetadata } from "../../../lib";
@@ -32,6 +33,7 @@ export function ProjectIdentityRow({
 	statusSlot?: ReactNode;
 	actions?: ReactNode;
 }>) {
+	const { t } = useTranslation("settings");
 	return (
 		<Card className="flex min-w-0 flex-col items-stretch gap-3 px-3 py-3 sm:flex-row sm:items-center sm:px-4">
 			<div className="flex min-w-0 items-center gap-3">
@@ -39,7 +41,7 @@ export function ProjectIdentityRow({
 					type="button"
 					className="shrink-0 rounded-lg border-0 bg-transparent p-0"
 					onClick={() => onOpenPanel("identity")}
-					aria-label="Edit identity and media"
+					aria-label={t('editIdentityAndMedia', 'Edit identity and media')}
 					disabled={!canEdit}
 				>
 					<AppTypeMark
@@ -57,9 +59,7 @@ export function ProjectIdentityRow({
 						</h1>
 						<VisibilityBadge visibility={app.visibility} />
 						{app.version && (
-							<Badge variant="outline" className="text-xs">
-								v{app.version}
-							</Badge>
+							<Badge variant="outline" className="text-xs">{`v${app.version}`}</Badge>
 						)}
 						{statusSlot}
 					</div>
@@ -86,7 +86,7 @@ export function ProjectIdentityRow({
 							className="flex-1 sm:flex-none"
 						>
 							<PencilIcon className="mr-1.5 h-3 w-3" />
-							Identity
+							{t('identity', 'Identity')}
 						</Button>
 						<Button
 							variant="outline"
@@ -95,7 +95,7 @@ export function ProjectIdentityRow({
 							className="flex-1 sm:flex-none"
 						>
 							<SettingsIcon className="mr-1.5 h-3 w-3" />
-							Settings
+							{t('settings', 'Settings')}
 						</Button>
 					</>
 				)}

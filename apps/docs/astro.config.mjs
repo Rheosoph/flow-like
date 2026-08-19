@@ -80,7 +80,7 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 				{
 					icon: "discord",
 					label: "Discord",
-					href: "https://discord.gg/KTWMrS2",
+					href: "https://discord.gg/mdBA9kMjFJ",
 				},
 				{
 					icon: "github",
@@ -104,6 +104,10 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 						{ label: "Quick Start", slug: "start/getting-started" },
 						{ label: "What is Flow-Like?", slug: "start/what-is-flow-like" },
 						{ label: "Download & Install", slug: "start/get" },
+						{
+							label: "Linux Troubleshooting",
+							slug: "start/linux-troubleshooting",
+						},
 						{ label: "First Steps", slug: "start/first-use" },
 						{ label: "Developer Mode", slug: "start/developer-mode" },
 						{ label: "Login & Accounts", slug: "start/login" },
@@ -471,6 +475,7 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 					items: [
 						{ label: "Security Architecture", slug: "reference/security" },
 						{ label: "Benchmarks", slug: "reference/benchmarks" },
+						{ label: "Dates & Times", slug: "reference/dates" },
 						{
 							label: "Markdown Formatting",
 							slug: "reference/markdown-formatting",

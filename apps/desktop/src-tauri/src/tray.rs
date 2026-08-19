@@ -16,7 +16,7 @@ const MENU_OPEN: &str = "tray_open";
 const MENU_STOP_RECORDING: &str = "tray_stop_recording";
 const MENU_STOP_ALL_RUNS: &str = "tray_stop_all_runs";
 const MENU_VIEW_FAILURES: &str = "tray_view_failures";
-const MENU_RESTART_UPDATE: &str = "tray_restart_update";
+const MENU_UPDATE: &str = "tray_update";
 const MENU_NEW_FLOW: &str = "tray_new_flow";
 const MENU_OPEN_RECENT: &str = "tray_open_recent";
 const MENU_SEARCH_FLOWS: &str = "tray_search_flows";
@@ -102,10 +102,10 @@ pub struct TrayUpdate {
     pub signed_in: Option<bool>,
 }
 
-/// Menu rows that only exist for certain states. When this changes the menu
-/// must be rebuilt via `set_menu` (which dismisses an open menu on macOS —
-/// acceptable for rare, discrete transitions). Everything else is updated
-/// in place on retained item handles, which never dismisses the menu.
+/// Menu rows and labels that are not retained as item handles. When these
+/// change the menu must be rebuilt via `set_menu` (which dismisses an open
+/// menu on macOS — acceptable for rare, discrete transitions). Everything
+/// else is updated in place on retained item handles.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TrayMenuSignature {
     recording: bool,
@@ -540,8 +540,6 @@ fn build_tray_menu(
     )?));
     items.push(Box::new(PredefinedMenuItem::separator(app_handle)?));
 
-    let mut has_status_section = false;
-
     if recording {
         items.push(Box::new(MenuItem::with_id(
             app_handle,
@@ -550,7 +548,6 @@ fn build_tray_menu(
             true,
             None::<&str>,
         )?));
-        has_status_section = true;
     }
 
     let mut run_items = Vec::new();
@@ -565,7 +562,6 @@ fn build_tray_menu(
         )?;
         items.push(Box::new(item.clone()));
         run_items.push((run.run_id.clone(), item, label));
-        has_status_section = true;
     }
     if !data.active_runs.is_empty() {
         items.push(Box::new(MenuItem::with_id(
@@ -583,7 +579,6 @@ fn build_tray_menu(
         let label = failures_label(data);
         let item = MenuItem::with_id(app_handle, MENU_VIEW_FAILURES, &label, true, None::<&str>)?;
         items.push(Box::new(item.clone()));
-        has_status_section = true;
         Some((item, label))
     };
 
@@ -591,26 +586,24 @@ fn build_tray_menu(
         let label = sync_label(data);
         let item = MenuItem::new(app_handle, &label, false, None::<&str>)?;
         items.push(Box::new(item.clone()));
-        has_status_section = true;
         Some((item, label))
     } else {
         None
     };
 
-    if data.update_state.available {
-        items.push(Box::new(MenuItem::with_id(
-            app_handle,
-            MENU_RESTART_UPDATE,
-            "Update Ready — Restart to Update",
-            true,
-            None::<&str>,
-        )?));
-        has_status_section = true;
-    }
-
-    if has_status_section {
-        items.push(Box::new(PredefinedMenuItem::separator(app_handle)?));
-    }
+    let update_label = if data.update_state.available {
+        "Update Available — Install…"
+    } else {
+        "Check for Updates…"
+    };
+    items.push(Box::new(MenuItem::with_id(
+        app_handle,
+        MENU_UPDATE,
+        update_label,
+        true,
+        None::<&str>,
+    )?));
+    items.push(Box::new(PredefinedMenuItem::separator(app_handle)?));
 
     items.push(Box::new(MenuItem::with_id(
         app_handle,
@@ -731,8 +724,9 @@ fn handle_menu_event(app_handle: &AppHandle, id: &str) {
             crate::utils::emit_to_ui(app_handle, "tray:open-spotlight", "search-flows");
             open_main_window(app_handle);
         }
-        MENU_RESTART_UPDATE => {
-            crate::utils::emit_to_ui(app_handle, "tray:restart-update", ());
+        MENU_UPDATE => {
+            open_main_window(app_handle);
+            crate::utils::emit_to_ui(app_handle, "tray:update-requested", ());
         }
         MENU_VIEW_FAILURES | MENU_OPEN_LOGS => {
             let app_handle = app_handle.clone();

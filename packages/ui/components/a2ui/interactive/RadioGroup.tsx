@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { cn } from "../../../lib/utils";
 import { Label } from "../../ui/label";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
@@ -7,6 +8,10 @@ import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import {
+	useBoundInputValue,
+	valueRevisionOf,
+} from "../hooks/use-bound-input-value";
 import type { BoundValue, RadioGroupComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -25,20 +30,20 @@ export function A2UIRadioGroup({
 	componentId,
 	surfaceId,
 }: ComponentProps<RadioGroupComponent>) {
+	const { t } = useTranslation("common");
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
-	const value = useResolved<string>(component.value);
+	const [value, setValue] = useBoundInputValue<string>(component.value, "", {
+		revision: valueRevisionOf(component),
+	});
 	const options =
 		useResolved<Array<{ value: string; label: string }>>(component.options) ??
 		[];
 	const disabled = useResolved<boolean>(component.disabled);
 	const orientation = useResolved<string>(component.orientation);
-	const { setByPath } = useData();
 
 	const handleChange = (newValue: string) => {
-		if (component.value && "path" in component.value) {
-			setByPath(component.value.path, newValue);
-		}
+		setValue(newValue);
 		if (onAction) {
 			onAction({
 				type: "userAction",
@@ -61,7 +66,7 @@ export function A2UIRadioGroup({
 			style={resolveInlineStyle(style)}
 		>
 			<RadioGroup
-				value={value ?? ""}
+				value={value}
 				onValueChange={handleChange}
 				disabled={disabled}
 				className={cn("flex", orientationClass)}

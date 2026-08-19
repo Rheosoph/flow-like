@@ -1,4 +1,5 @@
 "use client";
+import { useTranslation } from "@flow-like/locales";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
 	AudioLinesIcon,
@@ -62,6 +63,7 @@ export function BitCard({
 	wide = false,
 	subscriptionsPath = "/subscription",
 }: Readonly<{ bit: IBit; wide: boolean; subscriptionsPath?: string }>) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const { hub } = useHub();
 	const download = useDownloadManager((s) => s.download);
@@ -242,7 +244,7 @@ export function BitCard({
 						})
 					) {
 						toast.error(
-							`This model requires the ${tierInfo.requiredTier} plan.`,
+							t('thisModelRequiresTheRequiredtierPlan', 'This model requires the {{requiredTier}} plan.', { requiredTier: tierInfo.requiredTier }),
 						);
 					}
 					return;
@@ -257,7 +259,7 @@ export function BitCard({
 			console.error("Failed to update profile models:", error);
 			if (handleUpgradeRequiredError(error, "model-tier")) return;
 			toast.error(
-				error instanceof Error ? error.message : "Failed to update profile",
+				error instanceof Error ? error.message : t('failedToUpdateProfile', 'Failed to update profile'),
 			);
 		}
 	}, [
@@ -310,10 +312,10 @@ export function BitCard({
 							<div className="text-center space-y-2">
 								<div className="flex items-center gap-2 justify-center">
 									<ClockIcon className="h-5 w-5 text-primary animate-pulse" />
-									<p className="text-sm text-muted-foreground">Queued…</p>
+									<p className="text-sm text-muted-foreground">{t('queued2', 'Queued…')}</p>
 								</div>
 								<p className="text-xs text-muted-foreground">
-									Waiting for available download slot
+									{t('waitingForAvailableDownloadSlot', 'Waiting for available download slot')}
 								</p>
 							</div>
 						) : (
@@ -353,7 +355,7 @@ export function BitCard({
 								{isInstalled.data ? (
 									<>
 										<TrashIcon className="h-4 w-4" />
-										Remove Download
+										{t('removeDownload', 'Remove Download')}
 									</>
 								) : (
 									<>
@@ -374,12 +376,12 @@ export function BitCard({
 									{isInProfile ? (
 										<>
 											<MinusIcon className="h-4 w-4" />
-											Remove from Profile
+											{`Remove from Profile`}
 										</>
 									) : (
 										<>
 											<PlusIcon className="h-4 w-4" />
-											Add to Profile
+											{t('addToProfile', 'Add to Profile')}
 										</>
 									)}
 								</DropdownMenuItem>
@@ -396,7 +398,7 @@ export function BitCard({
 										className="flex items-center gap-2"
 									>
 										<ExternalLinkIcon className="h-4 w-4" />
-										View Repository
+										{t('viewRepository', 'View Repository')}
 									</DropdownMenuItem>
 								</>
 							)}
@@ -432,7 +434,7 @@ export function BitCard({
 								{isQueued(bit.hash) && !isVirtualBit && (
 									<Badge variant="outline" className="text-xs">
 										<ClockIcon className="h-3 w-3 mr-1" />
-										Queued
+										{t('queued', 'Queued')}
 									</Badge>
 								)}
 								{bit.repository?.startsWith("https://huggingface.co/") && (
@@ -440,7 +442,7 @@ export function BitCard({
 										src="/hf-logo.png"
 										width={20}
 										height={20}
-										alt="Hugging Face"
+										alt={t('huggingFace', 'Hugging Face')}
 										className="opacity-70 hover:opacity-100 transition-opacity ml-1"
 									/>
 								)}

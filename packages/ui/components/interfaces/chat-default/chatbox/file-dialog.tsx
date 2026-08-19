@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Archive,
 	ChevronRight,
@@ -59,6 +60,7 @@ export function FileManagerDialog({
 	onRemoveFiles,
 	onClearAll,
 }: Readonly<FileManagerDialogProps>) {
+	const { t } = useTranslation("chat");
 	const [searchTerm, setSearchTerm] = useState("");
 	const [selectedFiles, setSelectedFiles] = useState<Set<number>>(new Set());
 	const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
@@ -80,18 +82,18 @@ export function FileManagerDialog({
 
 	const getFileTypeColor = (file: File) => {
 		if (file.type.startsWith("image/"))
-			return "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-800";
+			return `bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-800`;
 		if (file.type.startsWith("video/"))
-			return "bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950 dark:text-violet-300 dark:border-violet-800";
+			return `bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950 dark:text-violet-300 dark:border-violet-800`;
 		if (file.type.startsWith("audio/"))
-			return "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800";
+			return `bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800`;
 		if (
 			file.type.includes("zip") ||
 			file.type.includes("rar") ||
 			file.type.includes("tar")
 		)
-			return "bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-800";
-		return "bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-950 dark:text-slate-300 dark:border-slate-800";
+			return `bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-800`;
+		return `bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-950 dark:text-slate-300 dark:border-slate-800`;
 	};
 
 	// Build hierarchical file tree based on path prefixes
@@ -342,12 +344,10 @@ export function FileManagerDialog({
 									{fileCount}
 								</Badge>
 								{selectionState === "partial" && (
-									<Badge className="text-xs bg-primary/10 text-primary border-primary/30 shrink-0">
-										{selectedCount} selected
-									</Badge>
+									<Badge className="text-xs bg-primary/10 text-primary border-primary/30 shrink-0">{t('selectedcountSelected', '{{selectedCount}} selected', { selectedCount })}</Badge>
 								)}
 								{selectionState === "all" && (
-									<Badge className="text-xs shrink-0">All selected</Badge>
+									<Badge className="text-xs shrink-0">{t('allSelected', 'All selected')}</Badge>
 								)}
 							</button>
 							<div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
@@ -362,7 +362,7 @@ export function FileManagerDialog({
 										className="h-8 px-3 text-xs hover:bg-destructive/10 hover:text-destructive"
 									>
 										<FolderMinus className="w-3 h-3 mr-1" />
-										Deselect
+										{t('deselect', 'Deselect')}
 									</Button>
 								)}
 								{selectionState !== "all" && (
@@ -376,7 +376,7 @@ export function FileManagerDialog({
 										className="h-8 px-3 text-xs hover:bg-primary/10 hover:text-primary"
 									>
 										<FolderPlus className="w-3 h-3 mr-1" />
-										Select
+										{t('select', 'Select')}
 									</Button>
 								)}
 							</div>
@@ -477,12 +477,10 @@ export function FileManagerDialog({
 					<DialogTitle className="flex items-center justify-between">
 						<div className="flex items-center gap-3">
 							<Files className="w-5 h-5" />
-							<span>Manage Attached Files</span>
+							<span>{t('manageAttachedFiles', 'Manage Attached Files')}</span>
 						</div>
 						<div className="flex items-center gap-3">
-							<Badge variant="outline" className="text-sm font-normal">
-								{files.length} files
-							</Badge>
+							<Badge variant="outline" className="text-sm font-normal">{t('lengthFiles', '{{length}} files', { length: files.length })}</Badge>
 							<Badge variant="outline" className="text-sm font-normal">
 								{humanFileSize(totalSize, true)}
 							</Badge>
@@ -494,7 +492,7 @@ export function FileManagerDialog({
 						<div className="relative flex-1">
 							<Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
 							<Input
-								placeholder="Search files..."
+								placeholder={t('searchFiles', 'Search files...')}
 								value={searchTerm}
 								onChange={(e) => setSearchTerm(e.target.value)}
 								className="pl-10 h-10"
@@ -508,16 +506,14 @@ export function FileManagerDialog({
 									className="h-10"
 								>
 									<X className="w-4 h-4 mr-2" />
-									Deselect All
+									{t('deselectAll', 'Deselect All')}
 								</Button>
 								<Button
 									variant="destructive"
 									onClick={removeSelectedFiles}
 									className="h-10"
 								>
-									<Trash2 className="w-4 h-4 mr-2" />
-									Remove {selectedFiles.size}
-								</Button>
+									<Trash2 className="w-4 h-4 mr-2" />{t('removeSize', 'Remove {{size}}', { size: selectedFiles.size })}</Button>
 							</>
 						)}
 						<Button
@@ -526,7 +522,7 @@ export function FileManagerDialog({
 							className="h-10 hover:bg-destructive/10 hover:text-destructive hover:border-destructive/20"
 						>
 							<Trash2 className="w-4 h-4 mr-2" />
-							Clear All
+							{t('clearAll2', 'Clear All')}
 						</Button>
 					</div>
 				</DialogHeader>
@@ -543,11 +539,11 @@ export function FileManagerDialog({
 								<div className="w-20 h-20 mx-auto mb-6 rounded-full bg-muted/30 flex items-center justify-center">
 									<Files className="w-10 h-10 text-muted-foreground/50" />
 								</div>
-								<h3 className="text-lg font-semibold mb-2">No files found</h3>
+								<h3 className="text-lg font-semibold mb-2">{t('noFilesFound', 'No files found')}</h3>
 								<p className="text-muted-foreground max-w-sm mx-auto">
 									{searchTerm
-										? "Try adjusting your search terms to find files"
-										: "No files have been attached to this conversation yet"}
+										? t('tryAdjustingYourSearchTermsToFindFiles', 'Try adjusting your search terms to find files')
+										: t('noFilesHaveBeenAttachedToThisConversationYet', 'No files have been attached to this conversation yet')}
 								</p>
 							</div>
 						)}
@@ -559,13 +555,11 @@ export function FileManagerDialog({
 				{/* Footer Stats */}
 				<div className="flex items-center justify-between pt-4 text-sm text-muted-foreground">
 					<span className="flex items-center gap-2">
-						<Badge variant="secondary" className="text-xs">
-							{filteredCount} of {files.length}
-						</Badge>
-						files shown
+						<Badge variant="secondary" className="text-xs">{t('filteredcountOfLength', '{{filteredCount}} of {{length}}', { filteredCount, length: files.length })}</Badge>
+						{t('filesShown', 'files shown')}
 					</span>
 					<span className="font-medium">
-						Total: {humanFileSize(totalSize, true)}
+						{t('total', 'Total:')} {humanFileSize(totalSize, true)}
 					</span>
 				</div>
 			</DialogContent>

@@ -219,6 +219,7 @@ impl LanceGraphStore {
         depth: usize,
         direction: TraversalDirection,
         node_limit: usize,
+        edge_labels: Option<&[String]>,
     ) -> Result<SubgraphResult> {
         let depth = depth.clamp(1, self.safety.max_depth);
         let node_limit = node_limit.max(1);
@@ -266,6 +267,16 @@ impl LanceGraphStore {
 
             let mut next_frontier: Vec<(String, Value)> = Vec::new();
             for edge in &self.overlay.edges {
+                // An empty allowlist is treated as "no restriction" rather than as
+                // "nothing", so a caller that sends its filter unset cannot silently
+                // receive an empty graph.
+                if let Some(allowed) = edge_labels
+                    && !allowed.is_empty()
+                    && !allowed.iter().any(|label| label == &edge.label)
+                {
+                    continue;
+                }
+
                 let mut sides: Vec<(&str, &str, &str, &str, bool)> = Vec::new();
                 // (filter_col, filter_label, neighbor_label, neighbor_col, filter_is_source)
                 if matches!(
@@ -1499,6 +1510,7 @@ impl LanceGraphStore {
                 max_depth,
                 TraversalDirection::Both,
                 node_limit,
+                None,
             )
             .await?;
 
@@ -2239,6 +2251,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expansion_traverses_only_the_requested_relationships() -> Result<()> {
+        let (store, test_path) = graph_fixture(3, &[("1", "2"), ("1", "3")]).await?;
+
+        let named = store
+            .neighbors(
+                "Person",
+                Value::String("1".to_string()),
+                1,
+                TraversalDirection::Both,
+                Some(100),
+                Some(&["KNOWS".to_string()]),
+            )
+            .await?;
+        assert_eq!(named.nodes.len(), 3, "the named relationship still expands");
+
+        let other = store
+            .neighbors(
+                "Person",
+                Value::String("1".to_string()),
+                1,
+                TraversalDirection::Both,
+                Some(100),
+                Some(&["OWNS".to_string()]),
+            )
+            .await?;
+        assert_eq!(
+            other.nodes.len(),
+            1,
+            "a relationship the overlay does not map reaches nobody"
+        );
+        assert!(other.edges.is_empty());
+
+        // An unset filter must not read as "allow nothing" — a caller that sends
+        // an empty list would otherwise get a blank graph with no error to explain it.
+        let empty = store
+            .neighbors(
+                "Person",
+                Value::String("1".to_string()),
+                1,
+                TraversalDirection::Both,
+                Some(100),
+                Some(&[]),
+            )
+            .await?;
+        assert_eq!(empty.nodes.len(), 3);
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn expansion_links_neighbors_discovered_on_the_same_hop() -> Result<()> {
         // 2 and 3 are both neighbors of 1, and are linked to each other.
         let (store, test_path) = graph_fixture(3, &[("1", "2"), ("1", "3"), ("2", "3")]).await?;
@@ -2250,6 +2313,7 @@ mod tests {
                 1,
                 TraversalDirection::Both,
                 Some(100),
+                None,
             )
             .await?;
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { Plus, Trash2 } from "lucide-react";
 import type {
 	LabelStyle,
@@ -40,6 +41,7 @@ export function StepNodes({
 	tableColumns,
 	onChange,
 }: StepNodesProps) {
+	const { t } = useTranslation("common");
 	const addNode = () => {
 		onChange([
 			...nodes,
@@ -78,14 +80,14 @@ export function StepNodes({
 		<div className="space-y-4">
 			<div className="flex items-center justify-between">
 				<div>
-					<h3 className="text-sm font-medium mb-1">Node Mappings</h3>
+					<h3 className="text-sm font-medium mb-1">{t('nodeMappings', 'Node Mappings')}</h3>
 					<p className="text-xs text-muted-foreground">
-						Each mapping turns a table into a graph node label.
+						{t('eachMappingTurnsATableIntoAGraphNodeLabel', 'Each mapping turns a table into a graph node label.')}
 					</p>
 				</div>
 				<Button size="sm" variant="outline" onClick={addNode}>
 					<Plus className="h-3.5 w-3.5 mr-1" />
-					Add Node
+					{t('addNode', 'Add Node')}
 				</Button>
 			</div>
 
@@ -98,7 +100,7 @@ export function StepNodes({
 							<Card key={i} className="p-4 space-y-3">
 								<div className="flex items-center justify-between">
 									<span className="text-xs font-medium text-muted-foreground">
-										Node #{i + 1}
+										{t('node2', 'Node #')}{i + 1}
 									</span>
 									<Button
 										variant="ghost"
@@ -112,7 +114,7 @@ export function StepNodes({
 
 								<div className="grid grid-cols-2 gap-3">
 									<div className="space-y-1.5">
-										<Label className="text-xs">Label</Label>
+										<Label className="text-xs">{t('label', 'Label')}</Label>
 										<Input
 											value={node.label}
 											onChange={(e) => updateNode(i, { label: e.target.value })}
@@ -121,7 +123,7 @@ export function StepNodes({
 										/>
 									</div>
 									<div className="space-y-1.5">
-										<Label className="text-xs">Table</Label>
+										<Label className="text-xs">{t('table', 'Table')}</Label>
 										<Select
 											value={node.table}
 											onValueChange={(v) =>
@@ -134,7 +136,7 @@ export function StepNodes({
 											}
 										>
 											<SelectTrigger className="h-8 text-xs">
-												<SelectValue placeholder="Select table" />
+												<SelectValue placeholder={t('selectTable', 'Select table')} />
 											</SelectTrigger>
 											<SelectContent>
 												{tables.map((t) => (
@@ -146,16 +148,16 @@ export function StepNodes({
 										</Select>
 									</div>
 									<div className="space-y-1.5">
-										<Label className="text-xs">ID Column</Label>
+										<Label className="text-xs">{t('idColumn', 'ID Column')}</Label>
 										<ColumnPicker
 											columns={colNames}
 											value={node.id_column}
 											onChange={(v) => updateNode(i, { id_column: v })}
-											placeholder="Pick ID column"
+											placeholder={t('pickIdColumn', 'Pick ID column')}
 										/>
 									</div>
 									<div className="space-y-1.5">
-										<Label className="text-xs">Display Column</Label>
+										<Label className="text-xs">{t('displayColumn', 'Display Column')}</Label>
 										<ColumnPicker
 											columns={colNames}
 											value={node.display_column ?? ""}
@@ -169,9 +171,9 @@ export function StepNodes({
 
 								{cols.length > 0 && (
 									<div className="space-y-1.5">
-										<Label className="text-xs">Property Columns</Label>
+										<Label className="text-xs">{t('propertyColumns', 'Property Columns')}</Label>
 										<p className="text-[10px] text-muted-foreground">
-											Leave empty to include all non-vector columns.
+											{t('leaveEmptyToIncludeAllNonvectorColumns', 'Leave empty to include all non-vector columns.')}
 										</p>
 										<div className="flex flex-wrap gap-1.5">
 											{cols.map((col) => (
@@ -205,7 +207,7 @@ export function StepNodes({
 					})}
 					{nodes.length === 0 && (
 						<p className="text-sm text-muted-foreground text-center py-8">
-							No node mappings yet. Click &quot;Add Node&quot; to get started.
+							{t('noNodeMappingsYetClickQuotaddNodequotToGetStarted', "No node mappings yet. Click \"Add Node\" to get started.")}
 						</p>
 					)}
 				</div>

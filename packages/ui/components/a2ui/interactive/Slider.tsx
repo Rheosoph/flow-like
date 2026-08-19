@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { cn } from "../../../lib/utils";
 import { Label } from "../../ui/label";
 import { Slider } from "../../ui/slider";
@@ -7,6 +8,10 @@ import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import {
+	useBoundInputValue,
+	valueRevisionOf,
+} from "../hooks/use-bound-input-value";
 import {
 	resolveEventDebounceMs,
 	useDebouncedTrigger,
@@ -28,9 +33,9 @@ export function A2UISlider({
 	componentId,
 	surfaceId,
 }: ComponentProps<SliderComponent>) {
+	const { t } = useTranslation("common");
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
-	const value = useResolved<number>(component.value);
 	const disabled = useResolved<boolean>(component.disabled);
 	const min = useResolved<number>(component.min) ?? 0;
 	const max = useResolved<number>(component.max) ?? 100;
@@ -39,14 +44,14 @@ export function A2UISlider({
 	const debounceMs = resolveEventDebounceMs(
 		useResolved<number>(component.debounceMs),
 	);
-	const { setByPath } = useData();
+	const [value, setValue] = useBoundInputValue<number>(component.value, min, {
+		revision: valueRevisionOf(component),
+	});
 	const { schedule, cancel } = useDebouncedTrigger(debounceMs);
 
 	const handleChange = (newValues: number[]) => {
 		const newValue = newValues[0];
-		if (component.value && "path" in component.value) {
-			setByPath(component.value.path, newValue);
-		}
+		setValue(newValue);
 		if (onAction) {
 			onAction({
 				type: "userAction",
@@ -73,12 +78,12 @@ export function A2UISlider({
 		>
 			{showValue && (
 				<div className="flex justify-between items-center">
-					<Label>Value</Label>
-					<span className="text-sm text-muted-foreground">{value ?? min}</span>
+					<Label>{t("value2", "Value")}</Label>
+					<span className="text-sm text-muted-foreground">{value}</span>
 				</div>
 			)}
 			<Slider
-				value={[value ?? min]}
+				value={[value]}
 				min={min}
 				max={max}
 				step={step}

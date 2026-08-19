@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	useBackend,
 	useInvoke,
@@ -8,7 +9,6 @@ import {
 import { useSpotlightStore } from "@flow-like/flow-like-ui/state/spotlight-state";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { check } from "@tauri-apps/plugin-updater";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo } from "react";
 import { TauriBackend } from "./tauri-provider";
@@ -18,19 +18,13 @@ interface TraySyncStatus {
 	detail?: string;
 }
 
-interface TrayUpdateState {
-	available: boolean;
-}
-
 interface TrayUpdate {
 	unreadCount?: number;
 	syncStatus?: TraySyncStatus;
-	updateState?: TrayUpdateState;
 	signedIn?: boolean;
 }
 
 const NOTIFICATION_POLL_INTERVAL = 60_000;
-const UPDATE_CHECK_INTERVAL = 30 * 60_000;
 
 const pushTrayUpdate = (update: TrayUpdate) =>
 	invoke("tray_update_state", { update }).catch((error) =>
@@ -38,6 +32,7 @@ const pushTrayUpdate = (update: TrayUpdate) =>
 	);
 
 const TrayProvider: React.FC = () => {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const isOnline = useNetworkStatus();
 	const router = useRouter();
@@ -45,7 +40,7 @@ const TrayProvider: React.FC = () => {
 	const syncStatus = useMemo<TraySyncStatus>(
 		() => ({
 			status: isOnline ? "Online" : "Offline",
-			detail: isOnline ? "Cloud sync active" : "Waiting for network",
+			detail: isOnline ? t('cloudSyncActive', 'Cloud sync active') : t('waitingForNetwork', 'Waiting for network'),
 		}),
 		[isOnline],
 	);
@@ -92,28 +87,6 @@ const TrayProvider: React.FC = () => {
 	}, [overview.refetch]);
 
 	useEffect(() => {
-		let mounted = true;
-
-		const checkForUpdate = async () => {
-			try {
-				const update = await check();
-				if (!mounted) return;
-				await pushTrayUpdate({ updateState: { available: Boolean(update) } });
-			} catch {
-				// Keep the last known update state on transient check failures
-			}
-		};
-
-		checkForUpdate();
-		const intervalId = setInterval(checkForUpdate, UPDATE_CHECK_INTERVAL);
-
-		return () => {
-			mounted = false;
-			clearInterval(intervalId);
-		};
-	}, []);
-
-	useEffect(() => {
 		const unlistenNavigate = listen<string>("tray:navigate", (event) => {
 			if (typeof event.payload === "string") router.push(event.payload);
 		});
@@ -124,18 +97,12 @@ const TrayProvider: React.FC = () => {
 			useSpotlightStore.getState().open();
 			useSpotlightStore.getState().setMode("quick-create");
 		});
-		const unlistenUpdate = listen("tray:restart-update", () => {
-			invoke("update").catch((error) =>
-				console.warn("Failed to trigger update", error),
-			);
-		});
 
 		return () => {
 			Promise.allSettled([
 				unlistenNavigate,
 				unlistenOpenSpotlight,
 				unlistenQuickCreate,
-				unlistenUpdate,
 			]).then((results) => {
 				for (const result of results) {
 					if (result.status === "fulfilled") result.value();

@@ -3,7 +3,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { usePathname } from "next/navigation";
 import { createPortal } from "react-dom";
-import { useFabBubbleSuppressed } from "../../state/fab-suppression";
+import { useFabBubbleVisible } from "../../state/fab-bubble";
 import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
 import { FlowPilotBubbleOrb } from "./flowpilot-bubble-orb";
 import { useFlowPilotOrbState, useOrbAckNonce } from "./flowpilot-orb-state";
@@ -18,34 +18,35 @@ const ORB_STATE_LABEL: Record<string, string> = {
 	working: "FlowPilot is applying changes",
 };
 
-// Routes that already surface FlowPilot themselves, so the floating launcher would be redundant.
-// The board/widget builders deliberately use the bubble instead of their own in-interface button, so
-// they are NOT listed here — only the full chat view is.
+// Routes that already surface FlowPilot themselves, so the floating launcher would be redundant
+// even if something they embed requests it (the chat renders inline app surfaces, and the start
+// page hosts the full hero bubble).
 const HIDDEN_ROUTE_PREFIXES = ["/chat"];
 
 /**
- * The small round FlowPilot launcher docked bottom-right on every page except the start page (which
- * hosts the full hero bubble) and /chat (which IS the assistant). Clicking it opens the docked
- * overlay — the same conversation the hero bubble and /chat share — which balloons out of this corner
- * so the bubble reads as morphing into the chat. Desktop only.
+ * The small round FlowPilot launcher docked bottom-right. Clicking it opens the docked overlay —
+ * the same conversation the hero bubble and /chat share — which balloons out of this corner so the
+ * bubble reads as morphing into the chat. Desktop only.
+ *
+ * Visibility is opt-in: only surfaces that call `useRequestFabBubble()` get it (see fab-bubble.ts),
+ * so it no longer floats over screens it has nothing to do with.
  */
 export function FlowPilotBubbleButton() {
 	const pathname = usePathname();
 	const mode = useGlobalChatStore((state) => state.mode);
 	const openOverlay = useGlobalChatStore((state) => state.openOverlay);
-	const suppressed = useFabBubbleSuppressed();
-	// The launcher is the only FlowPilot surface visible while you work elsewhere in the app,
-	// so it is where the assistant's activity has to be legible.
+	const visible = useFabBubbleVisible();
+	// On the surfaces that request it the launcher is the only FlowPilot surface on screen, so it is
+	// where the assistant's activity has to be legible.
 	const orbState = useFlowPilotOrbState();
 	const ackNonce = useOrbAckNonce(orbState);
 
-	// Hide where a FlowPilot entry point already exists: the hero bubble (start page), the full chat
-	// view, and while the docked overlay itself is open. Also hide while a component claims the
-	// bottom-right corner (e.g. the FlowScript panel's Apply button) so they don't overlap.
+	// Hide unless a mounted surface asked for it, while the docked overlay itself is open, and on the
+	// routes that are their own FlowPilot entry point.
 	const hidden =
-		pathname === "/" ||
+		!visible ||
 		mode === "overlay" ||
-		suppressed ||
+		pathname === "/" ||
 		HIDDEN_ROUTE_PREFIXES.some(
 			(prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
 		);

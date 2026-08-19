@@ -8,7 +8,7 @@ const nextConfig = {
 	images: {
 		unoptimized: true,
 	},
-	transpilePackages: ["@flow-like/flow-like-ui"],
+	transpilePackages: ["@flow-like/flow-like-ui", "@flow-like/locales"],
 	experimental: {
 		serverComponentsHmrCache: true,
 		webpackMemoryOptimizations: true,

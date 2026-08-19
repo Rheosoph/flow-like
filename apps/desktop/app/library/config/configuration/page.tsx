@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	Badge,
 	Card,
@@ -10,7 +11,7 @@ import {
 	Collapsible,
 	CollapsibleContent,
 	CollapsibleTrigger,
-	type IBoard,
+	type IBoardVariables,
 	type IVariable,
 	Separator,
 	VariableConfigCard,
@@ -29,12 +30,15 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
 export default function ConfigurationPage() {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const searchParams = useSearchParams();
 	const id = searchParams.get("id");
 
+	// Variables only: the configuration surface never needs the graphs, and the endpoint ships
+	// exactly the schema refs the variables reach.
 	const boards = useInvoke(
-		backend.boardState.getBoards,
+		backend.boardState.getBoardVariables,
 		backend.boardState,
 		[id ?? ""],
 		typeof id === "string",
@@ -49,7 +53,7 @@ export default function ConfigurationPage() {
 					.sort((a, b) => a.name.localeCompare(b.name)),
 			}))
 			.filter(({ variables }) => variables.length > 0)
-			.sort((a, b) => a.board.name.localeCompare(b.board.name));
+			.sort((a, b) => a.board.board_name.localeCompare(b.board.board_name));
 	}, [boards.data]);
 
 	if (configurableBoards.length === 0) {
@@ -59,19 +63,16 @@ export default function ConfigurationPage() {
 					<div className="w-16 h-16 mx-auto bg-emerald-500/10 rounded-full flex items-center justify-center">
 						<SettingsIcon className="w-8 h-8 text-emerald-500" />
 					</div>
-					<h3 className="text-xl font-semibold">No Configuration Needed</h3>
+					<h3 className="text-xl font-semibold">{t('noConfigurationNeeded', 'No Configuration Needed')}</h3>
 					<p className="text-muted-foreground">
-						Your app doesn&apos;t have any configurable parameters yet.
+						{t('yourAppDoesnapostHaveAnyConfigurableParametersYet', "Your app doesn't have any configurable parameters yet.")}
 					</p>
 					<div className="p-4 rounded-lg bg-muted/50 text-sm text-muted-foreground text-left space-y-2">
 						<p className="font-medium text-foreground">
-							What are configurable parameters?
+							{t('whatAreConfigurableParameters', 'What are configurable parameters?')}
 						</p>
 						<p>
-							When you build Flows, you can mark variables as
-							&quot;Exposed&quot; and &quot;Editable&quot;. These show up here
-							so app users can customize behavior without editing the flow
-							itself — like API keys, thresholds, or toggle switches.
+							{t('whenYouBuildFlowsYouCanMarkVariablesAsQuotexposedquotAndQuoteditablequotTheseShowUpHereSoAppUsersCanCustomizeBehaviorWithoutEditingTheFlowItselfLikeApiKeysThresholdsOrToggleSwitches', "When you build Flows, you can mark variables as \"Exposed\" and \"Editable\". These show up here so app users can customize behavior without editing the flow itself — like API keys, thresholds, or toggle switches.")}
 						</p>
 					</div>
 				</div>
@@ -89,10 +90,9 @@ export default function ConfigurationPage() {
 			<div className="w-full py-4 border-b">
 				<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
 					<div className="space-y-1">
-						<h2 className="text-2xl font-bold">Configuration</h2>
+						<h2 className="text-2xl font-bold">{t('configuration', 'Configuration')}</h2>
 						<p className="text-sm text-muted-foreground">
-							Adjust exposed parameters across your flows — no code changes
-							needed.
+							{t('adjustExposedParametersAcrossYourFlowsNoCodeChangesNeeded', "Adjust exposed parameters across your flows — no code changes needed.")}
 						</p>
 					</div>
 					<Badge
@@ -100,8 +100,18 @@ export default function ConfigurationPage() {
 						className="gap-1 shrink-0 self-start sm:self-auto"
 					>
 						<SettingsIcon className="w-3 h-3" />
-						{totalVariables} across {configurableBoards.length} flow
-						{configurableBoards.length !== 1 ? "s" : ""}
+						{t('variablesAcrossFlows', '{{variables}} across {{flows}}', {
+							variables: t('countVariables', {
+								defaultValue_one: '{{count}} variable',
+								defaultValue_other: '{{count}} variables',
+								count: totalVariables,
+							}),
+							flows: t('countFlows', {
+								defaultValue_one: '{{count}} Flow',
+								defaultValue_other: '{{count}} Flows',
+								count: configurableBoards.length,
+							}),
+						})}
 					</Badge>
 				</div>
 			</div>
@@ -110,7 +120,7 @@ export default function ConfigurationPage() {
 				{id &&
 					configurableBoards.map(({ board, variables }) => (
 						<BoardConfig
-							key={board.id}
+							key={board.board_id}
 							appId={id}
 							board={board}
 							variables={variables}
@@ -127,9 +137,10 @@ function BoardConfig({
 	variables,
 }: Readonly<{
 	appId: string;
-	board: IBoard;
+	board: IBoardVariables;
 	variables: IVariable[];
 }>) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const [isOpen, setIsOpen] = useState(true);
@@ -142,11 +153,11 @@ function BoardConfig({
 				variable: variable,
 			});
 
-			await backend.boardState.executeCommand(appId, board.id, command);
-			await invalidate(backend.boardState.getBoard, [appId, board.id]);
-			await invalidate(backend.boardState.getBoards, [appId]);
+			await backend.boardState.executeCommand(appId, board.board_id, command);
+			await invalidate(backend.boardState.getBoard, [appId, board.board_id]);
+			await invalidate(backend.boardState.getBoardVariables, [appId]);
 		},
-		[appId, board.id, backend, invalidate],
+		[appId, board.board_id, backend, invalidate],
 	);
 
 	return (
@@ -160,17 +171,23 @@ function BoardConfig({
 									<WorkflowIcon className="w-5 h-5 text-primary" />
 								</div>
 								<div>
-									<CardTitle className="text-left">{board.name}</CardTitle>
+									<CardTitle className="text-left">{board.board_name}</CardTitle>
 									<CardDescription className="text-left">
-										{variables.length} configurable parameter
-										{variables.length !== 1 ? "s" : ""}
+										{t('countConfigurableParameters', {
+											defaultValue_one: '{{count}} configurable parameter',
+											defaultValue_other: '{{count}} configurable parameters',
+											count: variables.length,
+										})}
 									</CardDescription>
 								</div>
 							</div>
 							<div className="flex items-center gap-2">
 								<Badge variant="outline" className="gap-1">
-									{variables.length}{" "}
-									{variables.length === 1 ? "parameter" : "parameters"}
+									{t('countParameters', {
+										defaultValue_one: '{{count}} parameter',
+										defaultValue_other: '{{count}} parameters',
+										count: variables.length,
+									})}
 								</Badge>
 								{isOpen ? (
 									<ChevronDownIcon className="w-4 h-4 text-muted-foreground" />

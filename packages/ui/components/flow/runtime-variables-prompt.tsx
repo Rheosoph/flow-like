@@ -1,3 +1,4 @@
+import { useTranslation } from "@flow-like/locales";
 import { AlertCircleIcon, CheckIcon, KeyIcon, SaveIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import type { IVariable } from "../../lib/schema/flow/board";
@@ -56,17 +57,17 @@ export function RuntimeVariablesPrompt({
 	onCancel,
 	refs,
 }: RuntimeVariablesPromptProps) {
+	const { t } = useTranslation("flow");
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
 				<DialogHeader>
 					<DialogTitle className="flex items-center gap-2">
 						<KeyIcon className="w-5 h-5" />
-						Configure Runtime Variables
+						{t('configureRuntimeVariables', 'Configure Runtime Variables')}
 					</DialogTitle>
 					<DialogDescription>
-						This flow requires runtime variables to be configured before
-						execution. These values are stored locally and never uploaded.
+						{t('thisFlowRequiresRuntimeVariablesToBeConfiguredBeforeExecutionTheseValuesAreStoredLocallyAndNeverUploaded', "This flow requires runtime variables to be configured before execution. These values are stored locally and never uploaded.")}
 					</DialogDescription>
 				</DialogHeader>
 
@@ -95,6 +96,7 @@ function RuntimeVariablesForm({
 	onCancel: () => void;
 	refs?: Record<string, string>;
 }>) {
+	const { t } = useTranslation("flow");
 	const [values, setValues] = useState<Map<string, IVariable>>(() => {
 		const map = new Map<string, IVariable>();
 		for (const variable of variables) {
@@ -158,7 +160,7 @@ function RuntimeVariablesForm({
 										{variable.secret && (
 											<Badge variant="secondary" className="text-xs gap-1">
 												<KeyIcon className="w-3 h-3" />
-												Secret
+												{t('secret', 'Secret')}
 											</Badge>
 										)}
 									</Label>
@@ -187,14 +189,17 @@ function RuntimeVariablesForm({
 			{missingCount > 0 && (
 				<div className="flex items-center gap-2 text-amber-500 text-sm">
 					<AlertCircleIcon className="w-4 h-4" />
-					{missingCount} variable{missingCount !== 1 ? "s" : ""} still need
-					{missingCount === 1 ? "s" : ""} to be configured
+					{t("runtimeVariablesStillNeedToBeConfigured", {
+						defaultValue_one: "{{count}} variable still needs to be configured",
+						defaultValue_other: "{{count}} variables still need to be configured",
+						count: missingCount,
+					})}
 				</div>
 			)}
 
 			<DialogFooter className="gap-2">
 				<Button variant="outline" onClick={onCancel}>
-					Cancel
+					{t('cancel', 'Cancel')}
 				</Button>
 				<Button
 					onClick={handleSave}
@@ -202,7 +207,7 @@ function RuntimeVariablesForm({
 					className="gap-2"
 				>
 					<SaveIcon className="w-4 h-4" />
-					Save & Continue
+					{t('saveContinue', 'Save & Continue')}
 				</Button>
 			</DialogFooter>
 		</>

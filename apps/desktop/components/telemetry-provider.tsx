@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type ITelemetryClient,
 	TelemetryConsentPrompt,
@@ -231,6 +232,7 @@ function desktopPlatform(): string {
 export function TelemetryProvider({
 	children,
 }: Readonly<{ children: React.ReactNode }>) {
+	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const features = useFeatures();
 	const pathname = usePathname();
@@ -271,9 +273,16 @@ export function TelemetryProvider({
 	}, []);
 
 	const settingsLoaded = settings !== undefined;
+	// This query is explicitly excluded from persistence, so the first value is
+	// authoritative for this process. Do not tear down telemetry during later
+	// background refetches merely because `isFetching` becomes true again.
+	const featuresResolved = features.data !== undefined;
 
 	useEffect(() => {
-		if (!settingsLoaded) return;
+		// Keep early crash reports in the telemetry module's pending buffer until
+		// the backend feature gate is known. Attaching a disabled client earlier
+		// would consume and permanently drop those startup reports.
+		if (!settingsLoaded || !featuresResolved) return;
 		let cancelled = false;
 		let client: ITelemetryClient | undefined;
 		let removeEventSink: (() => void) | undefined;
@@ -344,7 +353,7 @@ export function TelemetryProvider({
 						platform,
 						events,
 					}),
-					failureMessage: "Failed to deliver buffered telemetry events:",
+					failureMessage: t('failedToDeliverBufferedTelemetryEvents', 'Failed to deliver buffered telemetry events:'),
 				});
 				await drainBuffer<IQueuedTelemetryError>({
 					drainCommand: "drain_telemetry_errors",
@@ -361,7 +370,7 @@ export function TelemetryProvider({
 						platform,
 						errors,
 					}),
-					failureMessage: "Failed to deliver buffered crash reports:",
+					failureMessage: t('failedToDeliverBufferedCrashReports', 'Failed to deliver buffered crash reports:'),
 				});
 			};
 
@@ -426,7 +435,7 @@ export function TelemetryProvider({
 			removeMetricsSink?.();
 			client?.dispose();
 		};
-	}, [backend, settingsLoaded, usageEnabled, crashEnabled]);
+	}, [backend, settingsLoaded, featuresResolved, usageEnabled, crashEnabled]);
 
 	const crashReportingActive = available && isCrashReportingEnabled(settings);
 	const usageActive = available && isUsageTelemetryEnabled(settings);
