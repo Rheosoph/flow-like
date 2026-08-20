@@ -2,9 +2,16 @@ use crate::{
     functions::TauriFunctionError,
     state::{TauriFlowLikeState, TauriSettingsState},
 };
-use flow_like::{a2ui::widget::Page, app::App, bit::Metadata, flow::board::LoadedPages};
+use flow_like::{
+    a2ui::widget::Page,
+    app::App,
+    bit::Metadata,
+    flow::board::{Board, LoadedPages},
+    flow_like_storage::Path,
+    state::FlowLikeState,
+};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 use tauri::AppHandle;
 
 #[derive(Debug, Clone, Serialize)]
@@ -20,6 +27,23 @@ pub struct PageInfo {
     /// The board lists this page but its payload could not be read here. The entry is still
     /// reported so it can be shown and re-synced instead of silently vanishing.
     pub unavailable: bool,
+}
+
+/// A board handle backed only by its storage location, holding no board content.
+///
+/// A page payload is addressed by `(app_id, board_id, page_id)` alone, so reading one never
+/// needs the board file: the board lists page ids, it does not store them. A device that has
+/// the app but not the board — the normal state until a board is downloaded — can still serve
+/// that board's pages through this handle.
+///
+/// The handle is never saved. Writing a synthetic board file here would make later local board
+/// reads succeed against an empty board and permanently suppress the real download.
+fn detached_board(app_id: &str, board_id: &str, state: Arc<FlowLikeState>) -> Board {
+    Board::new(
+        Some(board_id.to_string()),
+        Path::from("apps").child(app_id.to_string()),
+        state,
+    )
 }
 
 fn page_revision(page: &Page) -> Option<String> {
@@ -111,36 +135,57 @@ pub async fn get_page(
     let app = App::load(app_id, flow_like_state.clone()).await?;
 
     if let Some(bid) = board_id {
-        let board = app
-            .open_board(bid.clone(), None, version)
-            .await
-            .map_err(|error| {
-                TauriFunctionError::new(&format!(
-                    "Failed to open board '{}' while looking up page '{}': {}",
-                    bid, page_id, error
-                ))
-            })?;
-        let board_guard = board.lock().await;
-        if !board_guard
-            .get_page_ids()
-            .iter()
-            .any(|candidate| candidate == &page_id)
-        {
-            return Err(TauriFunctionError::new("Page not found in specified board"));
+        match app.open_board(bid.clone(), None, version).await {
+            Ok(board) => {
+                let board_guard = board.lock().await;
+                if !board_guard
+                    .get_page_ids()
+                    .iter()
+                    .any(|candidate| candidate == &page_id)
+                {
+                    return Err(TauriFunctionError::new("Page not found in specified board"));
+                }
+                return load_page_from_board(&board_guard, &page_id, &bid, version).await;
+            }
+            Err(error) => {
+                // The caller named the board, so there is nothing to disambiguate and the
+                // membership check has no board to run against. Read the payload directly
+                // rather than failing an interface whose page is right there on disk.
+                tracing::warn!(
+                    "Board {} is unavailable locally; reading page {} without it: {}",
+                    bid,
+                    page_id,
+                    error
+                );
+                let detached = detached_board(&app.id, &bid, flow_like_state);
+                return load_page_from_board(&detached, &page_id, &bid, version).await;
+            }
         }
-        return load_page_from_board(&board_guard, &page_id, &bid, version).await;
     }
 
+    // Scanning cannot consult page ids for a board this device never downloaded, so each
+    // unreadable board is probed at the page's canonical location instead of aborting the
+    // search — one un-downloaded board must not hide every page in the app.
+    let mut unreadable: Vec<String> = Vec::new();
+
     for bid in app.boards.iter() {
-        let board = app
-            .open_board(bid.clone(), None, version)
-            .await
-            .map_err(|error| {
-                TauriFunctionError::new(&format!(
-                    "Failed to open board '{}' while looking up page '{}': {}",
-                    bid, page_id, error
-                ))
-            })?;
+        let board = match app.open_board(bid.clone(), None, version).await {
+            Ok(board) => board,
+            Err(error) => {
+                tracing::warn!(
+                    "Board {} is unavailable locally while looking up page {}: {}",
+                    bid,
+                    page_id,
+                    error
+                );
+                let detached = detached_board(&app.id, bid, flow_like_state.clone());
+                if let Ok(page) = load_page_from_board(&detached, &page_id, bid, version).await {
+                    return Ok(page);
+                }
+                unreadable.push(bid.clone());
+                continue;
+            }
+        };
         let board_guard = board.lock().await;
         if !board_guard
             .get_page_ids()
@@ -150,6 +195,15 @@ pub async fn get_page(
             continue;
         }
         return load_page_from_board(&board_guard, &page_id, bid, version).await;
+    }
+
+    // A bare "not found" is the caller's signal that the page authoritatively does not exist.
+    // It may only be given when every board could be consulted.
+    if let Some(bid) = unreadable.first() {
+        return Err(TauriFunctionError::new(&format!(
+            "Failed to open board '{}' while looking up page '{}': board unavailable on this device",
+            bid, page_id
+        )));
     }
 
     Err(TauriFunctionError::new("Page not found"))
@@ -269,11 +323,26 @@ pub async fn update_page(
         .clone()
         .ok_or_else(|| TauriFunctionError::new("Page must have a board_id"))?;
 
-    let board = app.open_board(board_id, None, None).await?;
-    {
-        let mut board_guard = board.lock().await;
-        board_guard.save_page(&page, None).await?;
-        board_guard.save(None).await?;
+    match app.open_board(board_id.clone(), None, None).await {
+        Ok(board) => {
+            let mut board_guard = board.lock().await;
+            board_guard.save_page(&page, None).await?;
+            board_guard.save(None).await?;
+        }
+        Err(error) => {
+            // Caching a page fetched from the server must work on a device that does not have
+            // the board yet, or the device can never leave that degraded state. Only the page
+            // payload is written: the board's page id list is the server's to send, and
+            // inventing a board file here would suppress the real download for good.
+            tracing::warn!(
+                "Board {} is unavailable locally; caching page {} without it: {}",
+                board_id,
+                page.id,
+                error
+            );
+            let mut detached = detached_board(&app.id, &board_id, flow_like_state);
+            detached.save_page(&page, None).await?;
+        }
     }
 
     Ok(())

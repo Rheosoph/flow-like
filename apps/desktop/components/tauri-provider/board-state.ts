@@ -149,6 +149,35 @@ export class BoardSyncDiscardRequiredError extends Error {
 	}
 }
 
+/** Where materializing a board this device does not have gave up. */
+export type BoardMaterializationPhase =
+	| "gated"
+	| "fetch"
+	| "persist"
+	| "verify";
+
+/**
+ * A board the device does not hold could not be brought onto disk.
+ *
+ * Every caller of `getBoard` treats a resolved promise as "the board is readable locally" — the
+ * page lookup and the pre-run gate both re-read from disk immediately afterwards. Reporting the
+ * download as a success while the write failed makes every retry re-run an identical, invisible
+ * failure, so the local-miss path fails loudly instead, naming the step that broke.
+ */
+export class BoardMaterializationError extends Error {
+	constructor(
+		readonly boardId: string,
+		readonly phase: BoardMaterializationPhase,
+		options?: { cause?: unknown },
+	) {
+		super(
+			`Board ${boardId} could not be made available on this device (${phase})`,
+			options,
+		);
+		this.name = "BoardMaterializationError";
+	}
+}
+
 /**
  * Command-batch rejections carry an index, an entity id and a rollback trace, which overflow a
  * toast. The full text stays on the queued row and is shown in the recovery dialog.
@@ -810,8 +839,10 @@ export class BoardState implements IBoardState {
 		});
 		const byId = new Map(local.map((summary) => [summary.id, summary]));
 
-		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline || !this.backend.profile || !this.backend.auth) {
+		// This listing is the app-level safety net that materializes boards the device never
+		// downloaded, so an app whose visibility is merely unknown must not gate it shut.
+		const localOnly = await this.backend.isLocalOnly(appId);
+		if (localOnly || !this.backend.profile || !this.backend.auth) {
 			return Array.from(byId.values());
 		}
 
@@ -910,6 +941,79 @@ export class BoardState implements IBoardState {
 		const nodes: INode[] = await invoke("get_catalog", { appId });
 		return nodes;
 	}
+	/**
+	 * Bring a board this device does not have onto disk, and prove that it landed.
+	 *
+	 * Nothing else on the interface route can create a board file: a hosted app's manifest
+	 * arrives listing board ids whose payloads were never downloaded, so this is the single
+	 * door. Its post-condition is therefore the strong one — **resolving means the board file
+	 * exists locally** — which is what the page lookup and the pre-run gate already assume.
+	 *
+	 * The gate is `isLocalOnly`, not `isOffline`: an app whose visibility this device has not
+	 * learned yet is unknown, not local-only, and must be allowed to ask the server. A refusal
+	 * from the hub is the positive evidence that it is local-only.
+	 *
+	 * A pinned version is deliberately not persisted — no native command writes the
+	 * `versions/` layout — so that path returns the remote board and says so.
+	 */
+	private async materializeBoardFromRemote(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+	): Promise<IBoard> {
+		const localOnly = await this.backend.isLocalOnly(appId);
+		if (localOnly || !this.backend.profile || !this.backend.auth) {
+			throw new BoardMaterializationError(boardId, "gated", {
+				cause: new Error(
+					localOnly
+						? `App ${appId} is local-only, so the board cannot be fetched`
+						: "No profile or authentication for a remote board fetch",
+				),
+			});
+		}
+
+		let remoteData: IBoard;
+		try {
+			remoteData = await this.fetchRemoteBoard(appId, boardId, version);
+		} catch (error) {
+			throw new BoardMaterializationError(boardId, "fetch", { cause: error });
+		}
+
+		if (typeof version !== "undefined") {
+			return remoteData;
+		}
+
+		try {
+			await invoke("upsert_board", {
+				appId: appId,
+				boardId: boardId,
+				name: remoteData.name,
+				description: remoteData.description,
+				logLevel: remoteData.log_level,
+				stage: remoteData.stage,
+				executionMode: remoteData.execution_mode,
+				boardData: remoteData,
+			});
+		} catch (error) {
+			throw new BoardMaterializationError(boardId, "persist", { cause: error });
+		}
+
+		// Read it back rather than trusting the write. This is what separates "downloaded" from
+		// "on disk", and it warms the local sync client's base for the next read, so the extra
+		// round trip is not wasted.
+		let materialized: IBoard;
+		try {
+			materialized = await this.fetchLocalBoard(appId, boardId, version);
+		} catch (error) {
+			throw new BoardMaterializationError(boardId, "verify", { cause: error });
+		}
+
+		await this.recordAppliedRemoteLineage(appId, boardId, remoteData);
+		dispatchRemoteBoardApplied(appId, boardId);
+
+		return materialized;
+	}
+
 	async getBoard(
 		appId: string,
 		boardId: string,
@@ -920,33 +1024,7 @@ export class BoardState implements IBoardState {
 		try {
 			board = await this.fetchLocalBoard(appId, boardId, version);
 		} catch {
-			const isOffline = await this.backend.isOffline(appId);
-			if (isOffline || !this.backend.profile || !this.backend.auth) {
-				throw new Error(`Board not found: ${boardId}`);
-			}
-			const remoteData = await this.fetchRemoteBoard(appId, boardId, version);
-			if (typeof version === "undefined") {
-				await invoke("upsert_board", {
-					appId: appId,
-					boardId: boardId,
-					name: remoteData.name,
-					description: remoteData.description,
-					logLevel: remoteData.log_level,
-					stage: remoteData.stage,
-					executionMode: remoteData.execution_mode,
-					boardData: remoteData,
-				}).catch((e: unknown) => {
-					console.warn(
-						"[BoardState] Failed to persist remote board locally:",
-						e,
-					);
-				});
-			}
-			if (typeof version === "undefined") {
-				await this.recordAppliedRemoteLineage(appId, boardId, remoteData);
-				dispatchRemoteBoardApplied(appId, boardId);
-			}
-			return remoteData;
+			return this.materializeBoardFromRemote(appId, boardId, version);
 		}
 
 		const isOffline = await this.backend.isOffline(appId);

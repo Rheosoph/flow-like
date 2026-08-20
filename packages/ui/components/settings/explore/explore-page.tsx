@@ -137,7 +137,7 @@ export const ExploreDataPage: React.FC<ExploreDataPageProps> = ({ appId }) => {
 	const userScoped = searchParams?.get("scope") === "user";
 
 	// Publish the open Data Studio page so the global assistant resolves "this data" to this
-	// app/overlay without overriding Event-first routing. Cleared on unmount.
+	// app/overlay instead of asking which app. Cleared on unmount.
 	const setDataStudioSurface = useAssistantSurface(
 		(state) => state.setDataStudioSurface,
 	);

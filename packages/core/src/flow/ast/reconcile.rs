@@ -2293,23 +2293,31 @@ pub(crate) fn dynamic_placeholder_config_pin(node_type: &str) -> Option<&'static
     match node_type {
         "string_format" => Some("format_string"),
         "string_render_template" => Some("template"),
-        node_type if sql_param_node(node_type) => Some("query"),
+        node_type => sql_param_config_pin(node_type),
+    }
+}
+
+/// Nodes that derive one input pin per `$placeholder` in their SQL literal, paired with the
+/// pin that carries that literal. Kept in one place because the same list gates prediction
+/// here, enrichment in `apply`, and the required-input lint in `executability`.
+///
+/// The two families do not share a config pin or a dialect: a DataFusion node parameterizes
+/// its `query` and binds through the planner, while a LanceDB node parameterizes the `filter`
+/// it hands to `only_if` and has its values substituted before the predicate is parsed.
+pub(crate) fn sql_param_config_pin(node_type: &str) -> Option<&'static str> {
+    match node_type {
+        "df_sql_query" | "df_sql_query_cached" | "df_execute_sql" | "df_write_delta"
+        | "graph_sql_query" => Some("query"),
+        "filter_local_db" | "count_local_db" | "filter_delete_local_db"
+        | "vector_search_local_db" | "fts_search_local_db" | "hybrid_search_local_db" => {
+            Some("filter")
+        }
         _ => None,
     }
 }
 
-/// Nodes that derive one input pin per `$placeholder` in their SQL literal. Kept in one
-/// place because the same list gates prediction here, enrichment in `apply`, and the
-/// required-input lint in `executability`.
 pub(crate) fn sql_param_node(node_type: &str) -> bool {
-    matches!(
-        node_type,
-        "df_sql_query"
-            | "df_sql_query_cached"
-            | "df_execute_sql"
-            | "df_write_delta"
-            | "graph_sql_query"
-    )
+    sql_param_config_pin(node_type).is_some()
 }
 
 /// Why an argument did not resolve to an input pin, and what has to change for it to.
@@ -2420,13 +2428,20 @@ fn dynamic_template_placeholders(node_type: &str, template: &str) -> Option<Vec<
         // here and the pins the node actually mints cannot disagree — unlike the
         // hand-rolled `format_string` mirror above, which has to be kept in sync by eye.
         node_type if sql_param_node(node_type) => Some(
-            flow_like_storage::databases::sql_params::declared_placeholders(template)
-                .unwrap_or_default()
-                .iter()
-                .map(|placeholder| {
-                    flow_like_storage::databases::sql_params::param_pin_name(placeholder)
-                })
-                .collect(),
+            match sql_param_config_pin(node_type) {
+                // A LanceDB filter is tokenized with Lance's dialect, not DataFusion's, so
+                // prediction has to ask the same module the node's `on_update` asks.
+                Some("filter") => {
+                    flow_like_storage::databases::lance_filter_params::declared_placeholders(
+                        template,
+                    )
+                }
+                _ => flow_like_storage::databases::sql_params::declared_placeholders(template),
+            }
+            .unwrap_or_default()
+            .iter()
+            .map(|placeholder| flow_like_storage::databases::sql_params::param_pin_name(placeholder))
+            .collect(),
         ),
         "string_format" => Some(format_string_placeholders(template)),
         "string_render_template" => {
@@ -19966,6 +19981,24 @@ push(arrayOut: Struct[]) {   //@n:push
                         && to_pin == "value_in"
             )
         }));
+    }
+
+    #[test]
+    fn repro_function_return_reads_loop_body_binding() {
+        let board = empty_board();
+        let catalog = accumulator_catalog();
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function parseRssXml(): (rows: Generic[]) {
+    for (const item of controlForEach({ array: [] })) {
+        const batchPush = arrayPush({ arrayIn: [], value: item.value })
+    }
+    return batchPush.arrayOut
+}
+"#,
+            &catalog,
+        );
+        panic!("REPRO DIAGNOSTICS: {:#?}", result.diagnostics);
     }
 
     #[test]

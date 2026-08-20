@@ -1,5 +1,7 @@
 pub mod df_provider;
 pub mod graph;
+pub mod lance_filter_params;
+pub mod sql_guard;
 pub mod sql_params;
 #[cfg(feature = "graph")]
 pub mod table_cascade;

@@ -221,7 +221,10 @@ impl Profile {
     }
 
     /// Gets the best model based on the preference
-    /// For remote we are also looking on hubs for available models (for recommendations, for example)
+    /// `remote = true` skips this profile's own bits entirely and scores the whole
+    /// hub catalog instead — recommendation/discovery only. Anything that runs on
+    /// the user's behalf must pass `false`, or it can land on a model their plan
+    /// does not include.
     /// When only_hosted=true, filters out local models that require hosting capabilities
     pub async fn get_best_model(
         &self,

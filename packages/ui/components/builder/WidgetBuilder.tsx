@@ -10,6 +10,7 @@ import {
 	XIcon,
 } from "lucide-react";
 import {
+	type RefObject,
 	useCallback,
 	useEffect,
 	useId,
@@ -188,6 +189,34 @@ export interface WidgetBuilderProps {
 	 * requestOpenAssistant() and the embedded A2UICopilot panel/sheet are not mounted.
 	 */
 	externalAssistant?: boolean;
+	/**
+	 * Receives an imperative handle onto the live component state so the host can rewrite it without
+	 * remounting the builder (e.g. renaming a widget action id referenced by components).
+	 */
+	handleRef?: RefObject<WidgetBuilderHandle | null>;
+}
+
+export interface WidgetBuilderHandle {
+	getComponents: () => SurfaceComponent[];
+	replaceComponents: (components: SurfaceComponent[]) => void;
+}
+
+function BuilderHandleBridge({
+	handleRef,
+}: Readonly<{ handleRef: RefObject<WidgetBuilderHandle | null> }>) {
+	const { components, replaceComponents } = useBuilder();
+
+	useEffect(() => {
+		handleRef.current = {
+			getComponents: () => Array.from(components.values()),
+			replaceComponents,
+		};
+		return () => {
+			handleRef.current = null;
+		};
+	}, [components, replaceComponents, handleRef]);
+
+	return null;
 }
 
 export function WidgetBuilder({
@@ -205,6 +234,7 @@ export function WidgetBuilder({
 	currentPageId,
 	onPageChange,
 	externalAssistant = false,
+	handleRef,
 }: WidgetBuilderProps) {
 	// Without an in-interface FlowPilot button the floating bubble is this builder's only way into
 	// the assistant, so ask for it exactly when we drop our own.
@@ -232,6 +262,7 @@ export function WidgetBuilder({
 			onCanvasSettingsChange={onCanvasSettingsChange}
 			actionContext={actionContext}
 		>
+			{handleRef && <BuilderHandleBridge handleRef={handleRef} />}
 			<WidgetBuilderWithDnd
 				className={className}
 				surfaceId={surfaceId}

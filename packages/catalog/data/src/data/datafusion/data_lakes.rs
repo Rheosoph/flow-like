@@ -1,4 +1,4 @@
-use crate::data::datafusion::params;
+use crate::data::query_params as params;
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::path::FlowPath;
 use flow_like::flow::{
@@ -872,7 +872,7 @@ impl NodeLogic for WriteDeltaTableNode {
             VariableType::String,
         );
 
-        params::add_params_pin(&mut node);
+        params::add_params_pin(&mut node, params::SqlFlavor::Query);
 
         node.add_input_pin(
             "path",
@@ -941,7 +941,7 @@ impl NodeLogic for WriteDeltaTableNode {
 
     async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
-        params::sync_param_pins(node, "query", board);
+        params::sync_param_pins(node, "query", board, params::SqlFlavor::Query);
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -954,7 +954,7 @@ impl NodeLogic for WriteDeltaTableNode {
 
             let session: DataFusionSession = context.evaluate_pin("session").await?;
             let query: String = context.evaluate_pin("query").await?;
-            let query_params = params::resolve_params(context, &query).await?;
+            let query_params = params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
             let path: FlowPath = context.evaluate_pin("path").await?;
             let mode: String = context
                 .evaluate_pin("mode")

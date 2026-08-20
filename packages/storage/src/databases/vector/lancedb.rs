@@ -1888,6 +1888,60 @@ mod tests {
         std::fs::remove_dir_all(&test_path).unwrap();
         Ok(())
     }
+
+    /// The end of the parameter path: a value bound into an `only_if` predicate reaches the
+    /// row it names, and a value that tries to close its own literal reaches none — proved
+    /// against a real table rather than against the string this module produces.
+    #[tokio::test]
+    async fn bound_filter_values_stay_inside_their_literal() -> Result<()> {
+        use crate::databases::lance_filter_params::{bind_filter_params, resolve_filter_params};
+
+        fn bind(filter: &str, supplied: Value) -> Result<String> {
+            bind_filter_params(filter, &resolve_filter_params(filter, &supplied)?)
+        }
+
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "bound_filter".to_string()).await?;
+        db.insert(vec![
+            json!({ "id": "a", "name": "first" }),
+            json!({ "id": "o'brien", "name": "second" }),
+            json!({ "id": "c", "name": "third" }),
+        ])
+        .await?;
+
+        let quoted = bind("id = $id", json!({ "id": "o'brien" }))?;
+        let rows = db.filter(&quoted, None, 10, 0).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], "second");
+
+        for attempt in [
+            "' OR id != '",
+            "a' OR 'a' = 'a",
+            // The backslash case: this dialect does not read `\'` as an escape, so the
+            // doubled quote is what keeps the tail inside the literal.
+            "x\\' OR true --",
+        ] {
+            let filter = bind("id = $id", json!({ "id": attempt }))?;
+            assert!(
+                db.filter(&filter, None, 10, 0).await?.is_empty(),
+                "matched rows for {attempt}: {filter}"
+            );
+        }
+
+        let in_list = bind("id IN ($ids)", json!({ "ids": ["a", "c"] }))?;
+        assert_eq!(db.filter(&in_list, None, 10, 0).await?.len(), 2);
+        let empty_list = bind("id IN ($ids)", json!({ "ids": [] }))?;
+        assert!(db.filter(&empty_list, None, 10, 0).await?.is_empty());
+
+        // The delete predicate goes through the same parser as the query one.
+        db.delete(&quoted).await?;
+        assert_eq!(db.count(None).await?, 2);
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
 }
 
 // impl VectorStoreIndex for LanceDBVectorStore {

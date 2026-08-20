@@ -3,8 +3,8 @@
 import { useEffect, useMemo } from "react";
 import {
 	IBitTypes,
-	filterHostableLlmModels,
 	isFreeLlmModel,
+	selectProfileLlmModels,
 	useBackend,
 	useCopilotSDK,
 	useInvoke,
@@ -89,30 +89,22 @@ export function useAgentSelection() {
 		[settingsProfile.data?.hub_profile.id],
 	);
 	const { canHostLlamaCPP, canHostMLX } = backend.capabilities();
-	const bitsModels = useMemo(() => {
-		const profileBits = settingsProfile.data?.hub_profile.bits;
-		if (!llmBits.data || !profileBits) return [];
-		const ids = new Set(profileBits);
-		const profileModels = llmBits.data.filter((bit) =>
-			ids.has(`${bit.hub}:${bit.id}`),
-		);
-		const seen = new Set(profileModels.map((bit) => bit.id));
-		const ownModels = (customBits.data ?? []).filter(
-			(bit) =>
-				!seen.has(bit.id) &&
-				(bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm),
-		);
-		return filterHostableLlmModels([...ownModels, ...profileModels], {
+	const bitsModels = useMemo(
+		() =>
+			selectProfileLlmModels(
+				llmBits.data,
+				customBits.data,
+				settingsProfile.data?.hub_profile.bits,
+				{ canHostLlamaCPP, canHostMLX },
+			),
+		[
+			llmBits.data,
+			customBits.data,
+			settingsProfile.data?.hub_profile.bits,
 			canHostLlamaCPP,
 			canHostMLX,
-		});
-	}, [
-		llmBits.data,
-		customBits.data,
-		settingsProfile.data?.hub_profile.bits,
-		canHostLlamaCPP,
-		canHostMLX,
-	]);
+		],
+	);
 
 	const normalizedProvider = normalizeAIProvider(provider);
 	const isAgent = isAgentBackendProvider(normalizedProvider);

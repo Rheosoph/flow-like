@@ -4,7 +4,6 @@ pub mod data_lakes;
 pub mod databases;
 pub mod external_stores;
 pub mod mount_store;
-pub mod params;
 pub mod query;
 pub mod query_cached;
 pub mod register_excel;

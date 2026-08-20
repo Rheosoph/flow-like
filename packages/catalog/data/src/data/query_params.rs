@@ -1,15 +1,15 @@
-//! Query parameter pins for the SQL nodes.
+//! Query parameter pins, shared by every node that takes caller-authored SQL text.
 //!
 //! A node whose query is a literal derives one input pin per `$placeholder` in that
 //! literal — the same shape as `string_format`'s `{token}` pins, so a value flows into a
-//! query by wiring it rather than by being concatenated into the SQL text. Values are
-//! bound by the DataFusion planner (see
-//! [`flow_like_storage::databases::sql_params`]), so a parameter can never widen the
-//! statement it sits in.
+//! query by wiring it rather than by being concatenated into the SQL text. A parameter can
+//! therefore never widen the statement it sits in.
 //!
 //! Nodes whose query arrives over a wire cannot have their placeholders read ahead of
 //! time, so every node also carries a `params` object pin. That pin is the general
 //! channel; the derived pins are the discoverable one.
+//!
+//! Two SQL surfaces use these pins and they do not share a dialect — see [`SqlFlavor`].
 
 use flow_like::flow::{
     board::Board,
@@ -19,24 +19,66 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_ast::to_camel_case;
-use flow_like_storage::databases::sql_params::{
-    declared_placeholders, param_pin_name, placeholder_from_pin_name, resolve_query_params,
+use flow_like_storage::databases::{
+    lance_filter_params, sql_params,
+    sql_params::{param_pin_name, placeholder_from_pin_name},
 };
 use flow_like_types::{Result, Value, json::json};
 use std::collections::HashMap;
 
+/// Which SQL surface the node's text is written for.
+///
+/// The two differ in more than wording. A DataFusion statement is tokenized with the
+/// `GenericDialect` its planner parses with and its values are bound by that planner; a
+/// LanceDB `only_if` filter is tokenized with Lance's own dialect and its values are
+/// substituted into the predicate before Lance ever sees it, because LanceDB has no
+/// placeholder binding at all. Picking the wrong flavor means discovering placeholders with
+/// a tokenizer that disagrees with the engine about where a string literal ends.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SqlFlavor {
+    /// A statement executed by DataFusion (`ctx.sql`).
+    Query,
+    /// A predicate handed to LanceDB as `only_if`.
+    LanceFilter,
+}
+
+impl SqlFlavor {
+    /// What the text is called on the node, for pin descriptions and errors.
+    const fn subject(self) -> &'static str {
+        match self {
+            Self::Query => "query",
+            Self::LanceFilter => "filter",
+        }
+    }
+
+    fn declared_placeholders(self, sql: &str) -> Result<Vec<String>> {
+        match self {
+            Self::Query => sql_params::declared_placeholders(sql),
+            Self::LanceFilter => lance_filter_params::declared_placeholders(sql),
+        }
+    }
+
+    fn resolve(self, sql: &str, supplied: &Value) -> Result<Vec<(String, Value)>> {
+        match self {
+            Self::Query => sql_params::resolve_query_params(sql, supplied),
+            Self::LanceFilter => lance_filter_params::resolve_filter_params(sql, supplied),
+        }
+    }
+}
+
 /// Name of the object pin that supplies parameters by name.
 pub const PARAMS_PIN: &str = "params";
 
-const PARAMS_PIN_DESCRIPTION: &str = "Values for the query's $placeholders, as an object keyed by placeholder name without the $ (e.g. {\"customer_id\": 42}). Only needed when the query itself comes from a wire — a literal query derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.";
-
 /// Adds the parameter object pin. Call from `get_node` on every node that binds
 /// parameters, so the channel exists even when the query is not a literal.
-pub fn add_params_pin(node: &mut Node) {
+pub fn add_params_pin(node: &mut Node, flavor: SqlFlavor) {
+    let subject = flavor.subject();
     node.add_input_pin(
         PARAMS_PIN,
         "Params",
-        PARAMS_PIN_DESCRIPTION,
+        &format!(
+            "Values for the {subject}'s $placeholders, as an object keyed by placeholder name without the $ (e.g. {{\"customer_id\": 42}}). Only needed when the {subject} itself comes from a wire — a literal {subject} derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty."
+        ),
         VariableType::Struct,
     )
     .set_default_value(Some(json!({})));
@@ -50,7 +92,7 @@ pub fn add_params_pin(node: &mut Node) {
 ///
 /// Pins are keyed by placeholder name, not by occurrence: a placeholder repeated in the
 /// statement resolves to one pin, bound once at every occurrence.
-pub fn sync_param_pins(node: &mut Node, query_pin: &str, board: &Board) {
+pub fn sync_param_pins(node: &mut Node, query_pin: &str, board: &Board, flavor: SqlFlavor) {
     let Some(query) = query_literal(node, query_pin) else {
         // What runs is decided at runtime, so the stale literal declares nothing: retire the pins
         // it left behind, since offering inputs the real query never asks for is misleading. A pin
@@ -68,7 +110,7 @@ pub fn sync_param_pins(node: &mut Node, query_pin: &str, board: &Board) {
         return;
     };
 
-    let placeholders = match declared_placeholders(&query) {
+    let placeholders = match flavor.declared_placeholders(&query) {
         Ok(placeholders) => placeholders,
         Err(error) => {
             node.error = Some(error.to_string());
@@ -124,7 +166,10 @@ pub fn sync_param_pins(node: &mut Node, query_pin: &str, board: &Board) {
         node.add_input_pin(
             &pin_name,
             &format!("${placeholder}"),
-            &format!("Value bound to the ${placeholder} placeholder in the query"),
+            &format!(
+                "Value bound to the ${placeholder} placeholder in the {}",
+                flavor.subject()
+            ),
             VariableType::Generic,
         );
     }
@@ -182,8 +227,9 @@ fn flowscript_name_conflict(placeholders: &[String]) -> Option<String> {
 pub async fn resolve_params(
     context: &mut ExecutionContext,
     query: &str,
+    flavor: SqlFlavor,
 ) -> Result<Vec<(String, Value)>> {
-    let placeholders = declared_placeholders(query)?;
+    let placeholders = flavor.declared_placeholders(query)?;
     if placeholders.is_empty() {
         return Ok(Vec::new());
     }
@@ -220,7 +266,7 @@ pub async fn resolve_params(
         bag.insert(placeholder.clone(), value);
     }
 
-    resolve_query_params(query, &Value::Object(bag))
+    flavor.resolve(query, &Value::Object(bag))
 }
 
 /// The resolved parameters as a JSON object, for the surfaces that bind from an object
@@ -232,6 +278,27 @@ pub fn to_object(params: &[(String, Value)]) -> Value {
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect(),
     )
+}
+
+/// Resolves this node's parameters for `filter` and substitutes them into it.
+///
+/// The whole binding step for a LanceDB node, which always does both at once: an unbound
+/// filter must never reach the store, so there is no reason for a node to hold the resolved
+/// values in between.
+pub async fn bind_lance_filter(context: &mut ExecutionContext, filter: &str) -> Result<String> {
+    let resolved = resolve_params(context, filter, SqlFlavor::LanceFilter).await?;
+    bind_filter(filter, &resolved)
+}
+
+/// Substitutes `params` into a LanceDB `only_if` filter, returning the predicate to hand to
+/// the store.
+///
+/// Unlike [`bind`], this produces text rather than binding values onto a plan: LanceDB has no
+/// placeholder binding, so the substitution happens in
+/// [`flow_like_storage::databases::lance_filter_params`] — on the token stream, with the
+/// dialect Lance parses with. A filter with no placeholders comes back unchanged.
+pub fn bind_filter(filter: &str, params: &[(String, Value)]) -> Result<String> {
+    lance_filter_params::bind_filter_params(filter, params)
 }
 
 /// Binds `params` onto a planned DataFrame. A query with no placeholders is left alone, so

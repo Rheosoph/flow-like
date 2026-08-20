@@ -1,4 +1,4 @@
-use crate::data::datafusion::params;
+use crate::data::query_params as params;
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::excel::CSVTable;
 use flow_like::flow::{
@@ -59,7 +59,7 @@ impl NodeLogic for SqlQueryNode {
         )
         .set_default_value(Some(json!("SELECT * FROM data LIMIT 100")));
 
-        params::add_params_pin(&mut node);
+        params::add_params_pin(&mut node, params::SqlFlavor::Query);
 
         node.add_output_pin(
             "exec_out",
@@ -105,7 +105,7 @@ impl NodeLogic for SqlQueryNode {
 
     async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
-        params::sync_param_pins(node, "query", board);
+        params::sync_param_pins(node, "query", board, params::SqlFlavor::Query);
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -113,7 +113,7 @@ impl NodeLogic for SqlQueryNode {
 
         let session: DataFusionSession = context.evaluate_pin("session").await?;
         let query: String = context.evaluate_pin("query").await?;
-        let query_params = params::resolve_params(context, &query).await?;
+        let query_params = params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
 
         let cached_session = session.load(context).await?;
 

@@ -10,12 +10,12 @@ use flow_like::app::App;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
-    node::{Node, NodeLogic, NodeScores, remove_unwired_pins},
+    node::{Node, NodeLogic, NodeScores, pin_is_wired, remove_unwired_pins},
     pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -74,21 +74,57 @@ fn find_widget_by_selector<'a>(widgets: &'a [Widget], selector: &str) -> Option<
         .or_else(|| widgets.iter().find(|w| w.name == selector))
 }
 
-/// Extract unique data paths referenced by component BoundValues (e.g. {"path": "/inputs/title"})
-fn collect_bound_paths(widget: &Widget) -> BTreeSet<String> {
-    let mut paths = BTreeSet::new();
+/// Type evidence gathered for one bound data path.
+///
+/// A builder-authored widget keeps its `data_model` empty, so the literal the binding was
+/// converted from — `{"path": "/inputs/hidden", "defaultValue": false}` — is the only record of
+/// what type the property had before it became a binding. Two components binding the same path
+/// with differently typed defaults mark the path `conflicting`, which resolves to `Generic`
+/// instead of silently picking one.
+#[derive(Default)]
+struct BoundPath {
+    default: Option<Value>,
+    conflicting: bool,
+}
+
+impl BoundPath {
+    fn observe(&mut self, default: Option<Value>) {
+        let Some(default) = default else { return };
+        match &self.default {
+            None => self.default = Some(default),
+            Some(existing) => {
+                if std::mem::discriminant(existing) != std::mem::discriminant(&default) {
+                    self.conflicting = true;
+                }
+            }
+        }
+    }
+
+    fn variable_type(&self) -> Option<VariableType> {
+        if self.conflicting {
+            return Some(VariableType::Generic);
+        }
+        self.default.as_ref().map(infer_variable_type)
+    }
+}
+
+/// Extract the data paths referenced by component BoundValues (e.g. {"path": "/inputs/title"})
+/// together with the literal default each binding carries.
+fn collect_bound_paths(widget: &Widget) -> BTreeMap<String, BoundPath> {
+    let mut paths = BTreeMap::new();
     for comp in &widget.components {
         visit_value_for_paths(&comp.component, &mut paths);
     }
     paths
 }
 
-fn visit_value_for_paths(value: &Value, paths: &mut BTreeSet<String>) {
+fn visit_value_for_paths(value: &Value, paths: &mut BTreeMap<String, BoundPath>) {
     match value {
         Value::Object(map) => {
             if let Some(Value::String(path)) = map.get("path") {
                 if !path.is_empty() {
-                    paths.insert(path.clone());
+                    let default = map.get("defaultValue").filter(|v| !v.is_null()).cloned();
+                    paths.entry(path.clone()).or_default().observe(default);
                 }
                 return;
             }
@@ -113,7 +149,7 @@ fn label_from_path(path: &str) -> String {
 /// Collect the expected dynamic pin names for a widget.
 fn expected_dynamic_pin_names(widget: &Widget) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
-    for path in collect_bound_paths(widget) {
+    for path in collect_bound_paths(widget).keys() {
         let safe_key = path.replace('/', "_");
         names.insert(format!("{DYNAMIC_PIN_PREFIX}path_{safe_key}"));
     }
@@ -128,29 +164,47 @@ fn expected_dynamic_pin_names(widget: &Widget) -> BTreeSet<String> {
 
 fn add_dynamic_pins_for_widget(node: &mut Node, widget: &Widget) {
     let bound_paths = collect_bound_paths(widget);
+    let mut stale_types: Vec<String> = Vec::new();
 
-    for path in &bound_paths {
+    for (path, bound) in &bound_paths {
         let safe_key = path.replace('/', "_");
         let pin_name = format!("{DYNAMIC_PIN_PREFIX}path_{safe_key}");
 
-        // Skip if pin already exists (preserves user-set default value)
-        if node.get_pin_by_name(&pin_name).is_some() {
-            continue;
-        }
-
-        let label = label_from_path(path);
         let data_entry = widget
             .data_model
             .iter()
             .find(|e| &e.key == path || format!("/{}", e.key) == *path);
+        let seed = data_entry
+            .map(|e| &e.value)
+            .or(bound.default.as_ref())
+            .cloned();
         let var_type = data_entry
             .map(|e| infer_variable_type(&e.value))
+            .or_else(|| bound.variable_type())
             .unwrap_or(VariableType::String);
 
+        // An existing pin keeps its user-set literal, but a pin minted before the widget
+        // declared a type — or before its binding changed type — is re-typed so the node heals
+        // on reload instead of demanding a rebuild. A wired pin is left alone: re-typing it
+        // leaves an edge the editor would refuse to draw, with nothing said on the producer.
+        // It gets named on `node.error` instead, since staying silently mistyped is what makes
+        // a bound boolean look like a text pin forever.
+        if let Some(existing) = node.get_pin_mut_by_name(&pin_name) {
+            if existing.data_type != var_type {
+                if pin_is_wired(existing) {
+                    stale_types.push(format!("{} (should be {:?})", existing.name, var_type));
+                } else {
+                    existing.data_type = var_type;
+                    existing.default_value =
+                        seed.and_then(|v| flow_like_types::json::to_vec(&v).ok());
+                }
+            }
+            continue;
+        }
+
+        let label = label_from_path(path);
         let pin = node.add_input_pin(&pin_name, &label, &format!("Bound: {path}"), var_type);
-        if let Some(entry) = data_entry
-            && let Ok(d) = flow_like_types::json::to_vec(&entry.value)
-        {
+        if let Some(d) = seed.and_then(|v| flow_like_types::json::to_vec(&v).ok()) {
             pin.default_value = Some(d);
         }
     }
@@ -192,6 +246,18 @@ fn add_dynamic_pins_for_widget(node: &mut Node, widget: &Widget) {
         if let Some(default) = &opt.default_value {
             pin.default_value = Some(default.clone());
         }
+    }
+
+    if !stale_types.is_empty() {
+        stale_types.sort();
+        let message = format!(
+            "Connected bound inputs still carry their old type: {}. Disconnect them to pick up the widget's type.",
+            stale_types.join(", ")
+        );
+        node.error = Some(match node.error.take() {
+            Some(existing) if !existing.is_empty() => format!("{existing} {message}"),
+            _ => message,
+        });
     }
 }
 
@@ -433,7 +499,7 @@ impl NodeLogic for InstantiateWidget {
 
         node.set_can_reference_fns(true);
         node.set_long_running(true);
-        node.set_version(5);
+        node.set_version(6);
 
         node
     }
@@ -601,7 +667,7 @@ impl NodeLogic for InstantiateWidget {
         // Collect bound path values from component path bindings
         let bound_paths = collect_bound_paths(widget);
         let mut data_values = flow_like_types::json::Map::new();
-        for path in &bound_paths {
+        for path in bound_paths.keys() {
             let safe_key = path.replace('/', "_");
             let pin_name = format!("{DYNAMIC_PIN_PREFIX}path_{safe_key}");
             if let Ok(val) = context.evaluate_pin::<Value>(&pin_name).await
@@ -786,6 +852,179 @@ impl NodeLogic for InstantiateWidget {
 mod tests {
     use super::*;
     use flow_like::a2ui::micro_widget::PackageWidgetRef;
+    use flow_like::a2ui::{DataEntry, SurfaceComponent};
+    use flow_like::flow::pin::PinType;
+
+    fn widget_with_components(components: Vec<(&str, Value)>) -> Widget {
+        let mut widget = Widget::new("w1", "Widget", "root");
+        widget.components = components
+            .into_iter()
+            .map(|(id, component)| SurfaceComponent::new(id, component))
+            .collect();
+        widget
+    }
+
+    fn bound_pin_type(node: &Node, path: &str) -> VariableType {
+        let safe_key = path.replace('/', "_");
+        node.get_pin_by_name(&format!("{DYNAMIC_PIN_PREFIX}path_{safe_key}"))
+            .unwrap_or_else(|| panic!("missing pin for {path}"))
+            .data_type
+            .clone()
+    }
+
+    #[test]
+    fn bound_path_pin_takes_the_type_of_the_binding_default() {
+        let widget = widget_with_components(vec![(
+            "text",
+            json!({
+                "type": "text",
+                "hidden": { "path": "/inputs/hidden", "defaultValue": false },
+                "content": { "path": "/inputs/title", "defaultValue": "Hello" },
+                "size": { "path": "/inputs/size", "defaultValue": 12 },
+            }),
+        )]);
+
+        let mut node = InstantiateWidget.get_node();
+        add_dynamic_pins_for_widget(&mut node, &widget);
+
+        assert_eq!(
+            bound_pin_type(&node, "/inputs/hidden"),
+            VariableType::Boolean
+        );
+        assert_eq!(bound_pin_type(&node, "/inputs/title"), VariableType::String);
+        assert_eq!(bound_pin_type(&node, "/inputs/size"), VariableType::Float);
+    }
+
+    #[test]
+    fn bound_path_without_type_evidence_stays_string() {
+        let widget = widget_with_components(vec![(
+            "text",
+            json!({ "type": "text", "content": { "path": "/inputs/title" } }),
+        )]);
+
+        let mut node = InstantiateWidget.get_node();
+        add_dynamic_pins_for_widget(&mut node, &widget);
+
+        assert_eq!(bound_pin_type(&node, "/inputs/title"), VariableType::String);
+    }
+
+    #[test]
+    fn data_model_entry_outranks_the_binding_default() {
+        let mut widget = widget_with_components(vec![(
+            "text",
+            json!({
+                "type": "text",
+                "hidden": { "path": "/inputs/hidden", "defaultValue": "false" },
+            }),
+        )]);
+        widget
+            .data_model
+            .push(DataEntry::new("/inputs/hidden", json!(true)));
+
+        let mut node = InstantiateWidget.get_node();
+        add_dynamic_pins_for_widget(&mut node, &widget);
+
+        assert_eq!(
+            bound_pin_type(&node, "/inputs/hidden"),
+            VariableType::Boolean
+        );
+    }
+
+    #[test]
+    fn conflicting_binding_defaults_resolve_to_generic() {
+        let widget = widget_with_components(vec![
+            (
+                "a",
+                json!({ "type": "text", "hidden": { "path": "/inputs/x", "defaultValue": false } }),
+            ),
+            (
+                "b",
+                json!({ "type": "text", "content": { "path": "/inputs/x", "defaultValue": "no" } }),
+            ),
+        ]);
+
+        let mut node = InstantiateWidget.get_node();
+        add_dynamic_pins_for_widget(&mut node, &widget);
+
+        assert_eq!(bound_pin_type(&node, "/inputs/x"), VariableType::Generic);
+    }
+
+    #[test]
+    fn an_unwired_pin_is_retyped_but_a_wired_one_is_left_alone() {
+        let untyped = widget_with_components(vec![(
+            "text",
+            json!({
+                "type": "text",
+                "hidden": { "path": "/inputs/hidden" },
+                "content": { "path": "/inputs/title" },
+            }),
+        )]);
+        let mut node = InstantiateWidget.get_node();
+        add_dynamic_pins_for_widget(&mut node, &untyped);
+        assert_eq!(
+            bound_pin_type(&node, "/inputs/hidden"),
+            VariableType::String
+        );
+
+        let wired_id = node
+            .get_pin_by_name(&format!("{DYNAMIC_PIN_PREFIX}path__inputs_title"))
+            .unwrap()
+            .id
+            .clone();
+        node.pins
+            .get_mut(&wired_id)
+            .unwrap()
+            .depends_on
+            .insert("producer-pin".to_string());
+
+        let typed = widget_with_components(vec![(
+            "text",
+            json!({
+                "type": "text",
+                "hidden": { "path": "/inputs/hidden", "defaultValue": false },
+                "content": { "path": "/inputs/title", "defaultValue": 3 },
+            }),
+        )]);
+        add_dynamic_pins_for_widget(&mut node, &typed);
+
+        assert_eq!(
+            bound_pin_type(&node, "/inputs/hidden"),
+            VariableType::Boolean
+        );
+        assert_eq!(bound_pin_type(&node, "/inputs/title"), VariableType::String);
+
+        let error = node.error.expect("wired mistyped pin must be reported");
+        assert!(
+            error.contains("dyn_path__inputs_title") && error.contains("Float"),
+            "unexpected diagnostic: {error}"
+        );
+        assert!(
+            !error.contains("dyn_path__inputs_hidden"),
+            "a re-typed pin must not be reported: {error}"
+        );
+    }
+
+    #[test]
+    fn bound_pins_are_inputs_and_seeded_with_the_binding_default() {
+        let widget = widget_with_components(vec![(
+            "text",
+            json!({
+                "type": "text",
+                "hidden": { "path": "/inputs/hidden", "defaultValue": true },
+            }),
+        )]);
+
+        let mut node = InstantiateWidget.get_node();
+        add_dynamic_pins_for_widget(&mut node, &widget);
+
+        let pin = node
+            .get_pin_by_name(&format!("{DYNAMIC_PIN_PREFIX}path__inputs_hidden"))
+            .unwrap();
+        assert_eq!(pin.pin_type, PinType::Input);
+        let default: Value =
+            flow_like_types::json::from_slice(pin.default_value.as_ref().unwrap()).unwrap();
+        assert_eq!(default, json!(true));
+    }
 
     #[test]
     fn test_build_micro_widget_component_frozen_shape() {

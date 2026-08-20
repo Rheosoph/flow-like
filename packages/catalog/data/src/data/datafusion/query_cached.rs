@@ -1,5 +1,5 @@
 use crate::data::cache::{CacheScope, FlowCache, cache_get, cache_set};
-use crate::data::datafusion::params;
+use crate::data::query_params as params;
 use crate::data::datafusion::query::{QueryRow, batches_to_csv_table};
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::excel::CSVTable;
@@ -113,7 +113,7 @@ impl NodeLogic for CachedSqlQueryNode {
         )
         .set_default_value(Some(json!("SELECT * FROM data LIMIT 100")));
 
-        params::add_params_pin(&mut node);
+        params::add_params_pin(&mut node, params::SqlFlavor::Query);
 
         node.add_input_pin(
             "scope",
@@ -195,7 +195,7 @@ impl NodeLogic for CachedSqlQueryNode {
 
     async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
-        params::sync_param_pins(node, "query", board);
+        params::sync_param_pins(node, "query", board, params::SqlFlavor::Query);
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
@@ -203,7 +203,7 @@ impl NodeLogic for CachedSqlQueryNode {
 
         let session: DataFusionSession = context.evaluate_pin("session").await?;
         let query: String = context.evaluate_pin("query").await?;
-        let query_params = params::resolve_params(context, &query).await?;
+        let query_params = params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
         let scope: String = context.evaluate_pin("scope").await?;
         let namespace: String = context.evaluate_pin("namespace").await?;
         let ttl_seconds: i64 = context.evaluate_pin("ttl_seconds").await?;
