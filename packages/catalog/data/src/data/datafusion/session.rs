@@ -172,11 +172,15 @@ impl CachedDataFusionSession {
         for (table_name, registration) in registrations.iter_mut() {
             let (cached_db, generation) =
                 registration.database.load_with_generation(context).await?;
+            // Flush before the generation short-circuit: local databases never
+            // rotate generations, but SQL run through this session — including
+            // UPDATE/DELETE — must see the flow's own buffered writes (a flush
+            // after a DELETE would otherwise resurrect the deleted rows).
+            cached_db.ensure_flushed().await?;
             if generation == registration.generation {
                 continue;
             }
 
-            cached_db.ensure_flushed().await?;
             let db_guard = cached_db.db.read().await;
             let adapter = db_guard.inner().to_datafusion().await?;
             drop(db_guard);

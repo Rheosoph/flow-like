@@ -2560,10 +2560,7 @@ mod tests {
         // a fallback that has to be justified. The Event preference stays, as a preference.
         assert!(data.description.contains("apps that already exist"));
         assert!(data.description.contains("needs no preflight"));
-        assert!(
-            data.description
-                .contains("not a restriction on this tool")
-        );
+        assert!(data.description.contains("not a restriction on this tool"));
 
         let schema = (data.schema)();
         assert!(schema["properties"]["routing_reason"].is_null());

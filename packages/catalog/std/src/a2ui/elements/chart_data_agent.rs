@@ -305,6 +305,14 @@ impl NodeLogic for ChartDataAgent {
             ));
         }
 
+        // Model-authored SQL over a session whose Lance tables accept DML —
+        // this surface only ever charts data, so enforce read-only.
+        flow_like_storage::databases::sql_guard::validate_readonly_sql(&sql).map_err(|error| {
+            flow_like_types::anyhow!(
+                "Chart Data Agent generated a non-SELECT statement and refused to run it: {error}"
+            )
+        })?;
+
         let data_df = cached_session.ctx.sql(&sql).await?;
         let data_batches = data_df.collect().await?;
         let rows = batches_to_rows(&data_batches)?;

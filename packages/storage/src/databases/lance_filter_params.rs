@@ -441,7 +441,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(literals.len(), 1, "{bound:?} did not hold exactly one literal");
+        assert_eq!(
+            literals.len(),
+            1,
+            "{bound:?} did not hold exactly one literal"
+        );
         literals.into_iter().next().expect("literal")
     }
 

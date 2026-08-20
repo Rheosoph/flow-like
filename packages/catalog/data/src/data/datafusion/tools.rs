@@ -1,7 +1,7 @@
-use crate::data::query_params as params;
 use crate::data::datafusion::query::batches_to_csv_table;
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::excel::CSVTable;
+use crate::data::query_params as params;
 use flow_like::flow::{
     board::Board,
     execution::{LogLevel, context::ExecutionContext},
@@ -281,7 +281,7 @@ impl NodeLogic for ExecuteSqlNode {
         let mut node = Node::new(
             "df_execute_sql",
             "Execute SQL",
-            "Execute a SQL query and return results as formatted text. Ideal for agent-driven data exploration.",
+            "Execute a read-only SQL query and return results as formatted text. Ideal for agent-driven data exploration; writing statements are rejected.",
             "Data/DataFusion/Tools",
         );
         node.add_icon("/flow/icons/database.svg");
@@ -362,7 +362,17 @@ impl NodeLogic for ExecuteSqlNode {
 
         let session: DataFusionSession = context.evaluate_pin("session").await?;
         let query: String = context.evaluate_pin("query").await?;
-        let query_params = params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
+
+        // Agent-authored SQL: this tool is an exploration surface, and Lance
+        // tables registered in the session accept DML — keep it read-only.
+        flow_like_storage::databases::sql_guard::validate_readonly_sql(&query).map_err(|error| {
+            flow_like_types::anyhow!(
+                "Execute SQL is a read-only exploration tool; use the SQL Query node for INSERT/UPDATE/DELETE: {error}"
+            )
+        })?;
+
+        let query_params =
+            params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
 
         let cached_session = session.load(context).await?;
 

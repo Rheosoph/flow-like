@@ -1,8 +1,8 @@
 use crate::data::cache::{CacheScope, FlowCache, cache_get, cache_set};
-use crate::data::query_params as params;
 use crate::data::datafusion::query::{QueryRow, batches_to_csv_table};
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::excel::CSVTable;
+use crate::data::query_params as params;
 use flow_like::flow::{
     board::Board,
     execution::{LogLevel, context::ExecutionContext},
@@ -212,7 +212,8 @@ impl NodeLogic for CachedSqlQueryNode {
             )
         })?;
 
-        let query_params = params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
+        let query_params =
+            params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
         let scope: String = context.evaluate_pin("scope").await?;
         let namespace: String = context.evaluate_pin("namespace").await?;
         let ttl_seconds: i64 = context.evaluate_pin("ttl_seconds").await?;

@@ -6,6 +6,23 @@ use flow_like::flow::{
 };
 use flow_like_types::{async_trait, json::json};
 
+/// A bare epoch integer carries no unit, so its magnitude decides — Arrow and
+/// Lance hand temporal columns back in microseconds, browsers and most JSON
+/// producers in milliseconds, and Unix tooling in seconds. Mirrors
+/// `detectEpochUnit` in `packages/ui/lib/date.ts`.
+fn datetime_from_epoch(units: i64) -> Option<DateTime<Utc>> {
+    const MAX_EPOCH_SECONDS: i64 = 100_000_000_000;
+    const MAX_EPOCH_MILLIS: i64 = 100_000_000_000_000;
+    const MAX_EPOCH_MICROS: i64 = 100_000_000_000_000_000;
+
+    match units.unsigned_abs() {
+        magnitude if magnitude < MAX_EPOCH_SECONDS as u64 => DateTime::from_timestamp(units, 0),
+        magnitude if magnitude < MAX_EPOCH_MILLIS as u64 => DateTime::from_timestamp_millis(units),
+        magnitude if magnitude < MAX_EPOCH_MICROS as u64 => DateTime::from_timestamp_micros(units),
+        _ => Some(DateTime::from_timestamp_nanos(units)),
+    }
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct DateTimeParseNode {}
@@ -22,7 +39,7 @@ impl NodeLogic for DateTimeParseNode {
         let mut node = Node::new(
             "utils_datetime_parse",
             "Parse DateTime",
-            "Parses a string into a DateTime. Auto-detects common formats or uses custom format string.",
+            "Parses a string into a DateTime. Auto-detects common formats and epoch timestamps (seconds, milliseconds, microseconds, nanoseconds) or uses a custom format string.",
             "Utils/DateTime",
         );
 
@@ -63,9 +80,9 @@ impl NodeLogic for DateTimeParseNode {
             else if let Ok(dt) = DateTime::parse_from_rfc2822(&input) {
                 Some(dt.with_timezone(&Utc))
             }
-            // Try timestamp (seconds)
-            else if let Ok(ts) = input.parse::<i64>() {
-                DateTime::from_timestamp(ts, 0)
+            // Try epoch timestamp
+            else if let Ok(units) = input.parse::<i64>() {
+                datetime_from_epoch(units)
             }
             // Try common formats
             else {
@@ -108,5 +125,33 @@ impl NodeLogic for DateTimeParseNode {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parsed(units: i64) -> String {
+        datetime_from_epoch(units)
+            .expect("epoch is representable")
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    }
+
+    #[test]
+    fn epoch_unit_is_detected_from_magnitude() {
+        assert_eq!(parsed(1_787_121_392), "2026-08-19T06:36:32.000Z");
+        assert_eq!(parsed(1_787_121_392_487), "2026-08-19T06:36:32.487Z");
+        assert_eq!(parsed(1_787_121_392_487_000), "2026-08-19T06:36:32.487Z");
+        assert_eq!(
+            parsed(1_787_121_392_487_000_000),
+            "2026-08-19T06:36:32.487Z"
+        );
+    }
+
+    #[test]
+    fn negative_epochs_keep_their_unit() {
+        assert_eq!(parsed(-1_000), "1969-12-31T23:43:20.000Z");
+        assert_eq!(parsed(-1_787_121_392_487_000), "1913-05-15T17:23:27.513Z");
     }
 }

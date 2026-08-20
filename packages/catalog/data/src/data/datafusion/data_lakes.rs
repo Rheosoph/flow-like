@@ -1,6 +1,6 @@
-use crate::data::query_params as params;
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::path::FlowPath;
+use crate::data::query_params as params;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -954,7 +954,8 @@ impl NodeLogic for WriteDeltaTableNode {
 
             let session: DataFusionSession = context.evaluate_pin("session").await?;
             let query: String = context.evaluate_pin("query").await?;
-            let query_params = params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
+            let query_params =
+                params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
             let path: FlowPath = context.evaluate_pin("path").await?;
             let mode: String = context
                 .evaluate_pin("mode")

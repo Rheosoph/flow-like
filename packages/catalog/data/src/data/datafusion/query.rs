@@ -1,6 +1,6 @@
-use crate::data::query_params as params;
 use crate::data::datafusion::session::DataFusionSession;
 use crate::data::excel::CSVTable;
+use crate::data::query_params as params;
 use flow_like::flow::{
     board::Board,
     execution::{LogLevel, context::ExecutionContext},
@@ -30,7 +30,7 @@ impl NodeLogic for SqlQueryNode {
         let mut node = Node::new(
             "df_sql_query",
             "SQL Query",
-            "Execute a SQL statement against a DataFusion session. SELECT returns results as both a CSVTable (for analytics) and array of row objects (for iteration). Registered Lance tables also accept INSERT INTO, and UPDATE/DELETE with a WHERE clause that references at least one column (constant-only conditions like WHERE true are refused; writes return a single `count` row). Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
+            "Execute a SQL statement against a DataFusion session. SELECT returns results as both a CSVTable (for analytics) and array of row objects (for iteration). Registered Lance tables also accept INSERT INTO, and UPDATE/DELETE with a WHERE clause that references at least one column (constant-only conditions like WHERE true are refused, as are subqueries and multi-table forms; writes return a single `count` row). Write any value that comes from outside the flow as a $placeholder and wire it into the pin that appears — never build the SQL string around it.",
             "Data/DataFusion",
         );
         node.add_icon("/flow/icons/database.svg");
@@ -113,7 +113,14 @@ impl NodeLogic for SqlQueryNode {
 
         let session: DataFusionSession = context.evaluate_pin("session").await?;
         let query: String = context.evaluate_pin("query").await?;
-        let query_params = params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
+
+        // UPDATE/DELETE with subqueries or joined tables cannot be forwarded to
+        // Lance faithfully (DataFusion only hands the table plain WHERE
+        // conjuncts) — refuse those shapes before planning can mangle them.
+        flow_like_storage::databases::sql_guard::validate_lance_dml_sql(&query)?;
+
+        let query_params =
+            params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
 
         let cached_session = session.load(context).await?;
 

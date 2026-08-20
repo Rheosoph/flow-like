@@ -90,7 +90,8 @@ impl NodeLogic for GraphSqlQueryNode {
 
         let conn: NodeGraphConnection = context.evaluate_pin("graph").await?;
         let query: String = context.evaluate_pin("query").await?;
-        let query_params = params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
+        let query_params =
+            params::resolve_params(context, &query, params::SqlFlavor::Query).await?;
         let limit: i64 = context.evaluate_pin("limit").await.unwrap_or(1000);
         let limit = if limit > 0 {
             Some(limit as usize)

@@ -2306,12 +2306,17 @@ pub(crate) fn dynamic_placeholder_config_pin(node_type: &str) -> Option<&'static
 /// it hands to `only_if` and has its values substituted before the predicate is parsed.
 pub(crate) fn sql_param_config_pin(node_type: &str) -> Option<&'static str> {
     match node_type {
-        "df_sql_query" | "df_sql_query_cached" | "df_execute_sql" | "df_write_delta"
+        "df_sql_query"
+        | "df_sql_query_cached"
+        | "df_execute_sql"
+        | "df_write_delta"
         | "graph_sql_query" => Some("query"),
-        "filter_local_db" | "count_local_db" | "filter_delete_local_db"
-        | "vector_search_local_db" | "fts_search_local_db" | "hybrid_search_local_db" => {
-            Some("filter")
-        }
+        "filter_local_db"
+        | "count_local_db"
+        | "filter_delete_local_db"
+        | "vector_search_local_db"
+        | "fts_search_local_db"
+        | "hybrid_search_local_db" => Some("filter"),
         _ => None,
     }
 }
@@ -2440,7 +2445,9 @@ fn dynamic_template_placeholders(node_type: &str, template: &str) -> Option<Vec<
             }
             .unwrap_or_default()
             .iter()
-            .map(|placeholder| flow_like_storage::databases::sql_params::param_pin_name(placeholder))
+            .map(|placeholder| {
+                flow_like_storage::databases::sql_params::param_pin_name(placeholder)
+            })
             .collect(),
         ),
         "string_format" => Some(format_string_placeholders(template)),

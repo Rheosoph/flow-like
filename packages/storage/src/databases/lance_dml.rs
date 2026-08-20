@@ -266,6 +266,10 @@ fn render_scalar(value: &ScalarValue) -> DataFusionResult<String> {
         ScalarValue::Int8(Some(v)) => v.to_string(),
         ScalarValue::Int16(Some(v)) => v.to_string(),
         ScalarValue::Int32(Some(v)) => v.to_string(),
+        // Lance tokenizes the minus separately and parses the magnitude as i64
+        // first; 9223372036854775808 overflows into the f64 fallback and then
+        // fails Float64→Int64 coercion. Arithmetic keeps MIN in the i64 domain.
+        ScalarValue::Int64(Some(v)) if *v == i64::MIN => "(-9223372036854775807 - 1)".to_string(),
         ScalarValue::Int64(Some(v)) => v.to_string(),
         ScalarValue::UInt8(Some(v)) => v.to_string(),
         ScalarValue::UInt16(Some(v)) => v.to_string(),
@@ -623,6 +627,18 @@ mod tests {
     fn refuses_unsafe_literals() {
         assert!(render_scalar(&ScalarValue::UInt64(Some(u64::MAX))).is_err());
         assert!(render_scalar(&ScalarValue::Float64(Some(f64::NAN))).is_err());
+    }
+
+    #[test]
+    fn renders_i64_min_in_the_integer_domain() {
+        assert_eq!(
+            render_scalar(&ScalarValue::Int64(Some(i64::MIN))).unwrap(),
+            "(-9223372036854775807 - 1)"
+        );
+        assert_eq!(
+            render_scalar(&ScalarValue::Int64(Some(i64::MAX))).unwrap(),
+            i64::MAX.to_string()
+        );
     }
 
     #[test]

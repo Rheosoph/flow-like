@@ -342,6 +342,7 @@ impl LanceDBVectorStore {
         table_name: &str,
         sql: &str,
     ) -> Result<datafusion::dataframe::DataFrame> {
+        crate::databases::sql_guard::validate_lance_dml_sql(sql)?;
         let table = self.to_datafusion().await?;
         let ctx = SessionContext::new();
         ctx.register_table(table_name, table)?;
@@ -1257,6 +1258,19 @@ mod tests {
         );
         assert_eq!(count(ctx.clone()).await?, json!(2));
 
+        // Subquery DML shapes are refused before planning — DataFusion would
+        // only forward the subquery's inner filters to the table, silently
+        // mutating the wrong rows.
+        assert!(
+            db.sql(
+                "people",
+                "DELETE FROM people WHERE id IN (SELECT id FROM people WHERE name = 'z')",
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(count(ctx.clone()).await?, json!(2));
+
         // INSERT keeps working through the same provider.
         ctx.sql("INSERT INTO people (id, name) VALUES (4, 'd')")
             .await?
@@ -1317,83 +1331,6 @@ mod tests {
             .concat();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["id"], json!(2));
-
-        std::fs::remove_dir_all(&test_path)?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn scratch_dml_subquery_verification() -> Result<()> {
-        let test_path = format!("./tmp/{}", create_id());
-        std::fs::create_dir_all(&test_path)?;
-        let mut people =
-            LanceDBVectorStore::new(PathBuf::from(&test_path), "people".to_string()).await?;
-        people
-            .insert(vec![
-                json!({ "id": 1, "name": "a", "flag": true }),
-                json!({ "id": 2, "name": "b", "flag": true }),
-                json!({ "id": 3, "name": "c", "flag": false }),
-            ])
-            .await?;
-        let mut banned =
-            LanceDBVectorStore::new(PathBuf::from(&test_path), "banned".to_string()).await?;
-        banned.insert(vec![json!({ "id": 999, "flag": true })]).await?;
-
-        let ctx = SessionContext::new();
-        ctx.register_table("people", people.to_datafusion().await?)?;
-        ctx.register_table("banned", banned.to_datafusion().await?)?;
-
-        // Scenario 1: banned holds no people id -> correct answer is 0 deletions.
-        let res = ctx
-            .sql("DELETE FROM people WHERE name = 'c' AND id IN (SELECT id FROM banned)")
-            .await;
-        match res {
-            Err(e) => println!("SCENARIO1: plan-time error: {e}"),
-            Ok(df) => match df.collect().await {
-                Err(e) => println!("SCENARIO1: exec-time error: {e}"),
-                Ok(batches) => {
-                    let rows: Vec<Value> = batches
-                        .iter()
-                        .map(record_batch_to_value)
-                        .collect::<Result<Vec<_>>>()?
-                        .concat();
-                    println!("SCENARIO1: succeeded with count={}", rows[0]["count"]);
-                }
-            },
-        }
-        let batches = ctx.sql("SELECT id FROM people ORDER BY id").await?.collect().await?;
-        let rows: Vec<Value> = batches
-            .iter()
-            .map(record_batch_to_value)
-            .collect::<Result<Vec<_>>>()?
-            .concat();
-        println!("SCENARIO1: remaining ids = {:?}", rows.iter().map(|r| r["id"].clone()).collect::<Vec<_>>());
-
-        // Scenario 2: subquery with inner filter; still no matching id -> 0 deletions expected.
-        let res = ctx
-            .sql("DELETE FROM people WHERE id IN (SELECT id FROM banned WHERE flag)")
-            .await;
-        match res {
-            Err(e) => println!("SCENARIO2: plan-time error: {e}"),
-            Ok(df) => match df.collect().await {
-                Err(e) => println!("SCENARIO2: exec-time error: {e}"),
-                Ok(batches) => {
-                    let rows: Vec<Value> = batches
-                        .iter()
-                        .map(record_batch_to_value)
-                        .collect::<Result<Vec<_>>>()?
-                        .concat();
-                    println!("SCENARIO2: succeeded with count={}", rows[0]["count"]);
-                }
-            },
-        }
-        let batches = ctx.sql("SELECT id FROM people ORDER BY id").await?.collect().await?;
-        let rows: Vec<Value> = batches
-            .iter()
-            .map(record_batch_to_value)
-            .collect::<Result<Vec<_>>>()?
-            .concat();
-        println!("SCENARIO2: remaining ids = {:?}", rows.iter().map(|r| r["id"].clone()).collect::<Vec<_>>());
 
         std::fs::remove_dir_all(&test_path)?;
         Ok(())
