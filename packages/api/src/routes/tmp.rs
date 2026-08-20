@@ -94,8 +94,11 @@ pub struct ExtensionParams {
     pub content_type: Option<String>,
     /// Optional custom download TTL in seconds (capped at 31 days).
     pub download_ttl_secs: Option<u64>,
-    /// Optional original filename. Appended as a query param on the download URL so consumers can recover it.
-    #[allow(dead_code)] // OpenAPI query parameter (IntoParams); part of the GET /tmp contract
+    /// Optional original filename. Fills in the extension - and through it the
+    /// content type - when `extension` is not given. It cannot be echoed on the
+    /// download URL: that URL is presigned, and any query parameter added after
+    /// signing invalidates the signature. The name itself survives on the object
+    /// via the `Content-Disposition` the client sets on the upload.
     pub filename: Option<String>,
 }
 
@@ -136,13 +139,18 @@ pub async fn get_temporary_upload(
     }
 
     let now_utc = Utc::now();
-    let key = temporary_upload_key(
-        &sub,
-        params.app_id.as_deref(),
-        params.extension.as_deref(),
-        now_utc,
-    );
+    let extension = params
+        .extension
+        .as_deref()
+        .map(str::trim)
+        .filter(|extension| !extension.is_empty())
+        .or_else(|| filename_extension(params.filename.as_deref()));
+    let key = temporary_upload_key(&sub, params.app_id.as_deref(), extension, now_utc);
     let content_type = resolve_content_type(&key, params.content_type.as_deref());
+
+    tracing::Span::current().record("user_sub", sub.as_str());
+    tracing::Span::current().record("key", key.as_str());
+    tracing::Span::current().record("ext", extension.unwrap_or("bin"));
 
     let download_ttl = params
         .download_ttl_secs
@@ -321,6 +329,15 @@ async fn sign_temporary_upload(
     })
 }
 
+/// Extension carried by an original filename, if any. Only the part after the
+/// last dot of the last path segment counts, and a leading-dot name such as
+/// `.env` has no extension at all.
+fn filename_extension(filename: Option<&str>) -> Option<&str> {
+    let name = filename?.trim().rsplit(['/', '\\']).next()?;
+    let (stem, extension) = name.rsplit_once('.')?;
+    (!stem.is_empty()).then_some(extension)
+}
+
 fn sanitize_ext(input: Option<&str>) -> Option<String> {
     let mut s = input?.trim().trim_start_matches('.').to_ascii_lowercase();
     if s.is_empty() || s.len() > 16 || !s.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -331,4 +348,57 @@ fn sanitize_ext(input: Option<&str>) -> Option<String> {
 
 fn sanitize_path_segment(input: &str, fallback: &str) -> String {
     crate::credentials::storage_path_segment(input, fallback)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filename_extension_reads_the_last_segment() {
+        assert_eq!(filename_extension(Some("report.pdf")), Some("pdf"));
+        assert_eq!(filename_extension(Some("  report.tar.gz  ")), Some("gz"));
+        assert_eq!(filename_extension(Some("a/b/c/report.PNG")), Some("PNG"));
+        assert_eq!(
+            filename_extension(Some(r"C:\dir\report.docx")),
+            Some("docx")
+        );
+    }
+
+    #[test]
+    fn filename_extension_rejects_names_without_one() {
+        assert_eq!(filename_extension(None), None);
+        assert_eq!(filename_extension(Some("")), None);
+        assert_eq!(filename_extension(Some("README")), None);
+        assert_eq!(filename_extension(Some(".env")), None);
+        assert_eq!(filename_extension(Some("../../etc/passwd")), None);
+    }
+
+    #[test]
+    fn hostile_filenames_still_sanitize_to_a_safe_extension() {
+        // Whatever the filename carries goes through `sanitize_ext` when the key
+        // is minted, so path separators and spaces can never reach the key.
+        assert_eq!(
+            sanitize_ext(filename_extension(Some("x.PDF"))).as_deref(),
+            Some("pdf")
+        );
+        assert_eq!(sanitize_ext(filename_extension(Some("x.p df"))), None);
+        assert_eq!(sanitize_ext(filename_extension(Some("x.php%00"))), None);
+        assert_eq!(
+            sanitize_ext(filename_extension(Some("x.averyverylongextension"))),
+            None
+        );
+    }
+
+    #[test]
+    fn content_type_follows_the_key_extension() {
+        assert_eq!(
+            resolve_content_type("tmp/user/u/2026/08/20/id.pdf", None).to_string(),
+            "application/pdf"
+        );
+        assert_eq!(
+            resolve_content_type("tmp/user/u/2026/08/20/id.bin", None).to_string(),
+            "application/octet-stream"
+        );
+    }
 }

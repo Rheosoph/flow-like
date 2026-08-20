@@ -1,6 +1,5 @@
 "use client";
 
-import { useVirtualizer } from "@tanstack/react-virtual";
 import {
 	FilesIcon,
 	FolderPlusIcon,
@@ -68,101 +67,38 @@ function formatEta(seconds?: number): string | null {
 	return `${(seconds / 3600).toFixed(1)}h left`;
 }
 
-/** Starting row height, refined by measurement once a row has rendered. */
-const STORAGE_ROW_ESTIMATE_PX = 72;
-
 /**
- * Columns the file grid renders, matching the Tailwind breakpoints the grid
- * used before it was windowed. The virtualizer needs the count as a number to
- * map items onto rows, so it cannot be left to CSS.
- */
-function useGridColumns(viewMode: "grid" | "list"): number {
-	const [columns, setColumns] = useState(1);
-
-	useEffect(() => {
-		if (viewMode === "list") {
-			setColumns(1);
-			return;
-		}
-		if (typeof window === "undefined") return;
-
-		const large = window.matchMedia("(min-width: 1024px)");
-		const medium = window.matchMedia("(min-width: 768px)");
-		const update = () => setColumns(large.matches ? 4 : medium.matches ? 3 : 2);
-
-		update();
-		large.addEventListener("change", update);
-		medium.addEventListener("change", update);
-		return () => {
-			large.removeEventListener("change", update);
-			medium.removeEventListener("change", update);
-		};
-	}, [viewMode]);
-
-	return columns;
-}
-
-/**
- * Windowed file list.
+ * File list.
  *
  * A folder can hold tens of thousands of entries — uploading one is now
- * possible, so browsing one has to be too. Rendering every row mounted a DOM
- * node and a dropdown per file and locked the tab for as long as it took, so
- * only the visible rows plus a small overscan are mounted. Row heights are
- * measured rather than assumed, since names wrap.
+ * possible, so browsing one has to be too. Every row opts into
+ * `content-visibility`, so the browser skips layout and paint for rows that
+ * are off-screen. JS windowing was tried here and could not repaint reliably:
+ * the re-renders the virtualizer schedules on itself never land in this page's
+ * React tree, so the list stayed blank until something else re-rendered it.
  */
 function StorageItemGrid({
 	items,
-	columns,
+	viewMode,
 	renderItem,
 }: Readonly<{
 	items: readonly IStorageItem[];
-	columns: number;
+	viewMode: "grid" | "list";
 	renderItem: (file: IStorageItem) => ReactNode;
 }>) {
-	const scrollRef = useRef<HTMLDivElement>(null);
-	const perRow = Math.max(1, columns);
-	const rowCount = Math.ceil(items.length / perRow);
-
-	const virtualizer = useVirtualizer({
-		count: rowCount,
-		getScrollElement: () => scrollRef.current,
-		estimateSize: () => STORAGE_ROW_ESTIMATE_PX,
-		overscan: 8,
-	});
-
 	return (
-		<div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
+		<div className="flex-1 min-h-0 overflow-y-auto">
 			<div
-				className="relative w-full"
-				style={{ height: `${virtualizer.getTotalSize()}px` }}
+				className={`grid gap-2 ${viewMode === "grid" ? "grid-cols-2 md:grid-cols-3 lg:grid-cols-4" : "grid-cols-1"}`}
 			>
-				{virtualizer.getVirtualItems().map((row) => {
-					const start = row.index * perRow;
-					const rowItems = items.slice(start, start + perRow);
-					return (
-						<div
-							key={row.key}
-							data-index={row.index}
-							ref={virtualizer.measureElement}
-							className="absolute left-0 top-0 w-full"
-							style={{ transform: `translateY(${row.start}px)` }}
-						>
-							<div
-								className="grid gap-2 pb-2"
-								style={{
-									gridTemplateColumns: `repeat(${perRow}, minmax(0, 1fr))`,
-								}}
-							>
-								{rowItems.map((file) => (
-									<div key={file.location} className="min-w-0">
-										{renderItem(file)}
-									</div>
-								))}
-							</div>
-						</div>
-					);
-				})}
+				{items.map((file) => (
+					<div
+						key={file.location}
+						className="min-w-0 [content-visibility:auto] [contain-intrinsic-size:auto_72px]"
+					>
+						{renderItem(file)}
+					</div>
+				))}
 			</div>
 		</div>
 	);
@@ -638,8 +574,6 @@ export function StorageSystem({
 			}),
 		[filteredFiles, sortBy, sortOrder],
 	);
-
-	const gridColumns = useGridColumns(viewMode);
 
 	// One definition for both render sites. They used to carry byte-identical
 	// copies of this prop block, differing only in whether navigating into a
@@ -1119,7 +1053,7 @@ export function StorageSystem({
 											</div>
 											<StorageItemGrid
 												items={sortedFiles}
-												columns={1}
+												viewMode="list"
 												renderItem={(file) => renderFile(file, false)}
 											/>
 										</div>
@@ -1167,7 +1101,7 @@ export function StorageSystem({
 							</div>
 							<StorageItemGrid
 								items={sortedFiles}
-								columns={gridColumns}
+								viewMode={viewMode}
 								renderItem={(file) => renderFile(file, true)}
 							/>
 						</div>

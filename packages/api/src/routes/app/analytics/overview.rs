@@ -14,15 +14,16 @@ use axum::{
     extract::{Path, Query, State},
 };
 use chrono::{Duration, NaiveDate, Utc};
-use sea_orm::sea_query::{Expr, SelectStatement, SimpleExpr};
+use sea_orm::sea_query::{Expr, SelectStatement};
 use sea_orm::{
-    ColumnTrait, Condition, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter,
-    QueryOrder, QuerySelect, QueryTrait, Select,
+    ColumnTrait, Condition, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
+    QuerySelect, QueryTrait, Select,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::update_aggregations::ensure_aggregations_current;
+use crate::utils::stats_period::StatsPeriod;
 
 fn successful_execution_count(total_executions: i64, failed_executions: i64) -> i64 {
     (total_executions - failed_executions).max(0)
@@ -36,10 +37,11 @@ pub struct AnalyticsStatsQuery {
     pub end_date: Option<String>,
     /// Optional event ID to scope event-capable metrics
     pub event_id: Option<String>,
-    /// Aggregation period: "day", "week", "month"
+    /// Aggregation period: "day" (default), "week" or "month". Week buckets
+    /// start on Monday; every bucket is labelled with its first day. Only
+    /// honoured by the `/stats` and `/dashboard` endpoints - the plain overview
+    /// has no time series to bucket.
     #[serde(default = "default_period")]
-    #[allow(dead_code)]
-    // OpenAPI/serde query parameter — see openapi.rs component + utoipa params()
     pub period: String,
 }
 
@@ -367,13 +369,13 @@ pub async fn get_analytics_overview(
     get,
     path = "/apps/{app_id}/analytics/stats",
     tag = "analytics",
-    description = "Get analytics statistics with daily breakdown.",
+    description = "Get analytics statistics bucketed by the requested period. Buckets are labelled with their first day; week buckets start on Monday.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("start_date" = Option<String>, Query, description = "Start date (YYYY-MM-DD)"),
         ("end_date" = Option<String>, Query, description = "End date (YYYY-MM-DD)"),
         ("event_id" = Option<String>, Query, description = "Optional event ID filter"),
-        ("period" = String, Query, description = "Aggregation period: day, week, month")
+        ("period" = String, Query, description = "Aggregation period: day (default), week or month. Unrecognised values fall back to day.")
     ),
     responses(
         (status = 200, description = "Analytics stats", body = AnalyticsStats),
@@ -396,6 +398,7 @@ pub async fn get_analytics_stats(
 ) -> Result<Json<AnalyticsStats>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::ReadAnalytics);
 
+    let period = StatsPeriod::parse(&query.period);
     let today = Utc::now().date_naive();
 
     let end_date = query
@@ -467,22 +470,39 @@ pub async fn get_analytics_stats(
         daily_stats.push(live.to_daily_stat());
     }
 
+    // The summary describes the whole range, so its weighted averages are taken
+    // from the unfolded day rows and stay identical whatever `period` is.
+    let avg_feedback_rating = weighted_average_by_count(
+        daily_stats
+            .iter()
+            .filter_map(|d| d.avg_rating.map(|rating| (rating, d.feedback_count))),
+    );
+    let avg_latency_ms = weighted_average_by_count(
+        daily_stats
+            .iter()
+            .filter_map(|d| d.avg_latency.map(|latency| (latency, d.executions))),
+    );
+
+    // Days are always computed first; `period` only decides how they are folded.
+    let mut daily_stats = fold_daily_stats(daily_stats, period);
+
     let total_executions: i64 = daily_stats.iter().map(|d| d.executions).sum();
     let failed_executions: i64 = daily_stats.iter().map(|d| d.failed_executions).sum();
     let successful_executions = successful_execution_count(total_executions, failed_executions);
-    let unique_users_by_date = count_unique_users_by_date(
+    let unique_users_by_bucket = count_unique_users_by_bucket(
         &state,
         &app_id,
         Some(start_date),
         Some(end_date + Duration::days(1)),
         event_filter,
+        period,
     )
     .await?;
     for stat in &mut daily_stats {
         if let Ok(date) = NaiveDate::parse_from_str(&stat.date, "%Y-%m-%d") {
             stat.successful_executions =
                 successful_execution_count(stat.executions, stat.failed_executions);
-            stat.unique_users = unique_users_by_date.get(&date).copied().unwrap_or(0);
+            stat.unique_users = unique_users_by_bucket.get(&date).copied().unwrap_or(0);
         }
     }
     let unique_users = count_unique_users(
@@ -498,18 +518,6 @@ pub async fn get_analytics_stats(
     let negative_feedback: i64 = daily_stats.iter().map(|d| d.negative_feedback).sum();
     let total_llm_cost: i64 = daily_stats.iter().map(|d| d.llm_cost).sum();
     let total_embedding_cost: i64 = daily_stats.iter().map(|d| d.embedding_cost).sum();
-
-    let avg_feedback_rating = weighted_average_by_count(
-        daily_stats
-            .iter()
-            .filter_map(|d| d.avg_rating.map(|rating| (rating, d.feedback_count))),
-    );
-
-    let avg_latency_ms = weighted_average_by_count(
-        daily_stats
-            .iter()
-            .filter_map(|d| d.avg_latency.map(|latency| (latency, d.executions))),
-    );
 
     Ok(Json(AnalyticsStats {
         daily_stats,
@@ -539,8 +547,8 @@ struct ScalarCount {
 }
 
 #[derive(FromQueryResult)]
-struct DayCount {
-    day: String,
+struct BucketCount {
+    bucket: String,
     cnt: i64,
 }
 
@@ -581,16 +589,6 @@ fn member_executions_query(
     query
 }
 
-/// Database-specific expression truncating `createdAt` to a `YYYY-MM-DD` day
-/// bucket so the grouping happens in SQL rather than in application memory.
-fn day_bucket_expr(backend: DbBackend) -> SimpleExpr {
-    match backend {
-        DbBackend::Postgres => Expr::cust(r#"to_char("createdAt", 'YYYY-MM-DD')"#),
-        // SQLite (and the MySQL fallback path is unused in this project).
-        _ => Expr::cust("strftime('%Y-%m-%d', createdAt)"),
-    }
-}
-
 /// Count distinct app members that produced executions in the given window via a
 /// single `COUNT(DISTINCT userId)` query.
 async fn count_unique_users(
@@ -613,40 +611,116 @@ async fn count_unique_users(
     Ok(row.map(|r| r.cnt).unwrap_or(0))
 }
 
-/// Count distinct app members that produced executions, grouped by day, in a
-/// single `GROUP BY day` query so we avoid both per-day N+1 queries and loading
-/// every execution row into memory.
-async fn count_unique_users_by_date(
+/// Count distinct app members that produced executions, grouped by `period`
+/// bucket, in a single `GROUP BY` query. Distinct counts cannot be summed
+/// across days, so the bucketing has to happen in SQL rather than over the day
+/// rows we already folded. At the edges of the requested range the first and
+/// last bucket are partial, exactly like the day rows they label.
+async fn count_unique_users_by_bucket(
     state: &AppState,
     app_id: &str,
     start_date: Option<NaiveDate>,
     end_date_exclusive: Option<NaiveDate>,
     event_filter: Option<&AnalyticsEventFilter>,
+    period: StatsPeriod,
 ) -> Result<std::collections::HashMap<NaiveDate, i64>, ApiError> {
     use std::collections::HashMap;
 
-    let day_expr = day_bucket_expr(state.db.get_database_backend());
+    let bucket_expr = period.bucket_expr(state.db.get_database_backend(), "createdAt");
 
     let rows = member_executions_query(app_id, start_date, end_date_exclusive, event_filter)
         .select_only()
-        .expr_as(day_expr.clone(), "day")
+        .expr_as(bucket_expr.clone(), "bucket")
         .expr_as(
             Expr::col(execution_usage_tracking::Column::UserId).count_distinct(),
             "cnt",
         )
-        .group_by(day_expr)
-        .into_model::<DayCount>()
+        .group_by(bucket_expr)
+        .into_model::<BucketCount>()
         .all(&state.db)
         .await?;
 
-    let mut per_day: HashMap<NaiveDate, i64> = HashMap::new();
+    let mut per_bucket: HashMap<NaiveDate, i64> = HashMap::new();
     for row in rows {
-        if let Ok(date) = NaiveDate::parse_from_str(&row.day, "%Y-%m-%d") {
-            per_day.insert(date, row.cnt);
+        if let Ok(date) = NaiveDate::parse_from_str(&row.bucket, "%Y-%m-%d") {
+            per_bucket.insert(date, row.cnt);
         }
     }
 
-    Ok(per_day)
+    Ok(per_bucket)
+}
+
+/// Fold day rows into `period` buckets keyed by the first day of the bucket.
+///
+/// Counts add up; the averages are re-weighted by the count they describe, so a
+/// quiet day cannot outweigh a busy one. `p95_latency` has no exact fold - the
+/// per-execution samples are gone by this point - so it is approximated the
+/// same way `avg_latency` is. `unique_users` is a distinct count and cannot be
+/// folded at all; the caller overwrites it from `count_unique_users_by_bucket`.
+fn fold_daily_stats(
+    stats: Vec<DailyAnalyticsStat>,
+    period: StatsPeriod,
+) -> Vec<DailyAnalyticsStat> {
+    use std::collections::BTreeMap;
+    use std::collections::btree_map::Entry;
+
+    if period == StatsPeriod::Day {
+        return stats;
+    }
+
+    let mut buckets: BTreeMap<NaiveDate, DailyAnalyticsStat> = BTreeMap::new();
+    for stat in stats {
+        let Ok(date) = NaiveDate::parse_from_str(&stat.date, "%Y-%m-%d") else {
+            continue;
+        };
+        let bucket_start = period.bucket_start(date);
+        match buckets.entry(bucket_start) {
+            Entry::Vacant(slot) => {
+                slot.insert(DailyAnalyticsStat {
+                    date: bucket_start.format("%Y-%m-%d").to_string(),
+                    ..stat
+                });
+            }
+            Entry::Occupied(mut slot) => merge_daily_stat(slot.get_mut(), &stat),
+        }
+    }
+
+    buckets.into_values().collect()
+}
+
+/// Merge one day into its bucket accumulator. The weighted averages have to be
+/// recomputed before the counts that weigh them are summed.
+fn merge_daily_stat(target: &mut DailyAnalyticsStat, source: &DailyAnalyticsStat) {
+    target.avg_rating = merge_weighted(
+        (target.avg_rating, target.feedback_count),
+        (source.avg_rating, source.feedback_count),
+    );
+    target.avg_latency = merge_weighted(
+        (target.avg_latency, target.executions),
+        (source.avg_latency, source.executions),
+    );
+    target.p95_latency = merge_weighted(
+        (target.p95_latency, target.executions),
+        (source.p95_latency, source.executions),
+    );
+
+    target.executions += source.executions;
+    target.successful_executions += source.successful_executions;
+    target.failed_executions += source.failed_executions;
+    target.feedback_count += source.feedback_count;
+    target.positive_feedback += source.positive_feedback;
+    target.negative_feedback += source.negative_feedback;
+    target.llm_cost += source.llm_cost;
+    target.embedding_cost += source.embedding_cost;
+    target.unique_users = target.unique_users.max(source.unique_users);
+}
+
+fn merge_weighted(left: (Option<f64>, i64), right: (Option<f64>, i64)) -> Option<f64> {
+    weighted_average_by_count(
+        [left, right]
+            .into_iter()
+            .filter_map(|(value, count)| value.map(|value| (value, count))),
+    )
 }
 
 /// Subquery selecting the user IDs that are members of the given app. Used to
@@ -1085,5 +1159,125 @@ impl TodayLiveData {
             positive_feedback: self.positive_feedback,
             negative_feedback: self.negative_feedback,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stat(date: &str, executions: i64, avg_latency: f64) -> DailyAnalyticsStat {
+        DailyAnalyticsStat {
+            date: date.to_string(),
+            executions,
+            successful_executions: executions,
+            failed_executions: 0,
+            unique_users: 1,
+            feedback_count: 0,
+            avg_rating: None,
+            llm_cost: 10,
+            embedding_cost: 1,
+            avg_latency: Some(avg_latency),
+            p95_latency: Some(avg_latency * 2.0),
+            positive_feedback: 0,
+            negative_feedback: 0,
+        }
+    }
+
+    #[test]
+    fn day_period_returns_the_rows_untouched() {
+        let rows = vec![stat("2026-08-17", 1, 10.0), stat("2026-08-23", 2, 20.0)];
+        let folded = fold_daily_stats(rows, StatsPeriod::Day);
+        assert_eq!(
+            folded.iter().map(|d| d.date.as_str()).collect::<Vec<_>>(),
+            vec!["2026-08-17", "2026-08-23"]
+        );
+        assert_eq!(folded[1].executions, 2);
+        assert_eq!(folded[1].avg_latency, Some(20.0));
+    }
+
+    #[test]
+    fn week_folding_sums_counts_and_labels_the_monday() {
+        // Mon 2026-08-17 .. Sun 2026-08-23 is one week; Mon 2026-08-24 starts the next.
+        let folded = fold_daily_stats(
+            vec![
+                stat("2026-08-17", 1, 10.0),
+                stat("2026-08-23", 3, 30.0),
+                stat("2026-08-24", 5, 50.0),
+            ],
+            StatsPeriod::Week,
+        );
+
+        assert_eq!(
+            folded.iter().map(|d| d.date.as_str()).collect::<Vec<_>>(),
+            vec!["2026-08-17", "2026-08-24"]
+        );
+        assert_eq!(folded[0].executions, 4);
+        assert_eq!(folded[0].llm_cost, 20);
+        assert_eq!(folded[1].executions, 5);
+        // Counts are lossless across the fold.
+        assert_eq!(folded.iter().map(|d| d.executions).sum::<i64>(), 9);
+    }
+
+    #[test]
+    fn month_folding_weights_averages_by_the_count_they_describe() {
+        let folded = fold_daily_stats(
+            vec![stat("2026-08-01", 1, 10.0), stat("2026-08-31", 3, 30.0)],
+            StatsPeriod::Month,
+        );
+
+        assert_eq!(folded.len(), 1);
+        assert_eq!(folded[0].date, "2026-08-01");
+        // (10*1 + 30*3) / 4 == 25, not the unweighted mean of 20.
+        assert_eq!(folded[0].avg_latency, Some(25.0));
+        assert_eq!(folded[0].p95_latency, Some(50.0));
+    }
+
+    #[test]
+    fn ratings_are_weighted_by_feedback_count_not_executions() {
+        let mut quiet = stat("2026-08-17", 100, 1.0);
+        quiet.avg_rating = Some(1.0);
+        quiet.feedback_count = 1;
+        let mut busy = stat("2026-08-18", 1, 1.0);
+        busy.avg_rating = Some(5.0);
+        busy.feedback_count = 3;
+
+        let folded = fold_daily_stats(vec![quiet, busy], StatsPeriod::Week);
+        assert_eq!(folded.len(), 1);
+        assert_eq!(folded[0].feedback_count, 4);
+        // (1*1 + 5*3) / 4 == 4
+        assert_eq!(folded[0].avg_rating, Some(4.0));
+    }
+
+    #[test]
+    fn missing_averages_do_not_dilute_the_bucket() {
+        let mut without = stat("2026-08-17", 4, 0.0);
+        without.avg_latency = None;
+        without.p95_latency = None;
+        let with = stat("2026-08-18", 1, 40.0);
+
+        let folded = fold_daily_stats(vec![without, with], StatsPeriod::Week);
+        assert_eq!(folded.len(), 1);
+        assert_eq!(folded[0].executions, 5);
+        assert_eq!(folded[0].avg_latency, Some(40.0));
+    }
+
+    #[test]
+    fn weeks_fold_across_month_and_year_boundaries() {
+        let folded = fold_daily_stats(
+            vec![
+                stat("2026-12-28", 1, 1.0),
+                stat("2027-01-01", 2, 1.0),
+                stat("2027-01-04", 4, 1.0),
+            ],
+            StatsPeriod::Week,
+        );
+
+        assert_eq!(
+            folded.iter().map(|d| d.date.as_str()).collect::<Vec<_>>(),
+            vec!["2026-12-28", "2027-01-04"]
+        );
+        assert_eq!(folded[0].executions, 3);
+        assert_eq!(folded[1].executions, 4);
     }
 }
