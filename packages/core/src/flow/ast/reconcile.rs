@@ -15336,6 +15336,81 @@ function constantFlag(): (flag: bool) {
     }
 
     #[tokio::test]
+    async fn applied_loop_body_return_roundtrip_is_idempotent() {
+        use crate::state::{FlowLikeConfig, FlowLikeState};
+        use crate::utils::http::HTTPClient;
+        use std::sync::Arc;
+
+        let mut for_each = Node::new("control_for_each", "For Each", "", "control");
+        for_each.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        for_each
+            .add_input_pin("array", "Array", "", VariableType::Generic)
+            .value_type = ValueType::Array;
+        for_each.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        for_each.add_output_pin("value", "Value", "", VariableType::Generic);
+        for_each.add_output_pin("index", "Index", "", VariableType::Integer);
+        for_each.add_output_pin("done", "Done", "", VariableType::Execution);
+
+        let mut push = Node::new("array_push", "Push", "", "array");
+        push.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        push.add_input_pin("array_in", "Array", "", VariableType::Generic)
+            .value_type = ValueType::Array;
+        push.add_input_pin("value", "Value", "", VariableType::Generic);
+        push.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        push.add_output_pin("array_out", "Array", "", VariableType::Generic)
+            .value_type = ValueType::Array;
+
+        let catalog_nodes = vec![for_each, push];
+        let mut board = empty_board();
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let script = r#"function parseRssXml(items: Generic[]): (rows: Generic[]) {
+    for (const item of controlForEach({ array: items })) {
+        const batchPush = arrayPush({ arrayIn: items, value: item.value })
+    }
+    return batchPush.arrayOut
+}
+"#;
+        let applied = super::super::apply_flowscript_to_board(
+            &mut board,
+            script,
+            &catalog_nodes,
+            state,
+            None,
+            false,
+        )
+        .await
+        .expect("loop accumulator script applies");
+        assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+
+        // The lowerer names bindings after the node, not after the source that created it, so
+        // find the accumulator's rendered name instead of assuming the authored one survived.
+        let text = anchored_text(&board);
+        let binding = text
+            .lines()
+            .find_map(|line| {
+                let (name, call) = line.trim().strip_prefix("const ")?.split_once(" = ")?;
+                call.starts_with("arrayPush(").then(|| name.to_string())
+            })
+            .expect("the accumulator must lower as a binding inside the loop body");
+        assert!(
+            text.contains(&format!("return {binding}.arrayOut")),
+            "the lowered board must still read the loop-local accumulator:\n{text}"
+        );
+
+        let catalog: Vec<NodeMetadata> = catalog_nodes.iter().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.is_empty(),
+            "re-applying the board's own lowered script must be a no-op: {:?}",
+            result.commands
+        );
+    }
+
+    #[tokio::test]
     async fn applied_literal_return_roundtrip_is_idempotent() {
         use crate::state::{FlowLikeConfig, FlowLikeState};
         use crate::utils::http::HTTPClient;

@@ -50,7 +50,10 @@ fn plan_err<T>(message: String) -> DataFusionResult<T> {
 /// Renders the WHERE clause of an UPDATE/DELETE as a lance predicate string.
 /// The filters are the AND-split conjuncts DataFusion extracted; an empty list
 /// is refused (see module docs — it is indistinguishable from `WHERE false`).
-pub fn filters_to_lance_predicate(filters: &[Expr], schema: &SchemaRef) -> DataFusionResult<String> {
+pub fn filters_to_lance_predicate(
+    filters: &[Expr],
+    schema: &SchemaRef,
+) -> DataFusionResult<String> {
     if filters.is_empty() {
         return plan_err(
             "UPDATE/DELETE on a Lance table requires a WHERE clause referencing at least one \
@@ -190,7 +193,11 @@ fn render_expr(expr: &Expr, schema: &SchemaRef) -> DataFusionResult<String> {
             let target = render_expr(&like.expr, schema)?;
             let pattern = render_expr(&like.pattern, schema)?;
             let negated = if like.negated { " NOT" } else { "" };
-            let operator = if like.case_insensitive { "ILIKE" } else { "LIKE" };
+            let operator = if like.case_insensitive {
+                "ILIKE"
+            } else {
+                "LIKE"
+            };
             let escape = match like.escape_char {
                 Some(escape_char) => format!(" ESCAPE {}", sql_string(&escape_char.to_string())),
                 None => String::new(),
@@ -471,15 +478,17 @@ impl ExecutionPlan for LanceDmlExec {
         let schema = self.schema.clone();
         let stream = futures::stream::once(async move {
             let count = match op {
-                LanceDmlOp::Delete { predicate } => table
-                    .delete(&predicate)
-                    .await
-                    .map_err(|e| {
-                        DataFusionError::External(
-                            format!("Lance DELETE (predicate: {predicate}) failed: {e}").into(),
-                        )
-                    })?
-                    .num_deleted_rows,
+                LanceDmlOp::Delete { predicate } => {
+                    table
+                        .delete(&predicate)
+                        .await
+                        .map_err(|e| {
+                            DataFusionError::External(
+                                format!("Lance DELETE (predicate: {predicate}) failed: {e}").into(),
+                            )
+                        })?
+                        .num_deleted_rows
+                }
                 LanceDmlOp::Update {
                     predicate,
                     assignments,

@@ -1234,7 +1234,13 @@ mod tests {
 
         // No effective WHERE clause (missing, constant-true or constant-false —
         // indistinguishable after optimization) must refuse, not write the table.
-        assert!(ctx.sql("DELETE FROM people").await?.collect().await.is_err());
+        assert!(
+            ctx.sql("DELETE FROM people")
+                .await?
+                .collect()
+                .await
+                .is_err()
+        );
         assert!(
             ctx.sql("DELETE FROM people WHERE false")
                 .await?
@@ -1274,11 +1280,7 @@ mod tests {
 
         let schema = Arc::new(ArrowSchema::new(vec![
             Field::new("id", DataType::Int64, false),
-            Field::new(
-                "ts",
-                DataType::Timestamp(TimeUnit::Microsecond, None),
-                true,
-            ),
+            Field::new("ts", DataType::Timestamp(TimeUnit::Microsecond, None), true),
         ]));
         let batch = RecordBatch::try_new(
             schema,
@@ -1307,11 +1309,7 @@ mod tests {
             .concat();
         assert_eq!(rows[0]["count"], json!(1));
 
-        let batches = ctx
-            .sql("SELECT id FROM events")
-            .await?
-            .collect()
-            .await?;
+        let batches = ctx.sql("SELECT id FROM events").await?.collect().await?;
         let rows: Vec<Value> = batches
             .iter()
             .map(record_batch_to_value)
@@ -1319,6 +1317,83 @@ mod tests {
             .concat();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["id"], json!(2));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scratch_dml_subquery_verification() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut people =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "people".to_string()).await?;
+        people
+            .insert(vec![
+                json!({ "id": 1, "name": "a", "flag": true }),
+                json!({ "id": 2, "name": "b", "flag": true }),
+                json!({ "id": 3, "name": "c", "flag": false }),
+            ])
+            .await?;
+        let mut banned =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "banned".to_string()).await?;
+        banned.insert(vec![json!({ "id": 999, "flag": true })]).await?;
+
+        let ctx = SessionContext::new();
+        ctx.register_table("people", people.to_datafusion().await?)?;
+        ctx.register_table("banned", banned.to_datafusion().await?)?;
+
+        // Scenario 1: banned holds no people id -> correct answer is 0 deletions.
+        let res = ctx
+            .sql("DELETE FROM people WHERE name = 'c' AND id IN (SELECT id FROM banned)")
+            .await;
+        match res {
+            Err(e) => println!("SCENARIO1: plan-time error: {e}"),
+            Ok(df) => match df.collect().await {
+                Err(e) => println!("SCENARIO1: exec-time error: {e}"),
+                Ok(batches) => {
+                    let rows: Vec<Value> = batches
+                        .iter()
+                        .map(record_batch_to_value)
+                        .collect::<Result<Vec<_>>>()?
+                        .concat();
+                    println!("SCENARIO1: succeeded with count={}", rows[0]["count"]);
+                }
+            },
+        }
+        let batches = ctx.sql("SELECT id FROM people ORDER BY id").await?.collect().await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        println!("SCENARIO1: remaining ids = {:?}", rows.iter().map(|r| r["id"].clone()).collect::<Vec<_>>());
+
+        // Scenario 2: subquery with inner filter; still no matching id -> 0 deletions expected.
+        let res = ctx
+            .sql("DELETE FROM people WHERE id IN (SELECT id FROM banned WHERE flag)")
+            .await;
+        match res {
+            Err(e) => println!("SCENARIO2: plan-time error: {e}"),
+            Ok(df) => match df.collect().await {
+                Err(e) => println!("SCENARIO2: exec-time error: {e}"),
+                Ok(batches) => {
+                    let rows: Vec<Value> = batches
+                        .iter()
+                        .map(record_batch_to_value)
+                        .collect::<Result<Vec<_>>>()?
+                        .concat();
+                    println!("SCENARIO2: succeeded with count={}", rows[0]["count"]);
+                }
+            },
+        }
+        let batches = ctx.sql("SELECT id FROM people ORDER BY id").await?.collect().await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        println!("SCENARIO2: remaining ids = {:?}", rows.iter().map(|r| r["id"].clone()).collect::<Vec<_>>());
 
         std::fs::remove_dir_all(&test_path)?;
         Ok(())
