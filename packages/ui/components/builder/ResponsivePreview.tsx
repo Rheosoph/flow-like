@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "../../lib";
 import { Button } from "../ui/button";
+import { PortalContainerProvider } from "../ui/portal-container";
 import {
 	Select,
 	SelectContent,
@@ -147,6 +148,24 @@ function PreviewFrame({ width, height, scale, children }: PreviewFrameProps) {
 		};
 	}, []);
 
+	// Clicking anything in the frame moves focus into it, which fires `blur` on the host
+	// window — and Radix closes every open overlay on that event. A select opened in the
+	// preview therefore shut before the user could pick an option. Focus landing in the
+	// preview is not the app losing focus, so that one event is swallowed before any other
+	// listener sees it. Element blurs (target is the element, not the window) pass through.
+	useEffect(() => {
+		const swallowFocusHandoff = (event: Event) => {
+			if (
+				event.target === window &&
+				document.activeElement === iframeRef.current
+			) {
+				event.stopImmediatePropagation();
+			}
+		};
+		window.addEventListener("blur", swallowFocusHandoff, true);
+		return () => window.removeEventListener("blur", swallowFocusHandoff, true);
+	}, []);
+
 	return (
 		<>
 			<iframe
@@ -162,7 +181,14 @@ function PreviewFrame({ width, height, scale, children }: PreviewFrameProps) {
 					transformOrigin: "top left",
 				}}
 			/>
-			{mountNode ? createPortal(children, mountNode) : null}
+			{mountNode
+				? createPortal(
+						<PortalContainerProvider container={mountNode}>
+							{children}
+						</PortalContainerProvider>,
+						mountNode,
+					)
+				: null}
 		</>
 	);
 }
