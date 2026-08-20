@@ -20,7 +20,7 @@ impl NodeLogic for LessThanOrEqualFloatNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "float_less_than_or_equal",
-            "<=",
+            "<= (Float)",
             "Checks if one float is less than or equal to another",
             "Math/Float/Comparison",
         );

@@ -89,6 +89,10 @@ pub async fn query_table(
     let db = LanceDBVectorStore::from_connection(connection, table.clone()).await;
 
     if let Some(sql) = payload.sql {
+        // The registered provider supports DML, but this endpoint is gated by read
+        // permissions only — reject anything but a single SELECT before planning.
+        flow_like_storage::databases::sql_guard::validate_readonly_sql(&sql)
+            .map_err(|error| ApiError::bad_request(format!("Invalid query SQL: {error}")))?;
         let context = SessionContext::new();
         let fusion = db.to_datafusion().await?;
         context.register_table(table, fusion)?;

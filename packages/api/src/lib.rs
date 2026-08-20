@@ -34,6 +34,7 @@ pub mod credentials;
 mod db_backfills;
 pub mod error;
 pub mod mail;
+pub mod model_tier;
 pub mod permission;
 pub mod publication;
 pub mod push_notifications;

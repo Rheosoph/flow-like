@@ -3915,6 +3915,12 @@ struct StructuralPlanner<'a> {
     connect_commands: Vec<BoardCommand>,
     update_commands: Vec<BoardCommand>,
     symbols: Vec<HashMap<String, SymbolValue>>,
+    /// Bindings made inside a loop body or a branch arm, kept resolvable after that block
+    /// closes. FlowScript blocks are lexical, but the board they render is one flat node
+    /// scope: a value produced inside a loop and read after it is an ordinary data edge, and
+    /// `lower` emits exactly that text from such a board. Consulted only when the lexical
+    /// chain has no such name, so an enclosing binding still wins.
+    closed_block_symbols: HashMap<String, SymbolValue>,
     variable_refs: VariableRefLookup,
     /// Exact data contract of every board variable visible to this planned source revision. New
     /// variable get/set nodes start Generic in the static catalog, but their `on_update` handlers
@@ -3984,6 +3990,7 @@ impl<'a> StructuralPlanner<'a> {
             connect_commands: Vec::new(),
             update_commands: Vec::new(),
             symbols: Vec::new(),
+            closed_block_symbols: HashMap::new(),
             variable_refs: VariableRefLookup::from_board(existing),
             variable_value_contracts: HashMap::new(),
             function_return_targets: Vec::new(),
@@ -4751,8 +4758,10 @@ impl<'a> StructuralPlanner<'a> {
         // sugar (`events_generic_return_result`), never a return of the enclosing function whose
         // layer the handler happens to live in.
         let enclosing_function_returns = std::mem::take(&mut self.function_return_targets);
+        let enclosing_blocks = std::mem::take(&mut self.closed_block_symbols);
         self.plan_block(&event.body, entry.map(ExecCursor::new), target_layer);
         self.function_return_targets = enclosing_function_returns;
+        self.closed_block_symbols = enclosing_blocks;
         self.pop_scope();
     }
 
@@ -4787,12 +4796,14 @@ impl<'a> StructuralPlanner<'a> {
         } else {
             None
         };
+        let enclosing_blocks = std::mem::take(&mut self.closed_block_symbols);
         let final_cursors = self.plan_block(&func.body, entry, target_layer);
         if planned.impure {
             for cursor in final_cursors {
                 self.wire_function_exit(&layer, cursor);
             }
         }
+        self.closed_block_symbols = enclosing_blocks;
         self.function_return_targets.pop();
         self.pop_scope();
     }
@@ -5470,7 +5481,7 @@ impl<'a> StructuralPlanner<'a> {
                     // (exec inputs are fan-in points). An empty arm's tail is the labelled pin
                     // itself — the pass-through case.
                     arm_tails.extend(self.plan_block(&arm.body, arm_cursor, target_layer.clone()));
-                    self.pop_scope();
+                    self.pop_block_scope();
                 }
                 stashed_splices.append(&mut self.pending_exec_splices);
                 self.pending_exec_splices = stashed_splices;
@@ -5532,7 +5543,7 @@ impl<'a> StructuralPlanner<'a> {
                         target_layer,
                     );
                 }
-                self.pop_scope();
+                self.pop_block_scope();
                 stashed_splices.append(&mut self.pending_exec_splices);
                 self.pending_exec_splices = stashed_splices;
                 entity.map(|entity| {
@@ -9397,6 +9408,14 @@ impl<'a> StructuralPlanner<'a> {
         self.symbols.pop();
     }
 
+    /// Close a loop body or branch arm, retiring its bindings into [`Self::closed_block_symbols`]
+    /// instead of dropping them.
+    fn pop_block_scope(&mut self) {
+        if let Some(scope) = self.symbols.pop() {
+            self.closed_block_symbols.extend(scope);
+        }
+    }
+
     fn insert_symbol(&mut self, name: String, source: SymbolValue) {
         if let Some(scope) = self.symbols.last_mut() {
             scope.insert(name, source);
@@ -9421,6 +9440,7 @@ impl<'a> StructuralPlanner<'a> {
             .iter()
             .rev()
             .find_map(|scope| scope.get(name).cloned())
+            .or_else(|| self.closed_block_symbols.get(name).cloned())
     }
 }
 
@@ -19984,11 +20004,9 @@ push(arrayOut: Struct[]) {   //@n:push
     }
 
     #[test]
-    fn repro_function_return_reads_loop_body_binding() {
-        let board = empty_board();
-        let catalog = accumulator_catalog();
+    fn function_return_resolves_a_binding_declared_inside_a_loop_body() {
         let result = reconcile_text_with_catalog(
-            &board,
+            &empty_board(),
             r#"function parseRssXml(): (rows: Generic[]) {
     for (const item of controlForEach({ array: [] })) {
         const batchPush = arrayPush({ arrayIn: [], value: item.value })
@@ -19996,9 +20014,115 @@ push(arrayOut: Struct[]) {   //@n:push
     return batchPush.arrayOut
 }
 "#,
+            &accumulator_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, from_pin, to_pin, .. }
+                        if command_node_type(&result.commands, from_node).as_deref()
+                            == Some("array_push")
+                            && from_pin == "array_out"
+                            && to_pin == "rows"
+                )
+            }),
+            "the accumulator inside the loop must reach the return pin: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn function_return_resolves_a_binding_declared_inside_a_branch_arm() {
+        let mut catalog = accumulator_catalog();
+        catalog.push(catalog_meta(
+            "control_branch",
+            "Branch",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("condition", "Boolean", PinType::Input),
+            ],
+            vec![
+                pin_meta("true", "Execution", PinType::Output),
+                pin_meta("false", "Execution", PinType::Output),
+            ],
+        ));
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function parseRssXml(): (rows: Generic[]) {
+    if (true) {
+        const batchPush = arrayPush({ arrayIn: [], value: "one" })
+    }
+    return batchPush.arrayOut
+}
+"#,
             &catalog,
         );
-        panic!("REPRO DIAGNOSTICS: {:#?}", result.diagnostics);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, from_pin, to_pin, .. }
+                        if command_node_type(&result.commands, from_node).as_deref()
+                            == Some("array_push")
+                            && from_pin == "array_out"
+                            && to_pin == "rows"
+                )
+            }),
+            "the arm-local accumulator must reach the return pin: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn a_closed_block_binding_never_shadows_an_enclosing_one() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function parseRssXml(): (rows: Generic[]) {
+    const batchPush = arrayPush({ arrayIn: [], value: "outer" })
+    for (const item of controlForEach({ array: [] })) {
+        const batchPush = arrayPush({ arrayIn: [], value: item.value })
+    }
+    return batchPush.arrayOut
+}
+"#,
+            &accumulator_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let outer = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::UpdateNodePin {
+                    node_id,
+                    pin_id,
+                    value,
+                    ..
+                } if pin_id == "value"
+                    && value == &flow_like_types::Value::String("outer".to_string()) =>
+                {
+                    Some(node_id.clone())
+                }
+                _ => None,
+            })
+            .expect("the enclosing push must be materialized");
+        assert!(
+            result.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, from_pin, to_pin, .. }
+                        if from_node == &outer && from_pin == "array_out" && to_pin == "rows"
+                )
+            }),
+            "the enclosing binding must still win over the loop-local one: {:?}",
+            result.commands
+        );
     }
 
     #[test]

@@ -28,6 +28,7 @@
 //! resumable across a reconnect; a dropped stream lets pending tool calls time out and get swept.
 
 use std::{
+    collections::HashSet,
     convert::Infallible,
     sync::{
         Arc,
@@ -44,6 +45,7 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use flow_like::bit::BitTypes;
 use flow_like::copilot::{ChatImage, CopilotScope, UnifiedCopilotResponse};
 use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryStatus};
 use flow_like::flow::copilot::platform::{PlatformToolBridge, run_internet_search};
@@ -70,7 +72,7 @@ use serde_json::{Value, json};
 use super::copilot::{master_flow_like_state, user_access_token};
 use crate::{
     entity::{
-        global_chat_tool_call, prelude::GlobalChatToolCall, profile,
+        bit, global_chat_tool_call, prelude::GlobalChatToolCall, profile,
         sea_orm_active_enums::InteractionStatus,
     },
     error::ApiError,
@@ -428,6 +430,19 @@ pub(crate) async fn load_user_profile_opt(
     sub: &str,
     profile_id: Option<&str>,
 ) -> Result<Option<Arc<Profile>>, ApiError> {
+    Ok(load_user_profile_access(state, sub, profile_id)
+        .await?
+        .map(|(profile, _)| profile))
+}
+
+/// As [`load_user_profile_opt`], but also reports what the caller's plan leaves
+/// selectable — callers that let the copilot pick a model need this to fail with a
+/// real explanation instead of a mid-stream 402.
+pub(crate) async fn load_user_profile_access(
+    state: &AppState,
+    sub: &str,
+    profile_id: Option<&str>,
+) -> Result<Option<(Arc<Profile>, ProfileModelAccess)>, ApiError> {
     let mut query = profile::Entity::find()
         .filter(profile::Column::UserId.eq(sub))
         .filter(profile::Column::DeletedAt.is_null());
@@ -462,7 +477,161 @@ pub(crate) async fn load_user_profile_opt(
         .map(flow_like::profile::ProfileCustomBit)
         .collect();
 
-    Ok(Some(Arc::new(profile)))
+    let access = drop_models_above_plan(state, sub, &mut profile).await;
+
+    Ok(Some((Arc::new(profile), access)))
+}
+
+/// What the caller's plan leaves them to work with, once the profile's own
+/// line-up has been measured against it.
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ProfileModelAccess {
+    /// LLM/VLM models the profile references, whatever the plan says.
+    pub profile_models: usize,
+    /// ...of those, the ones the plan actually covers.
+    pub allowed_models: usize,
+}
+
+impl ProfileModelAccess {
+    /// A profile that offers nothing to auto-select from. `None` when the caller
+    /// named a model explicitly — an explicit pick resolves straight off the hub
+    /// and is the proxy's business, not ours.
+    pub(crate) fn rejection(&self, model_id: Option<&str>) -> Option<ApiError> {
+        if model_id.is_some() || self.allowed_models > 0 {
+            return None;
+        }
+        if self.profile_models > 0 {
+            return Some(ApiError::payment_required(
+                "None of the models in this profile are included in your plan. Upgrade, or add a model your plan covers in Settings → Models.".to_string(),
+            ));
+        }
+        Some(ApiError::bad_request(
+            "This profile has no language model. Add one in Settings → Models before using FlowPilot.".to_string(),
+        ))
+    }
+}
+
+/// Strip the profile's LLM/VLM references that the caller's plan does not include,
+/// so automatic "best model" selection cannot pick one the proxy will reject with a
+/// 402 halfway through the stream — or, worse, escape the profile entirely and land
+/// on the catalog's flagship. Custom bits are counted but never stripped: those run
+/// on the user's own provider credentials, not on a hosted tier.
+///
+/// Best effort — a tier or bit lookup that fails leaves the profile as it was rather
+/// than locking the user out of their own models.
+async fn drop_models_above_plan(
+    state: &AppState,
+    sub: &str,
+    profile: &mut Profile,
+) -> ProfileModelAccess {
+    let custom_models = profile
+        .custom_bits
+        .iter()
+        .map(|custom| &custom.0)
+        .filter(|bit| matches!(bit.bit_type, BitTypes::Llm | BitTypes::Vlm))
+        .filter(|bit| {
+            profile.bits.iter().any(|reference| {
+                reference
+                    .rsplit_once(':')
+                    .map_or(reference.as_str(), |(_, id)| id)
+                    == bit.id
+            })
+        })
+        .count();
+
+    let unmeasured = ProfileModelAccess {
+        profile_models: custom_models,
+        allowed_models: custom_models,
+    };
+
+    if profile.bits.is_empty() {
+        return unmeasured;
+    }
+
+    let user_tier = match crate::middleware::jwt::tier_for_sub(state, sub).await {
+        Ok(tier) => tier,
+        Err(err) => {
+            tracing::warn!(sub = %sub, "Could not resolve tier for model gating: {err:?}");
+            return unmeasured;
+        }
+    };
+
+    let raw_ids: Vec<&str> = profile
+        .bits
+        .iter()
+        .map(|reference| {
+            reference
+                .rsplit_once(':')
+                .map_or(reference.as_str(), |(_, id)| id)
+        })
+        .collect();
+
+    // Every chat turn loads the profile, so keep the bit lookup off the hot path:
+    // the verdict only changes when the profile's line-up or the plan changes.
+    let cache_key = format!(
+        "plan_blocked_bits:{}:{}:{}",
+        profile.id,
+        user_tier.llm_tiers.join(","),
+        raw_ids.join(",")
+    );
+
+    let (blocked, hub_models): (Vec<String>, usize) = match state.get_cache(&cache_key) {
+        Some(cached) => cached,
+        None => {
+            let rows = match bit::Entity::find()
+                .filter(bit::Column::Id.is_in(raw_ids))
+                .all(&state.db)
+                .await
+            {
+                Ok(rows) => rows,
+                Err(err) => {
+                    tracing::warn!(sub = %sub, "Could not load profile bits for model gating: {err:?}");
+                    return unmeasured;
+                }
+            };
+
+            let mut blocked = Vec::new();
+            let mut hub_models = 0usize;
+            for row in rows {
+                let id = row.id.clone();
+                let bit = flow_like::bit::Bit::from(row);
+                if !matches!(bit.bit_type, BitTypes::Llm | BitTypes::Vlm) {
+                    continue;
+                }
+                hub_models += 1;
+                if !crate::model_tier::llm_bit_allowed(&bit, &user_tier) {
+                    blocked.push(id);
+                }
+            }
+            state.set_cache(cache_key, (&blocked, hub_models));
+            (blocked, hub_models)
+        }
+    };
+
+    let access = ProfileModelAccess {
+        profile_models: custom_models + hub_models,
+        allowed_models: custom_models + hub_models - blocked.len(),
+    };
+
+    if blocked.is_empty() {
+        return access;
+    }
+
+    let blocked: HashSet<String> = blocked.into_iter().collect();
+    profile.bits.retain(|reference| {
+        let id = reference
+            .rsplit_once(':')
+            .map_or(reference.as_str(), |(_, id)| id);
+        !blocked.contains(id)
+    });
+    tracing::debug!(
+        sub = %sub,
+        "Removed {} model(s) above the user's plan from profile {}",
+        blocked.len(),
+        profile.id
+    );
+
+    access
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -763,13 +932,17 @@ pub async fn global_chat(
         ));
     }
 
-    let profile = load_user_profile_opt(&state, &sub, payload.profile_id.as_deref())
-        .await?
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "No profile found for this user. A synced profile with model Bits is required to use FlowPilot in the browser.",
-            )
-        })?;
+    let (profile, model_access) =
+        load_user_profile_access(&state, &sub, payload.profile_id.as_deref())
+            .await?
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "No profile found for this user. A synced profile with model Bits is required to use FlowPilot in the browser.",
+                )
+            })?;
+    if let Some(rejection) = model_access.rejection(payload.model_id.as_deref()) {
+        return Err(rejection);
+    }
     let flow_like_state = master_flow_like_state(&state).await?;
 
     // Profile-scoped semantic memory, enabled only when the client selected an embedding model.

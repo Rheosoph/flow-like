@@ -489,26 +489,7 @@ impl AppUser {
     }
 
     pub async fn tier(&self, state: &AppState) -> Result<UserTier, AuthorizationError> {
-        let sub = self.effective_user_id()?;
-        let user = user::Entity::find_by_id(&sub)
-            .one(&state.db)
-            .await?
-            .ok_or_else(|| AuthorizationError::from(anyhow!("User not found")))?;
-
-        let db_tier = match user.tier {
-            sea_orm_active_enums::UserTier::Free => "FREE",
-            sea_orm_active_enums::UserTier::Premium => "PREMIUM",
-            sea_orm_active_enums::UserTier::Pro => "PRO",
-            sea_orm_active_enums::UserTier::Enterprise => "ENTERPRISE",
-        };
-
-        let tier = state
-            .platform_config
-            .tiers
-            .get(db_tier)
-            .cloned()
-            .ok_or_else(|| AuthorizationError::from(anyhow!("Tier not found")))?;
-        Ok(tier)
+        tier_for_sub(state, &self.effective_user_id()?).await
     }
 
     pub async fn get_user(&self, state: &AppState) -> Result<user::Model, AuthorizationError> {
@@ -796,6 +777,30 @@ impl AppUser {
 
         self.app_permission(app_id, state).await
     }
+}
+
+/// The plan tier of a user id. Split out of [`AppUser::tier`] so background work
+/// that only carries a `sub` — the copilot profile loader, for one — can apply the
+/// same plan rules the request-scoped routes do.
+pub async fn tier_for_sub(state: &AppState, sub: &str) -> Result<UserTier, AuthorizationError> {
+    let user = user::Entity::find_by_id(sub)
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| AuthorizationError::from(anyhow!("User not found")))?;
+
+    let db_tier = match user.tier {
+        sea_orm_active_enums::UserTier::Free => "FREE",
+        sea_orm_active_enums::UserTier::Premium => "PREMIUM",
+        sea_orm_active_enums::UserTier::Pro => "PRO",
+        sea_orm_active_enums::UserTier::Enterprise => "ENTERPRISE",
+    };
+
+    state
+        .platform_config
+        .tiers
+        .get(db_tier)
+        .cloned()
+        .ok_or_else(|| AuthorizationError::from(anyhow!("Tier not found")))
 }
 
 fn hash_token(token: &str) -> String {

@@ -427,4 +427,113 @@ mod tests {
         let error = bind("id = $id", json!({"id": {"a": 1}})).expect_err("rejected");
         assert!(error.to_string().contains("separate parameters"), "{error}");
     }
+    /// The single invariant everything else rests on: whatever the value was, the filter Lance
+    /// tokenizes carries it back exactly, as one literal.
+    fn round_trip(value: &str) -> String {
+        let bound = bind("id = $id", json!({ "id": value })).expect("binds");
+        let dialect = LanceFilterDialect::default();
+        let literals: Vec<String> = Tokenizer::new(&dialect, &bound)
+            .tokenize()
+            .unwrap_or_else(|error| panic!("{bound:?} does not tokenize: {error}"))
+            .into_iter()
+            .filter_map(|token| match token {
+                Token::SingleQuotedString(value) => Some(value),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(literals.len(), 1, "{bound:?} did not hold exactly one literal");
+        literals.into_iter().next().expect("literal")
+    }
+
+    #[test]
+    fn adversarial_values_round_trip_as_one_literal() {
+        for value in [
+            "plain",
+            "o'brien",
+            "' OR true --",
+            "'; DROP TABLE t; --",
+            // Already-doubled quotes: sqlparser's Display would pass these through as-is and
+            // Lance would read them back as a single quote, silently changing the value.
+            "a''b",
+            // A backslash is an ordinary character in this dialect, in every position.
+            "x\\'",
+            "x\\",
+            "back`tick",
+            "double\"quote",
+            "new\nline",
+            "ünïcøde 🎈",
+            "",
+        ] {
+            assert_eq!(round_trip(value), value, "value did not survive binding");
+        }
+    }
+
+    #[test]
+    fn lance_double_equals_is_left_alone() {
+        // Lance accepts `==` by rewriting its own token stream. Binding never re-renders the
+        // predicate, so the operator reaches Lance exactly as written.
+        assert_eq!(
+            bind("id == $id", json!({ "id": "x" })).expect("binds"),
+            "id == 'x'"
+        );
+    }
+
+    #[test]
+    fn an_in_list_binds_without_surrounding_whitespace() {
+        assert_eq!(
+            bind("id IN($ids)", json!({ "ids": [1, 2] })).expect("binds"),
+            "id IN(1, 2)"
+        );
+        assert_eq!(
+            bind("id IN (\n  $ids\n)", json!({ "ids": ["a"] })).expect("binds"),
+            "id IN (\n  'a'\n)"
+        );
+    }
+
+    #[test]
+    fn a_repeated_placeholder_binds_at_every_occurrence() {
+        assert_eq!(
+            bind("a = $q OR b = $q OR c = $q", json!({ "q": "x'y" })).expect("binds"),
+            "a = 'x''y' OR b = 'x''y' OR c = 'x''y'"
+        );
+    }
+
+    #[test]
+    fn a_double_quoted_string_is_data_to_this_dialect() {
+        // The opposite of DataFusion, where `"col"` is an identifier. Either way the `$` inside
+        // is not a placeholder — but only this tokenizer can say so for a filter.
+        assert!(
+            declared_placeholders("note = \"$id\"")
+                .expect("scans")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn declaring_more_parameters_than_the_cap_is_rejected() {
+        let filter = (0..=MAX_QUERY_PARAMS)
+            .map(|index| format!("c{index} = $p{index}"))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        let error = declared_placeholders(&filter).expect_err("rejected");
+        assert!(error.to_string().contains("more than the"), "{error}");
+    }
+
+    #[test]
+    fn numbers_keep_their_json_form() {
+        assert_eq!(
+            bind(
+                "a = $big AND b = $small AND c = $neg",
+                json!({ "big": 9_007_199_254_740_993i64, "small": 0.125, "neg": -42 })
+            )
+            .expect("binds"),
+            "a = 9007199254740993 AND b = 0.125 AND c = -42"
+        );
+    }
+
+    #[test]
+    fn a_nested_list_has_no_literal_form() {
+        let error = bind("id IN ($ids)", json!({ "ids": [["a"]] })).expect_err("rejected");
+        assert!(error.to_string().contains("nested list"), "{error}");
+    }
 }

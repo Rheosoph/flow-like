@@ -20,7 +20,7 @@ impl NodeLogic for GreaterThanOrEqualIntegerNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "int_greater_than_or_equal",
-            ">=",
+            ">= (Int)",
             "Checks if the first integer is greater than or equal to the second",
             "Math/Int",
         );

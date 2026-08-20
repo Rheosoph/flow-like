@@ -345,6 +345,10 @@ function useSearchIndex(board: IBoard | undefined, enabled: boolean) {
 						}
 					}
 				}
+				// Operator node names ("/", "!=", …) are pure punctuation and would
+				// otherwise be split away entirely — keep operator runs as tokens.
+				const operators = text.match(/[+\-*/%^!<>=&|~]+/g);
+				if (operators) out.push(...operators);
 				return out;
 			},
 		});

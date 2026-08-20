@@ -368,6 +368,10 @@ pub async fn db_query(
     let limit = limit.unwrap_or(25).min(250) as usize;
     let offset = offset.unwrap_or(0).min(MAX_OFFSET) as usize;
     if let Some(sql) = payload.sql {
+        // The registered provider supports DML, but this command is the read/query
+        // surface — reject anything but a single SELECT before planning.
+        flow_like::flow_like_storage::databases::sql_guard::validate_readonly_sql(&sql)
+            .map_err(|e| anyhow!("Invalid query SQL: {e}"))?;
         let context = SessionContext::new();
         let fusion = db.to_datafusion().await?;
         context

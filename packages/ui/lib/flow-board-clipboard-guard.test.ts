@@ -23,8 +23,10 @@ const { shouldIgnoreBoardClipboardEvent } = await import("./flow-board-utils");
 
 let window = globalThis.window as unknown as Window;
 
-function focus(element: Element) {
-	(element as unknown as HTMLElement).focus();
+// happy-dom's element classes are structurally distinct from lib.dom's, so the DOM this test
+// builds only satisfies the guard's `instanceof` checks through the globals installed above.
+function focus(element: unknown) {
+	(element as HTMLElement).focus();
 	Object.defineProperty(window.document, "activeElement", {
 		configurable: true,
 		get: () => element,

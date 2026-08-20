@@ -18,7 +18,7 @@ impl SubtractIntegerNode {
 #[async_trait]
 impl NodeLogic for SubtractIntegerNode {
     fn get_node(&self) -> Node {
-        let mut node = Node::new("int_subtract", "-", "Subtracts two Integers", "Math/Int");
+        let mut node = Node::new("int_subtract", "- (Int)", "Subtracts two Integers", "Math/Int");
         node.add_icon("/flow/icons/sigma.svg");
 
         node.add_input_pin("integer1", "Integer 1", "Minuend", VariableType::Integer);

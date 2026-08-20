@@ -20,7 +20,7 @@ impl NodeLogic for ModuloIntegerNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "int_modulo",
-            "%",
+            "% (Int)",
             "Calculates the remainder of integer division",
             "Math/Int",
         );

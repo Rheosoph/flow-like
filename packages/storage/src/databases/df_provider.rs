@@ -10,6 +10,12 @@
 //!
 //! [`zero_column_safe`] keeps one cheap column in the projection pushed into
 //! LanceDB and strips it again above the scan, carrying the row count across.
+//!
+//! [`zero_column_safe_writable`] additionally carries the [`lancedb::Table`]
+//! handle so SQL `UPDATE`/`DELETE` route into Lance's own mutation API (see
+//! [`crate::databases::lance_dml`]); without it those statements fail with
+//! DataFusion's NotImplemented error while `INSERT INTO` still forwards to
+//! the adapter.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -31,12 +37,33 @@ use datafusion::physical_plan::{
 use flow_like_types::async_trait;
 use futures::StreamExt;
 
+use crate::databases::lance_dml::{
+    LanceDmlExec, LanceDmlOp, assignments_to_lance_updates, filters_to_lance_predicate,
+};
+
 /// Wraps a table provider so scans that project no columns still work.
 pub fn zero_column_safe(inner: Arc<dyn TableProvider>) -> Arc<dyn TableProvider> {
     let placeholder_column = cheapest_column(&inner.schema());
     Arc::new(ZeroColumnSafeProvider {
         inner,
         placeholder_column,
+        dml_table: None,
+    })
+}
+
+/// Like [`zero_column_safe`], but also enables SQL `UPDATE`/`DELETE` by
+/// translating them onto the given Lance table handle. Only register a
+/// provider built here on surfaces where writing is intended — read-only
+/// surfaces must keep validating SQL before execution.
+pub fn zero_column_safe_writable(
+    inner: Arc<dyn TableProvider>,
+    table: lancedb::Table,
+) -> Arc<dyn TableProvider> {
+    let placeholder_column = cheapest_column(&inner.schema());
+    Arc::new(ZeroColumnSafeProvider {
+        inner,
+        placeholder_column,
+        dml_table: Some(table),
     })
 }
 
@@ -72,6 +99,9 @@ fn column_scan_cost(data_type: &DataType) -> u8 {
 struct ZeroColumnSafeProvider {
     inner: Arc<dyn TableProvider>,
     placeholder_column: Option<usize>,
+    /// When present, UPDATE/DELETE are translated onto this handle instead of
+    /// forwarding to the adapter (which cannot execute them).
+    dml_table: Option<lancedb::Table>,
 }
 
 #[async_trait]
@@ -123,6 +153,14 @@ impl TableProvider for ZeroColumnSafeProvider {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        // The Lance adapter answers Exact, which makes the optimizer delete the
+        // Filter node above the scan — but UPDATE/DELETE planning harvests its
+        // WHERE clause from exactly that Filter node, so with Exact every DML
+        // statement would arrive with an empty (= refused) predicate. Inexact
+        // keeps Lance-side pruning for reads while preserving the Filter node.
+        if self.dml_table.is_some() {
+            return Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()]);
+        }
         self.inner.supports_filters_pushdown(filters)
     }
 
@@ -139,12 +177,21 @@ impl TableProvider for ZeroColumnSafeProvider {
         self.inner.insert_into(state, input, insert_op).await
     }
 
+    /// The mutation itself runs when the returned plan executes — EXPLAIN
+    /// builds this plan without running it.
     async fn delete_from(
         &self,
         state: &dyn Session,
         filters: Vec<Expr>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        self.inner.delete_from(state, filters).await
+        let Some(table) = &self.dml_table else {
+            return self.inner.delete_from(state, filters).await;
+        };
+        let predicate = filters_to_lance_predicate(&filters, &self.schema())?;
+        Ok(Arc::new(LanceDmlExec::new(
+            table.clone(),
+            LanceDmlOp::Delete { predicate },
+        )))
     }
 
     async fn update(
@@ -153,7 +200,19 @@ impl TableProvider for ZeroColumnSafeProvider {
         assignments: Vec<(String, Expr)>,
         filters: Vec<Expr>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        self.inner.update(state, assignments, filters).await
+        let Some(table) = &self.dml_table else {
+            return self.inner.update(state, assignments, filters).await;
+        };
+        let schema = self.schema();
+        let predicate = filters_to_lance_predicate(&filters, &schema)?;
+        let assignments = assignments_to_lance_updates(&assignments, &schema)?;
+        Ok(Arc::new(LanceDmlExec::new(
+            table.clone(),
+            LanceDmlOp::Update {
+                predicate,
+                assignments,
+            },
+        )))
     }
 }
 

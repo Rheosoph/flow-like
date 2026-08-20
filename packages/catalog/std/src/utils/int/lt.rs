@@ -20,7 +20,7 @@ impl NodeLogic for LessThanIntegerNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "int_less_than",
-            "<",
+            "< (Int)",
             "Checks if the first integer is less than the second",
             "Math/Int",
         );

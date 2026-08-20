@@ -20,7 +20,7 @@ impl NodeLogic for UnequalIntegerNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "int_unequal",
-            "!=",
+            "!= (Int)",
             "Checks if two integers are unequal",
             "Math/Int",
         );

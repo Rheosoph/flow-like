@@ -20,7 +20,7 @@ impl NodeLogic for UnEqualStringNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "not_equal_string",
-            "!=",
+            "!= (String)",
             "Compares two Strings",
             "Utils/String",
         );
